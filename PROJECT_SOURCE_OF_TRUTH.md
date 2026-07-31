@@ -2,16 +2,27 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M1 active v0.8
+**Status:** M1 satisfied; M2 active v0.9
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestone M0 is complete. Milestone M1 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
+**Implementation authorization:** Milestones M0 and M1 are complete. Milestone M2 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.9 — M1 acceptance record and M2 authorization
+
+- recorded successful host-local bootstrap and private browser-session
+  acceptance against the exact green Red Hat release
+- recorded authenticated Project creation, switching, archive, active-only
+  navigation, and per-Actor route restoration across reload and relogin
+- confirmed that the M0 timeline and hosted Codex run remain functional through
+  M1 session authentication and centralized Project policy
+- retained redacted runtime and automated evidence in `docs/acceptance/m1.md`
+- confirmed the elaborated M2 Conversations backlog and authorized M2
 
 ### v0.8 — M2 Conversations entry
 
@@ -3302,7 +3313,11 @@ Build the first real connector against one chosen runtime, such as Hermes or Ope
 
 The IDs below are planning IDs for the repository backlog. They may be imported into the product later.
 
-Milestone M0 is authorized by this document. Before beginning any later milestone, replace its title-only backlog entries with scoped acceptance criteria, dependencies, expected tests, and explicit exclusions. This elaboration happens one milestone ahead, not for the whole roadmap at once.
+Milestones M0 and M1 are complete. Milestone M2 is authorized by its detailed
+criteria below. Before beginning any later milestone, replace its title-only
+backlog entries with scoped acceptance criteria, dependencies, expected tests,
+and explicit exclusions. This elaboration happens one milestone ahead, not for
+the whole roadmap at once.
 
 ## Milestone M0: Bootstrap and spikes
 
@@ -3577,6 +3592,8 @@ client-authored redirects.
 
 ### M1 exit criteria
 
+**Status:** Satisfied on July 31, 2026.
+
 - host-local first-admin bootstrap succeeds exactly once without credential
   disclosure
 - the administrator can sign in and out, create two Projects, archive an
@@ -3588,6 +3605,12 @@ client-authored redirects.
 - PostgreSQL migration/upgrade, session/CSRF, cross-Project, non-human policy,
   realtime isolation, frontend accessibility, and production-build tests pass
 - the M2 Conversations backlog is elaborated before M2 implementation begins
+
+The acceptance record at `docs/acceptance/m1.md` retains the exact accepted
+commit, Red Hat release, automated checks, and redacted browser/runtime
+evidence. The accepted browser flow proved first-user bootstrap, private
+sessions, Project lifecycle and navigation restoration, and the existing M0
+hosted-run path through centralized M1 Project policy.
 
 ## Milestone M2: Conversations
 
