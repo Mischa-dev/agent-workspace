@@ -34,7 +34,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let recovered = recovery::reconcile_non_terminal_runs(&pool)
+    let state = AppState {
+        config: Arc::clone(&config),
+        pool,
+        realtime: RealtimeHub::new(256),
+    };
+
+    let recovered = recovery::reconcile_non_terminal_runs(&state)
         .await
         .context("reconcile non-terminal Agent Runs")?;
     if recovered > 0 {
@@ -51,16 +57,8 @@ async fn main() -> anyhow::Result<()> {
         "Agent Workspace server listening"
     );
 
-    axum::serve(
-        listener,
-        router(AppState {
-            config,
-            pool,
-            realtime: RealtimeHub::new(256),
-        })
-        .into_make_service(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("serve HTTP application")
+    axum::serve(listener, router(state).into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("serve HTTP application")
 }

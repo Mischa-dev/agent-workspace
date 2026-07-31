@@ -87,6 +87,21 @@ pub fn absolute_runtime_path(path: &Path) -> Result<PathBuf, AppError> {
         .map_err(|_| AppError::Internal("resolve runtime path"))
 }
 
+pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
+    if !worktree.is_absolute() || !worktree.is_dir() {
+        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+    }
+    let output = run_git([
+        "-C",
+        &worktree.to_string_lossy(),
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    ])?;
+    Ok(!output.stdout.is_empty())
+}
+
 fn validate_mirror(mirror: &Path) -> Result<(), AppError> {
     if !mirror.is_absolute() || !mirror.is_dir() {
         return Err(AppError::Conflict("repository", "mirror is not ready"));
@@ -139,7 +154,8 @@ fn run_git<const N: usize>(arguments: [&str; N]) -> Result<std::process::Output,
 
 #[cfg(test)]
 mod tests {
-    use super::{unique_run_branch, validate_branch, validate_ref};
+    use super::{unique_run_branch, validate_branch, validate_ref, worktree_is_dirty};
+    use std::path::Path;
 
     #[test]
     fn rejects_unsafe_refs_and_branches() {
@@ -162,5 +178,10 @@ mod tests {
         let second = unique_run_branch("AW").expect("branch");
         assert!(first.starts_with("codex/run-aw-"));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn rejects_missing_worktrees_during_inspection() {
+        assert!(worktree_is_dirty(Path::new("/definitely/missing/worktree")).is_err());
     }
 }

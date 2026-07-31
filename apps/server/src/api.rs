@@ -860,8 +860,9 @@ async fn complete_demo_run(
         "ready worktree not found",
     ))?;
 
+    let proof_worktree_path = worktree_path.clone();
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        let known_file = PathBuf::from(worktree_path).join("KNOWN_FILE.txt");
+        let known_file = PathBuf::from(proof_worktree_path).join("KNOWN_FILE.txt");
         let mut file = OpenOptions::new()
             .append(true)
             .open(known_file)
@@ -871,6 +872,12 @@ async fn complete_demo_run(
     })
     .await
     .map_err(|_| AppError::Internal("join proof write task"))??;
+
+    let dirty = tokio::task::spawn_blocking(move || {
+        crate::git_runtime::worktree_is_dirty(PathBuf::from(worktree_path).as_path())
+    })
+    .await
+    .map_err(|_| AppError::Internal("join worktree inspection task"))??;
 
     let worker_actor_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT ew.actor_id FROM agent_runs ar JOIN execution_workers ew ON ew.id = ar.execution_worker_id WHERE ar.id = $1",
@@ -888,6 +895,23 @@ async fn complete_demo_run(
     )
     .await?;
     insert_event_entry(&mut transaction, conversation_id, file_event).await?;
+    sqlx::query(
+        r#"
+        UPDATE git_worktrees gw
+        SET state = CASE WHEN $2 THEN 'dirty' ELSE 'ready' END,
+            dirty = $2,
+            last_inspected_at = now(),
+            updated_at = now()
+        FROM repository_workspaces rw, agent_runs ar
+        WHERE ar.id = $1
+          AND rw.id = ar.repository_workspace_id
+          AND gw.repository_workspace_id = rw.id
+        "#,
+    )
+    .bind(run_id)
+    .bind(dirty)
+    .execute(&mut *transaction)
+    .await?;
 
     let message_id = Uuid::now_v7();
     let message_text = "The development walking skeleton completed its isolated file change and preserved the worktree.";

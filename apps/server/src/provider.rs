@@ -10,6 +10,7 @@ use crate::{
     AppState,
     domain::{RunState, allocate_conversation_sequence, transition_run},
     error::AppError,
+    git_runtime::worktree_is_dirty,
     realtime::RealtimeEvent,
 };
 
@@ -19,6 +20,13 @@ const MAX_MESSAGE_BYTES: usize = 200_000;
 pub struct StartedProviderRun {
     pub provider_session_id: Uuid,
     pub provider_thread_id: String,
+}
+
+#[derive(Debug)]
+pub(crate) enum ProviderRecovery {
+    Completed { message: String },
+    Resumed { latest_turn_status: String },
+    Unavailable,
 }
 
 pub async fn start_run(
@@ -37,34 +45,7 @@ pub async fn start_run(
     .fetch_one(&state.pool)
     .await?;
     let codex_home = PathBuf::from(codex_home);
-    let mut environment = BTreeMap::new();
-    let codex_parent = state
-        .config
-        .codex_binary
-        .parent()
-        .ok_or(AppError::Internal("Codex binary has no parent"))?;
-    environment.insert(
-        "PATH".to_owned(),
-        format!("{}:/usr/local/bin:/usr/bin:/bin", codex_parent.display()),
-    );
-    environment.insert("LANG".to_owned(), "C.UTF-8".to_owned());
-    environment.insert("LC_ALL".to_owned(), "C.UTF-8".to_owned());
-    let config = BridgeConfig {
-        codex_binary: state.config.codex_binary.clone(),
-        codex_home,
-        cwd: worktree.clone(),
-        safe_environment: environment,
-        max_line_bytes: 1_048_576,
-        max_stderr_bytes: 262_144,
-        request_timeout: Duration::from_secs(120),
-    };
-    let mut bridge = CodexBridge::spawn(config)
-        .await
-        .map_err(|error| provider_error(run_id, "spawn", error))?;
-    bridge
-        .initialize()
-        .await
-        .map_err(|error| provider_error(run_id, "initialize", error))?;
+    let mut bridge = spawn_initialized_bridge(state, codex_home, worktree.clone(), run_id).await?;
 
     let existing = sqlx::query_as::<_, (Uuid, String)>(
         r#"
@@ -194,6 +175,161 @@ pub async fn start_run(
     })
 }
 
+async fn spawn_initialized_bridge(
+    state: &AppState,
+    codex_home: PathBuf,
+    worktree: PathBuf,
+    run_id: Uuid,
+) -> Result<CodexBridge, AppError> {
+    let mut environment = BTreeMap::new();
+    let codex_parent = state
+        .config
+        .codex_binary
+        .parent()
+        .ok_or(AppError::Internal("Codex binary has no parent"))?;
+    environment.insert(
+        "PATH".to_owned(),
+        format!("{}:/usr/local/bin:/usr/bin:/bin", codex_parent.display()),
+    );
+    environment.insert("LANG".to_owned(), "C.UTF-8".to_owned());
+    environment.insert("LC_ALL".to_owned(), "C.UTF-8".to_owned());
+    let config = BridgeConfig {
+        codex_binary: state.config.codex_binary.clone(),
+        codex_home,
+        cwd: worktree.clone(),
+        safe_environment: environment,
+        max_line_bytes: 1_048_576,
+        max_stderr_bytes: 262_144,
+        request_timeout: Duration::from_secs(120),
+    };
+    let mut bridge = CodexBridge::spawn(config)
+        .await
+        .map_err(|error| provider_error(run_id, "spawn", error))?;
+    bridge
+        .initialize()
+        .await
+        .map_err(|error| provider_error(run_id, "initialize", error))?;
+    Ok(bridge)
+}
+
+pub(crate) async fn inspect_provider_for_recovery(
+    state: &AppState,
+    run_id: Uuid,
+    worktree: PathBuf,
+) -> ProviderRecovery {
+    let provider = sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT ps.provider_thread_id, ep.codex_home_path
+        FROM agent_runs ar
+        JOIN provider_sessions ps ON ps.id = ar.provider_session_id
+        JOIN execution_profiles ep ON ep.id = ar.execution_profile_id
+        WHERE ar.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&state.pool)
+    .await;
+    let Ok(Some((provider_thread_id, codex_home))) = provider else {
+        return ProviderRecovery::Unavailable;
+    };
+
+    let bridge =
+        spawn_initialized_bridge(state, PathBuf::from(codex_home), worktree.clone(), run_id).await;
+    let Ok(mut bridge) = bridge else {
+        return ProviderRecovery::Unavailable;
+    };
+    if bridge
+        .request(
+            "thread/resume",
+            json!({"threadId": provider_thread_id, "cwd": worktree}),
+        )
+        .await
+        .is_err()
+    {
+        bridge.shutdown().await;
+        return ProviderRecovery::Unavailable;
+    }
+    let history = bridge
+        .request(
+            "thread/read",
+            json!({"threadId": provider_thread_id, "includeTurns": true}),
+        )
+        .await;
+    bridge.shutdown().await;
+    let Ok(history) = history else {
+        return ProviderRecovery::Unavailable;
+    };
+    let Some(latest_turn) = history
+        .pointer("/thread/turns")
+        .and_then(Value::as_array)
+        .and_then(|turns| turns.last())
+    else {
+        return ProviderRecovery::Resumed {
+            latest_turn_status: "missing".to_owned(),
+        };
+    };
+    let latest_turn_status = latest_turn
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    if latest_turn_status == "completed" {
+        let message = latest_turn
+            .get("items")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().rev().find_map(|item| {
+                    (item.get("type").and_then(Value::as_str) == Some("agentMessage"))
+                        .then(|| item.get("text").and_then(Value::as_str))
+                        .flatten()
+                })
+            })
+            .map(|message| bounded_message(message, MAX_MESSAGE_BYTES))
+            .unwrap_or_default();
+        return ProviderRecovery::Completed { message };
+    }
+    ProviderRecovery::Resumed { latest_turn_status }
+}
+
+pub(crate) async fn complete_recovered_run(
+    state: &AppState,
+    run_id: Uuid,
+    message: &str,
+) -> Result<(), AppError> {
+    let (project_id, conversation_id, provider_session_id) =
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            r#"
+            SELECT c.project_id, ar.conversation_id, ar.provider_session_id
+            FROM agent_runs ar
+            JOIN conversations c ON c.id = ar.conversation_id
+            WHERE ar.id = $1
+            "#,
+        )
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let mut transaction = state.pool.begin().await?;
+    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    transaction.commit().await?;
+    complete_run(
+        state,
+        project_id,
+        run_id,
+        conversation_id,
+        provider_session_id,
+        message,
+    )
+    .await
+}
+
+fn bounded_message(message: &str, limit: usize) -> String {
+    let mut end = message.len().min(limit);
+    while !message.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    message[..end].to_owned()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drive_turn(
     state: AppState,
@@ -285,6 +421,15 @@ async fn drive_turn(
                         }
                     }
                     "turn/completed" => {
+                        if event.pointer("/params/turn/status").and_then(Value::as_str)
+                            != Some("completed")
+                        {
+                            bridge.shutdown().await;
+                            return Err(AppError::Conflict(
+                                "provider",
+                                "Codex turn did not complete successfully",
+                            ));
+                        }
                         complete_run(
                             &state,
                             project_id,
@@ -460,6 +605,24 @@ async fn complete_run(
     provider_session_id: Uuid,
     message: &str,
 ) -> Result<(), AppError> {
+    let worktree_path = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT gw.path
+        FROM agent_runs ar
+        JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
+        JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
+        WHERE ar.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let dirty = tokio::task::spawn_blocking(move || {
+        worktree_is_dirty(PathBuf::from(worktree_path).as_path())
+    })
+    .await
+    .map_err(|_| AppError::Internal("join worktree inspection task"))??;
+
     let worker_actor_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT ew.actor_id FROM agent_runs ar
@@ -471,6 +634,23 @@ async fn complete_run(
     .fetch_one(&state.pool)
     .await?;
     let mut transaction = state.pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE git_worktrees gw
+        SET state = CASE WHEN $2 THEN 'dirty' ELSE 'ready' END,
+            dirty = $2,
+            last_inspected_at = now(),
+            updated_at = now()
+        FROM repository_workspaces rw, agent_runs ar
+        WHERE ar.id = $1
+          AND rw.id = ar.repository_workspace_id
+          AND gw.repository_workspace_id = rw.id
+        "#,
+    )
+    .bind(run_id)
+    .bind(dirty)
+    .execute(&mut *transaction)
+    .await?;
     if !message.is_empty() {
         let message_id = Uuid::now_v7();
         sqlx::query(

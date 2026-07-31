@@ -1,0 +1,42 @@
+{
+  "captured_at": "2026-07-31",
+  "client": {
+    "name": "codex-cli",
+    "version": "0.146.0",
+    "profile": "separate_m0_profile"
+  },
+  "connection": {
+    "transport": "streamable_http",
+    "network_path": "ssh_forward_to_loopback",
+    "protocol_version": "2025-06-18",
+    "authentication": "bearer_environment_variable",
+    "credential_retained": false
+  },
+  "calls": [
+    {
+      "tool": "get_fake_work_item",
+      "outcome": "found",
+      "version": 1,
+      "status": "ready"
+    },
+    {
+      "tool": "update_fake_work_item",
+      "outcome": "updated",
+      "changed_fields": [
+        "status",
+        "version"
+      ],
+      "version": 2,
+      "status": "in_progress"
+    },
+    {
+      "tool": "get_fake_work_item",
+      "outcome": "found",
+      "version": 2,
+      "status": "in_progress"
+    }
+  ],
+  "application_thread_created": false,
+  "secrets": "[REDACTED]",
+  "repository_content": "[REDACTED]"
+}

@@ -42,3 +42,7 @@ capture, two concurrently requested linked worktrees, collision-safe unique
 branches, scoped locking, unsafe input rejection, dirty preservation, clean
 removal, and prune. The complete suite passed on macOS and on the Red Hat 10.1
 ARM64 validation host with `git version 2.47.3` at commit `3117b81`.
+
+The redacted behavioral summary is committed at
+`tools/git-worktree-spike/fixtures/live-evidence.json`. It contains command
+shapes and outcomes only, never repository content or operator paths.

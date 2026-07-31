@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
-import { coalesceDelta } from './streaming'
+import { coalesceDelta, coalesceDeltaBatch } from './streaming'
 
 const bootstrap = {
   projectId: '019fb600-0000-7000-8000-000000000001',
@@ -177,5 +177,17 @@ describe('streamed worker message coalescing', () => {
     const second = coalesceDelta(first, 'message-1', 'world')
 
     expect(second).toEqual({ 'message-1': 'hello world' })
+  })
+
+  it('coalesces a frame of deltas into one state update', () => {
+    expect(
+      coalesceDeltaBatch(
+        { 'message-1': 'hello ' },
+        { 'message-1': 'world', 'message-2': 'second' },
+      ),
+    ).toEqual({
+      'message-1': 'hello world',
+      'message-2': 'second',
+    })
   })
 })

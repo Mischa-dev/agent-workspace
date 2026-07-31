@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { coalesceDelta } from './streaming'
+import { coalesceDeltaBatch } from './streaming'
 
 type Actor = {
   id: string
@@ -174,6 +174,19 @@ function useThread() {
     let disposed = false
     let socket: WebSocket | undefined
     let retry: number | undefined
+    let streamFrame: number | undefined
+    let pendingDeltas: Record<string, string> = {}
+
+    const queueDelta = (messageId: string, delta: string) => {
+      pendingDeltas[messageId] = `${pendingDeltas[messageId] ?? ''}${delta}`
+      if (streamFrame !== undefined) return
+      streamFrame = window.requestAnimationFrame(() => {
+        const batch = pendingDeltas
+        pendingDeltas = {}
+        streamFrame = undefined
+        setStreaming((current) => coalesceDeltaBatch(current, batch))
+      })
+    }
 
     const connect = () => {
       if (disposed) return
@@ -203,13 +216,7 @@ function useThread() {
           payload.payload?.message_id &&
           typeof payload.payload.delta === 'string'
         ) {
-          setStreaming((current) =>
-            coalesceDelta(
-              current,
-              payload.payload?.message_id ?? '',
-              payload.payload?.delta ?? '',
-            ),
-          )
+          queueDelta(payload.payload.message_id, payload.payload.delta)
           return
         }
         void loadTimeline(bootstrap.threadId)
@@ -227,6 +234,7 @@ function useThread() {
     return () => {
       disposed = true
       if (retry) window.clearTimeout(retry)
+      if (streamFrame !== undefined) window.cancelAnimationFrame(streamFrame)
       socket?.close()
     }
   }, [bootstrap, loadTimeline])
