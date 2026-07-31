@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
-    config::AppConfig, domain::allocate_conversation_sequence, seed::dev_seed,
+    AppState, config::AppConfig, domain::allocate_conversation_sequence, realtime::RealtimeHub,
+    recovery, seed::dev_seed,
 };
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -86,6 +87,63 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         .rollback()
         .await
         .expect("rollback invariant transaction");
+
+    let terminal_run_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, state, prompt,
+            authorization_snapshot, finished_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'interrupted',
+                'recovery test', '{}'::jsonb, now())
+        "#,
+    )
+    .bind(terminal_run_id)
+    .bind(first.thread_id)
+    .bind(first.execution_worker_id)
+    .bind(first.human_actor_id)
+    .bind(first.execution_profile_id)
+    .bind(first.repository_id)
+    .execute(&pool)
+    .await
+    .expect("insert terminal run");
+    let approval_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, provider_request_id,
+            kind, summary, options
+        )
+        VALUES ($1, $2, $3, $4, 'approval', 'stale approval', '[]'::jsonb)
+        "#,
+    )
+    .bind(approval_id)
+    .bind(terminal_run_id)
+    .bind(first.human_actor_id)
+    .bind(format!("integration-{approval_id}"))
+    .execute(&pool)
+    .await
+    .expect("insert stale approval");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        realtime: RealtimeHub::new(8),
+    };
+    assert_eq!(
+        recovery::cancel_terminal_run_approvals(&state)
+            .await
+            .expect("cancel stale approval"),
+        1
+    );
+    let approval_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
+            .bind(approval_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read canceled approval");
+    assert_eq!(approval_status, "canceled");
 }
 
 async fn insert_active_run(

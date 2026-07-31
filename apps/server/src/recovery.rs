@@ -197,7 +197,7 @@ pub async fn cancel_terminal_run_approvals(state: &AppState) -> Result<u64, AppE
     let result = sqlx::query(
         r#"
         UPDATE agent_approvals aa
-        SET status = 'canceled', updated_at = now()
+        SET status = 'canceled'
         FROM agent_runs ar
         WHERE ar.id = aa.agent_run_id
           AND aa.status = 'pending'
@@ -256,7 +256,7 @@ async fn cancel_pending_approvals(
     sqlx::query(
         r#"
         UPDATE agent_approvals
-        SET status = 'canceled', updated_at = now()
+        SET status = 'canceled'
         WHERE agent_run_id = $1 AND status = 'pending'
         "#,
     )
