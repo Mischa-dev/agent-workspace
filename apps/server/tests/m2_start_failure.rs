@@ -16,6 +16,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use tokio::time::{Duration, Instant, sleep};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -116,6 +117,7 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
                 .header("origin", "http://127.0.0.1:3100")
                 .header("cookie", &cookie)
                 .header("x-csrf-token", &csrf)
+                .header("idempotency-key", "provider-start-failure-run")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&json!({"prompt": "prove durable start failure"}))
@@ -125,11 +127,12 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
         )
         .await
         .expect("provider start failure response");
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
     let _ = response_json(response).await;
 
-    let (run_id, state, failure_reason, workspace_state, worktree_state, worktree_path) =
-        sqlx::query_as::<_, (Uuid, String, Option<String>, String, String, String)>(
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (run_id, state, failure_reason, workspace_state, worktree_state, worktree_path) = loop {
+        let row = sqlx::query_as::<_, (Uuid, String, Option<String>, String, String, String)>(
             r#"
             SELECT
                 run.id,
@@ -149,9 +152,18 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
             "#,
         )
         .bind(seed.thread_id)
-        .fetch_one(&pool)
+        .fetch_optional(&pool)
         .await
         .expect("read failed start state");
+        if let Some(row) = row.filter(|row| row.1 == "failed") {
+            break row;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "queued start did not fail in time"
+        );
+        sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(state, "failed");
     assert_eq!(
         failure_reason.as_deref(),
@@ -261,6 +273,14 @@ fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
         "--mirror",
         source.to_string_lossy().as_ref(),
         mirror_path.to_string_lossy().as_ref(),
+    ]);
+    run_git([
+        "--git-dir",
+        mirror_path.to_string_lossy().as_ref(),
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/Mischa-dev/agent-workspace-m0-spike.git",
     ]);
 }
 

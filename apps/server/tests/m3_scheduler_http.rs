@@ -1,0 +1,619 @@
+use std::{collections::BTreeMap, fs, path::Path, process::Command, sync::Arc};
+
+use agent_workspace_server::{
+    AppState,
+    bootstrap::{BootstrapCommand, bootstrap_admin},
+    config::AppConfig,
+    git_runtime::expected_repository_mirror_path,
+    provider::SupervisorRegistry,
+    rate_limit::RateLimiters,
+    realtime::RealtimeHub,
+    router,
+    seed::dev_seed,
+};
+use axum::{
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+};
+use serde_json::{Value, json};
+use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
+use tokio::time::{Duration, Instant, sleep};
+use tower::ServiceExt;
+use uuid::Uuid;
+
+const ORIGIN: &str = "http://127.0.0.1:3100";
+const LOGIN_NAME: &str = "m3-scheduler-owner";
+const PASSWORD: &str = "correct horse battery staple";
+
+#[tokio::test]
+async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("m3_scheduler_http_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create scheduler schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run scheduler migrations");
+
+    let temporary = tempfile::tempdir().expect("temporary scheduler root");
+    let data_root = temporary.path().join("data");
+    let config = AppConfig::from_values(&BTreeMap::from([
+        ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
+        (
+            "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+            data_root.to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            data_root
+                .join("codex/profiles")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_WEB_ROOT".to_owned(),
+            temporary.path().to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_DEMO_EXECUTOR".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "1".to_owned(),
+        ),
+    ]))
+    .expect("scheduler configuration");
+    let seed = dev_seed(&pool, &config)
+        .await
+        .expect("seed scheduler fixture");
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(seed.execution_profile_id)
+        .execute(&pool)
+        .await
+        .expect("authenticate scheduler Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare scheduler Repository");
+    let mirror = expected_repository_mirror_path(&data_root, seed.repository_id)
+        .expect("canonical scheduler mirror");
+    create_test_mirror(temporary.path(), &mirror);
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: LOGIN_NAME.to_owned(),
+            display_name: "M3 Scheduler Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap scheduler owner");
+
+    let second_thread_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (
+            id, project_id, kind, parent_channel_id, repository_id, name
+        )
+        VALUES ($1, $2, 'thread', $3, $4, 'Queued scheduler proof')
+        "#,
+    )
+    .bind(second_thread_id)
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("insert second scheduler Thread");
+
+    let supervisors = SupervisorRegistry::new(&config).expect("scheduler supervisor registry");
+    let state = AppState {
+        config: Arc::new(config),
+        pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(32),
+        supervisors: supervisors.clone(),
+    };
+    let application = router(state.clone());
+    let (cookie, csrf) = login(&application).await;
+
+    let first = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        seed.thread_id,
+        "first-scheduler-run",
+        "hold the only host slot",
+    )
+    .await;
+    assert_eq!(first.0, StatusCode::ACCEPTED);
+    assert_eq!(first.2["state"], "queued");
+    assert!(first.2.get("worktreePath").is_none());
+    assert!(first.2["repositoryWorkspaceId"].is_null());
+    let first_run_id = uuid_field(&first.2, "runId");
+
+    let replay = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        seed.thread_id,
+        "first-scheduler-run",
+        "hold the only host slot",
+    )
+    .await;
+    assert_eq!(replay.0, StatusCode::ACCEPTED);
+    assert_eq!(uuid_field(&replay.2, "runId"), first_run_id);
+    let mismatch = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        seed.thread_id,
+        "first-scheduler-run",
+        "a conflicting retry payload",
+    )
+    .await;
+    assert_eq!(mismatch.0, StatusCode::CONFLICT);
+    assert_eq!(mismatch.2["error"]["code"], "conflict");
+
+    wait_for_state(&pool, first_run_id, "blocked").await;
+    let second = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        second_thread_id,
+        "second-scheduler-run",
+        "remain queued without touching Git",
+    )
+    .await;
+    assert_eq!(second.0, StatusCode::ACCEPTED);
+    let second_run_id = uuid_field(&second.2, "runId");
+    sleep(Duration::from_millis(250)).await;
+    let (second_state, second_workspace) = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT state, repository_workspace_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(second_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read queued scheduler run");
+    assert_eq!(second_state, "queued");
+    assert!(second_workspace.is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM git_worktrees")
+            .fetch_one(&pool)
+            .await
+            .expect("count admitted worktrees"),
+        1
+    );
+
+    let alternate_repository_id = Uuid::now_v7();
+    let alternate_mirror = expected_repository_mirror_path(&data_root, alternate_repository_id)
+        .expect("alternate canonical mirror path");
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, enabled, trusted, preparation_state,
+            prepared_at
+        )
+        VALUES (
+            $1, $2, 9000000099, 'Mischa-dev', 'alternate-scheduler-repository',
+            'https://github.com/Mischa-dev/alternate-scheduler-repository.git',
+            'main', $3, true, true, 'ready', now()
+        )
+        "#,
+    )
+    .bind(alternate_repository_id)
+    .bind(seed.project_id)
+    .bind(alternate_mirror.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .expect("insert alternate ready Repository");
+    let choice_thread_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, parent_channel_id, name)
+        VALUES ($1, $2, 'thread', $3, 'Repository choice proof')
+        "#,
+    )
+    .bind(choice_thread_id)
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .execute(&pool)
+    .await
+    .expect("insert unbound repository-choice Thread");
+    let choice_required = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        choice_thread_id,
+        "repository-choice-required",
+        "require deterministic repository selection",
+    )
+    .await;
+    assert_eq!(choice_required.0, StatusCode::CONFLICT);
+    assert_eq!(
+        choice_required.2["error"]["code"],
+        "repository_choice_required"
+    );
+    assert_eq!(
+        choice_required.2["error"]["details"]["repositoryIds"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    let explicit = start_run_with_repository(
+        &application,
+        &cookie,
+        &csrf,
+        choice_thread_id,
+        "repository-choice-explicit",
+        "use the explicit authorized repository",
+        seed.repository_id,
+    )
+    .await;
+    assert_eq!(explicit.0, StatusCode::ACCEPTED);
+    assert_eq!(explicit.2["repositoryId"], seed.repository_id.to_string());
+    assert!(explicit.2["repositoryWorkspaceId"].is_null());
+
+    sqlx::query(
+        r#"
+        UPDATE agent_runs
+        SET scheduler_claim_id = $2,
+            scheduler_claimed_at = now() - interval '2 minutes',
+            scheduler_lease_expires_at = now() - interval '1 minute'
+        WHERE id = $1 AND state = 'queued'
+        "#,
+    )
+    .bind(second_run_id)
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("expire a scheduler lease fixture");
+
+    let interrupted = interrupt(&application, &cookie, &csrf, first_run_id).await;
+    assert_eq!(interrupted.0, StatusCode::OK);
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("drain scheduler after releasing host capacity");
+    wait_for_state(&pool, second_run_id, "blocked").await;
+    let (workspace_id, branch, base_commit, worktree_path) =
+        sqlx::query_as::<_, (Uuid, String, String, String)>(
+            r#"
+        SELECT workspace.id, workspace.branch_name, workspace.base_commit, worktree.path
+        FROM agent_runs run
+        JOIN repository_workspaces workspace ON workspace.id = run.repository_workspace_id
+        JOIN git_worktrees worktree ON worktree.repository_workspace_id = workspace.id
+        WHERE run.id = $1
+        "#,
+        )
+        .bind(second_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read admitted scheduler workspace");
+    assert!(branch.starts_with("codex/run-aw-"));
+    assert_eq!(base_commit.len(), 40);
+    assert_eq!(
+        Path::new(&worktree_path)
+            .canonicalize()
+            .expect("canonical admitted worktree"),
+        data_root
+            .join("worktrees")
+            .join(seed.repository_id.to_string())
+            .join(workspace_id.to_string())
+            .canonicalize()
+            .expect("canonical expected worktree")
+    );
+
+    wait_for_claim_release(&pool, second_run_id).await;
+    supervisors.shutdown_all().await;
+    pool.close().await;
+    administrative_pool
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("drop scheduler schema");
+}
+
+async fn start_run(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    thread_id: Uuid,
+    idempotency_key: &str,
+    prompt: &str,
+) -> (StatusCode, String, Value) {
+    start_run_body(
+        application,
+        cookie,
+        csrf,
+        thread_id,
+        idempotency_key,
+        json!({"prompt": prompt}),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_run_with_repository(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    thread_id: Uuid,
+    idempotency_key: &str,
+    prompt: &str,
+    repository_id: Uuid,
+) -> (StatusCode, String, Value) {
+    start_run_body(
+        application,
+        cookie,
+        csrf,
+        thread_id,
+        idempotency_key,
+        json!({"prompt": prompt, "repositoryId": repository_id}),
+    )
+    .await
+}
+
+async fn start_run_body(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    thread_id: Uuid,
+    idempotency_key: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    response_json(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/threads/{thread_id}/agent-runs"))
+                    .header("origin", ORIGIN)
+                    .header("cookie", cookie)
+                    .header("x-csrf-token", csrf)
+                    .header("idempotency-key", idempotency_key)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&body).expect("serialize scheduler start"),
+                    ))
+                    .expect("build scheduler start"),
+            )
+            .await
+            .expect("scheduler start response"),
+    )
+    .await
+}
+
+async fn interrupt(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    run_id: Uuid,
+) -> (StatusCode, String, Value) {
+    response_json(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/agent-runs/{run_id}/interrupt"))
+                    .header("origin", ORIGIN)
+                    .header("cookie", cookie)
+                    .header("x-csrf-token", csrf)
+                    .header("idempotency-key", format!("interrupt-{run_id}"))
+                    .body(Body::empty())
+                    .expect("build scheduler interrupt"),
+            )
+            .await
+            .expect("scheduler interrupt response"),
+    )
+    .await
+}
+
+async fn wait_for_state(pool: &PgPool, run_id: Uuid, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("read scheduler run state");
+        if state == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "run did not reach {expected}; last state was {state}"
+        );
+        sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_for_claim_release(pool: &PgPool, run_id: Uuid) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let released = sqlx::query_scalar::<_, bool>(
+            "SELECT scheduler_claim_id IS NULL FROM agent_runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("read scheduler claim");
+        if released {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "scheduler claim was not released"
+        );
+        sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn uuid_field(value: &Value, field: &str) -> Uuid {
+    value[field]
+        .as_str()
+        .expect("UUID response field")
+        .parse()
+        .expect("valid UUID response field")
+}
+
+fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
+    let source = runtime_root.join("source");
+    fs::create_dir(&source).expect("create scheduler source");
+    git(&source, ["init", "-b", "main"]);
+    fs::write(source.join("KNOWN_FILE.txt"), "known\n").expect("write scheduler source");
+    git(&source, ["add", "KNOWN_FILE.txt"]);
+    git(
+        &source,
+        [
+            "-c",
+            "user.name=Agent Workspace",
+            "-c",
+            "user.email=agent-workspace@example.invalid",
+            "commit",
+            "-m",
+            "baseline",
+        ],
+    );
+    fs::create_dir_all(mirror_path.parent().expect("scheduler mirror parent"))
+        .expect("create scheduler mirror parent");
+    let output = Command::new("/usr/bin/git")
+        .args([
+            "clone",
+            "--mirror",
+            "--no-local",
+            source.to_string_lossy().as_ref(),
+            mirror_path.to_string_lossy().as_ref(),
+        ])
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", "/dev/null")
+        .output()
+        .expect("clone scheduler mirror");
+    assert!(output.status.success());
+    let output = Command::new("/usr/bin/git")
+        .args([
+            "--git-dir",
+            mirror_path.to_string_lossy().as_ref(),
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/Mischa-dev/agent-workspace-m0-spike.git",
+        ])
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", "/dev/null")
+        .output()
+        .expect("set scheduler mirror origin");
+    assert!(output.status.success());
+}
+
+fn git<const N: usize>(repository: &Path, arguments: [&str; N]) {
+    let output = Command::new("/usr/bin/git")
+        .current_dir(repository)
+        .args(arguments)
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", "/dev/null")
+        .output()
+        .expect("run scheduler Git fixture");
+    assert!(output.status.success());
+}
+
+async fn login(application: &axum::Router) -> (String, String) {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("origin", ORIGIN)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "loginName": LOGIN_NAME,
+                        "password": PASSWORD
+                    }))
+                    .expect("serialize scheduler login"),
+                ))
+                .expect("build scheduler login"),
+        )
+        .await
+        .expect("scheduler login response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let cookie = cookies.join("; ");
+    let csrf = cookies
+        .iter()
+        .find_map(|value| value.strip_prefix("agent_workspace_csrf="))
+        .expect("scheduler CSRF cookie")
+        .to_owned();
+    (cookie, csrf)
+}
+
+async fn response_json(response: axum::response::Response) -> (StatusCode, String, Value) {
+    let status = response.status();
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("read scheduler response")
+            .to_vec(),
+    )
+    .expect("scheduler response UTF-8");
+    let value = serde_json::from_str(&text).expect("scheduler response JSON");
+    (status, text, value)
+}
+
+async fn integration_pool() -> Option<(String, PgPool)> {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return None;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .expect("connect scheduler PostgreSQL");
+    Some((database_url, pool))
+}
+
+async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
+    let schema = schema.to_owned();
+    PgPoolOptions::new()
+        .max_connections(12)
+        .after_connect(move |connection, _| {
+            let schema = schema.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(schema)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(database_url)
+        .await
+        .expect("connect scheduler schema pool")
+}

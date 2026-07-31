@@ -160,6 +160,7 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
                 .header("origin", ORIGIN)
                 .header("cookie", &harness.cookie)
                 .header("x-csrf-token", &harness.csrf)
+                .header("idempotency-key", "provider-session-failure-run")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&json!({
@@ -171,7 +172,7 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
         )
         .await
         .expect("start fake-provider run");
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
     let response = response_json(response).await;
     let run_id = response["runId"]
         .as_str()
@@ -413,6 +414,7 @@ async fn interrupt(harness: &TestHarness, run_id: Uuid) -> axum::response::Respo
                 .header("origin", ORIGIN)
                 .header("cookie", &harness.cookie)
                 .header("x-csrf-token", &harness.csrf)
+                .header("idempotency-key", format!("interrupt-{run_id}"))
                 .body(Body::empty())
                 .expect("build interrupt request"),
         )
@@ -525,6 +527,14 @@ fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
         "--mirror",
         source.to_string_lossy().as_ref(),
         mirror_path.to_string_lossy().as_ref(),
+    ]);
+    run_git([
+        "--git-dir",
+        mirror_path.to_string_lossy().as_ref(),
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/Mischa-dev/agent-workspace-m0-spike.git",
     ]);
 }
 

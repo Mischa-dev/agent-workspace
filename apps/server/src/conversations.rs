@@ -302,6 +302,10 @@ pub(crate) struct RunRow {
     pub(crate) repository_id: Uuid,
     pub(crate) repository_workspace_id: Option<Uuid>,
     pub(crate) provider_session_id: Option<Uuid>,
+    pub(crate) provider_turn_id: Option<String>,
+    pub(crate) branch: Option<String>,
+    pub(crate) base_commit: Option<String>,
+    pub(crate) queue_position: Option<i64>,
     pub(crate) failure_reason: Option<String>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
@@ -2338,14 +2342,24 @@ async fn fetch_run_projection(
     let active_run = sqlx::query_as::<_, RunRow>(
         r#"
         SELECT
-            id, state, repository_id, repository_workspace_id,
-            provider_session_id, failure_reason,
-            created_at::text AS created_at,
-            updated_at::text AS updated_at
-        FROM agent_runs
-        WHERE conversation_id = $1
-          AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        ORDER BY created_at DESC, id DESC
+            run.id, run.state, run.repository_id, run.repository_workspace_id,
+            run.provider_session_id, run.provider_turn_id,
+            workspace.branch_name AS branch,
+            workspace.base_commit,
+            CASE WHEN run.state = 'queued' THEN (
+                SELECT count(*) FROM agent_runs queued
+                WHERE queued.state = 'queued'
+                  AND (queued.created_at, queued.id) <= (run.created_at, run.id)
+            ) END AS queue_position,
+            run.failure_reason,
+            run.created_at::text AS created_at,
+            run.updated_at::text AS updated_at
+        FROM agent_runs run
+        LEFT JOIN repository_workspaces workspace
+          ON workspace.id = run.repository_workspace_id
+        WHERE run.conversation_id = $1
+          AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        ORDER BY run.created_at DESC, run.id DESC
         LIMIT 1
         "#,
     )

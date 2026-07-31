@@ -3,11 +3,11 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf};
 use axum::{
     Json, Router,
     extract::State,
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
     },
     domain::{RunState, allocate_conversation_sequence, transition_run},
     error::{ApiJson, ApiPath, AppError},
-    git_runtime,
+    idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox,
     policy::{
@@ -115,6 +115,7 @@ async fn development_bootstrap(
     }))
 }
 
+#[cfg(any())]
 #[derive(Clone, Copy)]
 struct RequestIdentity {
     actor_id: Uuid,
@@ -132,39 +133,344 @@ struct ConversationRow {
     membership_enabled: bool,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StartRunRequest {
     prompt: String,
+    repository_id: Option<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
 struct RunSetup {
-    project_key: String,
     repository_id: Uuid,
-    mirror_path: String,
-    default_branch: String,
     execution_worker_id: Uuid,
     execution_profile_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StartRunResponse {
     run_id: Uuid,
     state: RunState,
-    repository_workspace_id: Uuid,
-    branch: String,
-    base_commit: String,
-    worktree_path: String,
+    repository_id: Uuid,
+    repository_workspace_id: Option<Uuid>,
+    branch: Option<String>,
+    base_commit: Option<String>,
+    queue_position: Option<i64>,
 }
 
+#[cfg(any())]
 const WORKTREE_START_FAILURE_REASON: &str =
     "Worktree creation failed; inspect the retained repository workspace.";
+#[cfg(any())]
 const PROVIDER_START_FAILURE_REASON: &str =
     "Codex App Server could not start. The worktree was preserved.";
 
 async fn start_agent_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(mut request): ApiJson<StartRunRequest>,
+) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    request.prompt = request.prompt.trim().to_owned();
+    let (prompt_content, prompt, prompt_mentions) =
+        MessageContent::from_plain_text(request.prompt.clone())
+            .map_err(|_| AppError::Validation("Message content"))?
+            .into_parts();
+    debug_assert!(prompt_mentions.is_empty());
+    let prompt_content = serde_json::to_value(prompt_content)
+        .map_err(|_| AppError::Internal("serialize hosted prompt Message"))?;
+    let conversation =
+        authorized_conversation(&state, &principal, conversation_id, Action::WorkerInvoke).await?;
+    if conversation.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+    if conversation.conversation_archived {
+        return Err(AppError::NotFound("conversation"));
+    }
+    if conversation.kind != "thread" {
+        return Err(AppError::Invalid("agent runs require a Thread"));
+    }
+
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let scope = idempotency::resource_bound_scope("thread", conversation_id, "agent_run_start")?;
+    let mut transaction = state.pool.begin().await?;
+    guard_conversation_mutation(
+        &mut transaction,
+        &principal,
+        conversation_id,
+        conversation.project_id,
+        Action::WorkerInvoke,
+    )
+    .await?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let response: StartRunResponse = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(response)));
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    if sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM agent_runs
+            WHERE conversation_id = $1
+              AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        )
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_one(&mut *transaction)
+    .await?
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "Thread already has an active run",
+        ));
+    }
+
+    let setup = select_run_setup(
+        &mut transaction,
+        conversation.project_id,
+        conversation_id,
+        principal.actor_id,
+        request.repository_id,
+    )
+    .await?;
+    let bound = sqlx::query(
+        r#"
+        UPDATE conversations
+        SET repository_id = COALESCE(repository_id, $2), updated_at = now()
+        WHERE id = $1 AND project_id = $3
+          AND (repository_id IS NULL OR repository_id = $2)
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(setup.repository_id)
+    .bind(conversation.project_id)
+    .execute(&mut *transaction)
+    .await?;
+    if bound.rows_affected() != 1 {
+        return Err(AppError::RepositoryBindingConflict);
+    }
+
+    let prompt_message_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO messages (
+            id, project_id, conversation_id, author_actor_id,
+            content_version, content, plain_text
+        )
+        VALUES ($1, $2, $3, $4, 1, $5, $6)
+        "#,
+    )
+    .bind(prompt_message_id)
+    .bind(conversation.project_id)
+    .bind(conversation_id)
+    .bind(principal.actor_id)
+    .bind(prompt_content)
+    .bind(&prompt)
+    .execute(&mut *transaction)
+    .await?;
+    let prompt_sequence = allocate_conversation_sequence(&mut transaction, conversation_id).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, message_id)
+        VALUES ($1, $2, $3, 'message', $4)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(conversation_id)
+    .bind(prompt_sequence)
+    .bind(prompt_message_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    let run_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, state, prompt,
+            authorization_snapshot
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8)
+        "#,
+    )
+    .bind(run_id)
+    .bind(conversation_id)
+    .bind(setup.execution_worker_id)
+    .bind(principal.actor_id)
+    .bind(setup.execution_profile_id)
+    .bind(setup.repository_id)
+    .bind(&prompt)
+    .bind(serde_json::json!({
+        "actor_id": principal.actor_id,
+        "project_id": conversation.project_id,
+        "scope": ["repository.read", "repository.write", "provider.turn"]
+    }))
+    .execute(&mut *transaction)
+    .await?;
+    transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
+    let queue_position = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(*)
+        FROM agent_runs queued
+        JOIN agent_runs current ON current.id = $1
+        WHERE queued.state = 'queued'
+          AND (queued.created_at, queued.id) <= (current.created_at, current.id)
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    outbox::enqueue_message_created(
+        &mut transaction,
+        conversation.project_id,
+        conversation_id,
+        prompt_message_id,
+        prompt_sequence,
+        principal.actor_id,
+    )
+    .await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        conversation.project_id,
+        conversation_id,
+        run_id,
+    )
+    .await?;
+    let response = StartRunResponse {
+        run_id,
+        state: RunState::Queued,
+        repository_id: setup.repository_id,
+        repository_workspace_id: None,
+        branch: None,
+        base_commit: None,
+        queue_position: Some(queue_position),
+    };
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::ACCEPTED,
+        &response,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    crate::scheduler::kick(state.clone());
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn select_run_setup(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    requesting_actor_id: Uuid,
+    explicit_repository_id: Option<Uuid>,
+) -> Result<RunSetup, AppError> {
+    let bound_repository_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT repository_id FROM conversations WHERE id = $1 AND project_id = $2 FOR UPDATE",
+    )
+    .bind(conversation_id)
+    .bind(project_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if bound_repository_id.is_some()
+        && explicit_repository_id.is_some()
+        && bound_repository_id != explicit_repository_id
+    {
+        return Err(AppError::RepositoryBindingConflict);
+    }
+    let ready_repository_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM repositories
+        WHERE project_id = $1 AND enabled AND trusted
+          AND archived_at IS NULL AND preparation_state = 'ready'
+        ORDER BY created_at, id
+        LIMIT 101
+        "#,
+    )
+    .bind(project_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let selected_repository_id = match bound_repository_id.or(explicit_repository_id) {
+        Some(repository_id) if ready_repository_ids.contains(&repository_id) => repository_id,
+        Some(_) => return Err(AppError::NotFound("repository")),
+        None if ready_repository_ids.len() == 1 => ready_repository_ids[0],
+        None => {
+            return Err(AppError::RepositoryChoiceRequired {
+                repository_ids: ready_repository_ids,
+            });
+        }
+    };
+    sqlx::query_as::<_, RunSetup>(
+        r#"
+        SELECT r.id AS repository_id,
+               ew.id AS execution_worker_id,
+               ew.execution_profile_id
+        FROM repositories r
+        JOIN execution_workers ew
+          ON ew.project_id = r.project_id AND ew.enabled
+        JOIN project_memberships worker_membership
+          ON worker_membership.project_id = ew.project_id
+         AND worker_membership.actor_id = ew.actor_id
+         AND worker_membership.role = 'worker'
+         AND worker_membership.enabled
+        JOIN actors worker_actor
+          ON worker_actor.id = ew.actor_id
+         AND worker_actor.kind = 'execution_worker'
+         AND worker_actor.status = 'active'
+        JOIN provider_connections connection
+          ON connection.project_id = ew.project_id
+         AND connection.id = ew.provider_connection_id
+         AND connection.enabled
+        JOIN execution_profiles profile
+          ON profile.project_id = ew.project_id
+         AND profile.id = ew.execution_profile_id
+         AND profile.provider_connection_id = connection.id
+         AND profile.owner_actor_id = $3
+         AND profile.status = 'available'
+         AND profile.account_state = 'authenticated'
+        JOIN project_memberships owner_membership
+          ON owner_membership.project_id = profile.project_id
+         AND owner_membership.actor_id = profile.owner_actor_id
+         AND owner_membership.enabled
+        JOIN actors owner_actor
+          ON owner_actor.id = profile.owner_actor_id
+         AND owner_actor.status = 'active'
+        WHERE r.project_id = $1 AND r.id = $2
+          AND r.enabled AND r.trusted AND r.archived_at IS NULL
+          AND r.preparation_state = 'ready'
+        ORDER BY ew.created_at, ew.id
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(selected_repository_id)
+    .bind(requesting_actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::Conflict(
+        "execution_worker",
+        "an available personal Execution Profile is required",
+    ))
+}
+
+#[cfg(any())]
+async fn legacy_start_agent_run(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,
@@ -533,6 +839,7 @@ async fn start_agent_run(
     }))
 }
 
+#[cfg(any())]
 async fn mark_worktree_ready(state: &AppState, worktree_id: Uuid) -> Result<(), AppError> {
     let updated = sqlx::query(
         "UPDATE git_worktrees SET state = 'ready', last_inspected_at = now(), updated_at = now() WHERE id = $1",
@@ -549,6 +856,7 @@ async fn mark_worktree_ready(state: &AppState, worktree_id: Uuid) -> Result<(), 
     Ok(())
 }
 
+#[cfg(any())]
 async fn fail_provider_start(
     state: &AppState,
     run_id: Uuid,
@@ -566,6 +874,7 @@ async fn fail_provider_start(
     Ok(())
 }
 
+#[cfg(any())]
 async fn prepare_demo_blocker(
     state: &AppState,
     identity: RequestIdentity,
@@ -627,6 +936,7 @@ async fn prepare_demo_blocker(
     Ok(approval_id)
 }
 
+#[cfg(any())]
 async fn fail_worktree_start(
     state: &AppState,
     run_id: Uuid,
@@ -644,6 +954,7 @@ async fn fail_worktree_start(
     Ok(())
 }
 
+#[cfg(any())]
 async fn persist_run_start_failure(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
@@ -665,10 +976,18 @@ async fn persist_run_start_failure(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct ApprovalResponse {
     decision: String,
 }
+
+#[derive(Clone, Deserialize, Serialize)]
+struct CommandReference {
+    resource_id: Uuid,
+}
+
+#[derive(Serialize)]
+struct EmptyCommand {}
 
 async fn respond_to_approval(
     State(state): State<AppState>,
@@ -681,6 +1000,7 @@ async fn respond_to_approval(
     if !matches!(response.decision.as_str(), "approve" | "deny") {
         return Err(AppError::Invalid("unknown approval decision"));
     }
+    let request_hash = RequestHash::for_value(&response)?;
 
     #[derive(FromRow)]
     struct ApprovalContext {
@@ -754,12 +1074,47 @@ async fn respond_to_approval(
         },
     )?;
 
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let scope = idempotency::resource_bound_scope("approval", approval_id, "respond")?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let reference: CommandReference = replay.decode()?;
+            if reference.resource_id != approval_id {
+                return Err(AppError::Internal(
+                    "approval idempotency reference mismatch",
+                ));
+            }
+            transaction.commit().await?;
+            return fetch_approval(&state, approval_id, context.project_id)
+                .await
+                .map(Json);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+
     let response_json = serde_json::json!({"decision": response.decision});
     if context.status == "resolved" {
         if context.responded_by_actor_id == Some(principal.actor_id)
             && context.current_response == Some(response_json)
         {
-            transaction.rollback().await?;
+            idempotency::complete(
+                &mut transaction,
+                &reservation,
+                StatusCode::OK,
+                &CommandReference {
+                    resource_id: approval_id,
+                },
+            )
+            .await?;
+            transaction.commit().await?;
             return fetch_approval(&state, approval_id, context.project_id)
                 .await
                 .map(Json);
@@ -829,8 +1184,16 @@ async fn respond_to_approval(
         context.run_id,
     )
     .await?;
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::OK,
+        &CommandReference {
+            resource_id: approval_id,
+        },
+    )
+    .await?;
     transaction.commit().await?;
-
     if response.decision == "approve" && state.config.demo_executor {
         let background_state = state.clone();
         tokio::spawn(async move {
@@ -1025,6 +1388,7 @@ async fn interrupt_agent_run(
         repository_id: Uuid,
         membership_role: String,
         membership_enabled: bool,
+        state: String,
     }
 
     let mut transaction = state.pool.begin().await?;
@@ -1035,7 +1399,8 @@ async fn interrupt_agent_run(
             c.project_id,
             ar.repository_id,
             pm.role AS membership_role,
-            pm.enabled AS membership_enabled
+            pm.enabled AS membership_enabled,
+            ar.state
         FROM agent_runs ar
         JOIN conversations c ON c.id = ar.conversation_id
         JOIN project_memberships pm
@@ -1064,6 +1429,57 @@ async fn interrupt_agent_run(
             context.repository_id,
         )),
     )?;
+
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&EmptyCommand {})?;
+    let scope = idempotency::resource_bound_scope("agent_run", run_id, "interrupt")?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let reference: CommandReference = replay.decode()?;
+            if reference.resource_id != run_id {
+                return Err(AppError::Internal(
+                    "interrupt idempotency reference mismatch",
+                ));
+            }
+            transaction.commit().await?;
+            return fetch_run(&state, run_id, context.project_id)
+                .await
+                .map(Json);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    if matches!(
+        context.state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        if context.state != "interrupted" {
+            return Err(AppError::Conflict(
+                "agent_run",
+                "only a non-terminal run can be interrupted",
+            ));
+        }
+        idempotency::complete(
+            &mut transaction,
+            &reservation,
+            StatusCode::OK,
+            &CommandReference {
+                resource_id: run_id,
+            },
+        )
+        .await?;
+        transaction.commit().await?;
+        return fetch_run(&state, run_id, context.project_id)
+            .await
+            .map(Json);
+    }
 
     transition_run(
         &mut transaction,
@@ -1094,6 +1510,15 @@ async fn interrupt_agent_run(
         context.project_id,
         context.conversation_id,
         run_id,
+    )
+    .await?;
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::OK,
+        &CommandReference {
+            resource_id: run_id,
+        },
     )
     .await?;
     transaction.commit().await?;
@@ -1179,6 +1604,14 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             ar.repository_id,
             ar.repository_workspace_id,
             ar.provider_session_id,
+            ar.provider_turn_id,
+            workspace.branch_name AS branch,
+            workspace.base_commit,
+            CASE WHEN ar.state = 'queued' THEN (
+                SELECT count(*) FROM agent_runs queued
+                WHERE queued.state = 'queued'
+                  AND (queued.created_at, queued.id) <= (ar.created_at, ar.id)
+            ) END AS queue_position,
             ar.failure_reason,
             ar.created_at::text AS created_at,
             ar.updated_at::text AS updated_at
@@ -1186,6 +1619,8 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
         JOIN conversations c
           ON c.id = ar.conversation_id
          AND c.project_id = $2
+        LEFT JOIN repository_workspaces workspace
+          ON workspace.id = ar.repository_workspace_id
         WHERE ar.id = $1
         "#,
     )
@@ -1420,6 +1855,7 @@ fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
     }
 }
 
+#[cfg(any())]
 async fn enqueue_run_updated_for_id(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,

@@ -120,12 +120,13 @@ pub async fn start_run(
     sqlx::query(
         r#"
         UPDATE agent_runs
-        SET provider_session_id = $2, updated_at = now()
+        SET provider_session_id = $2, provider_turn_id = $3, updated_at = now()
         WHERE id = $1
         "#,
     )
     .bind(run_id)
     .bind(provider_session_id)
+    .bind(&turn_id)
     .execute(&mut *transaction)
     .await?;
     sqlx::query("UPDATE provider_sessions SET state = 'active', updated_at = now() WHERE id = $1")

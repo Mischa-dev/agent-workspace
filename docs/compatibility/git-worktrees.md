@@ -58,6 +58,13 @@ serialize only their short metadata operations. Dirty removal fails without
 changing the tree; clean removal is followed by a locked prune, and repair
 does not reset content.
 
+Queued Agent Runs own no Repository Workspace and create no physical path.
+Only a database-leased scheduler claim may move a run to `starting`, inspect
+the already prepared canonical mirror, record its exact default-branch commit,
+allocate the logical branch/workspace, and call the short locked worktree add.
+Browser responses expose branch/base/logical IDs after allocation but never the
+worktree or mirror path.
+
 Migration `0011_m3_canonical_repository_mirrors.sql` adopts the retained M0
 mirror without moving it. A startup preflight verifies its origin and default
 branch, clones its refs into the UUID-scoped canonical location, and stages an
@@ -86,3 +93,7 @@ session, Origin/CSRF, role policy, trust acknowledgement, pending registration,
 idempotent replay, duplicate and unsafe identity rejection, authorized
 activation, safe failure state, archive/replay, and path redaction. A separate
 upgrade test proves that both canonical and legacy mirrors exist after `0011`.
+The scheduler integration test additionally holds one development run in the
+only host slot, proves a second run remains queued without a workspace or Git
+row, expires its synthetic lease, releases capacity, and verifies the admitted
+path is exactly the canonical repository/workspace location.

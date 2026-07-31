@@ -23,6 +23,7 @@ pub mod rate_limit;
 pub mod realtime;
 pub mod recovery;
 pub mod repositories;
+pub mod scheduler;
 pub mod seed;
 pub mod telemetry;
 
