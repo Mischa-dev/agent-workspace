@@ -2,16 +2,26 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 accepted; M1 entry elaboration pending v0.6
+**Status:** M1 active v0.7
 
 **Owner:** Mischa Nelson  
 **Date:** July 30, 2026  
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestone M0 is complete. Milestone M1 may begin after its task-level entry criteria are added; every later milestone remains subject to the entry checks defined in this document.
+**Implementation authorization:** Milestone M0 is complete. Milestone M1 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.7 — M1 identity and Projects entry
+
+- confirmed the accepted M0 exit before entering M1
+- expanded every M1 backlog item with acceptance criteria, dependencies,
+  expected tests, and explicit exclusions
+- scoped host-local bootstrap, private-build password sessions, centralized
+  Actor policy, Project lifecycle, the Project rail, and per-Actor navigation
+- kept final team authentication, invitations, Conversations, Work Items, and
+  later integration behavior outside M1
 
 ### v0.6 — M0 acceptance record
 
@@ -3357,21 +3367,216 @@ worktree without manual repair.
 
 ### M1-001 Complete identity and Project schema
 
-Complete the production identity and Project schema with Actors, users, bootstrap password credentials, Organizations, Actor-backed memberships, Projects, counters, and sessions. Extend the walking-skeleton migration history; do not replace it.
+Complete the production identity and Project schema with Actors, users,
+password credentials, Organizations, Actor-backed memberships, Projects,
+counters, sessions, Project instructions, per-Actor navigation state, and
+security audit events. Extend the walking-skeleton migration history; never
+replace or rewrite M0 migrations.
+
+**Acceptance criteria**
+
+- append migration `0004_m1_identity_projects.sql` without changing existing
+  M0 IDs or relationships
+- add `users`, `user_password_credentials`, `organization_memberships`,
+  `sessions`, `project_counters`, `project_instructions`,
+  `project_navigation_states`, and `audit_events`
+- expand Project membership roles to Owner, Admin, Member, Viewer, and Worker
+- enforce human-Actor ownership for users and role-compatible Worker
+  memberships in PostgreSQL
+- store only Argon2id password PHC strings and SHA-256 session/CSRF token
+  digests; plaintext credentials never enter rows, logs, URLs, or command
+  arguments
+- preserve case-insensitive Organization-scoped Project-key uniqueness across
+  archived Projects and enforce `[A-Z][A-Z0-9]{1,9}`
+- backfill Project counters, instructions, and provable Organization ownership
+  for the M0 data set without inventing a user, password, or session
+
+**Dependencies:** accepted M0 migrations, Actor records, Project ownership, and
+the M0 PostgreSQL integration harness.
+
+**Expected tests:** real-PostgreSQL M0-to-M1 upgrade, foreign-key and role
+invariants, case-insensitive uniqueness, credential digest storage, session
+expiry/revocation, navigation cross-Project rejection, and concurrent Project
+counter allocation.
+
+**Exclusions:** invitation tokens, password reset, passkeys, OIDC, external
+agent credentials, Work Item tables, and speculative team-authentication
+schema.
 
 ### M1-002 Bootstrap administrator
 
-Create safe first-user setup.
+Create safe first-user setup and the private-build browser session boundary.
+
+**Acceptance criteria**
+
+- add a host-local `bootstrap-admin` command that succeeds only while `users`
+  is empty, holds an advisory bootstrap lock, and creates or explicitly adopts
+  one human Actor, User, personal Organization, and Organization Owner
+  membership transactionally
+- read the password from a non-logging interactive terminal, validate a bounded
+  length, hash it with Argon2id in a blocking worker, and zeroize the plaintext
+  buffer after use
+- support an upgraded M0 host only through an unambiguous active human owner or
+  an explicit non-secret Actor/Organization selection; never rewrite authorship
+- implement login, logout, and session-read APIs with opaque rotating cookies,
+  idle and absolute expiry, generic credential failures, exact Origin checks,
+  and CSRF protection for unsafe cookie-authenticated requests
+- permit non-Secure development cookies only when development mode and a
+  loopback listener are both proven
+
+**Dependencies:** M1-001 identity, credential, session, and Organization
+membership schema.
+
+**Expected tests:** single-winner concurrent bootstrap, rollback atomicity, M0
+Actor adoption, Argon2 verification and dummy unknown-user verification,
+cookie attributes, session rotation/expiry/revocation, CSRF mismatch, exact
+Origin rejection, logout idempotency, and secret redaction.
+
+**Exclusions:** a browser setup route, default credentials, password recovery
+or change UI, email verification, invitations, passkeys, OIDC, and the final
+M7 authentication choice.
 
 ### M1-003 Project creation and archive
 
+Implement Project list, create, detail, switch, and archive domain commands and
+HTTP APIs.
+
+**Acceptance criteria**
+
+- an Organization Owner or Admin can create a Project with a normalized key
+  and bounded display name
+- one transaction creates the Project, creator Owner membership, counter,
+  instructions, initial navigation state, and redacted audit event
+- all list/detail queries join through the authenticated Actor's enabled
+  membership and include `project_id` in resource lookups
+- a non-member receives the same not-found response as a missing Project;
+  members without a management privilege receive forbidden
+- archive locks and versions the Project, records the responsible Actor,
+  rejects any Project with a non-terminal Agent Run, preserves history, and is
+  idempotent for an already archived Project
+- archived Projects disappear from ordinary rail/search results and reject new
+  mutations while remaining explicitly readable to authorized members
+
+**Dependencies:** M1-001 schema, M1-002 authenticated Actor extraction, and
+M1-004 policy decisions.
+
+**Expected tests:** atomic creation, key/name validation, duplicate-key
+conflict, Owner/Admin/Member/Viewer behavior, cross-Project non-disclosure,
+active-run archive conflict, archive attribution/versioning, idempotent retry,
+and preservation of M0 Project history.
+
+**Exclusions:** hard deletion, restore UI, Organization administration,
+default Channels, Work Item workflow, repositories, Execution Workers, and
+bulk Project operations.
+
 ### M1-004 Project membership policy layer
 
-Use Actor IDs in memberships and centralized action-on-resource checks. Version one exercises human Actors; include non-human authorization fixtures without creating an external-agent connection.
+Use Actor IDs in memberships and centralized typed action-on-resource checks.
+Version one exercises human Actors; include non-human authorization fixtures
+without creating an external-agent connection.
+
+**Acceptance criteria**
+
+- define one pure policy layer for Organization Project creation, Project view
+  and management, navigation read/write, Worker invocation, run interruption,
+  and approval response
+- authority derives from active Actor status, enabled membership, role, and any
+  immutable delegated Worker scope; Actor kind alone grants no authority
+- Owner/Admin may manage, Member may perform ordinary collaboration and Worker
+  invocation, Viewer is read-only, and Worker is limited to exact delegated
+  scope
+- retrofit M0 timeline, Agent Run, interrupt, approval, and WebSocket paths to
+  use the authenticated Actor and centralized policy
+- authenticate WebSocket upgrades, validate the exact Origin, and filter
+  events by current Project access so one Project cannot observe another
+
+**Dependencies:** M1-001 roles and sessions plus the existing M0 request and
+realtime boundaries.
+
+**Expected tests:** exhaustive role/action matrix, disabled Actor/membership,
+same-role human and external-agent fixtures, Worker scope, human-required and
+separation-of-duty approval rules, cross-Project HTTP access, WebSocket
+handshake/filtering, and session revocation.
+
+**Exclusions:** invitation/member-management UI, external-agent registration
+or credentials, a system/integration superuser bypass, and final team
+Execution Profile policy.
 
 ### M1-005 Project rail and switcher
 
+Replace the static M0 Project rail with authenticated server data and the
+minimum Project creation/archive navigation.
+
+**Acceptance criteria**
+
+- add sign-in, Home, Project creation, Project overview, Project settings, and
+  existing Thread routes behind a session boundary
+- render Home, pinned Projects, five recent unpinned Projects, the active
+  Project fallback, attention counts supplied by the server, bounded search,
+  and Project creation access
+- use links for navigation, buttons for actions, server-returned capabilities
+  for action visibility, and no client-submitted Actor identity
+- remove archived Projects from ordinary navigation and route successful
+  archive back to Home without silently choosing another Project
+- preserve the restrained M0 visual system, move global navigation outside the
+  main landmark, add a skip link, and replace breakpoint hiding with
+  keyboard-accessible rail/sidebar drawers
+
+**Dependencies:** M1-002 session APIs, M1-003 Project APIs, and M1-004
+capabilities.
+
+**Expected tests:** authenticated/signed-out/expired session states, login and
+logout, rail grouping/search/attention labels, create validation and
+idempotency, archive confirmation/conflict, keyboard and focus behavior,
+phone-sized drawers, hostile text escaping, and accessibility smoke tests.
+
+**Exclusions:** final branding, polished global navigation, derived global
+attention, team member surfaces, Channels beyond the preserved M0 route, Work
+Items, and repository/GitHub UI.
+
 ### M1-006 Remember per-user Project route
+
+Persist and restore each Actor's last successfully opened location independently
+for every Project.
+
+**Acceptance criteria**
+
+- navigation state is keyed by `(project_id, actor_id)`, versioned, and updated
+  only after the referenced same-Project resource loads successfully
+- clients send a structured location kind and canonical resource ID, never an
+  arbitrary authoritative URL or Actor ID
+- switching Project A to Project B and back restores each Project's own last
+  location across reload and relogin
+- stale, archived, unauthorized, or cross-Project locations fall back to the
+  Project overview without exposing the inaccessible resource
+- pin/recent changes and navigation writes use optimistic versions and
+  serialize retries so an older response cannot overwrite a newer location
+
+**Dependencies:** M1-001 navigation schema, M1-003 scoped Project/resource
+queries, and M1-005 routes.
+
+**Expected tests:** A-to-B-to-A restoration, reload/relogin persistence,
+same-Project composite foreign keys, stale-resource fallback, cross-Project
+rejection, optimistic conflict, pin ordering, and no browser-storage
+dependency.
+
+**Exclusions:** Conversation read cursors, Work view/filter/drawer state not
+yet backed by M2/M4 resources, cross-device live synchronization, and
+client-authored redirects.
+
+### M1 exit criteria
+
+- host-local first-admin bootstrap succeeds exactly once without credential
+  disclosure
+- the administrator can sign in and out, create two Projects, archive an
+  eligible Project, and see only authorized active Projects in the rail
+- switching between the two Projects restores independent remembered routes
+  after reload and relogin
+- existing M0 timeline and hosted-run behavior works through real session
+  authentication and Project policy
+- PostgreSQL migration/upgrade, session/CSRF, cross-Project, non-human policy,
+  realtime isolation, frontend accessibility, and production-build tests pass
+- the M2 Conversations backlog is elaborated before M2 implementation begins
 
 ## Milestone M2: Conversations
 
@@ -3897,6 +4102,17 @@ interrupted, non-terminal, missing, or ambiguous turn becomes an actionable
 application `interrupted` result with its worktree preserved. This proved the
 required M0 recovery boundary without inventing continuation or resetting
 dirty state.
+
+## D-033: Private-build authentication uses host-bootstrapped local sessions through M6
+
+**Status:** Accepted as an interim private-build boundary
+
+**Reason:** M1 needs real human identity and server-resolved Actor sessions
+before Projects, Conversations, and execution can be authorized correctly.
+Host-local bootstrap plus Argon2id password verification and opaque,
+server-side cookie sessions provide that boundary without exposing a setup
+route or choosing the final team authentication product. Passkeys, OIDC, and
+the final combination remain O-004 and must be resolved before M7.
 
 ---
 
