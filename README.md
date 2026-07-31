@@ -6,7 +6,7 @@ conversation, structured work, hosted execution workers, and GitHub delivery.
 The canonical product and engineering plan is
 [PROJECT_SOURCE_OF_TRUTH.md](./PROJECT_SOURCE_OF_TRUTH.md).
 
-## M0 development
+## Development
 
 Prerequisites:
 
@@ -43,6 +43,23 @@ connection, retained execution profile, and trusted spike repository. Set
 `AGENT_WORKSPACE_DEV_REPOSITORY_MIRROR` to the absolute bare-mirror path.
 `AGENT_WORKSPACE_DEMO_EXECUTOR=true` enables the development-only deterministic
 approval/file-change loop; production configuration rejects this shortcut.
+
+For a new database, create the first browser administrator from an interactive
+host terminal. The password is prompted twice and is never accepted in an
+argument or environment variable:
+
+```bash
+cargo run -p agent-workspace-server -- bootstrap-admin \
+  --login-name mischa \
+  --display-name "Mischa Nelson" \
+  --organization-name "Personal" \
+  --organization-slug personal
+```
+
+On an upgraded M0 database, the command adopts the single unambiguous active
+human Project owner. If more than one ownership pair exists, rerun it with the
+non-secret `--adopt-actor <uuid> --organization-id <uuid>` selection. Bootstrap
+is permanently refused after the first User commits.
 
 The Rust server serves the built frontend and API on `127.0.0.1:3100`. During
 frontend development, Vite proxies HTTP and WebSocket traffic to that port.

@@ -67,6 +67,7 @@ pub struct AppConfig {
     pub environment: Environment,
     pub server_addr: SocketAddr,
     pub webhook_addr: SocketAddr,
+    pub allowed_origins: Vec<String>,
     pub database_url: SecretString,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
@@ -109,6 +110,7 @@ impl AppConfig {
         ));
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
+        let allowed_origins = allowed_origins(values, environment)?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
         validate_loopback("WEBHOOK_ADDR", webhook_addr, environment)?;
@@ -140,6 +142,7 @@ impl AppConfig {
             environment,
             server_addr,
             webhook_addr,
+            allowed_origins,
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,
@@ -150,6 +153,62 @@ impl AppConfig {
             log_filter,
         })
     }
+}
+
+fn allowed_origins(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+) -> Result<Vec<String>, ConfigError> {
+    let configured = values
+        .get(&format!("{PREFIX}ALLOWED_ORIGINS"))
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim();
+    let candidates = if configured.is_empty() && environment.is_development() {
+        vec![
+            "http://127.0.0.1:3100",
+            "http://localhost:3100",
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ]
+    } else if configured.is_empty() {
+        return Err(ConfigError::Missing(format!("{PREFIX}ALLOWED_ORIGINS")));
+    } else {
+        configured.split(',').map(str::trim).collect()
+    };
+
+    let mut origins = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let parsed = candidate
+            .parse::<http::Uri>()
+            .map_err(|error| ConfigError::Invalid {
+                key: format!("{PREFIX}ALLOWED_ORIGINS"),
+                reason: error.to_string(),
+            })?;
+        let valid_scheme = matches!(parsed.scheme_str(), Some("http" | "https"));
+        let valid_authority = parsed
+            .authority()
+            .is_some_and(|authority| !authority.as_str().contains('@'));
+        let valid_path = parsed
+            .path_and_query()
+            .is_none_or(|path| path.as_str() == "/");
+        if !valid_scheme
+            || !valid_authority
+            || !valid_path
+            || candidate.contains('*')
+            || candidate == "null"
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}ALLOWED_ORIGINS"),
+                reason: "origins must be exact http(s) origins without paths or wildcards".into(),
+            });
+        }
+        let normalized = candidate.trim_end_matches('/').to_owned();
+        if !origins.contains(&normalized) {
+            origins.push(normalized);
+        }
+    }
+    Ok(origins)
 }
 
 fn validate_loopback(
@@ -244,6 +303,10 @@ mod tests {
         let mut values = base_values();
         values.insert("AGENT_WORKSPACE_ENV".to_owned(), "production".to_owned());
         values.insert(
+            "AGENT_WORKSPACE_ALLOWED_ORIGINS".to_owned(),
+            "https://workspace.example.com".to_owned(),
+        );
+        values.insert(
             "AGENT_WORKSPACE_SERVER_ADDR".to_owned(),
             "0.0.0.0:3100".to_owned(),
         );
@@ -253,5 +316,20 @@ mod tests {
             config.server_addr.ip(),
             std::net::IpAddr::from([0, 0, 0, 0])
         );
+    }
+
+    #[test]
+    fn production_requires_exact_allowed_origins() {
+        let mut values = base_values();
+        values.insert("AGENT_WORKSPACE_ENV".to_owned(), "production".to_owned());
+        let error = AppConfig::from_values(&values).expect_err("origin must be configured");
+        assert!(error.to_string().contains("ALLOWED_ORIGINS"));
+
+        values.insert(
+            "AGENT_WORKSPACE_ALLOWED_ORIGINS".to_owned(),
+            "https://*.example.com".to_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("wildcard must be rejected");
+        assert!(error.to_string().contains("without paths or wildcards"));
     }
 }

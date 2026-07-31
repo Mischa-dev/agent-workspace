@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use agent_workspace_server::{
-    AppState, config::AppConfig, realtime::RealtimeHub, recovery, router, seed, shutdown_signal,
-    telemetry::init_tracing,
+    AppState, bootstrap, config::AppConfig, rate_limit::RateLimiters, realtime::RealtimeHub,
+    recovery, router, seed, shutdown_signal, telemetry::init_tracing,
 };
-use anyhow::Context;
+use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 
@@ -26,17 +26,34 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("apply database migrations")?;
 
-    if std::env::args().nth(1).as_deref() == Some("dev-seed") {
-        let seeded = seed::dev_seed(&pool, &config)
-            .await
-            .context("seed development data")?;
-        println!("{}", serde_json::to_string_pretty(&seeded)?);
-        return Ok(());
+    let mut arguments = std::env::args().skip(1);
+    match arguments.next().as_deref() {
+        Some("bootstrap-admin") => {
+            let command = bootstrap::parse_command(arguments)
+                .context("parse host-local bootstrap command")?;
+            let password =
+                bootstrap::read_password_interactively().context("read administrator password")?;
+            let bootstrapped = bootstrap::bootstrap_admin(&pool, command, password)
+                .await
+                .context("bootstrap administrator")?;
+            println!("{}", serde_json::to_string_pretty(&bootstrapped)?);
+            return Ok(());
+        }
+        Some("dev-seed") => {
+            let seeded = seed::dev_seed(&pool, &config)
+                .await
+                .context("seed development data")?;
+            println!("{}", serde_json::to_string_pretty(&seeded)?);
+            return Ok(());
+        }
+        Some(_) => bail!("unknown command"),
+        None => {}
     }
 
     let state = AppState {
         config: Arc::clone(&config),
         pool,
+        rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(256),
     };
 

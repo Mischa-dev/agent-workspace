@@ -1,25 +1,144 @@
 use axum::{
     Json,
-    http::StatusCode,
+    extract::{FromRequest, FromRequestParts, Path, Query, Request},
+    http::{HeaderValue, StatusCode, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tracing::error;
+
+/// JSON request extractor that keeps every API rejection inside the public
+/// error-envelope contract. Axum's default rejection includes parser details
+/// in a plain-text body, which is neither stable nor appropriate to expose.
+pub struct ApiJson<T>(pub T);
+
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = AppError;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        Json::<T>::from_request(request, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(|_| AppError::Invalid("JSON request body"))
+    }
+}
+
+/// Path extractor with a stable, structured rejection.
+pub struct ApiPath<T>(pub T);
+
+impl<S, T> FromRequestParts<S> for ApiPath<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned + Send,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Path::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Path(value)| Self(value))
+            .map_err(|_| AppError::Invalid("request path"))
+    }
+}
+
+/// Query extractor with a stable, structured rejection.
+pub struct ApiQuery<T>(pub T);
+
+impl<S, T> FromRequestParts<S> for ApiQuery<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(value)| Self(value))
+            .map_err(|_| AppError::Invalid("request query"))
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
+    #[error("authentication is required")]
+    AuthenticationRequired,
+    #[error("invalid credentials")]
+    InvalidCredentials,
+    #[error("the actor is not authorized")]
+    Forbidden,
+    #[error("request origin was rejected")]
+    OriginRejected,
+    #[error("CSRF token is invalid")]
+    CsrfInvalid,
     #[error("{0} was not found")]
     NotFound(&'static str),
     #[error("{0} conflict: {1}")]
     Conflict(&'static str, &'static str),
+    #[error("{resource} version conflict at version {current_version}")]
+    VersionConflict {
+        resource: &'static str,
+        current_version: i64,
+    },
     #[error("invalid request: {0}")]
     Invalid(&'static str),
+    #[error("validation failed: {0}")]
+    Validation(&'static str),
+    #[error("the project key already exists")]
+    ProjectKeyConflict,
+    #[error("the project has an active run")]
+    ProjectHasActiveRuns,
+    #[error("the project is archived")]
+    ProjectArchived,
+    #[error("request rate limit exceeded; retry after {retry_after_seconds} seconds")]
+    RateLimited { retry_after_seconds: u64 },
     #[error("development authentication is unavailable")]
     DevelopmentAuthUnavailable,
     #[error("internal invariant failed: {0}")]
     Internal(&'static str),
+}
+
+impl AppError {
+    pub fn rate_limited(retry_after_seconds: u64) -> Self {
+        Self::RateLimited {
+            retry_after_seconds: retry_after_seconds.max(1),
+        }
+    }
+
+    pub fn log_category(&self) -> &'static str {
+        match self {
+            Self::Database(_) => "database",
+            Self::AuthenticationRequired => "authentication_required",
+            Self::InvalidCredentials => "invalid_credentials",
+            Self::Forbidden => "forbidden",
+            Self::OriginRejected => "origin_rejected",
+            Self::CsrfInvalid => "csrf_invalid",
+            Self::NotFound(_) => "not_found",
+            Self::Conflict(_, _) => "conflict",
+            Self::VersionConflict { .. } => "version_conflict",
+            Self::Invalid(_) => "invalid",
+            Self::Validation(_) => "validation",
+            Self::ProjectKeyConflict => "project_key_conflict",
+            Self::ProjectHasActiveRuns => "project_has_active_runs",
+            Self::ProjectArchived => "project_archived",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
+            Self::Internal(_) => "internal",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -31,47 +150,275 @@ struct ErrorEnvelope {
 struct ErrorBody {
     code: &'static str,
     message: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<ErrorDetails>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorDetails {
+    resource: &'static str,
+    current_version: i64,
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, code, message) = match self {
+        let details = match &self {
+            Self::VersionConflict {
+                resource,
+                current_version,
+            } => Some(ErrorDetails {
+                resource,
+                current_version: *current_version,
+            }),
+            _ => None,
+        };
+        let (status, code, message, retry_after_seconds) = match self {
+            Self::AuthenticationRequired => (
+                StatusCode::UNAUTHORIZED,
+                "authentication_required",
+                "Sign in to continue.",
+                None,
+            ),
+            Self::InvalidCredentials => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+                "The login name or password is invalid.",
+                None,
+            ),
+            Self::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "You do not have permission to perform this action.",
+                None,
+            ),
+            Self::OriginRejected => (
+                StatusCode::FORBIDDEN,
+                "request_origin_rejected",
+                "The request origin is not allowed.",
+                None,
+            ),
+            Self::CsrfInvalid => (
+                StatusCode::FORBIDDEN,
+                "csrf_token_invalid",
+                "The request security token is invalid.",
+                None,
+            ),
             Self::NotFound(_) => (
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "The requested resource was not found.",
+                None,
             ),
             Self::Conflict(_, _) => (
                 StatusCode::CONFLICT,
                 "conflict",
                 "The request conflicts with current durable state.",
+                None,
+            ),
+            Self::VersionConflict { .. } => (
+                StatusCode::CONFLICT,
+                "version_conflict",
+                "The resource changed after it was loaded.",
+                None,
             ),
             Self::Invalid(_) => (
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "The request is invalid.",
+                None,
+            ),
+            Self::Validation(_) => (
+                StatusCode::BAD_REQUEST,
+                "validation_failed",
+                "One or more fields are invalid.",
+                None,
+            ),
+            Self::ProjectKeyConflict => (
+                StatusCode::CONFLICT,
+                "project_key_conflict",
+                "That Project key is already in use.",
+                None,
+            ),
+            Self::ProjectHasActiveRuns => (
+                StatusCode::CONFLICT,
+                "project_has_active_runs",
+                "Interrupt or finish active runs before archiving this Project.",
+                None,
+            ),
+            Self::ProjectArchived => (
+                StatusCode::CONFLICT,
+                "project_archived",
+                "The Project is archived.",
+                None,
+            ),
+            Self::RateLimited {
+                retry_after_seconds,
+            } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                "Too many attempts. Try again later.",
+                Some(retry_after_seconds),
             ),
             Self::DevelopmentAuthUnavailable => (
                 StatusCode::FORBIDDEN,
                 "development_auth_unavailable",
                 "Development authentication is unavailable.",
+                None,
             ),
-            Self::Database(_) | Self::Internal(_) => {
-                error!(error = ?self, "request failed");
+            Self::Database(error) => {
+                let (database_code, database_constraint) = error
+                    .as_database_error()
+                    .map(|database_error| {
+                        (
+                            database_error.code().map(|value| value.into_owned()),
+                            database_error.constraint().map(str::to_owned),
+                        )
+                    })
+                    .unwrap_or((None, None));
+                error!(
+                    database_code = database_code.as_deref().unwrap_or("unavailable"),
+                    database_constraint = database_constraint.as_deref().unwrap_or("unavailable"),
+                    "request database operation failed"
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
                     "The request could not be completed.",
+                    None,
+                )
+            }
+            Self::Internal(invariant) => {
+                error!(invariant, "request invariant failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "The request could not be completed.",
+                    None,
                 )
             }
         };
 
-        (
+        let mut response = (
             status,
             Json(ErrorEnvelope {
-                error: ErrorBody { code, message },
+                error: ErrorBody {
+                    code,
+                    message,
+                    details,
+                },
             }),
         )
-            .into_response()
+            .into_response();
+        if let Some(seconds) = retry_after_seconds
+            && let Ok(value) = HeaderValue::from_str(&seconds.to_string())
+        {
+            response.headers_mut().insert(RETRY_AFTER, value);
+        }
+        response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::Request,
+        response::IntoResponse,
+        routing::get,
+    };
+    use serde::Deserialize;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use super::{ApiPath, ApiQuery, AppError};
+
+    async fn path_handler(ApiPath(_id): ApiPath<Uuid>) {}
+
+    #[derive(Deserialize)]
+    struct TestQuery {
+        limit: u16,
+    }
+
+    async fn query_handler(ApiQuery(query): ApiQuery<TestQuery>) {
+        let _ = query.limit;
+    }
+
+    #[test]
+    fn rate_limit_errors_include_retry_after() {
+        let response = AppError::rate_limited(17).into_response();
+
+        assert_eq!(response.status(), 429);
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok()),
+            Some("17")
+        );
+    }
+
+    #[tokio::test]
+    async fn database_errors_do_not_expose_driver_details_in_the_response() {
+        let response = AppError::Database(sqlx::Error::Protocol(
+            "synthetic credential must remain private".to_owned(),
+        ))
+        .into_response();
+        let body = to_bytes(response.into_body(), 16_384)
+            .await
+            .expect("error response body");
+        let body = String::from_utf8(body.to_vec()).expect("UTF-8 error response");
+
+        assert!(!body.contains("synthetic credential"));
+        assert!(body.contains("\"code\":\"internal_error\""));
+    }
+
+    #[tokio::test]
+    async fn version_conflicts_return_the_authoritative_version() {
+        let response = AppError::VersionConflict {
+            resource: "project_navigation",
+            current_version: 7,
+        }
+        .into_response();
+        assert_eq!(response.status(), 409);
+        let body = to_bytes(response.into_body(), 16_384)
+            .await
+            .expect("version conflict body");
+        let body = String::from_utf8(body.to_vec()).expect("UTF-8 conflict response");
+
+        assert!(body.contains("\"code\":\"version_conflict\""));
+        assert!(body.contains("\"resource\":\"project_navigation\""));
+        assert!(body.contains("\"currentVersion\":7"));
+    }
+
+    #[tokio::test]
+    async fn malformed_path_and_query_values_use_the_error_envelope() {
+        let application = Router::new()
+            .route("/items/{id}", get(path_handler))
+            .route("/search", get(query_handler));
+
+        for uri in ["/items/not-a-uuid", "/search?limit=not-a-number"] {
+            let response = application
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), 400, "{uri}");
+            let body = to_bytes(response.into_body(), 16_384)
+                .await
+                .expect("error response body");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).expect("JSON error envelope")["error"]
+                    ["code"],
+                "invalid_request",
+                "{uri}"
+            );
+        }
     }
 }

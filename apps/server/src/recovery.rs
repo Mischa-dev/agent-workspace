@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -29,7 +29,7 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         r#"
         SELECT id, state AS previous_state, conversation_id
         FROM agent_runs
-        WHERE state IN ('created', 'queued', 'starting', 'working', 'blocked')
+        WHERE state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
         ORDER BY created_at
         "#,
     )
@@ -155,7 +155,41 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         transaction.commit().await?;
     }
 
+    let idled_provider_sessions = idle_terminal_provider_sessions(&state.pool).await?;
+    if idled_provider_sessions > 0 {
+        tracing::warn!(
+            idled_provider_sessions,
+            "reconciled active provider Sessions without a non-terminal Agent Run"
+        );
+    }
+
     Ok(runs.len() as u64)
+}
+
+async fn idle_terminal_provider_sessions(pool: &PgPool) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        r#"
+        UPDATE provider_sessions ps
+        SET state = 'idle', updated_at = now()
+        WHERE ps.state = 'active'
+          AND EXISTS (
+              SELECT 1
+              FROM agent_runs linked
+              WHERE linked.provider_session_id = ps.id
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM agent_runs active
+              WHERE active.provider_session_id = ps.id
+                AND active.state IN (
+                    'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
+                )
+          )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, AppError> {

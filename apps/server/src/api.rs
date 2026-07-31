@@ -2,7 +2,8 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::State,
+    http::HeaderMap,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -11,14 +12,21 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    auth::{AuthenticatedActor, require_authenticated_write},
     domain::{RunState, allocate_conversation_sequence, transition_run},
-    error::AppError,
+    error::{ApiJson, ApiPath, AppError},
     git_runtime,
+    policy::{
+        Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
+        MembershipRole, ProjectScope, Resource, Subject, authorize,
+    },
     realtime::RealtimeEvent,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(crate::auth::router())
+        .merge(crate::projects::router())
         .route("/api/v1/dev/bootstrap", get(development_bootstrap))
         .route(
             "/api/v1/conversations/{id}/timeline",
@@ -46,35 +54,68 @@ struct DevelopmentBootstrap {
 
 async fn development_bootstrap(
     State(state): State<AppState>,
+    principal: AuthenticatedActor,
 ) -> Result<Json<DevelopmentBootstrap>, AppError> {
-    let identity = development_identity(&state).await?;
-    let (channel_id, thread_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
+    if !state.config.environment.is_development() || !state.config.server_addr.ip().is_loopback() {
+        return Err(AppError::DevelopmentAuthUnavailable);
+    }
+
+    #[derive(FromRow)]
+    struct BootstrapRow {
+        project_id: Uuid,
+        channel_id: Uuid,
+        thread_id: Uuid,
+        membership_role: String,
+        membership_enabled: bool,
+    }
+
+    let bootstrap = sqlx::query_as::<_, BootstrapRow>(
         r#"
-        SELECT parent.id, thread.id
+        SELECT
+            thread.project_id,
+            parent.id AS channel_id,
+            thread.id AS thread_id,
+            pm.role AS membership_role,
+            pm.enabled AS membership_enabled
         FROM conversations thread
         JOIN conversations parent ON parent.id = thread.parent_channel_id
-        WHERE thread.project_id = $1
+        JOIN projects p ON p.id = thread.project_id
+        JOIN project_memberships pm
+          ON pm.project_id = thread.project_id
+         AND pm.actor_id = $1
+        WHERE p.archived_at IS NULL
           AND thread.kind = 'thread'
           AND thread.archived_at IS NULL
           AND parent.archived_at IS NULL
-        ORDER BY thread.created_at
+        ORDER BY (p.project_key = 'AW') DESC, thread.created_at
         LIMIT 1
         "#,
     )
-    .bind(identity.project_id)
+    .bind(principal.actor_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("seeded_thread"))?;
+    authorize_project_action(
+        &principal,
+        bootstrap.project_id,
+        &bootstrap.membership_role,
+        bootstrap.membership_enabled,
+        Action::ProjectView,
+        Resource::Project(ProjectScope::thread(
+            bootstrap.project_id,
+            bootstrap.thread_id,
+        )),
+    )?;
 
     Ok(Json(DevelopmentBootstrap {
-        project_id: identity.project_id,
-        channel_id,
-        thread_id,
+        project_id: bootstrap.project_id,
+        channel_id: bootstrap.channel_id,
+        thread_id: bootstrap.thread_id,
     }))
 }
 
 #[derive(Clone, Copy)]
-struct DevelopmentIdentity {
+struct RequestIdentity {
     actor_id: Uuid,
     project_id: Uuid,
 }
@@ -86,6 +127,10 @@ struct ConversationRow {
     kind: String,
     parent_channel_id: Option<Uuid>,
     name: String,
+    conversation_archived: bool,
+    project_archived: bool,
+    membership_role: String,
+    membership_enabled: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -110,7 +155,7 @@ struct TimelineEntryRow {
 
 #[derive(Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RunView {
+struct RunRow {
     id: Uuid,
     state: String,
     repository_id: Uuid,
@@ -121,9 +166,22 @@ struct RunView {
     updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunView {
+    #[serde(flatten)]
+    run: RunRow,
+    capabilities: RunCapabilities,
+}
+
+#[derive(Debug, Serialize)]
+struct RunCapabilities {
+    interrupt: bool,
+}
+
 #[derive(Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ApprovalView {
+struct ApprovalRow {
     id: Uuid,
     agent_run_id: Uuid,
     kind: String,
@@ -132,6 +190,33 @@ struct ApprovalView {
     status: String,
     response: Option<serde_json::Value>,
     created_at: String,
+    #[serde(skip_serializing)]
+    repository_id: Uuid,
+    #[serde(skip_serializing)]
+    requesting_actor_id: Uuid,
+    #[serde(skip_serializing)]
+    eligible_role: String,
+    #[serde(skip_serializing)]
+    human_required: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalView {
+    #[serde(flatten)]
+    approval: ApprovalRow,
+    capabilities: ApprovalCapabilities,
+}
+
+#[derive(Debug, Serialize)]
+struct ApprovalCapabilities {
+    respond: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TimelineCapabilities {
+    worker_invoke: bool,
 }
 
 #[derive(Serialize)]
@@ -141,6 +226,7 @@ struct TimelineResponse {
     entries: Vec<TimelineEntry>,
     active_run: Option<RunView>,
     approvals: Vec<ApprovalView>,
+    capabilities: TimelineCapabilities,
 }
 
 #[derive(Serialize)]
@@ -194,11 +280,14 @@ struct WorkerEventView {
 
 async fn conversation_timeline(
     State(state): State<AppState>,
-    Path(conversation_id): Path<Uuid>,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
 ) -> Result<Json<TimelineResponse>, AppError> {
-    let identity = development_identity(&state).await?;
     let conversation =
-        conversation_for_project(&state, conversation_id, identity.project_id).await?;
+        authorized_conversation(&state, &principal, conversation_id, Action::ProjectView).await?;
+    if conversation.conversation_archived {
+        return Err(AppError::NotFound("conversation"));
+    }
 
     let rows = sqlx::query_as::<_, TimelineEntryRow>(
         r#"
@@ -220,6 +309,9 @@ async fn conversation_timeline(
             are.summary AS event_summary,
             are.payload AS event_payload
         FROM conversation_entries ce
+        JOIN conversations c
+          ON c.id = ce.conversation_id
+         AND c.project_id = $2
         LEFT JOIN messages m ON m.id = ce.message_id
         LEFT JOIN actors a ON a.id = m.author_actor_id
         LEFT JOIN project_memberships pm
@@ -232,42 +324,127 @@ async fn conversation_timeline(
         "#,
     )
     .bind(conversation_id)
-    .bind(identity.project_id)
+    .bind(conversation.project_id)
     .fetch_all(&state.pool)
     .await?;
 
-    let active_run = sqlx::query_as::<_, RunView>(
+    let active_run = sqlx::query_as::<_, RunRow>(
         r#"
         SELECT
-            id, state, repository_id, repository_workspace_id,
-            provider_session_id, failure_reason,
-            created_at::text AS created_at,
-            updated_at::text AS updated_at
+            agent_runs.id,
+            agent_runs.state,
+            agent_runs.repository_id,
+            agent_runs.repository_workspace_id,
+            agent_runs.provider_session_id,
+            agent_runs.failure_reason,
+            agent_runs.created_at::text AS created_at,
+            agent_runs.updated_at::text AS updated_at
         FROM agent_runs
-        WHERE conversation_id = $1
+        JOIN conversations c
+          ON c.id = agent_runs.conversation_id
+         AND c.project_id = $2
+        WHERE agent_runs.conversation_id = $1
           AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        ORDER BY created_at DESC
+        ORDER BY agent_runs.created_at DESC
         LIMIT 1
         "#,
     )
     .bind(conversation_id)
+    .bind(conversation.project_id)
     .fetch_optional(&state.pool)
     .await?;
 
-    let approvals = sqlx::query_as::<_, ApprovalView>(
+    let approvals = sqlx::query_as::<_, ApprovalRow>(
         r#"
         SELECT
             aa.id, aa.agent_run_id, aa.kind, aa.summary, aa.options,
-            aa.status, aa.response, aa.created_at::text AS created_at
+            aa.status, aa.response, aa.created_at::text AS created_at,
+            ar.repository_id,
+            aa.requesting_actor_id,
+            aa.eligible_role,
+            aa.human_required
         FROM agent_approvals aa
         JOIN agent_runs ar ON ar.id = aa.agent_run_id
+        JOIN conversations c
+          ON c.id = ar.conversation_id
+         AND c.project_id = $2
         WHERE ar.conversation_id = $1
         ORDER BY aa.created_at ASC
         "#,
     )
     .bind(conversation_id)
+    .bind(conversation.project_id)
     .fetch_all(&state.pool)
     .await?;
+
+    let worker_invoke = conversation.kind == "thread"
+        && !conversation.project_archived
+        && authorize_project_action(
+            &principal,
+            conversation.project_id,
+            &conversation.membership_role,
+            conversation.membership_enabled,
+            Action::WorkerInvoke,
+            Resource::Project(ProjectScope::thread(
+                conversation.project_id,
+                conversation.id,
+            )),
+        )
+        .is_ok();
+    let active_run = active_run.map(|run| {
+        let interrupt = authorize_project_action(
+            &principal,
+            conversation.project_id,
+            &conversation.membership_role,
+            conversation.membership_enabled,
+            Action::RunInterrupt,
+            Resource::Project(ProjectScope::run(
+                conversation.project_id,
+                conversation.id,
+                run.id,
+                run.repository_id,
+            )),
+        )
+        .is_ok();
+        RunView {
+            run,
+            capabilities: RunCapabilities { interrupt },
+        }
+    });
+    let approvals = approvals
+        .into_iter()
+        .map(|approval| {
+            let eligible_role = parse_membership_role(&approval.eligible_role)?;
+            let respond = approval.status == "pending"
+                && authorize_project_action(
+                    &principal,
+                    conversation.project_id,
+                    &conversation.membership_role,
+                    conversation.membership_enabled,
+                    Action::ApprovalRespond,
+                    Resource::Approval {
+                        scope: ProjectScope::approval(
+                            conversation.project_id,
+                            conversation.id,
+                            approval.agent_run_id,
+                            approval.repository_id,
+                            approval.id,
+                        ),
+                        requirements: ApprovalRequirements {
+                            requesting_actor_id: approval.requesting_actor_id,
+                            eligibility: ApprovalEligibility::Role(eligible_role),
+                            human_required: approval.human_required,
+                            separation_of_duty: false,
+                        },
+                    },
+                )
+                .is_ok();
+            Ok(ApprovalView {
+                approval,
+                capabilities: ApprovalCapabilities { respond },
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
 
     Ok(Json(TimelineResponse {
         conversation: ConversationView {
@@ -280,6 +457,7 @@ async fn conversation_timeline(
         entries: rows.into_iter().map(TimelineEntry::from).collect(),
         active_run,
         approvals,
+        capabilities: TimelineCapabilities { worker_invoke },
     }))
 }
 
@@ -344,19 +522,34 @@ struct StartRunResponse {
 
 async fn start_agent_run(
     State(state): State<AppState>,
-    Path(conversation_id): Path<Uuid>,
-    Json(request): Json<StartRunRequest>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<StartRunRequest>,
 ) -> Result<Json<StartRunResponse>, AppError> {
-    let identity = development_identity(&state).await?;
+    require_authenticated_write(&state, &headers, &principal)?;
     let prompt = request.prompt.trim();
     if prompt.is_empty() || prompt.len() > 20_000 {
         return Err(AppError::Invalid("prompt length"));
     }
     let conversation =
-        conversation_for_project(&state, conversation_id, identity.project_id).await?;
+        authorized_conversation(&state, &principal, conversation_id, Action::WorkerInvoke).await?;
+    if conversation.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+    if conversation.conversation_archived {
+        return Err(AppError::Conflict(
+            "conversation",
+            "archived Conversations reject Agent Runs",
+        ));
+    }
     if conversation.kind != "thread" {
         return Err(AppError::Invalid("agent runs require a Thread"));
     }
+    let identity = RequestIdentity {
+        actor_id: principal.actor_id,
+        project_id: conversation.project_id,
+    };
 
     let setup = sqlx::query_as::<_, RunSetup>(
         r#"
@@ -390,9 +583,10 @@ async fn start_agent_run(
     .bind(identity.project_id)
     .bind(
         sqlx::query_scalar::<_, Option<Uuid>>(
-            "SELECT repository_id FROM conversations WHERE id = $1",
+            "SELECT repository_id FROM conversations WHERE id = $1 AND project_id = $2",
         )
         .bind(conversation_id)
+        .bind(identity.project_id)
         .fetch_one(&state.pool)
         .await?,
     )
@@ -423,16 +617,29 @@ async fn start_agent_run(
         .join(run_id.to_string());
 
     let mut transaction = state.pool.begin().await?;
+    guard_conversation_mutation(
+        &mut transaction,
+        &principal,
+        conversation_id,
+        identity.project_id,
+        Action::WorkerInvoke,
+    )
+    .await?;
     if sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
-            SELECT 1 FROM agent_runs
-            WHERE conversation_id = $1
-              AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+            SELECT 1
+            FROM agent_runs ar
+            JOIN conversations c
+              ON c.id = ar.conversation_id
+             AND c.project_id = $2
+            WHERE ar.conversation_id = $1
+              AND ar.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
         )
         "#,
     )
     .bind(conversation_id)
+    .bind(identity.project_id)
     .fetch_one(&mut *transaction)
     .await?
     {
@@ -443,10 +650,11 @@ async fn start_agent_run(
     }
 
     sqlx::query(
-        "UPDATE conversations SET repository_id = COALESCE(repository_id, $2), updated_at = now() WHERE id = $1",
+        "UPDATE conversations SET repository_id = COALESCE(repository_id, $2), updated_at = now() WHERE id = $1 AND project_id = $3",
     )
     .bind(conversation_id)
     .bind(setup.repository_id)
+    .bind(identity.project_id)
     .execute(&mut *transaction)
     .await?;
 
@@ -632,7 +840,7 @@ async fn fail_provider_start(state: &AppState, run_id: Uuid) -> Result<(), AppEr
 
 async fn prepare_demo_blocker(
     state: &AppState,
-    identity: DevelopmentIdentity,
+    identity: RequestIdentity,
     run_id: Uuid,
     worktree_id: Uuid,
     conversation_id: Uuid,
@@ -713,10 +921,12 @@ struct ApprovalResponse {
 
 async fn respond_to_approval(
     State(state): State<AppState>,
-    Path(approval_id): Path<Uuid>,
-    Json(response): Json<ApprovalResponse>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(approval_id): ApiPath<Uuid>,
+    ApiJson(response): ApiJson<ApprovalResponse>,
 ) -> Result<Json<ApprovalView>, AppError> {
-    let identity = development_identity(&state).await?;
+    require_authenticated_write(&state, &headers, &principal)?;
     if !matches!(response.decision.as_str(), "approve" | "deny") {
         return Err(AppError::Invalid("unknown approval decision"));
     }
@@ -725,6 +935,13 @@ async fn respond_to_approval(
     struct ApprovalContext {
         run_id: Uuid,
         conversation_id: Uuid,
+        project_id: Uuid,
+        repository_id: Uuid,
+        requesting_actor_id: Uuid,
+        eligible_role: String,
+        human_required: bool,
+        membership_role: String,
+        membership_enabled: bool,
         status: String,
         responded_by_actor_id: Option<Uuid>,
         current_response: Option<serde_json::Value>,
@@ -736,29 +953,65 @@ async fn respond_to_approval(
         SELECT
             aa.agent_run_id AS run_id,
             ar.conversation_id,
+            c.project_id,
+            ar.repository_id,
+            aa.requesting_actor_id,
+            aa.eligible_role,
+            aa.human_required,
+            pm.role AS membership_role,
+            pm.enabled AS membership_enabled,
             aa.status,
             aa.responded_by_actor_id,
             aa.response AS current_response
         FROM agent_approvals aa
         JOIN agent_runs ar ON ar.id = aa.agent_run_id
         JOIN conversations c ON c.id = ar.conversation_id
-        WHERE aa.id = $1 AND c.project_id = $2
+        JOIN project_memberships pm
+          ON pm.project_id = c.project_id
+         AND pm.actor_id = $2
+        WHERE aa.id = $1
         FOR UPDATE OF aa
+        FOR SHARE OF pm
         "#,
     )
     .bind(approval_id)
-    .bind(identity.project_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_approval"))?;
+    let eligible_role = parse_membership_role(&context.eligible_role)?;
+    authorize_project_action(
+        &principal,
+        context.project_id,
+        &context.membership_role,
+        context.membership_enabled,
+        Action::ApprovalRespond,
+        Resource::Approval {
+            scope: ProjectScope::approval(
+                context.project_id,
+                context.conversation_id,
+                context.run_id,
+                context.repository_id,
+                approval_id,
+            ),
+            requirements: ApprovalRequirements {
+                requesting_actor_id: context.requesting_actor_id,
+                eligibility: ApprovalEligibility::Role(eligible_role),
+                human_required: context.human_required,
+                separation_of_duty: false,
+            },
+        },
+    )?;
 
     let response_json = serde_json::json!({"decision": response.decision});
     if context.status == "resolved" {
-        if context.responded_by_actor_id == Some(identity.actor_id)
+        if context.responded_by_actor_id == Some(principal.actor_id)
             && context.current_response == Some(response_json)
         {
             transaction.rollback().await?;
-            return fetch_approval(&state, approval_id).await.map(Json);
+            return fetch_approval(&state, approval_id, context.project_id)
+                .await
+                .map(Json);
         }
         return Err(AppError::Conflict(
             "agent_approval",
@@ -777,7 +1030,7 @@ async fn respond_to_approval(
         "#,
     )
     .bind(approval_id)
-    .bind(identity.actor_id)
+    .bind(principal.actor_id)
     .bind(&response_json)
     .execute(&mut *transaction)
     .await?;
@@ -789,7 +1042,7 @@ async fn respond_to_approval(
         serde_json::json!({
             "approval_id": approval_id,
             "decision": response.decision,
-            "responded_by_actor_id": identity.actor_id
+            "responded_by_actor_id": principal.actor_id
         }),
     )
     .await?;
@@ -819,7 +1072,7 @@ async fn respond_to_approval(
     transaction.commit().await?;
     publish_timeline_update(
         &state,
-        identity.project_id,
+        context.project_id,
         context.conversation_id,
         context.run_id,
     );
@@ -830,11 +1083,17 @@ async fn respond_to_approval(
             if let Err(error) =
                 complete_demo_run(background_state, context.run_id, context.conversation_id).await
             {
-                tracing::error!(?error, run_id = %context.run_id, "development run completion failed");
+                tracing::error!(
+                    error_category = error.log_category(),
+                    run_id = %context.run_id,
+                    "development run completion failed"
+                );
             }
         });
     }
-    fetch_approval(&state, approval_id).await.map(Json)
+    fetch_approval(&state, approval_id, context.project_id)
+        .await
+        .map(Json)
 }
 
 async fn complete_demo_run(
@@ -842,23 +1101,33 @@ async fn complete_demo_run(
     run_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<(), AppError> {
-    let identity = development_identity(&state).await?;
-    let worktree_path = sqlx::query_scalar::<_, String>(
+    #[derive(FromRow)]
+    struct DemoRunContext {
+        project_id: Uuid,
+        worktree_path: String,
+    }
+
+    let context = sqlx::query_as::<_, DemoRunContext>(
         r#"
-        SELECT gw.path
+        SELECT c.project_id, gw.path AS worktree_path
         FROM agent_runs ar
+        JOIN conversations c
+          ON c.id = ar.conversation_id
+         AND c.id = $2
         JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
         JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
         WHERE ar.id = $1 AND gw.state = 'ready'
         "#,
     )
     .bind(run_id)
+    .bind(conversation_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::Conflict(
         "git_worktree",
         "ready worktree not found",
     ))?;
+    let worktree_path = context.worktree_path;
 
     let proof_worktree_path = worktree_path.clone();
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
@@ -962,30 +1231,65 @@ async fn complete_demo_run(
     .await?;
     insert_event_entry(&mut transaction, conversation_id, completed_event).await?;
     transaction.commit().await?;
-    publish_timeline_update(&state, identity.project_id, conversation_id, run_id);
+    publish_timeline_update(&state, context.project_id, conversation_id, run_id);
     Ok(())
 }
 
 async fn interrupt_agent_run(
     State(state): State<AppState>,
-    Path(run_id): Path<Uuid>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(run_id): ApiPath<Uuid>,
 ) -> Result<Json<RunView>, AppError> {
-    let identity = development_identity(&state).await?;
-    let conversation_id = sqlx::query_scalar::<_, Uuid>(
+    require_authenticated_write(&state, &headers, &principal)?;
+
+    #[derive(FromRow)]
+    struct RunContext {
+        conversation_id: Uuid,
+        project_id: Uuid,
+        repository_id: Uuid,
+        membership_role: String,
+        membership_enabled: bool,
+    }
+
+    let mut transaction = state.pool.begin().await?;
+    let context = sqlx::query_as::<_, RunContext>(
         r#"
-        SELECT ar.conversation_id
+        SELECT
+            ar.conversation_id,
+            c.project_id,
+            ar.repository_id,
+            pm.role AS membership_role,
+            pm.enabled AS membership_enabled
         FROM agent_runs ar
         JOIN conversations c ON c.id = ar.conversation_id
-        WHERE ar.id = $1 AND c.project_id = $2
+        JOIN project_memberships pm
+          ON pm.project_id = c.project_id
+         AND pm.actor_id = $2
+        WHERE ar.id = $1
+        FOR UPDATE OF ar
+        FOR SHARE OF pm
         "#,
     )
     .bind(run_id)
-    .bind(identity.project_id)
-    .fetch_optional(&state.pool)
+    .bind(principal.actor_id)
+    .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
+    authorize_project_action(
+        &principal,
+        context.project_id,
+        &context.membership_role,
+        context.membership_enabled,
+        Action::RunInterrupt,
+        Resource::Project(ProjectScope::run(
+            context.project_id,
+            context.conversation_id,
+            run_id,
+            context.repository_id,
+        )),
+    )?;
 
-    let mut transaction = state.pool.begin().await?;
     transition_run(
         &mut transaction,
         run_id,
@@ -999,10 +1303,10 @@ async fn interrupt_agent_run(
         run_id,
         "run_interrupted",
         "The run was interrupted.",
-        serde_json::json!({"actor_id": identity.actor_id}),
+        serde_json::json!({"actor_id": principal.actor_id}),
     )
     .await?;
-    insert_event_entry(&mut transaction, conversation_id, event_id).await?;
+    insert_event_entry(&mut transaction, context.conversation_id, event_id).await?;
     sqlx::query(
         "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
     )
@@ -1010,8 +1314,10 @@ async fn interrupt_agent_run(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    publish_timeline_update(&state, identity.project_id, conversation_id, run_id);
-    fetch_run(&state, run_id).await.map(Json)
+    publish_timeline_update(&state, context.project_id, context.conversation_id, run_id);
+    fetch_run(&state, run_id, context.project_id)
+        .await
+        .map(Json)
 }
 
 async fn insert_significant_event(
@@ -1082,89 +1388,234 @@ async fn insert_event_entry(
     Ok(())
 }
 
-async fn fetch_run(state: &AppState, run_id: Uuid) -> Result<RunView, AppError> {
-    sqlx::query_as::<_, RunView>(
+async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<RunView, AppError> {
+    let run = sqlx::query_as::<_, RunRow>(
         r#"
         SELECT
-            id, state, repository_id, repository_workspace_id,
-            provider_session_id, failure_reason,
-            created_at::text AS created_at,
-            updated_at::text AS updated_at
-        FROM agent_runs WHERE id = $1
+            ar.id,
+            ar.state,
+            ar.repository_id,
+            ar.repository_workspace_id,
+            ar.provider_session_id,
+            ar.failure_reason,
+            ar.created_at::text AS created_at,
+            ar.updated_at::text AS updated_at
+        FROM agent_runs ar
+        JOIN conversations c
+          ON c.id = ar.conversation_id
+         AND c.project_id = $2
+        WHERE ar.id = $1
         "#,
     )
     .bind(run_id)
+    .bind(project_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::NotFound("agent_run"))
+    .ok_or(AppError::NotFound("agent_run"))?;
+    Ok(RunView {
+        run,
+        capabilities: RunCapabilities { interrupt: false },
+    })
 }
 
-async fn fetch_approval(state: &AppState, approval_id: Uuid) -> Result<ApprovalView, AppError> {
-    sqlx::query_as::<_, ApprovalView>(
+async fn fetch_approval(
+    state: &AppState,
+    approval_id: Uuid,
+    project_id: Uuid,
+) -> Result<ApprovalView, AppError> {
+    let approval = sqlx::query_as::<_, ApprovalRow>(
         r#"
         SELECT
-            id, agent_run_id, kind, summary, options, status, response,
-            created_at::text AS created_at
-        FROM agent_approvals WHERE id = $1
+            aa.id,
+            aa.agent_run_id,
+            aa.kind,
+            aa.summary,
+            aa.options,
+            aa.status,
+            aa.response,
+            aa.created_at::text AS created_at,
+            ar.repository_id,
+            aa.requesting_actor_id,
+            aa.eligible_role,
+            aa.human_required
+        FROM agent_approvals aa
+        JOIN agent_runs ar ON ar.id = aa.agent_run_id
+        JOIN conversations c
+          ON c.id = ar.conversation_id
+         AND c.project_id = $2
+        WHERE aa.id = $1
         "#,
     )
     .bind(approval_id)
+    .bind(project_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::NotFound("agent_approval"))
+    .ok_or(AppError::NotFound("agent_approval"))?;
+    Ok(ApprovalView {
+        approval,
+        capabilities: ApprovalCapabilities { respond: false },
+    })
 }
 
-async fn conversation_for_project(
-    state: &AppState,
+async fn guard_conversation_mutation(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &AuthenticatedActor,
     conversation_id: Uuid,
     project_id: Uuid,
-) -> Result<ConversationRow, AppError> {
-    sqlx::query_as::<_, ConversationRow>(
+    action: Action,
+) -> Result<(), AppError> {
+    #[derive(FromRow)]
+    struct MutationGuard {
+        kind: String,
+        conversation_archived: bool,
+        project_archived: bool,
+        membership_role: String,
+        membership_enabled: bool,
+    }
+
+    let guard = sqlx::query_as::<_, MutationGuard>(
         r#"
-        SELECT id, project_id, kind, parent_channel_id, name
-        FROM conversations
-        WHERE id = $1 AND project_id = $2 AND archived_at IS NULL
+        SELECT
+            c.kind,
+            c.archived_at IS NOT NULL AS conversation_archived,
+            p.archived_at IS NOT NULL AS project_archived,
+            pm.role AS membership_role,
+            pm.enabled AS membership_enabled
+        FROM conversations c
+        JOIN projects p
+          ON p.id = c.project_id
+         AND p.id = $2
+        JOIN project_memberships pm
+          ON pm.project_id = c.project_id
+         AND pm.actor_id = $3
+        WHERE c.id = $1
+          AND c.project_id = $2
+        FOR SHARE OF c, p, pm
         "#,
     )
     .bind(conversation_id)
     .bind(project_id)
-    .fetch_optional(&state.pool)
+    .bind(principal.actor_id)
+    .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(AppError::NotFound("conversation"))
+    .ok_or(AppError::NotFound("conversation"))?;
+    let scope = if guard.kind == "thread" {
+        ProjectScope::thread(project_id, conversation_id)
+    } else {
+        ProjectScope::project(project_id)
+    };
+    authorize_project_action(
+        principal,
+        project_id,
+        &guard.membership_role,
+        guard.membership_enabled,
+        action,
+        Resource::Project(scope),
+    )?;
+    if guard.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+    if guard.conversation_archived {
+        return Err(AppError::Conflict(
+            "conversation",
+            "archived Conversations reject mutations",
+        ));
+    }
+    Ok(())
 }
 
-async fn development_identity(state: &AppState) -> Result<DevelopmentIdentity, AppError> {
-    if !state.config.environment.is_development() || !state.config.server_addr.ip().is_loopback() {
-        return Err(AppError::DevelopmentAuthUnavailable);
-    }
-    #[derive(FromRow)]
-    struct IdentityRow {
-        actor_id: Uuid,
-        project_id: Uuid,
-    }
-    let identity = sqlx::query_as::<_, IdentityRow>(
+async fn authorized_conversation(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    conversation_id: Uuid,
+    action: Action,
+) -> Result<ConversationRow, AppError> {
+    let conversation = sqlx::query_as::<_, ConversationRow>(
         r#"
-        SELECT pm.actor_id, pm.project_id
-        FROM project_memberships pm
-        JOIN actors a ON a.id = pm.actor_id
-        JOIN projects p ON p.id = pm.project_id
-        WHERE lower(pm.handle) = 'mischa'
-          AND pm.role = 'owner'
-          AND pm.enabled
-          AND a.kind = 'human'
-          AND a.status = 'active'
-          AND p.project_key = 'AW'
-          AND p.archived_at IS NULL
-        LIMIT 1
+        SELECT
+            c.id,
+            c.project_id,
+            c.kind,
+            c.parent_channel_id,
+            c.name,
+            c.archived_at IS NOT NULL AS conversation_archived,
+            p.archived_at IS NOT NULL AS project_archived,
+            pm.role AS membership_role,
+            pm.enabled AS membership_enabled
+        FROM conversations c
+        JOIN projects p ON p.id = c.project_id
+        JOIN project_memberships pm
+          ON pm.project_id = c.project_id
+         AND pm.actor_id = $2
+        WHERE c.id = $1
         "#,
     )
+    .bind(conversation_id)
+    .bind(principal.actor_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::DevelopmentAuthUnavailable)?;
-    Ok(DevelopmentIdentity {
-        actor_id: identity.actor_id,
-        project_id: identity.project_id,
-    })
+    .ok_or(AppError::NotFound("conversation"))?;
+    let scope = if conversation.kind == "thread" {
+        ProjectScope::thread(conversation.project_id, conversation.id)
+    } else {
+        ProjectScope::project(conversation.project_id)
+    };
+    authorize_project_action(
+        principal,
+        conversation.project_id,
+        &conversation.membership_role,
+        conversation.membership_enabled,
+        action,
+        Resource::Project(scope),
+    )?;
+    Ok(conversation)
+}
+
+fn authorize_project_action(
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    membership_role: &str,
+    membership_enabled: bool,
+    action: Action,
+    resource: Resource,
+) -> Result<(), AppError> {
+    let subject = Subject::new(
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        true,
+        Some(Membership::project(
+            project_id,
+            parse_membership_role(membership_role)?,
+            membership_enabled,
+        )),
+        None,
+    );
+    match authorize(&subject, action, resource) {
+        Decision::Allow => Ok(()),
+        Decision::Deny(_) => Err(AppError::Forbidden),
+    }
+}
+
+fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
+    match value {
+        "human" => Ok(ActorKind::Human),
+        "external_agent" => Ok(ActorKind::ExternalAgent),
+        "execution_worker" => Ok(ActorKind::ExecutionWorker),
+        "integration" => Ok(ActorKind::Integration),
+        "system" => Ok(ActorKind::System),
+        _ => Err(AppError::Internal("unknown Actor kind")),
+    }
+}
+
+fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
+    match value {
+        "owner" => Ok(MembershipRole::Owner),
+        "admin" => Ok(MembershipRole::Admin),
+        "member" => Ok(MembershipRole::Member),
+        "viewer" => Ok(MembershipRole::Viewer),
+        "worker" => Ok(MembershipRole::Worker),
+        _ => Err(AppError::Internal("unknown Project membership role")),
+    }
 }
 
 fn publish_timeline_update(

@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent Workspace M0 host
+Description=Agent Workspace application host
 After=network-online.target
 Wants=network-online.target
 

@@ -2,16 +2,48 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 accepted; M1 entry elaboration pending v0.6
+**Status:** M1 satisfied; M2 active v0.9
 
 **Owner:** Mischa Nelson  
-**Date:** July 30, 2026  
+**Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestone M0 is complete. Milestone M1 may begin after its task-level entry criteria are added; every later milestone remains subject to the entry checks defined in this document.
+**Implementation authorization:** Milestones M0 and M1 are complete. Milestone M2 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.9 — M1 acceptance record and M2 authorization
+
+- recorded successful host-local bootstrap and private browser-session
+  acceptance against the exact green Red Hat release
+- recorded authenticated Project creation, switching, archive, active-only
+  navigation, and per-Actor route restoration across reload and relogin
+- confirmed that the M0 timeline and hosted Codex run remain functional through
+  M1 session authentication and centralized Project policy
+- retained redacted runtime and automated evidence in `docs/acceptance/m1.md`
+- confirmed the elaborated M2 Conversations backlog and authorized M2
+
+### v0.8 — M2 Conversations entry
+
+- expanded every M2 backlog item with acceptance criteria, dependencies,
+  expected tests, and explicit exclusions
+- fixed the M2 boundary around durable Channels, Threads, immutable
+  Actor-authored Messages, read cursors, and structured Actor mentions
+- specified the transactional outbox, authenticated realtime envelope,
+  reconnect/refetch behavior, and compact Thread-sidebar projection
+- kept Work Items, attachments, reactions, hosted-worker ownership, and inline
+  Channel execution outside M2
+
+### v0.7 — M1 identity and Projects entry
+
+- confirmed the accepted M0 exit before entering M1
+- expanded every M1 backlog item with acceptance criteria, dependencies,
+  expected tests, and explicit exclusions
+- scoped host-local bootstrap, private-build password sessions, centralized
+  Actor policy, Project lifecycle, the Project rail, and per-Actor navigation
+- kept final team authentication, invitations, Conversations, Work Items, and
+  later integration behavior outside M1
 
 ### v0.6 — M0 acceptance record
 
@@ -3281,7 +3313,11 @@ Build the first real connector against one chosen runtime, such as Hermes or Ope
 
 The IDs below are planning IDs for the repository backlog. They may be imported into the product later.
 
-Milestone M0 is authorized by this document. Before beginning any later milestone, replace its title-only backlog entries with scoped acceptance criteria, dependencies, expected tests, and explicit exclusions. This elaboration happens one milestone ahead, not for the whole roadmap at once.
+Milestones M0 and M1 are complete. Milestone M2 is authorized by its detailed
+criteria below. Before beginning any later milestone, replace its title-only
+backlog entries with scoped acceptance criteria, dependencies, expected tests,
+and explicit exclusions. This elaboration happens one milestone ahead, not for
+the whole roadmap at once.
 
 ## Milestone M0: Bootstrap and spikes
 
@@ -3357,43 +3393,581 @@ worktree without manual repair.
 
 ### M1-001 Complete identity and Project schema
 
-Complete the production identity and Project schema with Actors, users, bootstrap password credentials, Organizations, Actor-backed memberships, Projects, counters, and sessions. Extend the walking-skeleton migration history; do not replace it.
+Complete the production identity and Project schema with Actors, users,
+password credentials, Organizations, Actor-backed memberships, Projects,
+counters, sessions, Project instructions, per-Actor navigation state, and
+security audit events. Extend the walking-skeleton migration history; never
+replace or rewrite M0 migrations.
+
+**Acceptance criteria**
+
+- append migration `0004_m1_identity_projects.sql` without changing existing
+  M0 IDs or relationships
+- add `users`, `user_password_credentials`, `organization_memberships`,
+  `sessions`, `project_counters`, `project_instructions`,
+  `project_navigation_states`, and `audit_events`
+- expand Project membership roles to Owner, Admin, Member, Viewer, and Worker
+- enforce human-Actor ownership for users and role-compatible Worker
+  memberships in PostgreSQL
+- store only Argon2id password PHC strings and SHA-256 session/CSRF token
+  digests; plaintext credentials never enter rows, logs, URLs, or command
+  arguments
+- preserve case-insensitive Organization-scoped Project-key uniqueness across
+  archived Projects and enforce `[A-Z][A-Z0-9]{1,9}`
+- backfill Project counters, instructions, and provable Organization ownership
+  for the M0 data set without inventing a user, password, or session
+
+**Dependencies:** accepted M0 migrations, Actor records, Project ownership, and
+the M0 PostgreSQL integration harness.
+
+**Expected tests:** real-PostgreSQL M0-to-M1 upgrade, foreign-key and role
+invariants, case-insensitive uniqueness, credential digest storage, session
+expiry/revocation, navigation cross-Project rejection, and concurrent Project
+counter allocation.
+
+**Exclusions:** invitation tokens, password reset, passkeys, OIDC, external
+agent credentials, Work Item tables, and speculative team-authentication
+schema.
 
 ### M1-002 Bootstrap administrator
 
-Create safe first-user setup.
+Create safe first-user setup and the private-build browser session boundary.
+
+**Acceptance criteria**
+
+- add a host-local `bootstrap-admin` command that succeeds only while `users`
+  is empty, holds an advisory bootstrap lock, and creates or explicitly adopts
+  one human Actor, User, personal Organization, and Organization Owner
+  membership transactionally
+- read the password from a non-logging interactive terminal, validate a bounded
+  length, hash it with Argon2id in a blocking worker, and zeroize the plaintext
+  buffer after use
+- support an upgraded M0 host only through an unambiguous active human owner or
+  an explicit non-secret Actor/Organization selection; never rewrite authorship
+- implement login, logout, and session-read APIs with opaque rotating cookies,
+  idle and absolute expiry, generic credential failures, exact Origin checks,
+  and CSRF protection for unsafe cookie-authenticated requests
+- permit non-Secure development cookies only when development mode and a
+  loopback listener are both proven
+
+**Dependencies:** M1-001 identity, credential, session, and Organization
+membership schema.
+
+**Expected tests:** single-winner concurrent bootstrap, rollback atomicity, M0
+Actor adoption, Argon2 verification and dummy unknown-user verification,
+cookie attributes, session rotation/expiry/revocation, CSRF mismatch, exact
+Origin rejection, logout idempotency, and secret redaction.
+
+**Exclusions:** a browser setup route, default credentials, password recovery
+or change UI, email verification, invitations, passkeys, OIDC, and the final
+M7 authentication choice.
 
 ### M1-003 Project creation and archive
 
+Implement Project list, create, detail, switch, and archive domain commands and
+HTTP APIs.
+
+**Acceptance criteria**
+
+- an Organization Owner or Admin can create a Project with a normalized key
+  and bounded display name
+- one transaction creates the Project, creator Owner membership, counter,
+  instructions, initial navigation state, and redacted audit event
+- all list/detail queries join through the authenticated Actor's enabled
+  membership and include `project_id` in resource lookups
+- a non-member receives the same not-found response as a missing Project;
+  members without a management privilege receive forbidden
+- archive locks and versions the Project, records the responsible Actor,
+  rejects any Project with a non-terminal Agent Run, preserves history, and is
+  idempotent for an already archived Project
+- archived Projects disappear from ordinary rail/search results and reject new
+  mutations while remaining explicitly readable to authorized members
+
+**Dependencies:** M1-001 schema, M1-002 authenticated Actor extraction, and
+M1-004 policy decisions.
+
+**Expected tests:** atomic creation, key/name validation, duplicate-key
+conflict, Owner/Admin/Member/Viewer behavior, cross-Project non-disclosure,
+active-run archive conflict, archive attribution/versioning, idempotent retry,
+and preservation of M0 Project history.
+
+**Exclusions:** hard deletion, restore UI, Organization administration,
+default Channels, Work Item workflow, repositories, Execution Workers, and
+bulk Project operations.
+
 ### M1-004 Project membership policy layer
 
-Use Actor IDs in memberships and centralized action-on-resource checks. Version one exercises human Actors; include non-human authorization fixtures without creating an external-agent connection.
+Use Actor IDs in memberships and centralized typed action-on-resource checks.
+Version one exercises human Actors; include non-human authorization fixtures
+without creating an external-agent connection.
+
+**Acceptance criteria**
+
+- define one pure policy layer for Organization Project creation, Project view
+  and management, navigation read/write, Worker invocation, run interruption,
+  and approval response
+- authority derives from active Actor status, enabled membership, role, and any
+  immutable delegated Worker scope; Actor kind alone grants no authority
+- Owner/Admin may manage, Member may perform ordinary collaboration and Worker
+  invocation, Viewer is read-only, and Worker is limited to exact delegated
+  scope
+- retrofit M0 timeline, Agent Run, interrupt, approval, and WebSocket paths to
+  use the authenticated Actor and centralized policy
+- authenticate WebSocket upgrades, validate the exact Origin, and filter
+  events by current Project access so one Project cannot observe another
+
+**Dependencies:** M1-001 roles and sessions plus the existing M0 request and
+realtime boundaries.
+
+**Expected tests:** exhaustive role/action matrix, disabled Actor/membership,
+same-role human and external-agent fixtures, Worker scope, human-required and
+separation-of-duty approval rules, cross-Project HTTP access, WebSocket
+handshake/filtering, and session revocation.
+
+**Exclusions:** invitation/member-management UI, external-agent registration
+or credentials, a system/integration superuser bypass, and final team
+Execution Profile policy.
 
 ### M1-005 Project rail and switcher
 
+Replace the static M0 Project rail with authenticated server data and the
+minimum Project creation/archive navigation.
+
+**Acceptance criteria**
+
+- add sign-in, Home, Project creation, Project overview, Project settings, and
+  existing Thread routes behind a session boundary
+- render Home, pinned Projects, five recent unpinned Projects, the active
+  Project fallback, attention counts supplied by the server, bounded search,
+  and Project creation access
+- use links for navigation, buttons for actions, server-returned capabilities
+  for action visibility, and no client-submitted Actor identity
+- remove archived Projects from ordinary navigation and route successful
+  archive back to Home without silently choosing another Project
+- preserve the restrained M0 visual system, move global navigation outside the
+  main landmark, add a skip link, and replace breakpoint hiding with
+  keyboard-accessible rail/sidebar drawers
+
+**Dependencies:** M1-002 session APIs, M1-003 Project APIs, and M1-004
+capabilities.
+
+**Expected tests:** authenticated/signed-out/expired session states, login and
+logout, rail grouping/search/attention labels, create validation and
+idempotency, archive confirmation/conflict, keyboard and focus behavior,
+phone-sized drawers, hostile text escaping, and accessibility smoke tests.
+
+**Exclusions:** final branding, polished global navigation, derived global
+attention, team member surfaces, Channels beyond the preserved M0 route, Work
+Items, and repository/GitHub UI.
+
 ### M1-006 Remember per-user Project route
+
+Persist and restore each Actor's last successfully opened location independently
+for every Project.
+
+**Acceptance criteria**
+
+- navigation state is keyed by `(project_id, actor_id)`, versioned, and updated
+  only after the referenced same-Project resource loads successfully
+- clients send a structured location kind and canonical resource ID, never an
+  arbitrary authoritative URL or Actor ID
+- switching Project A to Project B and back restores each Project's own last
+  location across reload and relogin
+- stale, archived, unauthorized, or cross-Project locations fall back to the
+  Project overview without exposing the inaccessible resource
+- pin/recent changes and navigation writes use optimistic versions and
+  serialize retries so an older response cannot overwrite a newer location
+
+**Dependencies:** M1-001 navigation schema, M1-003 scoped Project/resource
+queries, and M1-005 routes.
+
+**Expected tests:** A-to-B-to-A restoration, reload/relogin persistence,
+same-Project composite foreign keys, stale-resource fallback, cross-Project
+rejection, optimistic conflict, pin ordering, and no browser-storage
+dependency.
+
+**Exclusions:** Conversation read cursors, Work view/filter/drawer state not
+yet backed by M2/M4 resources, cross-device live synchronization, and
+client-authored redirects.
+
+### M1 exit criteria
+
+**Status:** Satisfied on July 31, 2026.
+
+- host-local first-admin bootstrap succeeds exactly once without credential
+  disclosure
+- the administrator can sign in and out, create two Projects, archive an
+  eligible Project, and see only authorized active Projects in the rail
+- switching between the two Projects restores independent remembered routes
+  after reload and relogin
+- existing M0 timeline and hosted-run behavior works through real session
+  authentication and Project policy
+- PostgreSQL migration/upgrade, session/CSRF, cross-Project, non-human policy,
+  realtime isolation, frontend accessibility, and production-build tests pass
+- the M2 Conversations backlog is elaborated before M2 implementation begins
+
+The acceptance record at `docs/acceptance/m1.md` retains the exact accepted
+commit, Red Hat release, automated checks, and redacted browser/runtime
+evidence. The accepted browser flow proved first-user bootstrap, private
+sessions, Project lifecycle and navigation restoration, and the existing M0
+hosted-run path through centralized M1 Project policy.
 
 ## Milestone M2: Conversations
 
 ### M2-001 Conversation schema and invariants
 
+Extend the M0 conversation projection into the production-shaped Channel and
+Thread foundation without replacing its durable IDs or timeline history.
+
+**Acceptance criteria**
+
+- append a new migration after M1; preserve and evolve the M0
+  `conversations`, `messages`, and `conversation_entries` tables rather than
+  introducing parallel replacements
+- add the missing origin-Message relationship, archive attribution/versioning,
+  and same-Project composite constraints needed by Channel and Thread commands
+- enforce in PostgreSQL and application code that a Channel has no parent or
+  repository, a Thread has exactly one same-Project Channel parent, and a
+  Thread can never parent another Thread
+- preserve transactional, monotonically increasing, unique
+  `conversation_entries.sequence` values inside each Conversation; timestamps
+  remain metadata, not ordering keys
+- prevent Channel or Thread archive while it owns a non-terminal Agent Run,
+  preserve child history, and never cascade-delete Messages or entries
+- make a Thread's repository binding immutable after its first Agent Run while
+  leaving repository selection and workspace creation owned by M3
+
+**Dependencies:** accepted M1 Actor/session/Project policy, the existing M0
+Conversation and Agent Run rows, and application-generated UUIDv7 IDs.
+
+**Expected tests:** M0-to-M2 migration, same-Project parent enforcement, nested
+Thread rejection, Channel repository rejection, concurrent sequence
+allocation, archive guards, repository-binding immutability after a run, and
+historical M0 timeline preservation.
+
+**Exclusions:** attachments, reactions, Work Item links, repository
+registration UI, provider-session changes, and destructive Conversation
+deletion.
+
 ### M2-002 Versioned Message AST and Actor authorship
+
+Implement immutable version-one Message content with server-resolved Actor
+authorship.
+
+**Acceptance criteria**
+
+- define a bounded, explicitly tagged version-one AST supporting text and
+  Actor-mention nodes; reject unknown node types, malformed UUIDs, invalid
+  shapes, unsafe URLs, excessive depth, and over-limit text before persistence
+- derive bounded plain text on the server from the validated AST for search,
+  notification, and export use; never trust a client-supplied plain-text
+  rendering
+- resolve `author_actor_id` exclusively from the authenticated session and
+  reject any client-supplied authorship field
+- validate every mentioned Actor against an enabled membership in the
+  Message's Project at send time while retaining historical display
+  attribution if that Actor is disabled later
+- treat a sent Message as immutable in M2; a correction is another Message,
+  and `content_version` describes the AST schema rather than an edit revision
+
+**Dependencies:** M2-001 Conversation constraints, M1 authenticated Actor and
+Project membership policy, and the existing Actor-backed M0 Messages.
+
+**Expected tests:** AST round trip and plain-text derivation, hostile and
+oversized nodes, authorship spoof rejection, human/Worker mention parity,
+disabled or cross-Project mention rejection, HTML escaping, and preservation
+of existing consolidated Worker Messages.
+
+**Exclusions:** Message editing/deletion, attachments, reactions, Markdown or
+HTML as authoritative storage, Work Item reference nodes before M4, and
+plain-text `@handle` scanning as identity.
 
 ### M2-003 Message API and pagination
 
+Add authorized Channel and Thread Message commands plus one durable timeline
+pagination contract.
+
+**Acceptance criteria**
+
+- implement `POST /api/v1/channels/:id/messages` and the equivalent
+  Thread-targeted send command through one Conversation domain operation
+- require a bounded idempotency key for Message append; the same Actor,
+  Conversation, and key returns the original durable result, while a
+  mismatched payload conflicts
+- insert the Message, allocate its Conversation sequence, create exactly one
+  `conversation_entries` row, and enqueue its outbox event in one transaction
+- extend `GET /api/v1/conversations/:id/timeline` with an opaque keyset cursor,
+  bounded page size, stable ascending render order, and a cursor for loading
+  older entries without timestamp merging
+- authorize every send and timeline query through exact Project membership;
+  a missing or unauthorized Conversation has the same not-found response
+- return AST content, derived display data, Actor attribution, and significant
+  Worker-event cards through typed DTOs without exposing raw provider payloads
+
+**Dependencies:** M2-001 ordered entries, M2-002 Message validation, M1 policy
+and sessions, and M2-005 outbox insertion.
+
+**Expected tests:** concurrent sends with gap-free unique sequences,
+idempotent retry and payload mismatch, forward and backward page boundaries,
+empty/final pages, cross-Project non-disclosure, inactive membership, bounded
+payloads, and stable mixed Message/Worker-event ordering.
+
+**Exclusions:** full-text search, Message edits, file upload, reactions,
+per-client event replay, and one database row per streamed token.
+
 ### M2-004 WebSocket connection
+
+Evolve the authenticated M1 realtime boundary into the typed M2 Project event
+connection while keeping HTTP and PostgreSQL authoritative.
+
+**Acceptance criteria**
+
+- keep one authenticated `/api/v1/realtime` WebSocket per browser session,
+  validate the exact allowed Origin during upgrade, and never accept tokens or
+  Actor IDs through the URL
+- emit bounded version-one envelopes containing `event_id`, monotonic
+  diagnostic `event_cursor`, `project_id`, type, occurrence time, and a typed
+  payload
+- authorize Project scope at connection/use time and again before delivery;
+  close or rescope promptly when the session, Actor, or membership is revoked
+- permit realtime delivery and ephemeral stream control only; all durable
+  Message, read-state, and Conversation mutations remain authenticated HTTP
+  actions
+- on reconnect, have the client refetch Project navigation, the open
+  Conversation page, read state, and attention data with bounded exponential
+  backoff; correctness never depends on replaying missed events
+- tolerate duplicate event IDs and unknown future event types without
+  duplicating durable UI state or crashing the connection
+
+**Dependencies:** M1 authenticated/revocable WebSocket, M2-005 outbox
+publication, and M2-003 durable refetch endpoints.
+
+**Expected tests:** missing/expired/revoked session, exact-Origin rejection,
+cross-Project suppression, membership removal during a connection, duplicate
+event tolerance, bounded frame handling, reconnect/refetch, and no
+WebSocket-only durable mutation.
+
+**Exclusions:** per-client acknowledgement, durable replay logs, public
+subscriptions, browser bearer tokens, cross-Project firehoses, and presence or
+typing indicators.
 
 ### M2-005 Transactional outbox
 
+Make durable Conversation changes observable without coupling database commits
+to an in-memory WebSocket send.
+
+**Acceptance criteria**
+
+- add `outbox_events` with an application UUIDv7 event ID, database-ordered
+  publication cursor, schema version, Project/resource scope, bounded typed
+  payload, attempt metadata, and nullable `published_at`
+- write the outbox row in the same transaction as every M2 Message,
+  Conversation, and read-relevant state change
+- claim unpublished rows in cursor order with a short transactional lease or
+  `FOR UPDATE SKIP LOCKED`, publish only after the originating transaction
+  commits, and record completion without claiming browser receipt
+- run publication at least once, recover unpublished rows after restart, and
+  make duplicate publication harmless through stable event IDs and
+  version-aware/refetching clients
+- bound retries and payload sizes; exhausted or malformed events remain
+  inspectable in redacted operator diagnostics rather than silently
+  disappearing or blocking later events forever
+- keep database access in the outbox worker/domain layer rather than the
+  WebSocket handler
+
+**Dependencies:** PostgreSQL, the M2-003 transactional command layer, the
+M2-004 realtime broadcaster, and the existing structured logging boundary.
+
+**Expected tests:** transaction rollback emits nothing, commit produces one
+event, competing-worker single claim, crash before and after publish,
+unpublished restart recovery, duplicate client receipt, poison-event
+isolation, ordered cursor behavior, and secret/payload redaction.
+
+**Exclusions:** Kafka or another broker, per-browser delivery guarantees,
+unbounded replay, exactly-once network delivery, and the broader durable job
+queue required by later integrations.
+
 ### M2-006 Channel UI
+
+Add the first durable Conversation workspace inside an authenticated Project.
+
+**Acceptance criteria**
+
+- render active Channels in the Project sidebar and a routed Channel workspace
+  with title, mixed durable timeline, load-older control, and Message composer
+- render from the validated AST with Actor identity and accessible structured
+  mentions; escape hostile text and never inject persisted HTML
+- send optimistically with a stable idempotency key, reconcile the canonical
+  sequence from the server, and expose retryable versus terminal failures
+  without duplicating a Message
+- consume realtime invalidations, coalesce refetches, and recover the open
+  Channel from HTTP after disconnect, reload, or relogin
+- preserve the M1 responsive rail/sidebar drawers, skip-link/main-landmark
+  structure, keyboard operation, focus handling, and readable pending/error
+  states
+- retain independent per-Project remembered routes and fall back to Project
+  overview when a Channel is archived or no longer authorized
+
+**Dependencies:** M1 shell/navigation, M2-003 timeline and send APIs, M2-004
+realtime connection, and M2-010 mention composer.
+
+**Expected tests:** empty and long Channels, historical pagination, optimistic
+send/retry, duplicate realtime event, disconnect/refetch, hostile AST output,
+keyboard-only composer and drawers, screen-reader labels/status, narrow
+viewport behavior, and Project switch restoration.
+
+**Exclusions:** final visual design, attachments, reactions, edit/delete,
+typing presence, rich link previews, offline sending, and inline hosted-worker
+execution.
 
 ### M2-007 Thread creation and linking
 
+Create focused child Conversations from a Channel or an originating Message.
+
+**Acceptance criteria**
+
+- implement an idempotent `POST /api/v1/channels/:id/threads` command with a
+  bounded title and optional same-Channel origin Message
+- create one same-Project Thread, preserve `parent_channel_id` and
+  `origin_message_id`, initialize its sequence/read projections, and enqueue
+  the Conversation event in one transaction
+- reject nested Threads, cross-Project origins, origins from another Channel,
+  archived parents, and unauthorized callers without leaking resource
+  existence
+- provide Channel actions to start a Thread and open existing linked Threads;
+  direct Thread routes render the same paginated timeline and composer
+- archive a Thread only through a versioned action with the active-run guard,
+  preserve its history, and return the parent Channel as the safe navigation
+  fallback
+
+**Dependencies:** M2-001 invariants, M2-003 Message/timeline commands, M2-005
+outbox, and M1 Project policy/navigation.
+
+**Expected tests:** atomic creation, idempotent retry, nested/cross-Project
+rejection, origin ownership, archived-parent rejection, active-run archive
+guard, direct route/reload, parent fallback, and concurrent duplicate
+requests.
+
+**Exclusions:** Work Item links, repository selection, provider-session
+creation, Agent Run start behavior beyond preserving the M0 route, automatic
+AI-generated titles, and Thread children.
+
 ### M2-008 Per-user read state
+
+Persist the highest Conversation sequence seen independently for every Actor.
+
+**Acceptance criteria**
+
+- add `conversation_read_states` keyed by exact
+  `(project_id, conversation_id, actor_id)` with a highest-seen sequence,
+  optimistic version, and timestamps
+- require matching enabled Project membership and same-Project Conversation
+  foreign keys; clients never submit another Actor's identity
+- implement an idempotent mark-seen action that advances with an atomic
+  maximum and can never move a cursor backward or beyond the current durable
+  Conversation sequence
+- mark seen only after the client has successfully rendered the corresponding
+  durable entry; loading a sidebar or receiving a WebSocket event alone does
+  not consume attention
+- derive unread/unseen state from durable sequences independently for each
+  human or non-human Actor fixture and preserve it across reload and relogin
+
+**Dependencies:** M2-001 sequence model, M1 Actor authorization, M2-003
+timeline responses, and M2-004 refetch behavior.
+
+**Expected tests:** first read, monotonic concurrent updates, stale idempotent
+retry, future-sequence rejection, cross-Project and disabled membership,
+per-Actor isolation, reload/relogin persistence, and completed-after-cursor
+derivation.
+
+**Exclusions:** read receipts shown to other members, typing presence, device
+specific cursors, notification-delivery acknowledgement, and failed-run
+acknowledgement semantics owned by M3.
 
 ### M2-009 Thread sidebar surfacing rules
 
+Implement the compact, deterministic Thread projection defined in section 6.5.
+
+**Acceptance criteria**
+
+- beneath each Channel, always surface Threads whose newest Agent Run is
+  active, blocked for the current Actor, failed and unacknowledged, or
+  completed after that Actor's read cursor
+- for the selected Channel, also include its five most recently active
+  Threads, deduplicate overlaps, and sort with a stable server-defined order
+- remove seen inactive Threads from the compact list when the user leaves the
+  parent Channel while retaining them behind `Show more`, `View all Threads`,
+  and an explicit archived filter
+- derive blue/orange/white/gray/red presentation from durable run/read state;
+  every color has equivalent text and icon meaning and is never stored as
+  business state
+- calculate the projection in bounded Project-scoped queries and return no
+  Thread the Actor cannot currently view
+- update through outbox invalidations and refetch so reconnect, duplicate
+  delivery, or missed events converge on the durable projection
+
+**Dependencies:** M2-007 Threads, M2-008 read state, existing M0 Agent Run
+states, M2-004 realtime, and M1 Project sidebar.
+
+**Expected tests:** each attention reason, addressed blocked Actor, selected
+Channel recent-five boundary, overlap deduplication, seen inactive removal,
+stable ordering ties, archived filtering, cross-Project isolation,
+color-independent labels, and reconnect convergence.
+
+**Exclusions:** global Home attention aggregation, notification inbox, custom
+sorting, arbitrary user pinning of Threads, inline Channel runs, and the full
+M3 acknowledgement/blocker UI.
+
 ### M2-010 Mention autocomplete for human and worker Actors
+
+Provide a keyboard-accessible structured Actor picker without making handles an
+authorization or invocation protocol.
+
+**Acceptance criteria**
+
+- expose a bounded Project-scoped Actor search endpoint returning enabled human
+  and Execution Worker memberships the sender may mention, with immutable
+  Actor ID, display name, handle, kind, and safe avatar reference
+- search normalized display names and handles with deterministic ordering and
+  pagination; exclude disabled, archived, and cross-Project memberships
+- insert a semantic mention node into composer state and submit its Actor ID
+  in the Message AST while rendering the current Project handle
+- support keyboard open, search, selection, dismissal, focus restoration, and
+  screen-reader announcement without trapping focus or relying on color
+- revalidate the referenced Actor and membership on send; handle races by
+  preserving the draft and showing an actionable validation error
+- treat an `@agent` mention as ordinary structured conversation data in M2;
+  it must not silently start an Agent Run or scan text for magic strings
+
+**Dependencies:** M1 Actor-backed Project memberships and policy, M2-002 AST,
+M2-003 send API, and M2-006 composer.
+
+**Expected tests:** human/Worker results, duplicate handles in different
+Projects, disabled and cross-Project exclusion, bounded search/pagination,
+keyboard and screen-reader interaction, hostile display names, send-time
+membership race, AST round trip, and literal `@agent` text remaining text.
+
+**Exclusions:** Work Item autocomplete, external-agent connection setup,
+presence, directory-wide search, fuzzy ranking infrastructure, automatic
+Worker invocation, and O-002 inline execution.
+
+### M2 exit criteria
+
+- an authenticated member can create a Channel, exchange immutable
+  Actor-attributed Messages, create and revisit a linked Thread, and paginate a
+  mixed durable timeline without sequence gaps or duplicates
+- two Actors retain independent read cursors and attention states across
+  reload, relogin, missed realtime delivery, and reconnect
+- realtime events originate from the transactional outbox, survive server
+  restart, remain Project-scoped, and converge through HTTP refetch
+- the Project sidebar implements the exact compact Thread surfacing rules with
+  accessible non-color status and archived history still reachable
+- structured human and Worker mentions survive storage/rendering while
+  spoofed authorship, cross-Project references, and plain-text magic invocation
+  are rejected
+- PostgreSQL, HTTP, WebSocket, frontend accessibility, hostile-content,
+  concurrency, and browser-driven two-Actor acceptance tests pass
+- the M3 Execution Worker backlog is elaborated before M3 implementation begins
 
 ## Milestone M3: Execution Worker and hosted Codex
 
@@ -3896,7 +4470,20 @@ worktree. A completed provider turn may be reconciled as completed. An
 interrupted, non-terminal, missing, or ambiguous turn becomes an actionable
 application `interrupted` result with its worktree preserved. This proved the
 required M0 recovery boundary without inventing continuation or resetting
-dirty state.
+dirty state. Recovery is re-entrant for a run already marked `recovering`, and
+an `active` provider session returns to `idle` once no linked Agent Run remains
+non-terminal, so a second service interruption cannot strand the Thread.
+
+## D-033: Private-build authentication uses host-bootstrapped local sessions through M6
+
+**Status:** Accepted as an interim private-build boundary
+
+**Reason:** M1 needs real human identity and server-resolved Actor sessions
+before Projects, Conversations, and execution can be authorized correctly.
+Host-local bootstrap plus Argon2id password verification and opaque,
+server-side cookie sessions provide that boundary without exposing a setup
+route or choosing the final team authentication product. Passkeys, OIDC, and
+the final combination remain O-004 and must be resolved before M7.
 
 ---
 
