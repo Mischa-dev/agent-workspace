@@ -25,6 +25,16 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         return Err(AppError::DevelopmentAuthUnavailable);
     }
 
+    let retained_profile = config.codex_home_root.join("m0-retained");
+    std::fs::create_dir_all(&retained_profile)
+        .map_err(|_| AppError::Internal("create retained Codex profile"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&retained_profile, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| AppError::Internal("protect retained Codex profile"))?;
+    }
+
     let mut transaction = pool.begin().await?;
 
     let organization_id = sqlx::query_scalar::<_, Uuid>(
@@ -202,13 +212,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .bind(project_id)
     .bind(provider_connection_id)
     .bind(human_actor_id)
-    .bind(
-        config
-            .codex_home_root
-            .join("m0-retained")
-            .to_string_lossy()
-            .as_ref(),
-    )
+    .bind(retained_profile.to_string_lossy().as_ref())
     .fetch_one(&mut *transaction)
     .await?;
 
