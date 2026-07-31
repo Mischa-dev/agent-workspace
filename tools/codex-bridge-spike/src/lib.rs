@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -31,6 +31,9 @@ pub struct BridgeConfig {
     pub max_line_bytes: usize,
     pub max_stderr_bytes: usize,
     pub request_timeout: Duration,
+    pub shutdown_timeout: Duration,
+    pub max_buffered_events: usize,
+    pub automatic_server_request_responses: bool,
 }
 
 impl BridgeConfig {
@@ -46,7 +49,11 @@ impl BridgeConfig {
                 )));
             }
         }
-        if self.max_line_bytes == 0 || self.max_stderr_bytes == 0 || self.request_timeout.is_zero()
+        if self.max_line_bytes == 0
+            || self.max_stderr_bytes == 0
+            || self.request_timeout.is_zero()
+            || self.shutdown_timeout.is_zero()
+            || self.max_buffered_events == 0
         {
             return Err(BridgeError::InvalidConfig(
                 "limits and request timeout must be greater than zero".to_owned(),
@@ -76,6 +83,12 @@ pub enum BridgeError {
     Rpc(Value),
     #[error("Codex App Server response did not include a result")]
     MissingResult,
+    #[error("Codex App Server exceeded the buffered event limit of {limit}")]
+    EventBufferFull { limit: usize },
+    #[error("Codex App Server sent a server request while another request was pending")]
+    ServerRequestDuringPendingRequest,
+    #[error("Codex App Server returned an unexpected response id")]
+    UnexpectedResponseId,
 }
 
 pub struct CodexBridge {
@@ -87,7 +100,10 @@ pub struct CodexBridge {
     next_id: u64,
     max_line_bytes: usize,
     request_timeout: Duration,
-    notifications: Vec<Value>,
+    shutdown_timeout: Duration,
+    notifications: VecDeque<Value>,
+    max_buffered_events: usize,
+    automatic_server_request_responses: bool,
 }
 
 impl CodexBridge {
@@ -141,7 +157,10 @@ impl CodexBridge {
             next_id: 1,
             max_line_bytes: config.max_line_bytes,
             request_timeout: config.request_timeout,
-            notifications: Vec::new(),
+            shutdown_timeout: config.shutdown_timeout,
+            notifications: VecDeque::new(),
+            max_buffered_events: config.max_buffered_events,
+            automatic_server_request_responses: config.automatic_server_request_responses,
         })
     }
 
@@ -190,6 +209,9 @@ impl CodexBridge {
     }
 
     pub async fn next_raw_event(&mut self) -> Result<Value, BridgeError> {
+        if let Some(notification) = self.notifications.pop_front() {
+            return Ok(notification);
+        }
         timeout(self.request_timeout, self.read_message())
             .await
             .map_err(|_| BridgeError::Timeout)?
@@ -199,8 +221,21 @@ impl CodexBridge {
         self.write_json(&json!({"id": id, "result": result})).await
     }
 
+    pub async fn respond_error(
+        &mut self,
+        id: Value,
+        code: i64,
+        message: &'static str,
+    ) -> Result<(), BridgeError> {
+        self.write_json(&json!({
+            "id": id,
+            "error": {"code": code, "message": message}
+        }))
+        .await
+    }
+
     pub fn take_notifications(&mut self) -> Vec<Value> {
-        std::mem::take(&mut self.notifications)
+        self.notifications.drain(..).map(redact_fixture).collect()
     }
 
     pub async fn stderr_snapshot(&self) -> String {
@@ -218,10 +253,18 @@ impl CodexBridge {
             }
         }
 
-        if timeout(Duration::from_secs(5), self.child.wait())
+        if timeout(self.shutdown_timeout, self.child.wait())
             .await
             .is_err()
         {
+            if let Some(process_id) = process_id {
+                #[cfg(unix)]
+                {
+                    if let Ok(raw_pid) = i32::try_from(process_id) {
+                        let _ = killpg(Pid::from_raw(raw_pid), Signal::SIGKILL);
+                    }
+                }
+            }
             let _ = self.child.kill().await;
         }
         self.stderr_task.abort();
@@ -240,10 +283,18 @@ impl CodexBridge {
                     .ok_or(BridgeError::MissingResult);
             }
 
-            if message.get("id").is_some() && message.get("method").is_some() {
-                self.respond_to_server_request(&message).await?;
+            if message.get("id").is_some() {
+                if message.get("method").is_some() {
+                    if self.automatic_server_request_responses {
+                        self.respond_to_server_request(&message).await?;
+                    } else {
+                        return Err(BridgeError::ServerRequestDuringPendingRequest);
+                    }
+                } else {
+                    return Err(BridgeError::UnexpectedResponseId);
+                }
             } else {
-                self.notifications.push(redact_fixture(message));
+                buffer_event(&mut self.notifications, self.max_buffered_events, message)?;
             }
         }
     }
@@ -426,13 +477,29 @@ fn decode_line(bytes: &[u8], max_line_bytes: usize) -> Result<Value, BridgeError
     Ok(serde_json::from_slice(bytes)?)
 }
 
+fn buffer_event(
+    events: &mut VecDeque<Value>,
+    limit: usize,
+    event: Value,
+) -> Result<(), BridgeError> {
+    if events.len() >= limit {
+        return Err(BridgeError::EventBufferFull { limit });
+    }
+    events.push_back(event);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        path::PathBuf,
+        time::Duration,
+    };
 
     use serde_json::json;
 
-    use super::{BridgeConfig, BridgeError, decode_line, redact_fixture};
+    use super::{BridgeConfig, BridgeError, buffer_event, decode_line, redact_fixture};
 
     #[test]
     fn rejects_relative_runtime_paths() {
@@ -444,6 +511,9 @@ mod tests {
             max_line_bytes: 1024,
             max_stderr_bytes: 1024,
             request_timeout: Duration::from_secs(1),
+            shutdown_timeout: Duration::from_secs(1),
+            max_buffered_events: 16,
+            automatic_server_request_responses: false,
         };
         assert!(config.validate().is_err());
     }
@@ -479,6 +549,16 @@ mod tests {
         assert!(matches!(
             decode_line(br#"{"method":"turn/completed"}"#, 8),
             Err(BridgeError::OversizedLine { limit: 8 })
+        ));
+    }
+
+    #[test]
+    fn buffered_provider_events_have_a_hard_limit() {
+        let mut events = VecDeque::new();
+        buffer_event(&mut events, 1, json!({"method": "first"})).expect("buffer first event");
+        assert!(matches!(
+            buffer_event(&mut events, 1, json!({"method": "second"})),
+            Err(BridgeError::EventBufferFull { limit: 1 })
         ));
     }
 }

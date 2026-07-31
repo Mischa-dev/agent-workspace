@@ -10,6 +10,7 @@ use crate::{
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    provider::ProfileHealth,
 };
 
 const MAX_EXECUTION_RESOURCES: i64 = 100;
@@ -127,7 +128,24 @@ struct ExecutionProfileView {
     last_failure_category: Option<String>,
     owner: ExecutionActorView,
     available_for_new_runs: bool,
+    supervisor: SupervisorHealthView,
     provider: ProviderView,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SupervisorHealthView {
+    state: SupervisorState,
+    consecutive_failures: u32,
+    process_starts: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SupervisorState {
+    Stopped,
+    Ready,
+    CircuitOpen,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -300,10 +318,11 @@ async fn list_execution_profiles(
     .fetch_all(&mut *transaction)
     .await?;
 
-    let profiles = rows
-        .into_iter()
-        .map(execution_profile_view)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut profiles = Vec::with_capacity(rows.len());
+    for row in rows {
+        let health = state.supervisors.health(row.id).await;
+        profiles.push(execution_profile_view(row, health)?);
+    }
     transaction.commit().await?;
     Ok(Json(ExecutionProfilesResponse { profiles }))
 }
@@ -410,7 +429,10 @@ fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView,
     })
 }
 
-fn execution_profile_view(row: ExecutionProfileRow) -> Result<ExecutionProfileView, AppError> {
+fn execution_profile_view(
+    row: ExecutionProfileRow,
+    supervisor_health: Option<ProfileHealth>,
+) -> Result<ExecutionProfileView, AppError> {
     let status = parse_profile_status(&row.status)?;
     let account_state = parse_account_state(&row.account_state)?;
     let owner_status = parse_actor_status(&row.owner_actor_status)?;
@@ -442,6 +464,7 @@ fn execution_profile_view(row: ExecutionProfileRow) -> Result<ExecutionProfileVi
             owner_status,
         )?,
         available_for_new_runs,
+        supervisor: supervisor_health_view(supervisor_health),
         provider: provider_view(
             &row.provider_kind,
             row.provider_enabled,
@@ -450,6 +473,27 @@ fn execution_profile_view(row: ExecutionProfileRow) -> Result<ExecutionProfileVi
             &row.capabilities,
         )?,
     })
+}
+
+fn supervisor_health_view(health: Option<ProfileHealth>) -> SupervisorHealthView {
+    let Some(health) = health else {
+        return SupervisorHealthView {
+            state: SupervisorState::Stopped,
+            consecutive_failures: 0,
+            process_starts: 0,
+        };
+    };
+    SupervisorHealthView {
+        state: if health.circuit_open {
+            SupervisorState::CircuitOpen
+        } else if health.process_running {
+            SupervisorState::Ready
+        } else {
+            SupervisorState::Stopped
+        },
+        consecutive_failures: health.consecutive_failures,
+        process_starts: health.process_starts,
+    }
 }
 
 fn execution_actor_view(

@@ -68,11 +68,14 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
     ]))
     .expect("development config");
     let realtime = RealtimeHub::new(64);
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let application = router(AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: realtime.clone(),
+        supervisors,
     });
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

@@ -39,11 +39,14 @@ async fn durable_m0_routes_require_a_session_and_exact_project_membership() {
         ),
     ]))
     .expect("development config");
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let application = router(AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(16),
+        supervisors,
     });
 
     let unauthenticated = application

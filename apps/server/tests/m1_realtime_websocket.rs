@@ -55,11 +55,14 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
     ]))
     .expect("development config");
     let realtime = RealtimeHub::new(16);
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let application = router(AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: realtime.clone(),
+        supervisors,
     });
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

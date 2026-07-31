@@ -97,11 +97,14 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
     .await
     .expect("insert non-terminal Agent Run");
 
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(8),
+        supervisors,
     };
     assert_eq!(
         recovery::reconcile_non_terminal_runs(&state)

@@ -98,11 +98,14 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
     .await
     .expect("bootstrap seeded owner");
 
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let application = router(AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(16),
+        supervisors,
     });
     let (cookie, csrf) = login(&application).await;
     let response = application

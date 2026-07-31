@@ -49,6 +49,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub rate_limits: RateLimiters,
     pub realtime: RealtimeHub,
+    pub supervisors: provider::SupervisorRegistry,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -189,11 +190,14 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy(config.database_url.expose())
             .expect("lazy PostgreSQL pool");
+        let supervisors =
+            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config),
             pool,
             rate_limits: RateLimiters::default(),
             realtime: RealtimeHub::new(8),
+            supervisors,
         });
 
         let response = application
@@ -253,11 +257,14 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy(config.database_url.expose())
             .expect("lazy PostgreSQL pool");
+        let supervisors =
+            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config),
             pool,
             rate_limits: RateLimiters::default(),
             realtime: RealtimeHub::new(8),
+            supervisors,
         });
 
         let unknown = application

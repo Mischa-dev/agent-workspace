@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use agent_workspace_server::{
-    AppState, bootstrap, config::AppConfig, migration_preflight, rate_limit::RateLimiters,
-    realtime::RealtimeHub, recovery, router, seed, shutdown_signal, telemetry::init_tracing,
+    AppState, bootstrap, config::AppConfig, migration_preflight, provider::SupervisorRegistry,
+    rate_limit::RateLimiters, realtime::RealtimeHub, recovery, router, seed, shutdown_signal,
+    telemetry::init_tracing,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
@@ -84,11 +85,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let realtime = RealtimeHub::new(256);
+    let supervisors = SupervisorRegistry::new(&config).context("configure Codex supervisors")?;
     let state = AppState {
         config: Arc::clone(&config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: realtime.clone(),
+        supervisors: supervisors.clone(),
     };
 
     let recovered = recovery::reconcile_non_terminal_runs(&state)
@@ -143,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
     };
     tokio::pin!(server);
 
-    tokio::select! {
+    let result = tokio::select! {
         server_result = &mut server => {
             let _ = shutdown_sender.send(true);
             let worker_result = outbox_publisher
@@ -165,7 +168,9 @@ async fn main() -> anyhow::Result<()> {
                 bail!("outbox publisher stopped unexpectedly")
             }
         }
-    }
+    };
+    supervisors.shutdown_all().await;
+    result
 }
 
 async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {

@@ -345,11 +345,14 @@ impl TestHarness {
         .await
         .expect("bootstrap seeded Provider Session owner");
 
+        let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+            .expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config.clone()),
             pool: pool.clone(),
             rate_limits: RateLimiters::default(),
             realtime: RealtimeHub::new(16),
+            supervisors,
         });
         let (cookie, csrf) = login(&application).await;
         Some(Self {
