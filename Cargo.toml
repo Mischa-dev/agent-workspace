@@ -3,6 +3,7 @@ members = [
   "apps/server",
   "tools/codex-bridge-spike",
   "tools/git-worktree-spike",
+  "tools/github-spike",
   "tools/mcp-spike",
 ]
 resolver = "2"
