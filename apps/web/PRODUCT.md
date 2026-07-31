@@ -7,17 +7,17 @@ product
 ## Users
 
 The initial user is a technical solo operator working from a Mac while execution
-runs on a private Red Hat project host. They need to start, supervise, approve,
-interrupt, and recover hosted coding work without losing the durable Thread,
-provider session, Git branch, base commit, or isolated worktree.
+runs on a private Red Hat project host. They need to sign in, move between
+contained Projects without losing context, and start, supervise, approve,
+interrupt, and recover hosted coding work without losing durable state.
 
 ## Product Purpose
 
 Agent Workspace is a desktop-first project environment that joins durable
-conversation with hosted execution and GitHub delivery. M0 succeeds when the
-operator can open a seeded Thread, start one isolated run, understand its
-significant activity, answer a blocker, and see a trustworthy recovery result
-after a service restart.
+conversation with hosted execution and GitHub delivery. M1 succeeds when the
+operator can use a real browser session, create and archive Projects, search and
+switch through the Project rail, restore each Project's remembered location,
+and continue using the accepted M0 Thread execution surface.
 
 ## Brand Personality
 
@@ -42,12 +42,14 @@ boundaries.
   recovery outcomes instead of simulated token noise.
 - Preserve project context: the four-region shell keeps navigation, timeline,
   and execution context visible without turning every datum into a card.
+- Keep identity server-owned: the browser never chooses authorship, derives
+  permissions from roles, or stores authentication tokens.
 - Fail clearly and recover honestly: reconnect, refetch, and interruption states
   explain what is known and what was preserved.
 
 ## Accessibility & Inclusion
 
-Target WCAG 2.2 AA for the M0 surface. Color is never the only status signal;
+Target WCAG 2.2 AA for the M1 surface. Color is never the only status signal;
 keyboard focus is visible; native controls and semantic landmarks are used;
 hostile provider output is rendered as text; and reduced-motion preferences are
 respected.

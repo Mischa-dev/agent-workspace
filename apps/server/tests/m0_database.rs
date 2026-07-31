@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
-    AppState, config::AppConfig, domain::allocate_conversation_sequence, realtime::RealtimeHub,
-    recovery, seed::dev_seed,
+    AppState, config::AppConfig, domain::allocate_conversation_sequence, rate_limit::RateLimiters,
+    realtime::RealtimeHub, recovery, seed::dev_seed,
 };
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -129,6 +129,7 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
     let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
+        rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(8),
     };
     assert_eq!(

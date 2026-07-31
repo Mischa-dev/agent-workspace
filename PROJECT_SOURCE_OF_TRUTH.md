@@ -2,16 +2,27 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M1 active v0.7
+**Status:** M1 active v0.8
 
 **Owner:** Mischa Nelson  
-**Date:** July 30, 2026  
+**Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
 **Implementation authorization:** Milestone M0 is complete. Milestone M1 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.8 — M2 Conversations entry
+
+- expanded every M2 backlog item with acceptance criteria, dependencies,
+  expected tests, and explicit exclusions
+- fixed the M2 boundary around durable Channels, Threads, immutable
+  Actor-authored Messages, read cursors, and structured Actor mentions
+- specified the transactional outbox, authenticated realtime envelope,
+  reconnect/refetch behavior, and compact Thread-sidebar projection
+- kept Work Items, attachments, reactions, hosted-worker ownership, and inline
+  Channel execution outside M2
 
 ### v0.7 — M1 identity and Projects entry
 
@@ -3582,23 +3593,358 @@ client-authored redirects.
 
 ### M2-001 Conversation schema and invariants
 
+Extend the M0 conversation projection into the production-shaped Channel and
+Thread foundation without replacing its durable IDs or timeline history.
+
+**Acceptance criteria**
+
+- append a new migration after M1; preserve and evolve the M0
+  `conversations`, `messages`, and `conversation_entries` tables rather than
+  introducing parallel replacements
+- add the missing origin-Message relationship, archive attribution/versioning,
+  and same-Project composite constraints needed by Channel and Thread commands
+- enforce in PostgreSQL and application code that a Channel has no parent or
+  repository, a Thread has exactly one same-Project Channel parent, and a
+  Thread can never parent another Thread
+- preserve transactional, monotonically increasing, unique
+  `conversation_entries.sequence` values inside each Conversation; timestamps
+  remain metadata, not ordering keys
+- prevent Channel or Thread archive while it owns a non-terminal Agent Run,
+  preserve child history, and never cascade-delete Messages or entries
+- make a Thread's repository binding immutable after its first Agent Run while
+  leaving repository selection and workspace creation owned by M3
+
+**Dependencies:** accepted M1 Actor/session/Project policy, the existing M0
+Conversation and Agent Run rows, and application-generated UUIDv7 IDs.
+
+**Expected tests:** M0-to-M2 migration, same-Project parent enforcement, nested
+Thread rejection, Channel repository rejection, concurrent sequence
+allocation, archive guards, repository-binding immutability after a run, and
+historical M0 timeline preservation.
+
+**Exclusions:** attachments, reactions, Work Item links, repository
+registration UI, provider-session changes, and destructive Conversation
+deletion.
+
 ### M2-002 Versioned Message AST and Actor authorship
+
+Implement immutable version-one Message content with server-resolved Actor
+authorship.
+
+**Acceptance criteria**
+
+- define a bounded, explicitly tagged version-one AST supporting text and
+  Actor-mention nodes; reject unknown node types, malformed UUIDs, invalid
+  shapes, unsafe URLs, excessive depth, and over-limit text before persistence
+- derive bounded plain text on the server from the validated AST for search,
+  notification, and export use; never trust a client-supplied plain-text
+  rendering
+- resolve `author_actor_id` exclusively from the authenticated session and
+  reject any client-supplied authorship field
+- validate every mentioned Actor against an enabled membership in the
+  Message's Project at send time while retaining historical display
+  attribution if that Actor is disabled later
+- treat a sent Message as immutable in M2; a correction is another Message,
+  and `content_version` describes the AST schema rather than an edit revision
+
+**Dependencies:** M2-001 Conversation constraints, M1 authenticated Actor and
+Project membership policy, and the existing Actor-backed M0 Messages.
+
+**Expected tests:** AST round trip and plain-text derivation, hostile and
+oversized nodes, authorship spoof rejection, human/Worker mention parity,
+disabled or cross-Project mention rejection, HTML escaping, and preservation
+of existing consolidated Worker Messages.
+
+**Exclusions:** Message editing/deletion, attachments, reactions, Markdown or
+HTML as authoritative storage, Work Item reference nodes before M4, and
+plain-text `@handle` scanning as identity.
 
 ### M2-003 Message API and pagination
 
+Add authorized Channel and Thread Message commands plus one durable timeline
+pagination contract.
+
+**Acceptance criteria**
+
+- implement `POST /api/v1/channels/:id/messages` and the equivalent
+  Thread-targeted send command through one Conversation domain operation
+- require a bounded idempotency key for Message append; the same Actor,
+  Conversation, and key returns the original durable result, while a
+  mismatched payload conflicts
+- insert the Message, allocate its Conversation sequence, create exactly one
+  `conversation_entries` row, and enqueue its outbox event in one transaction
+- extend `GET /api/v1/conversations/:id/timeline` with an opaque keyset cursor,
+  bounded page size, stable ascending render order, and a cursor for loading
+  older entries without timestamp merging
+- authorize every send and timeline query through exact Project membership;
+  a missing or unauthorized Conversation has the same not-found response
+- return AST content, derived display data, Actor attribution, and significant
+  Worker-event cards through typed DTOs without exposing raw provider payloads
+
+**Dependencies:** M2-001 ordered entries, M2-002 Message validation, M1 policy
+and sessions, and M2-005 outbox insertion.
+
+**Expected tests:** concurrent sends with gap-free unique sequences,
+idempotent retry and payload mismatch, forward and backward page boundaries,
+empty/final pages, cross-Project non-disclosure, inactive membership, bounded
+payloads, and stable mixed Message/Worker-event ordering.
+
+**Exclusions:** full-text search, Message edits, file upload, reactions,
+per-client event replay, and one database row per streamed token.
+
 ### M2-004 WebSocket connection
+
+Evolve the authenticated M1 realtime boundary into the typed M2 Project event
+connection while keeping HTTP and PostgreSQL authoritative.
+
+**Acceptance criteria**
+
+- keep one authenticated `/api/v1/realtime` WebSocket per browser session,
+  validate the exact allowed Origin during upgrade, and never accept tokens or
+  Actor IDs through the URL
+- emit bounded version-one envelopes containing `event_id`, monotonic
+  diagnostic `event_cursor`, `project_id`, type, occurrence time, and a typed
+  payload
+- authorize Project scope at connection/use time and again before delivery;
+  close or rescope promptly when the session, Actor, or membership is revoked
+- permit realtime delivery and ephemeral stream control only; all durable
+  Message, read-state, and Conversation mutations remain authenticated HTTP
+  actions
+- on reconnect, have the client refetch Project navigation, the open
+  Conversation page, read state, and attention data with bounded exponential
+  backoff; correctness never depends on replaying missed events
+- tolerate duplicate event IDs and unknown future event types without
+  duplicating durable UI state or crashing the connection
+
+**Dependencies:** M1 authenticated/revocable WebSocket, M2-005 outbox
+publication, and M2-003 durable refetch endpoints.
+
+**Expected tests:** missing/expired/revoked session, exact-Origin rejection,
+cross-Project suppression, membership removal during a connection, duplicate
+event tolerance, bounded frame handling, reconnect/refetch, and no
+WebSocket-only durable mutation.
+
+**Exclusions:** per-client acknowledgement, durable replay logs, public
+subscriptions, browser bearer tokens, cross-Project firehoses, and presence or
+typing indicators.
 
 ### M2-005 Transactional outbox
 
+Make durable Conversation changes observable without coupling database commits
+to an in-memory WebSocket send.
+
+**Acceptance criteria**
+
+- add `outbox_events` with an application UUIDv7 event ID, database-ordered
+  publication cursor, schema version, Project/resource scope, bounded typed
+  payload, attempt metadata, and nullable `published_at`
+- write the outbox row in the same transaction as every M2 Message,
+  Conversation, and read-relevant state change
+- claim unpublished rows in cursor order with a short transactional lease or
+  `FOR UPDATE SKIP LOCKED`, publish only after the originating transaction
+  commits, and record completion without claiming browser receipt
+- run publication at least once, recover unpublished rows after restart, and
+  make duplicate publication harmless through stable event IDs and
+  version-aware/refetching clients
+- bound retries and payload sizes; exhausted or malformed events remain
+  inspectable in redacted operator diagnostics rather than silently
+  disappearing or blocking later events forever
+- keep database access in the outbox worker/domain layer rather than the
+  WebSocket handler
+
+**Dependencies:** PostgreSQL, the M2-003 transactional command layer, the
+M2-004 realtime broadcaster, and the existing structured logging boundary.
+
+**Expected tests:** transaction rollback emits nothing, commit produces one
+event, competing-worker single claim, crash before and after publish,
+unpublished restart recovery, duplicate client receipt, poison-event
+isolation, ordered cursor behavior, and secret/payload redaction.
+
+**Exclusions:** Kafka or another broker, per-browser delivery guarantees,
+unbounded replay, exactly-once network delivery, and the broader durable job
+queue required by later integrations.
+
 ### M2-006 Channel UI
+
+Add the first durable Conversation workspace inside an authenticated Project.
+
+**Acceptance criteria**
+
+- render active Channels in the Project sidebar and a routed Channel workspace
+  with title, mixed durable timeline, load-older control, and Message composer
+- render from the validated AST with Actor identity and accessible structured
+  mentions; escape hostile text and never inject persisted HTML
+- send optimistically with a stable idempotency key, reconcile the canonical
+  sequence from the server, and expose retryable versus terminal failures
+  without duplicating a Message
+- consume realtime invalidations, coalesce refetches, and recover the open
+  Channel from HTTP after disconnect, reload, or relogin
+- preserve the M1 responsive rail/sidebar drawers, skip-link/main-landmark
+  structure, keyboard operation, focus handling, and readable pending/error
+  states
+- retain independent per-Project remembered routes and fall back to Project
+  overview when a Channel is archived or no longer authorized
+
+**Dependencies:** M1 shell/navigation, M2-003 timeline and send APIs, M2-004
+realtime connection, and M2-010 mention composer.
+
+**Expected tests:** empty and long Channels, historical pagination, optimistic
+send/retry, duplicate realtime event, disconnect/refetch, hostile AST output,
+keyboard-only composer and drawers, screen-reader labels/status, narrow
+viewport behavior, and Project switch restoration.
+
+**Exclusions:** final visual design, attachments, reactions, edit/delete,
+typing presence, rich link previews, offline sending, and inline hosted-worker
+execution.
 
 ### M2-007 Thread creation and linking
 
+Create focused child Conversations from a Channel or an originating Message.
+
+**Acceptance criteria**
+
+- implement an idempotent `POST /api/v1/channels/:id/threads` command with a
+  bounded title and optional same-Channel origin Message
+- create one same-Project Thread, preserve `parent_channel_id` and
+  `origin_message_id`, initialize its sequence/read projections, and enqueue
+  the Conversation event in one transaction
+- reject nested Threads, cross-Project origins, origins from another Channel,
+  archived parents, and unauthorized callers without leaking resource
+  existence
+- provide Channel actions to start a Thread and open existing linked Threads;
+  direct Thread routes render the same paginated timeline and composer
+- archive a Thread only through a versioned action with the active-run guard,
+  preserve its history, and return the parent Channel as the safe navigation
+  fallback
+
+**Dependencies:** M2-001 invariants, M2-003 Message/timeline commands, M2-005
+outbox, and M1 Project policy/navigation.
+
+**Expected tests:** atomic creation, idempotent retry, nested/cross-Project
+rejection, origin ownership, archived-parent rejection, active-run archive
+guard, direct route/reload, parent fallback, and concurrent duplicate
+requests.
+
+**Exclusions:** Work Item links, repository selection, provider-session
+creation, Agent Run start behavior beyond preserving the M0 route, automatic
+AI-generated titles, and Thread children.
+
 ### M2-008 Per-user read state
+
+Persist the highest Conversation sequence seen independently for every Actor.
+
+**Acceptance criteria**
+
+- add `conversation_read_states` keyed by exact
+  `(project_id, conversation_id, actor_id)` with a highest-seen sequence,
+  optimistic version, and timestamps
+- require matching enabled Project membership and same-Project Conversation
+  foreign keys; clients never submit another Actor's identity
+- implement an idempotent mark-seen action that advances with an atomic
+  maximum and can never move a cursor backward or beyond the current durable
+  Conversation sequence
+- mark seen only after the client has successfully rendered the corresponding
+  durable entry; loading a sidebar or receiving a WebSocket event alone does
+  not consume attention
+- derive unread/unseen state from durable sequences independently for each
+  human or non-human Actor fixture and preserve it across reload and relogin
+
+**Dependencies:** M2-001 sequence model, M1 Actor authorization, M2-003
+timeline responses, and M2-004 refetch behavior.
+
+**Expected tests:** first read, monotonic concurrent updates, stale idempotent
+retry, future-sequence rejection, cross-Project and disabled membership,
+per-Actor isolation, reload/relogin persistence, and completed-after-cursor
+derivation.
+
+**Exclusions:** read receipts shown to other members, typing presence, device
+specific cursors, notification-delivery acknowledgement, and failed-run
+acknowledgement semantics owned by M3.
 
 ### M2-009 Thread sidebar surfacing rules
 
+Implement the compact, deterministic Thread projection defined in section 6.5.
+
+**Acceptance criteria**
+
+- beneath each Channel, always surface Threads whose newest Agent Run is
+  active, blocked for the current Actor, failed and unacknowledged, or
+  completed after that Actor's read cursor
+- for the selected Channel, also include its five most recently active
+  Threads, deduplicate overlaps, and sort with a stable server-defined order
+- remove seen inactive Threads from the compact list when the user leaves the
+  parent Channel while retaining them behind `Show more`, `View all Threads`,
+  and an explicit archived filter
+- derive blue/orange/white/gray/red presentation from durable run/read state;
+  every color has equivalent text and icon meaning and is never stored as
+  business state
+- calculate the projection in bounded Project-scoped queries and return no
+  Thread the Actor cannot currently view
+- update through outbox invalidations and refetch so reconnect, duplicate
+  delivery, or missed events converge on the durable projection
+
+**Dependencies:** M2-007 Threads, M2-008 read state, existing M0 Agent Run
+states, M2-004 realtime, and M1 Project sidebar.
+
+**Expected tests:** each attention reason, addressed blocked Actor, selected
+Channel recent-five boundary, overlap deduplication, seen inactive removal,
+stable ordering ties, archived filtering, cross-Project isolation,
+color-independent labels, and reconnect convergence.
+
+**Exclusions:** global Home attention aggregation, notification inbox, custom
+sorting, arbitrary user pinning of Threads, inline Channel runs, and the full
+M3 acknowledgement/blocker UI.
+
 ### M2-010 Mention autocomplete for human and worker Actors
+
+Provide a keyboard-accessible structured Actor picker without making handles an
+authorization or invocation protocol.
+
+**Acceptance criteria**
+
+- expose a bounded Project-scoped Actor search endpoint returning enabled human
+  and Execution Worker memberships the sender may mention, with immutable
+  Actor ID, display name, handle, kind, and safe avatar reference
+- search normalized display names and handles with deterministic ordering and
+  pagination; exclude disabled, archived, and cross-Project memberships
+- insert a semantic mention node into composer state and submit its Actor ID
+  in the Message AST while rendering the current Project handle
+- support keyboard open, search, selection, dismissal, focus restoration, and
+  screen-reader announcement without trapping focus or relying on color
+- revalidate the referenced Actor and membership on send; handle races by
+  preserving the draft and showing an actionable validation error
+- treat an `@agent` mention as ordinary structured conversation data in M2;
+  it must not silently start an Agent Run or scan text for magic strings
+
+**Dependencies:** M1 Actor-backed Project memberships and policy, M2-002 AST,
+M2-003 send API, and M2-006 composer.
+
+**Expected tests:** human/Worker results, duplicate handles in different
+Projects, disabled and cross-Project exclusion, bounded search/pagination,
+keyboard and screen-reader interaction, hostile display names, send-time
+membership race, AST round trip, and literal `@agent` text remaining text.
+
+**Exclusions:** Work Item autocomplete, external-agent connection setup,
+presence, directory-wide search, fuzzy ranking infrastructure, automatic
+Worker invocation, and O-002 inline execution.
+
+### M2 exit criteria
+
+- an authenticated member can create a Channel, exchange immutable
+  Actor-attributed Messages, create and revisit a linked Thread, and paginate a
+  mixed durable timeline without sequence gaps or duplicates
+- two Actors retain independent read cursors and attention states across
+  reload, relogin, missed realtime delivery, and reconnect
+- realtime events originate from the transactional outbox, survive server
+  restart, remain Project-scoped, and converge through HTTP refetch
+- the Project sidebar implements the exact compact Thread surfacing rules with
+  accessible non-color status and archived history still reachable
+- structured human and Worker mentions survive storage/rendering while
+  spoofed authorship, cross-Project references, and plain-text magic invocation
+  are rejected
+- PostgreSQL, HTTP, WebSocket, frontend accessibility, hostile-content,
+  concurrency, and browser-driven two-Actor acceptance tests pass
+- the M3 Execution Worker backlog is elaborated before M3 implementation begins
 
 ## Milestone M3: Execution Worker and hosted Codex
 

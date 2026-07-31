@@ -3,8 +3,8 @@
 ## Theme
 
 A restrained dark operational interface intended for a technical operator in a
-mixed-light desktop environment. The visual system is deliberately provisional
-during M0 because product naming and public identity are unresolved.
+mixed-light desktop environment. The visual system remains deliberately
+provisional during M1 because product naming and public identity are unresolved.
 
 ## Color
 
@@ -31,6 +31,10 @@ The main Thread surface owns scrolling while the composer stays available.
 ## Components
 
 - Project controls and Channels use one compact selection vocabulary.
+- The narrow Project rail distinguishes pinned, recent, active, and
+  attention-bearing Projects without becoming a second full sidebar.
+- Sign-in, Project creation, and archive confirmation use ordinary labelled
+  forms with focused error summaries and explicit outcomes.
 - Timeline entries are grouped by meaning, not wrapped in identical cards.
 - Provider events use quiet bordered rows with a visible event type and summary.
 - Pending approvals use a contained alert surface with explicit allow and deny
@@ -43,3 +47,10 @@ The main Thread surface owns scrolling while the composer stays available.
 Use 150–200ms state transitions for hover, focus, and newly arriving timeline
 content. Avoid page choreography. Disable nonessential transitions under
 `prefers-reduced-motion`.
+
+## M1 Boundaries
+
+Keep the four-region desktop shell and existing cool blue-gray tokens. At phone
+widths, the Project rail and Project sidebar become keyboard-accessible drawers;
+they do not disappear. M1 adds no final logo, font, illustration, broad
+navigation system, or decorative surface treatment.

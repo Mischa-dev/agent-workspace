@@ -11,6 +11,7 @@ architecture. It is canonical.
 - Run all required local checks: `corepack pnpm check`
 - Start PostgreSQL with Docker: `corepack pnpm db:up`
 - Start PostgreSQL on Red Hat: `podman-compose -f docker-compose.dev.yml up -d`
+- Bootstrap the first browser administrator: `cargo run -p agent-workspace-server -- bootstrap-admin --login-name <name> --display-name <name> --organization-name <name> --organization-slug <slug>` (interactive terminal only)
 
 ## Verification
 

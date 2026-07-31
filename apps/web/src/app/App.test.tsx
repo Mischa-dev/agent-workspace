@@ -1,21 +1,102 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type {
+  OrganizationSummary,
+  SessionResponse,
+} from '../auth/session'
 import { App } from './App'
 import { coalesceDelta, coalesceDeltaBatch } from './streaming'
 
-const bootstrap = {
-  projectId: '019fb600-0000-7000-8000-000000000001',
-  channelId: '019fb600-0000-7000-8000-000000000002',
-  threadId: '019fb600-0000-7000-8000-000000000003',
+const organization: OrganizationSummary = {
+  id: '019fb600-0000-7000-8000-000000000000',
+  name: 'Mischa',
+  slug: 'mischa',
+  role: 'owner',
 }
+const projectAId = '019fb600-0000-7000-8000-000000000001'
+const projectBId = '019fb600-0000-7000-8000-000000000002'
+const threadId = '019fb600-0000-7000-8000-000000000003'
+const adminOrganizationId = '019fb600-0000-7000-8000-000000000007'
+const ownerOrganizationId = '019fb600-0000-7000-8000-000000000008'
+const memberOrganizationId = '019fb600-0000-7000-8000-000000000009'
+const user = {
+  id: '019fb600-0000-7000-8000-000000000004',
+  actorId: '019fb600-0000-7000-8000-000000000005',
+  actorKind: 'human',
+  loginName: 'mischa',
+  displayName: 'Mischa Nelson',
+  capabilities: { createProject: true },
+}
+const authenticatedSession = {
+  authenticated: true,
+  user,
+  organizations: [organization],
+}
+const signedOutSession = {
+  authenticated: false,
+  user: null,
+  organizations: [],
+}
+
+function project(
+  id: string,
+  key: string,
+  name: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id,
+    organizationId: organization.id,
+    key,
+    name,
+    archivedAt: null,
+    role: 'owner',
+    version: 1,
+    attentionCount: 0,
+    capabilities: {
+      view: true,
+      manage: true,
+      archive: true,
+      navigationWrite: true,
+    },
+    navigation: {
+      location: { kind: 'project_overview' },
+      href: `/projects/${id}`,
+      pinned: false,
+      lastOpenedAt: '2026-07-31T05:00:00Z',
+      version: 1,
+    },
+    ...overrides,
+  }
+}
+
+const projectA = project(projectAId, 'AW', 'Agent Workspace', {
+  attentionCount: 3,
+  navigation: {
+    location: { kind: 'thread', conversationId: threadId },
+    href: `/projects/${projectAId}/threads/${threadId}`,
+    pinned: true,
+    lastOpenedAt: '2026-07-31T06:00:00Z',
+    version: 2,
+  },
+})
+const projectB = project(projectBId, 'BETA', 'Beta Project')
 
 const timeline = {
   conversation: {
-    id: bootstrap.threadId,
-    projectId: bootstrap.projectId,
+    id: threadId,
+    projectId: projectAId,
     kind: 'thread',
-    parentChannelId: bootstrap.channelId,
+    parentChannelId: 'channel-1',
     name: 'M0 walking skeleton',
   },
   entries: [
@@ -61,6 +142,7 @@ const timeline = {
     failureReason: null,
     createdAt: '2026-07-31T04:00:00Z',
     updatedAt: '2026-07-31T04:01:00Z',
+    capabilities: { interrupt: true },
   },
   approvals: [
     {
@@ -75,8 +157,10 @@ const timeline = {
       status: 'pending',
       response: null,
       createdAt: '2026-07-31T04:01:00Z',
+      capabilities: { respond: true },
     },
   ],
+  capabilities: { workerInvoke: true },
 }
 
 class WebSocketStub extends EventTarget {
@@ -93,81 +177,1139 @@ function jsonResponse(body: unknown, status = 200) {
   return Promise.resolve(
     new Response(JSON.stringify(body), {
       status,
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'request-test',
+      },
     }),
   )
 }
 
-describe('M0 Thread route', () => {
+function noContentResponse() {
+  return Promise.resolve(new Response(null, { status: 204 }))
+}
+
+function installStandardApi(
+  session: SessionResponse = authenticatedSession,
+) {
+  let currentSession = session
+  const fetchMock = vi.fn(
+    (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const path = String(input)
+      const method = init?.method ?? 'GET'
+      if (path.endsWith('/api/v1/auth/session')) {
+        return jsonResponse(currentSession)
+      }
+      if (path.endsWith('/api/v1/auth/login')) {
+        currentSession = authenticatedSession
+        return jsonResponse(currentSession)
+      }
+      if (path.endsWith('/api/v1/auth/logout')) return noContentResponse()
+      if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+        return jsonResponse({ projects: [projectA, projectB] })
+      }
+      if (path.endsWith(`/projects/${projectAId}`)) {
+        return jsonResponse(projectA)
+      }
+      if (path.endsWith(`/projects/${projectBId}`)) {
+        return jsonResponse(projectB)
+      }
+      if (path.endsWith(`/projects/${projectAId}/navigation`)) {
+        return jsonResponse(projectA.navigation)
+      }
+      if (path.endsWith(`/projects/${projectBId}/navigation`)) {
+        return jsonResponse(projectB.navigation)
+      }
+      if (path.endsWith(`/projects/${projectAId}/switch`)) {
+        return jsonResponse({
+          project: projectA,
+          navigation: projectA.navigation,
+          href: projectA.navigation.href,
+        })
+      }
+      if (path.endsWith(`/projects/${projectBId}/switch`)) {
+        return jsonResponse({
+          project: projectB,
+          navigation: projectB.navigation,
+          href: projectB.navigation.href,
+        })
+      }
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(timeline)
+      }
+      if (path.includes('/agent-approvals/approval-1/respond')) {
+        return jsonResponse({ ...timeline.approvals[0], status: 'resolved' })
+      }
+      throw new Error(`Unexpected request: ${method} ${path}`)
+    },
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+describe('M1 authenticated shell', () => {
   beforeEach(() => {
     WebSocketStub.instances = []
     vi.stubGlobal('WebSocket', WebSocketStub)
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL) => {
-        const path = String(input)
-        if (path.endsWith('/api/v1/dev/bootstrap')) return jsonResponse(bootstrap)
-        if (path.includes('/timeline')) return jsonResponse(timeline)
-        if (path.includes('/respond')) {
-          return jsonResponse({ ...timeline.approvals[0], status: 'resolved' })
-        }
-        return jsonResponse({})
-      }),
-    )
+    window.history.replaceState({}, '', '/home')
+    document.cookie =
+      'agent_workspace_csrf=test-csrf; Path=/; SameSite=Strict'
   })
 
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
+    document.cookie = 'agent_workspace_csrf=; Max-Age=0; Path=/'
+    window.history.replaceState({}, '', '/')
   })
 
-  it('renders the four-region shell and durable timeline', async () => {
+  it('redirects a signed-out protected route to the sign-in boundary', async () => {
+    installStandardApi(signedOutSession)
+    const { container } = render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
+    expect(
+      screen.getByText(/first account is created from the host-local/i),
+    ).toBeVisible()
+    expect(
+      (
+        await axe.run(container, {
+          rules: { 'color-contrast': { enabled: false } },
+        })
+      ).violations,
+    ).toEqual([])
+  })
+
+  it('signs in without writing credentials or tokens to browser storage', async () => {
+    window.history.replaceState({}, '', '/sign-in?returnTo=%2Fhome')
+    const storageSpy = vi.spyOn(Storage.prototype, 'setItem')
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input)
+        if (path.endsWith('/auth/session')) return jsonResponse(signedOutSession)
+        if (path.endsWith('/auth/login')) return jsonResponse(authenticatedSession)
+        if (path.startsWith('/api/v1/projects?')) {
+          return jsonResponse({ projects: [projectA] })
+        }
+        throw new Error(`Unexpected request: ${String(init?.method)} ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    expect(screen.getByRole('navigation', { name: 'Projects' })).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Agent Workspace' })).toBeVisible()
+    fireEvent.change(await screen.findByLabelText('Login name'), {
+      target: { value: 'mischa' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'correct horse battery staple' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(
+      await screen.findByRole('heading', { name: /Welcome back/ }),
+    ).toBeVisible()
+    const loginCall = fetchMock.mock.calls.find(([path]) =>
+      String(path).endsWith('/auth/login'),
+    )
+    expect(loginCall?.[1]).toEqual(
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'POST',
+      }),
+    )
+    expect(storageSpy).not.toHaveBeenCalled()
+    storageSpy.mockRestore()
+  })
+
+  it('signs out through the CSRF-protected session action', async () => {
+    const fetchMock = installStandardApi()
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Sign out Mischa Nelson' }),
+    )
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
+    const logoutCall = fetchMock.mock.calls.find(([path]) =>
+      String(path).endsWith('/auth/logout'),
+    )
+    expect(logoutCall?.[1]).toEqual(
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'POST',
+      }),
+    )
+    expect(new Headers(logoutCall?.[1]?.headers).get('x-csrf-token')).toBe(
+      'test-csrf',
+    )
+  })
+
+  it('drops prior Actor caches after an automatic 401 before another login', async () => {
+    const nextActorSession: SessionResponse = {
+      ...authenticatedSession,
+      user: {
+        ...user,
+        id: '019fb600-0000-7000-8000-00000000000a',
+        actorId: '019fb600-0000-7000-8000-00000000000b',
+        loginName: 'next',
+        displayName: 'Next Actor',
+      },
+    }
+    let nextActor = false
+    let projectListReads = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const path = String(input)
+          const method = init?.method ?? 'GET'
+          if (path.endsWith('/auth/session')) {
+            return jsonResponse(authenticatedSession)
+          }
+          if (path.endsWith('/auth/login')) {
+            nextActor = true
+            return jsonResponse(nextActorSession)
+          }
+          if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+            projectListReads += 1
+            return jsonResponse({
+              projects: nextActor ? [projectB] : [projectA],
+            })
+          }
+          if (
+            path.endsWith(`/projects/${projectAId}/navigation`) &&
+            method === 'GET'
+          ) {
+            return jsonResponse(
+              {
+                error: {
+                  code: 'authentication_required',
+                  message: 'Sign in to continue.',
+                },
+              },
+              401,
+            )
+          }
+          throw new Error(`Unexpected request: ${method} ${path}`)
+        },
+      ),
+    )
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('link', {
+        name: 'Agent Workspace, 3 items need attention',
+      }),
+    )
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('Login name'), {
+      target: { value: 'next' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'correct horse battery staple' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(
+      await screen.findByRole('heading', { name: /Welcome back, Next Actor/ }),
+    ).toBeVisible()
+    expect(
+      await screen.findByRole('link', { name: 'Beta Project' }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('link', {
+        name: 'Agent Workspace, 3 items need attention',
+      }),
+    ).not.toBeInTheDocument()
+    expect(projectListReads).toBeGreaterThanOrEqual(2)
+  })
+
+  it('renders server-backed rail, attention labels, search, and accessible drawers', async () => {
+    installStandardApi()
+    const { container } = render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: /Welcome back/ }),
+    ).toBeVisible()
+    expect(
+      await screen.findByRole('link', {
+        name: 'Agent Workspace, 3 items need attention',
+      }),
+    ).toBeVisible()
+    const searchButton = screen.getByRole('button', { name: 'Search Projects' })
+    fireEvent.click(searchButton)
+    const search = screen.getByRole('searchbox', { name: 'Search Projects' })
+    expect(search).toHaveFocus()
+    expect(search.closest('label')).toHaveClass('search-field')
+    fireEvent.change(search, { target: { value: 'beta' } })
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('link', { name: /Beta Project/ })).toBeVisible()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(searchButton).toHaveFocus())
+
+    const projectsButton = screen.getByRole('button', { name: 'Projects' })
+    fireEvent.click(projectsButton)
+    expect(screen.getByRole('navigation', { name: 'Projects' })).toHaveAttribute(
+      'data-mobile-open',
+      'true',
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(projectsButton).toHaveFocus())
+    expect(
+      (
+        await axe.run(container, {
+          rules: { 'color-contrast': { enabled: false } },
+        })
+      ).violations,
+    ).toEqual([])
+  })
+
+  it('restores independent A to B to A locations after a client reload', async () => {
+    installStandardApi()
+    const firstRender = render(<App />)
+    const projectALink = await screen.findByRole('link', {
+      name: 'Agent Workspace, 3 items need attention',
+    })
+    fireEvent.click(projectALink)
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    expect(window.location.pathname).toBe(
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+
+    fireEvent.click(screen.getByRole('link', { name: 'Global Home' }))
+    fireEvent.click(
+      await screen.findByRole('link', { name: 'Beta Project' }),
+    )
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Beta Project' }),
+    ).toBeVisible()
+    expect(window.location.pathname).toBe(`/projects/${projectBId}`)
+
+    fireEvent.click(screen.getByRole('link', { name: 'Global Home' }))
+    fireEvent.click(
+      await screen.findByRole('link', {
+        name: 'Agent Workspace, 3 items need attention',
+      }),
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+
+    firstRender.unmount()
+    installStandardApi(signedOutSession)
+    window.history.replaceState({}, '', '/sign-in')
+    render(<App />)
+    fireEvent.change(await screen.findByLabelText('Login name'), {
+      target: { value: 'mischa' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'correct horse battery staple' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(
+      await screen.findByRole('heading', { name: /Welcome back/ }),
+    ).toBeVisible()
+    fireEvent.click(
+      await screen.findByRole('link', {
+        name: 'Agent Workspace, 3 items need attention',
+      }),
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    expect(window.location.pathname).toBe(
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+  })
+
+  it('keeps one idempotency key while retrying Project creation', async () => {
+    window.history.replaceState({}, '', '/projects/new')
+    let createAttempts = 0
+    const idempotencyKeys: Array<string | null> = []
+    const created = project(
+      '019fb600-0000-7000-8000-000000000099',
+      'TRI',
+      'Trident',
+    )
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input)
+        const method = init?.method ?? 'GET'
+        if (path.endsWith('/auth/session')) return jsonResponse(authenticatedSession)
+        if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+          return jsonResponse({ projects: [] })
+        }
+        if (path.endsWith('/projects') && method === 'POST') {
+          idempotencyKeys.push(
+            new Headers(init?.headers).get('idempotency-key'),
+          )
+          createAttempts += 1
+          return createAttempts === 1
+            ? jsonResponse(
+                {
+                  error: {
+                    code: 'internal_error',
+                    message: 'The request could not be completed.',
+                  },
+                },
+                500,
+              )
+            : jsonResponse(created, 201)
+        }
+        if (path.endsWith(`/${created.id}/switch`)) {
+          return jsonResponse({
+            project: created,
+            navigation: created.navigation,
+            href: `/projects/${created.id}`,
+          })
+        }
+        if (path.endsWith(`/${created.id}`)) return jsonResponse(created)
+        if (path.endsWith(`/${created.id}/navigation`)) {
+          return jsonResponse(created.navigation)
+        }
+        throw new Error(`Unexpected request: ${method} ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('Project name'), {
+      target: { value: 'Trident' },
+    })
+    fireEvent.change(screen.getByLabelText('Project key'), {
+      target: { value: 'tri' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Project' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The request could not be completed.',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Create Project' }))
+
+    await waitFor(() => expect(createAttempts).toBe(2))
+    expect(idempotencyKeys[0]).toBeTruthy()
+    expect(idempotencyKeys[1]).toBe(idempotencyKeys[0])
+  })
+
+  it('offers Project creation only in Owner and Admin Organizations', async () => {
+    window.history.replaceState({}, '', '/projects/new')
+    const sessionWithMixedRoles: SessionResponse = {
+      ...authenticatedSession,
+      organizations: [
+        {
+          id: memberOrganizationId,
+          name: 'Member Organization',
+          slug: 'member',
+          role: 'member',
+        },
+        {
+          id: adminOrganizationId,
+          name: 'Admin Organization',
+          slug: 'admin',
+          role: 'admin',
+        },
+        {
+          id: ownerOrganizationId,
+          name: 'Owner Organization',
+          slug: 'owner',
+          role: 'owner',
+        },
+      ],
+    }
+    installStandardApi(sessionWithMixedRoles)
+    render(<App />)
+
+    const selector = await screen.findByLabelText('Organization')
+    expect(selector).toHaveValue(adminOrganizationId)
+    expect(
+      within(selector).queryByRole('option', {
+        name: 'Member Organization',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(selector).getByRole('option', { name: 'Admin Organization' }),
+    ).toBeVisible()
+    expect(
+      within(selector).getByRole('option', { name: 'Owner Organization' }),
+    ).toBeVisible()
+  })
+
+  it('blocks direct Project creation when no eligible Organization exists', async () => {
+    window.history.replaceState({}, '', '/projects/new')
+    installStandardApi({
+      ...authenticatedSession,
+      organizations: [
+        {
+          id: memberOrganizationId,
+          name: 'Member Organization',
+          slug: 'member',
+          role: 'member',
+        },
+      ],
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Project creation unavailable',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Create Project' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('requires the exact Project key and archives with its expected version', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectBId}/settings`,
+    )
+    let archived = false
+    const fetchMock = installStandardApi()
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input)
+        const method = init?.method ?? 'GET'
+        if (path.endsWith('/auth/session')) return jsonResponse(authenticatedSession)
+        if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+          return jsonResponse({
+            projects: archived ? [projectA] : [projectA, projectB],
+          })
+        }
+        if (path.endsWith(`/projects/${projectBId}`)) {
+          return jsonResponse(projectB)
+        }
+        if (path.endsWith(`/projects/${projectBId}/navigation`)) {
+          return jsonResponse({
+            ...projectB.navigation,
+            location: { kind: 'settings' },
+            href: `/projects/${projectBId}/settings`,
+          })
+        }
+        if (
+          path.endsWith(`/projects/${projectBId}/archive`) &&
+          method === 'POST'
+        ) {
+          archived = true
+          return jsonResponse({
+            ...projectB,
+            archivedAt: '2026-07-31T07:00:00Z',
+            version: 2,
+          })
+        }
+        throw new Error(`Unexpected request: ${method} ${path}`)
+      },
+    )
+    render(<App />)
+
+    const archiveButton = await screen.findByRole('button', {
+      name: 'Archive Project',
+    })
+    expect(archiveButton).toBeDisabled()
+    fireEvent.change(screen.getByLabelText(/Type BETA to confirm/), {
+      target: { value: 'BETA' },
+    })
+    fireEvent.click(archiveButton)
+
+    expect(
+      await screen.findByText(/Beta Project was archived/),
+    ).toBeVisible()
+    const archiveCall = fetchMock.mock.calls.find(([path]) =>
+      String(path).endsWith(`/${projectBId}/archive`),
+    )
+    expect(archiveCall?.[1]?.body).toBe(JSON.stringify({ expectedVersion: 1 }))
+    expect(new Headers(archiveCall?.[1]?.headers).get('x-csrf-token')).toBe(
+      'test-csrf',
+    )
+    expect(
+      screen.queryByRole('link', { name: 'Beta Project' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it.each([
+    {
+      code: 'version_conflict',
+      message: 'Project changed. Reload before archiving.',
+      details: { currentVersion: 2 },
+    },
+    {
+      code: 'project_has_active_runs',
+      message: 'Interrupt active runs before archiving.',
+    },
+  ])('keeps archive conflicts recoverable for $code', async ({
+    code,
+    details,
+    message,
+  }) => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectBId}/settings`,
+    )
+    let projectReads = 0
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input)
+        const method = init?.method ?? 'GET'
+        if (path.endsWith('/auth/session')) {
+          return jsonResponse(authenticatedSession)
+        }
+        if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+          return jsonResponse({ projects: [projectA, projectB] })
+        }
+        if (path.endsWith(`/projects/${projectBId}`)) {
+          projectReads += 1
+          return jsonResponse({
+            ...projectB,
+            version:
+              code === 'version_conflict' && projectReads > 1 ? 2 : 1,
+          })
+        }
+        if (
+          path.endsWith(`/projects/${projectBId}/navigation`) &&
+          method === 'GET'
+        ) {
+          return jsonResponse({
+            ...projectB.navigation,
+            location: { kind: 'settings' },
+            href: `/projects/${projectBId}/settings`,
+          })
+        }
+        if (
+          path.endsWith(`/projects/${projectBId}/archive`) &&
+          method === 'POST'
+        ) {
+          return jsonResponse({ error: { code, details, message } }, 409)
+        }
+        throw new Error(`Unexpected request: ${method} ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(
+      await screen.findByLabelText(/Type BETA to confirm/),
+      { target: { value: 'BETA' } },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Project' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      code === 'version_conflict' ? 'current version 2' : message,
+    )
+    await waitFor(() => expect(alert).toHaveFocus())
+    expect(window.location.pathname).toBe(
+      `/projects/${projectBId}/settings`,
+    )
+    expect(
+      screen.getByRole('link', { name: 'Beta Project' }),
+    ).toBeVisible()
+    const archiveCall = fetchMock.mock.calls.find(([path]) =>
+      String(path).endsWith(`/${projectBId}/archive`),
+    )
+    expect(archiveCall?.[1]?.body).toBe(
+      JSON.stringify({ expectedVersion: 1 }),
+    )
+    if (code === 'version_conflict') {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Archive Project' }),
+      )
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.filter(([path]) =>
+            String(path).endsWith(`/${projectBId}/archive`),
+          ),
+        ).toHaveLength(2),
+      )
+      const archiveCalls = fetchMock.mock.calls.filter(([path]) =>
+        String(path).endsWith(`/${projectBId}/archive`),
+      )
+      expect(archiveCalls[1][1]?.body).toBe(
+        JSON.stringify({ expectedVersion: 2 }),
+      )
+    }
+  })
+
+  it('serializes a navigation conflict retry with the newest expected version', async () => {
+    const projectCId = '019fb600-0000-7000-8000-000000000088'
+    const projectC = project(projectCId, 'GAMMA', 'Gamma Project')
+    window.history.replaceState({}, '', `/projects/${projectCId}/settings`)
+    let navigationReads = 0
+    const navigationWrites: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const path = String(input)
+          const method = init?.method ?? 'GET'
+          if (path.endsWith('/auth/session')) {
+            return jsonResponse(authenticatedSession)
+          }
+          if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+            return jsonResponse({ projects: [projectC] })
+          }
+          if (path.endsWith(`/projects/${projectCId}`)) {
+            return jsonResponse(projectC)
+          }
+          if (
+            path.endsWith(`/projects/${projectCId}/navigation`) &&
+            method === 'GET'
+          ) {
+            navigationReads += 1
+            return jsonResponse({
+              ...projectC.navigation,
+              version: navigationReads,
+            })
+          }
+          if (
+            path.endsWith(`/projects/${projectCId}/navigation`) &&
+            method === 'PUT'
+          ) {
+            const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+            navigationWrites.push(body)
+            if (navigationWrites.length === 1) {
+              return jsonResponse(
+                {
+                  error: {
+                    code: 'version_conflict',
+                    details: { currentVersion: 2 },
+                    message: 'Navigation changed.',
+                  },
+                },
+                409,
+              )
+            }
+            return jsonResponse({
+              ...projectC.navigation,
+              location: { kind: 'settings' },
+              href: `/projects/${projectCId}/settings`,
+              version: 3,
+            })
+          }
+          throw new Error(`Unexpected request: ${method} ${path}`)
+        },
+      ),
+    )
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Project settings' }),
+    ).toBeVisible()
+    await waitFor(() => expect(navigationWrites).toHaveLength(2))
+    expect(navigationWrites.map((write) => write.expectedVersion)).toEqual([
+      1, 2,
+    ])
+    expect(navigationWrites[1]).toMatchObject({
+      location: { kind: 'settings' },
+    })
+    expect(navigationWrites[1]).not.toHaveProperty('actorId')
+  })
+
+  it('announces a terminal remembered-location failure and offers retry', async () => {
+    const projectCId = '019fb600-0000-7000-8000-000000000089'
+    const projectC = project(projectCId, 'DELTA', 'Delta Project')
+    window.history.replaceState({}, '', `/projects/${projectCId}/settings`)
+    let navigationReads = 0
+    let navigationWrites = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const path = String(input)
+          const method = init?.method ?? 'GET'
+          if (path.endsWith('/auth/session')) {
+            return jsonResponse(authenticatedSession)
+          }
+          if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+            return jsonResponse({ projects: [projectC] })
+          }
+          if (path.endsWith(`/projects/${projectCId}`)) {
+            return jsonResponse(projectC)
+          }
+          if (
+            path.endsWith(`/projects/${projectCId}/navigation`) &&
+            method === 'GET'
+          ) {
+            navigationReads += 1
+            return jsonResponse({
+              ...projectC.navigation,
+              version: navigationReads === 1 ? 1 : 2,
+            })
+          }
+          if (
+            path.endsWith(`/projects/${projectCId}/navigation`) &&
+            method === 'PUT'
+          ) {
+            navigationWrites += 1
+            if (navigationWrites === 1) {
+              return jsonResponse(
+                {
+                  error: {
+                    code: 'version_conflict',
+                    details: { currentVersion: 2 },
+                    message: 'Navigation changed.',
+                  },
+                },
+                409,
+              )
+            }
+            if (navigationWrites === 2) {
+              return jsonResponse(
+                {
+                  error: {
+                    code: 'internal_error',
+                    message: 'Navigation could not be saved.',
+                  },
+                },
+                500,
+              )
+            }
+            return jsonResponse({
+              ...projectC.navigation,
+              location: { kind: 'settings' },
+              href: `/projects/${projectCId}/settings`,
+              version: 3,
+            })
+          }
+          throw new Error(`Unexpected request: ${method} ${path}`)
+        },
+      ),
+    )
+    render(<App />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Navigation could not be saved.')
+    expect(navigationWrites).toBe(2)
+    fireEvent.click(
+      within(alert).getByRole('button', { name: 'Try saving again' }),
+    )
+    await waitFor(() => expect(navigationWrites).toBe(3))
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Navigation could not be saved.'),
+      ).not.toBeInTheDocument(),
+    )
+  })
+
+  it('keeps Viewer Project controls read-only', async () => {
+    const viewerProject = {
+      ...projectB,
+      role: 'viewer',
+      capabilities: {
+        view: true,
+        manage: false,
+        archive: false,
+        navigationWrite: true,
+      },
+      navigation: {
+        ...projectB.navigation,
+        location: { kind: 'settings' },
+        href: `/projects/${projectBId}/settings`,
+      },
+    }
+    window.history.replaceState({}, '', `/projects/${projectBId}/settings`)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const path = String(input)
+          const method = init?.method ?? 'GET'
+          if (path.endsWith('/auth/session')) {
+            return jsonResponse(authenticatedSession)
+          }
+          if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+            return jsonResponse({ projects: [viewerProject] })
+          }
+          if (path.endsWith(`/projects/${projectBId}`)) {
+            return jsonResponse(viewerProject)
+          }
+          if (path.endsWith(`/projects/${projectBId}/navigation`)) {
+            return jsonResponse(viewerProject.navigation)
+          }
+          throw new Error(`Unexpected request: ${method} ${path}`)
+        },
+      ),
+    )
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Project settings' }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Archive Project' }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('viewer')).toBeVisible()
+  })
+
+  it('preserves the hosted Thread timeline, hostile-output escaping, and approval flow', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const fetchMock = installStandardApi()
+    const { container } = render(<App />)
+
     expect(
       await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Project host' })).toBeVisible()
-    expect(screen.getByText('The run is waiting for an approval.')).toBeVisible()
-  })
-
-  it('escapes hostile provider output as text', async () => {
-    const { container } = render(<App />)
-
-    expect(await screen.findByText('<img src=x onerror=alert(1)>')).toBeVisible()
+    expect(
+      screen.getByText('<img src=x onerror=alert(1)>'),
+    ).toBeVisible()
     expect(container.querySelector('img')).toBeNull()
-  })
-
-  it('submits an approval response and refetches durable state', async () => {
-    render(<App />)
-    const button = await screen.findByRole('button', { name: 'Allow once' })
-    fireEvent.click(button)
-
+    expect(
+      screen.getByRole('button', { name: 'Interrupt run' }),
+    ).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(
-        '/api/v1/agent-approvals/approval-1/respond',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({ decision: 'approve' }),
-        }),
-      )
-    })
-  })
-
-  it('refetches after the realtime connection opens', async () => {
-    render(<App />)
-    await screen.findByText('<img src=x onerror=alert(1)>')
-    expect(WebSocketStub.instances).toHaveLength(1)
-
-    WebSocketStub.instances[0].dispatchEvent(new Event('open'))
-    await waitFor(() => {
-      const fetchMock = vi.mocked(fetch)
       expect(
-        fetchMock.mock.calls.filter(([path]) => String(path).includes('/timeline')),
-      ).toHaveLength(2)
+        fetchMock.mock.calls.some(([path]) =>
+          String(path).includes('/agent-approvals/approval-1/respond'),
+        ),
+      ).toBe(true)
     })
+  })
+
+  it('rechecks an expired session when the realtime connection closes', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    let expired = false
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (
+        expired &&
+        String(input).includes(`/conversations/${threadId}/timeline`)
+      ) {
+        return jsonResponse(
+          {
+            error: {
+              code: 'authentication_required',
+              message: 'Sign in to continue.',
+            },
+          },
+          401,
+        )
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    expect(WebSocketStub.instances).toHaveLength(1)
+    expired = true
+    WebSocketStub.instances[0].dispatchEvent(new Event('close'))
+
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
+    expect(
+      screen.queryByText('<img src=x onerror=alert(1)>'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('redirects a cross-Project Thread response without exposing its state or actions', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const mismatchedTimeline = {
+      ...timeline,
+      conversation: {
+        ...timeline.conversation,
+        projectId: projectBId,
+        name: 'Private Project B Thread',
+      },
+      entries: [
+        {
+          ...timeline.entries[0],
+          message: {
+            ...timeline.entries[0].message,
+            plainText: 'Project B private content',
+          },
+        },
+      ],
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(mismatchedTimeline)
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(`/projects/${projectAId}`),
+    )
+    expect(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Agent Workspace',
+      }),
+    ).toBeVisible()
+    expect(screen.queryByText('Private Project B Thread')).not.toBeInTheDocument()
+    expect(screen.queryByText('Project B private content')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Allow once' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Interrupt run' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
+    expect(WebSocketStub.instances).toHaveLength(0)
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) =>
+          String(path).includes('/agent-runs') ||
+          String(path).includes('/agent-approvals'),
+      ),
+    ).toBe(false)
+  })
+
+  it('keeps Viewer execution controls read-only when capabilities are missing', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const readOnlyTimeline = {
+      ...timeline,
+      capabilities: {},
+      activeRun: timeline.activeRun
+        ? { ...timeline.activeRun, capabilities: {} }
+        : null,
+      approvals: timeline.approvals.map((approval) => ({
+        ...approval,
+        capabilities: {},
+      })),
+    }
+    const viewerThreadProject = {
+      ...projectA,
+      role: 'viewer',
+      capabilities: {
+        view: true,
+        manage: false,
+        archive: false,
+        navigationWrite: false,
+      },
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      const method = init?.method ?? 'GET'
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(readOnlyTimeline)
+      }
+      if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+        return jsonResponse({ projects: [viewerThreadProject] })
+      }
+      if (path.endsWith(`/projects/${projectAId}`)) {
+        return jsonResponse(viewerThreadProject)
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    expect(screen.getByText('Allow the isolated file change?')).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Allow once' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Deny' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Interrupt run' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
+  })
+
+  it('fails Worker invocation closed when its timeline capability is absent', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const idleReadOnlyTimeline = {
+      ...timeline,
+      activeRun: null,
+      approvals: [],
+      capabilities: {},
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(idleReadOnlyTimeline)
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Start run' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
+  })
+
+  it('shows Worker invocation only when the server explicitly grants it', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const invokableTimeline = {
+      ...timeline,
+      activeRun: null,
+      approvals: [],
+      capabilities: { workerInvoke: true },
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(invokableTimeline)
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByLabelText('Ask the execution worker'),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Start run' }),
+    ).toBeDisabled()
   })
 })
 
@@ -175,7 +1317,6 @@ describe('streamed worker message coalescing', () => {
   it('keeps one in-memory message while appending deltas', () => {
     const first = coalesceDelta({}, 'message-1', 'hello ')
     const second = coalesceDelta(first, 'message-1', 'world')
-
     expect(second).toEqual({ 'message-1': 'hello world' })
   })
 

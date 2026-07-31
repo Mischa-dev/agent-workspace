@@ -157,7 +157,11 @@ pub async fn start_run(
         )
         .await
         {
-            tracing::error!(?error, %run_id, "hosted Codex turn failed");
+            tracing::error!(
+                error_category = error.log_category(),
+                %run_id,
+                "hosted Codex turn failed"
+            );
             let _ = fail_run(
                 &background_state,
                 project_id,
@@ -835,6 +839,11 @@ fn publish(state: &AppState, project_id: Uuid, conversation_id: Uuid, run_id: Uu
 }
 
 fn provider_error(run_id: Uuid, operation: &'static str, error: impl std::fmt::Debug) -> AppError {
-    tracing::error!(%run_id, operation, ?error, "Codex App Server operation failed");
+    tracing::error!(
+        %run_id,
+        operation,
+        error_type = std::any::type_name_of_val(&error),
+        "Codex App Server operation failed"
+    );
     AppError::Conflict("provider", "Codex App Server operation failed")
 }

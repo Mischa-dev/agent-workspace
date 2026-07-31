@@ -1,0 +1,293 @@
+import type { QueryClient } from '@tanstack/react-query'
+
+import { isApiError } from '../api/errors'
+import { queryKeys } from '../api/queryKeys'
+import { currentQueryScopeGeneration } from '../api/queryScope'
+import {
+  getProjectNavigation,
+  switchProject,
+  updateProjectNavigation,
+} from './api'
+import { locationsEqual } from './locations'
+import type {
+  Project,
+  ProjectListResponse,
+  ProjectLocation,
+  ProjectNavigation,
+  ProjectSwitchResponse,
+} from './types'
+
+type NavigationPatch = {
+  location?: ProjectLocation
+  pinned?: boolean
+  contextDrawerOpen?: boolean
+  filters?: Record<string, unknown>
+}
+
+type NavigationMutationContext = {
+  expectedVersion: number
+  navigation?: ProjectNavigation
+  projectId: string
+}
+
+const projectMutationQueues = new Map<string, Promise<void>>()
+
+function enqueueProjectMutation<T>(
+  projectId: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const generation = currentQueryScopeGeneration()
+  const queueKey = `${generation}:${projectId}`
+  const previous = projectMutationQueues.get(queueKey) ?? Promise.resolve()
+  const operation = previous.catch(() => undefined).then(async () => {
+    assertCurrentQueryScope(generation)
+    const result = await task()
+    assertCurrentQueryScope(generation)
+    return result
+  })
+  const tail = operation.then(
+    () => undefined,
+    () => undefined,
+  )
+  projectMutationQueues.set(queueKey, tail)
+  void tail.finally(() => {
+    if (projectMutationQueues.get(queueKey) === tail) {
+      projectMutationQueues.delete(queueKey)
+    }
+  })
+  return operation
+}
+
+function assertCurrentQueryScope(generation: number) {
+  if (generation !== currentQueryScopeGeneration()) {
+    throw new Error('Navigation update cancelled after the session changed.')
+  }
+}
+
+function newerNavigation(
+  left: ProjectNavigation | undefined,
+  right: ProjectNavigation | undefined,
+) {
+  if (!left) return right
+  if (!right) return left
+  return right.version >= left.version ? right : left
+}
+
+function cachedNavigation(
+  queryClient: QueryClient,
+  projectId: string,
+  initial?: ProjectNavigation,
+) {
+  let current = initial
+  current = newerNavigation(
+    current,
+    queryClient.getQueryData<ProjectNavigation>(
+      queryKeys.navigation(projectId),
+    ),
+  )
+  current = newerNavigation(
+    current,
+    queryClient.getQueryData<Project>(queryKeys.project(projectId))?.navigation,
+  )
+  for (const [, list] of queryClient.getQueriesData<ProjectListResponse>({
+    queryKey: ['projects'],
+  })) {
+    current = newerNavigation(
+      current,
+      list?.projects.find((project) => project.id === projectId)?.navigation,
+    )
+  }
+  return current
+}
+
+function mergeNavigation(
+  current: ProjectNavigation,
+  incoming: ProjectNavigation,
+) {
+  return incoming.version >= current.version ? incoming : current
+}
+
+function installNavigation(
+  queryClient: QueryClient,
+  projectId: string,
+  navigation: ProjectNavigation,
+  project?: Project,
+) {
+  queryClient.setQueryData<ProjectNavigation>(
+    queryKeys.navigation(projectId),
+    (current) =>
+      current ? mergeNavigation(current, navigation) : navigation,
+  )
+  queryClient.setQueryData<Project>(
+    queryKeys.project(projectId),
+    (current) => {
+      if (!current) return project ? { ...project, navigation } : current
+      const nextProject =
+        project && project.version >= current.version
+          ? { ...current, ...project }
+          : current
+      return {
+        ...nextProject,
+        navigation: mergeNavigation(current.navigation, navigation),
+      }
+    },
+  )
+  queryClient.setQueriesData<ProjectListResponse>(
+    { queryKey: ['projects'] },
+    (current) => {
+      if (!current) return current
+      return {
+        ...current,
+        projects: current.projects.map((candidate) => {
+          if (candidate.id !== projectId) return candidate
+          const nextProject =
+            project && project.version >= candidate.version
+              ? { ...candidate, ...project }
+              : candidate
+          return {
+            ...nextProject,
+            navigation: mergeNavigation(candidate.navigation, navigation),
+          }
+        }),
+      }
+    },
+  )
+  void queryClient.invalidateQueries({
+    queryKey: ['projects'],
+    refetchType: 'none',
+  })
+}
+
+async function prepareNavigation(
+  queryClient: QueryClient,
+  context: NavigationMutationContext,
+) {
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: ['projects'] }),
+    queryClient.cancelQueries({
+      queryKey: queryKeys.project(context.projectId),
+      exact: true,
+    }),
+    queryClient.cancelQueries({
+      queryKey: queryKeys.navigation(context.projectId),
+      exact: true,
+    }),
+  ])
+  const known = cachedNavigation(
+    queryClient,
+    context.projectId,
+    context.navigation,
+  )
+  const current = await getProjectNavigation(context.projectId)
+  const authoritative =
+    known &&
+    known.version >= Math.max(0, context.expectedVersion) &&
+    known.version > current.version
+      ? known
+      : current
+  installNavigation(queryClient, context.projectId, authoritative)
+  return authoritative
+}
+
+async function retryAfterConflict<T>(
+  queryClient: QueryClient,
+  projectId: string,
+  operation: (current: ProjectNavigation) => Promise<T>,
+  current: ProjectNavigation,
+  generation: number,
+) {
+  try {
+    const result = await operation(current)
+    assertCurrentQueryScope(generation)
+    return result
+  } catch (error) {
+    assertCurrentQueryScope(generation)
+    if (!isApiError(error) || error.status !== 409) throw error
+    const refreshed = await getProjectNavigation(projectId)
+    assertCurrentQueryScope(generation)
+    installNavigation(queryClient, projectId, refreshed)
+    const result = await operation(refreshed)
+    assertCurrentQueryScope(generation)
+    return result
+  }
+}
+
+function patchAlreadyApplied(
+  current: ProjectNavigation,
+  patch: NavigationPatch,
+) {
+  if (patch.location && !locationsEqual(current.location, patch.location)) {
+    return false
+  }
+  if (patch.pinned !== undefined && current.pinned !== patch.pinned) {
+    return false
+  }
+  if (
+    patch.contextDrawerOpen !== undefined &&
+    current.contextDrawerOpen !== patch.contextDrawerOpen
+  ) {
+    return false
+  }
+  if (patch.filters !== undefined) return false
+  return true
+}
+
+export function enqueueProjectNavigationUpdate(
+  queryClient: QueryClient,
+  context: NavigationMutationContext & NavigationPatch,
+): Promise<ProjectNavigation> {
+  return enqueueProjectMutation(context.projectId, async () => {
+    const generation = currentQueryScopeGeneration()
+    const current = await prepareNavigation(queryClient, context)
+    assertCurrentQueryScope(generation)
+    if (patchAlreadyApplied(current, context)) return current
+    const update = async (latest: ProjectNavigation) =>
+      updateProjectNavigation(context.projectId, {
+        expectedVersion: latest.version,
+        location: context.location ?? latest.location,
+        ...(context.pinned === undefined ? {} : { pinned: context.pinned }),
+        ...(context.contextDrawerOpen === undefined
+          ? {}
+          : { contextDrawerOpen: context.contextDrawerOpen }),
+        ...(context.filters === undefined ? {} : { filters: context.filters }),
+      })
+    const navigation = await retryAfterConflict(
+      queryClient,
+      context.projectId,
+      update,
+      current,
+      generation,
+    )
+    assertCurrentQueryScope(generation)
+    installNavigation(queryClient, context.projectId, navigation)
+    return navigation
+  })
+}
+
+export function enqueueProjectSwitch(
+  queryClient: QueryClient,
+  context: NavigationMutationContext,
+): Promise<ProjectSwitchResponse> {
+  return enqueueProjectMutation(context.projectId, async () => {
+    const generation = currentQueryScopeGeneration()
+    const current = await prepareNavigation(queryClient, context)
+    assertCurrentQueryScope(generation)
+    const performSwitch = (latest: ProjectNavigation) =>
+      switchProject(context.projectId, latest.version)
+    const result = await retryAfterConflict(
+      queryClient,
+      context.projectId,
+      performSwitch,
+      current,
+      generation,
+    )
+    assertCurrentQueryScope(generation)
+    installNavigation(
+      queryClient,
+      context.projectId,
+      result.navigation,
+      result.project,
+    )
+    return result
+  })
+}
