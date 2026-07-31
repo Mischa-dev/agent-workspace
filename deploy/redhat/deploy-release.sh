@@ -6,14 +6,18 @@ readonly commit_sha="$(git -C "${checkout_root}" rev-parse HEAD)"
 readonly install_root="/opt/agent-workspace"
 readonly release_root="${install_root}/releases/${commit_sha}"
 readonly node_bin="${install_root}/toolchains/node-v24.18.1-linux-arm64/bin"
+readonly cargo_bin="${HOME}/.local/share/agent-workspace/cargo/bin"
+readonly rustup_home="${HOME}/.local/share/agent-workspace/rustup"
 
 if [[ -n "$(git -C "${checkout_root}" status --porcelain)" ]]; then
   echo "Refusing to deploy a dirty checkout." >&2
   exit 1
 fi
 
-export PATH="${node_bin}:${PATH}"
+export PATH="${cargo_bin}:${node_bin}:${PATH}"
 export COREPACK_HOME="${checkout_root}/.corepack"
+export CARGO_HOME="${HOME}/.local/share/agent-workspace/cargo"
+export RUSTUP_HOME="${rustup_home}"
 
 cd "${checkout_root}"
 corepack prepare pnpm@11.18.0 --activate

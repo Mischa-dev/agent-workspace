@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/server"]
+members = ["apps/server", "tools/codex-bridge-spike"]
 resolver = "2"
 
 [workspace.package]

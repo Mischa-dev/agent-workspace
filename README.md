@@ -29,3 +29,7 @@ cargo test --workspace
 
 Copy `.env.example` to `.env` for local development. Never commit `.env`,
 Codex credentials, GitHub App keys, webhook secrets, or bearer tokens.
+
+The Red Hat build operator uses `deploy/redhat/install-build-rust.sh` for an
+isolated pinned Rust toolchain. Its `CARGO_HOME` and `RUSTUP_HOME` live under
+the bot account and do not replace Red Hat's `/usr/bin/rustc`.
