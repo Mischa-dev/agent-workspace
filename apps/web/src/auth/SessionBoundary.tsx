@@ -8,6 +8,7 @@ import {
   isAuthenticatedSession,
   useSession,
 } from './session'
+import { RealtimeProvider } from '../realtime/RealtimeProvider'
 
 export function SessionBoundary() {
   const session = useSession()
@@ -77,7 +78,9 @@ export function SessionBoundary() {
 
   return (
     <AuthenticatedSessionProvider session={session.data}>
-      <Outlet />
+      <RealtimeProvider>
+        <Outlet />
+      </RealtimeProvider>
     </AuthenticatedSessionProvider>
   )
 }

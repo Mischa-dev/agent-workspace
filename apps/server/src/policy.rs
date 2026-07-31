@@ -38,10 +38,16 @@ pub enum Action {
     WorkerInvoke,
     RunInterrupt,
     ApprovalRespond,
+    ChannelCreate,
+    MessageSend,
+    ThreadCreate,
+    ConversationArchive,
+    ReadStateUpdate,
+    MentionSearch,
 }
 
 impl Action {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 14] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -50,6 +56,12 @@ impl Action {
         Self::WorkerInvoke,
         Self::RunInterrupt,
         Self::ApprovalRespond,
+        Self::ChannelCreate,
+        Self::MessageSend,
+        Self::ThreadCreate,
+        Self::ConversationArchive,
+        Self::ReadStateUpdate,
+        Self::MentionSearch,
     ];
 }
 
@@ -303,7 +315,13 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::NavigationRead
             | Action::NavigationWrite
             | Action::WorkerInvoke
-            | Action::RunInterrupt,
+            | Action::RunInterrupt
+            | Action::ChannelCreate
+            | Action::MessageSend
+            | Action::ThreadCreate
+            | Action::ConversationArchive
+            | Action::ReadStateUpdate
+            | Action::MentionSearch,
             Resource::Project(scope),
         ) => MembershipScope::Project(scope.project_id),
         (Action::ApprovalRespond, Resource::Approval { scope, .. }) => {
@@ -364,9 +382,18 @@ const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
                 | Action::WorkerInvoke
                 | Action::RunInterrupt
                 | Action::ApprovalRespond
+                | Action::ChannelCreate
+                | Action::MessageSend
+                | Action::ThreadCreate
+                | Action::ConversationArchive
+                | Action::ReadStateUpdate
+                | Action::MentionSearch
         ),
         MembershipRole::Viewer => {
-            matches!(action, Action::ProjectView | Action::NavigationRead)
+            matches!(
+                action,
+                Action::ProjectView | Action::NavigationRead | Action::ReadStateUpdate
+            )
         }
         MembershipRole::Worker => false,
     }
@@ -505,9 +532,18 @@ mod tests {
                             | Action::WorkerInvoke
                             | Action::RunInterrupt
                             | Action::ApprovalRespond
+                            | Action::ChannelCreate
+                            | Action::MessageSend
+                            | Action::ThreadCreate
+                            | Action::ConversationArchive
+                            | Action::ReadStateUpdate
+                            | Action::MentionSearch
                     ),
                     MembershipRole::Viewer => {
-                        matches!(action, Action::ProjectView | Action::NavigationRead)
+                        matches!(
+                            action,
+                            Action::ProjectView | Action::NavigationRead | Action::ReadStateUpdate
+                        )
                     }
                     MembershipRole::Worker => matches!(
                         action,

@@ -113,7 +113,12 @@ const timeline = {
           displayName: 'Mischa Nelson',
           handle: 'mischa',
         },
-        content: { version: 1 },
+        content: {
+          version: 1,
+          nodes: [
+            { type: 'text', text: '<img src=x onerror=alert(1)>' },
+          ],
+        },
         plainText: '<img src=x onerror=alert(1)>',
       },
       workerEvent: null,
@@ -1150,6 +1155,55 @@ describe('M1 authenticated shell', () => {
     })
   })
 
+  it('does not remember an active child while browsing archived-parent history', async () => {
+    const archivedChildId = '019fb600-0000-7000-8000-000000000014'
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${archivedChildId}?includeArchived=true`,
+    )
+    let navigationWrites = 0
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${archivedChildId}/timeline`)) {
+        return jsonResponse({
+          ...timeline,
+          conversation: {
+            ...timeline.conversation,
+            id: archivedChildId,
+            archivedAt: null,
+          },
+        })
+      }
+      if (
+        path.endsWith(`/projects/${projectAId}/navigation`) &&
+        init?.method === 'PUT'
+      ) {
+        navigationWrites += 1
+        return jsonResponse(projectA.navigation)
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path]) =>
+          String(path).includes(`/conversations/${archivedChildId}/timeline`),
+        ),
+      ).toBe(true),
+    )
+    expect(navigationWrites).toBe(0)
+  })
+
   it('rechecks an expired session when the realtime connection closes', async () => {
     window.history.replaceState(
       {},
@@ -1248,7 +1302,9 @@ describe('M1 authenticated shell', () => {
       screen.queryByRole('button', { name: 'Interrupt run' }),
     ).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
-    expect(WebSocketStub.instances).toHaveLength(0)
+    // Realtime is authenticated at the browser-session boundary, not scoped
+    // to a resource that a mismatched response could cause us to subscribe to.
+    expect(WebSocketStub.instances).toHaveLength(1)
     expect(
       fetchMock.mock.calls.some(
         ([path]) =>
@@ -1256,6 +1312,154 @@ describe('M1 authenticated shell', () => {
           String(path).includes('/agent-approvals'),
       ),
     ).toBe(false)
+  })
+
+  it.each([
+    {
+      label: 'a different Conversation ID',
+      conversation: {
+        ...timeline.conversation,
+        id: '019fb600-0000-7000-8000-00000000000c',
+      },
+    },
+    {
+      label: 'a Channel kind at the Thread route',
+      conversation: { ...timeline.conversation, kind: 'channel' },
+    },
+  ])('rejects $label even inside the selected Project', async ({ conversation }) => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse({ ...timeline, conversation })
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(`/projects/${projectAId}`),
+    )
+    expect(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Agent Workspace',
+      }),
+    ).toBeVisible()
+    expect(screen.queryByText('M0 walking skeleton')).not.toBeInTheDocument()
+  })
+
+  it('returns a remotely unavailable Thread to its last verified parent Channel', async () => {
+    const parentChannelId = '019fb600-0000-7000-8000-00000000000d'
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    let timelineReads = 0
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        timelineReads += 1
+        if (timelineReads > 1) {
+          return jsonResponse(
+            {
+              error: {
+                code: 'not_found',
+                message: 'Conversation not found.',
+              },
+            },
+            404,
+          )
+        }
+        return jsonResponse({
+          ...timeline,
+          conversation: {
+            ...timeline.conversation,
+            parentChannelId,
+          },
+        })
+      }
+      if (path.includes(`/conversations/${parentChannelId}/timeline`)) {
+        return new Promise<Response>(() => {})
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+    ).toBeVisible()
+    WebSocketStub.instances[0].dispatchEvent(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          event_id: '019fb600-0000-7000-8000-00000000000e',
+          event_cursor: 14,
+          version: 1,
+          project_id: projectAId,
+          type: 'conversation.archived',
+          occurred_at: '2026-07-31T15:02:00Z',
+          payload: { conversationId: threadId, version: 2 },
+        }),
+      }),
+    )
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        `/projects/${projectAId}/channels/${parentChannelId}`,
+      ),
+    )
+  })
+
+  it('returns an initially unavailable Thread to the Project overview', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(
+          {
+            error: {
+              code: 'not_found',
+              message: 'Conversation not found.',
+            },
+          },
+          404,
+        )
+      }
+      if (!standardImplementation) {
+        throw new Error('Standard API implementation unavailable.')
+      }
+      return standardImplementation(input, init)
+    })
+    render(<App />)
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(`/projects/${projectAId}`),
+    )
+    expect(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Agent Workspace',
+      }),
+    ).toBeVisible()
   })
 
   it('keeps Viewer execution controls read-only when capabilities are missing', async () => {
@@ -1407,5 +1611,14 @@ describe('streamed worker message coalescing', () => {
       'message-1': 'hello world',
       'message-2': 'second',
     })
+  })
+
+  it('keeps the consolidated provider stream inside the Message boundary', () => {
+    const exact = { 'message-1': '🙂'.repeat(20_000) }
+    expect(coalesceDelta(exact, 'message-1', '🙂')).toBe(exact)
+    expect(coalesceDelta(exact, 'message-1', '\u0000')).toBe(exact)
+    expect(
+      coalesceDeltaBatch(exact, { 'message-1': '🙂', 'message-2': 'safe' }),
+    ).toEqual({ ...exact, 'message-2': 'safe' })
   })
 })

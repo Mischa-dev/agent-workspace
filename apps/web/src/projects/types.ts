@@ -1,5 +1,6 @@
 export type ProjectLocation =
   | { kind: 'project_overview' }
+  | { kind: 'channel'; conversationId: string }
   | { kind: 'thread'; conversationId: string }
   | { kind: 'settings' }
 

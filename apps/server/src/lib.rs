@@ -4,10 +4,14 @@ pub mod api;
 pub mod auth;
 pub mod bootstrap;
 pub mod config;
+pub mod conversations;
 pub mod domain;
 pub mod error;
 pub mod git_runtime;
 pub mod health;
+pub mod idempotency;
+pub mod message_content;
+pub mod outbox;
 pub mod policy;
 pub mod projects;
 pub mod provider;
@@ -54,6 +58,7 @@ pub fn router(state: AppState) -> Router {
             pool: state.pool.clone(),
         }))
         .merge(api::router())
+        .merge(conversations::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use codex_bridge_spike::{BridgeConfig, CodexBridge};
 use serde_json::{Value, json};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, Transaction};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -11,10 +11,10 @@ use crate::{
     domain::{RunState, allocate_conversation_sequence, transition_run},
     error::AppError,
     git_runtime::worktree_is_dirty,
+    message_content::{MessageContentError, PlainTextMessageBuffer, ValidatedMessageContent},
+    outbox,
     realtime::RealtimeEvent,
 };
-
-const MAX_MESSAGE_BYTES: usize = 200_000;
 
 #[derive(Debug)]
 pub struct StartedProviderRun {
@@ -26,6 +26,7 @@ pub struct StartedProviderRun {
 pub(crate) enum ProviderRecovery {
     Completed { message: String },
     Resumed { latest_turn_status: String },
+    RejectedMessage,
     Unavailable,
 }
 
@@ -140,6 +141,8 @@ pub async fn start_run(
         .execute(&mut *transaction)
         .await?;
     transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
     transaction.commit().await?;
 
     let background_state = state.clone();
@@ -151,7 +154,6 @@ pub async fn start_run(
             project_id,
             run_id,
             conversation_id,
-            provider_session_id,
             thread_for_task,
             turn_id,
         )
@@ -288,8 +290,15 @@ pub(crate) async fn inspect_provider_for_recovery(
                         .flatten()
                 })
             })
-            .map(|message| bounded_message(message, MAX_MESSAGE_BYTES))
+            .map(str::to_owned)
             .unwrap_or_default();
+        if validated_worker_message(&message).is_err() {
+            tracing::warn!(
+                %run_id,
+                "rejected invalid provider Message while reconciling completed turn"
+            );
+            return ProviderRecovery::RejectedMessage;
+        }
         return ProviderRecovery::Completed { message };
     }
     ProviderRecovery::Resumed { latest_turn_status }
@@ -300,38 +309,31 @@ pub(crate) async fn complete_recovered_run(
     run_id: Uuid,
     message: &str,
 ) -> Result<(), AppError> {
-    let (project_id, conversation_id, provider_session_id) =
-        sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-            r#"
-            SELECT c.project_id, ar.conversation_id, ar.provider_session_id
+    let (project_id, conversation_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+            SELECT c.project_id, ar.conversation_id
             FROM agent_runs ar
             JOIN conversations c ON c.id = ar.conversation_id
             WHERE ar.id = $1
             "#,
-        )
-        .bind(run_id)
-        .fetch_one(&state.pool)
-        .await?;
+    )
+    .bind(run_id)
+    .fetch_one(&state.pool)
+    .await?;
     let mut transaction = state.pool.begin().await?;
     transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
     transaction.commit().await?;
     complete_run(
         state,
         project_id,
         run_id,
         conversation_id,
-        provider_session_id,
+        Uuid::now_v7(),
         message,
     )
     .await
-}
-
-fn bounded_message(message: &str, limit: usize) -> String {
-    let mut end = message.len().min(limit);
-    while !message.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    message[..end].to_owned()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -341,11 +343,10 @@ async fn drive_turn(
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
-    provider_session_id: Uuid,
     provider_thread_id: String,
     turn_id: String,
 ) -> Result<(), AppError> {
-    let mut message = String::new();
+    let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
     loop {
         tokio::select! {
@@ -366,13 +367,10 @@ async fn drive_turn(
                 match method {
                     "item/agentMessage/delta" => {
                         if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) {
-                            let remaining = MAX_MESSAGE_BYTES.saturating_sub(message.len());
-                            let mut end = delta.len().min(remaining);
-                            while !delta.is_char_boundary(end) {
-                                end = end.saturating_sub(1);
+                            if let Err(error) = message.push(delta) {
+                                bridge.shutdown().await;
+                                return Err(provider_message_error(run_id, error));
                             }
-                            let bounded = &delta[..end];
-                            message.push_str(bounded);
                             state.realtime.publish(RealtimeEvent {
                                 event_id: Uuid::now_v7(),
                                 kind: "message.delta",
@@ -380,7 +378,8 @@ async fn drive_turn(
                                 conversation_id: Some(conversation_id),
                                 payload: json!({
                                     "message_id": message_stream_id,
-                                    "delta": bounded
+                                    "agent_run_id": run_id,
+                                    "delta": delta
                                 }),
                             });
                         }
@@ -390,6 +389,7 @@ async fn drive_turn(
                         if item_type == Some("commandExecution") {
                             persist_event(
                                 &state,
+                                project_id,
                                 run_id,
                                 conversation_id,
                                 "command_started",
@@ -404,6 +404,7 @@ async fn drive_turn(
                             Some("commandExecution") => {
                                 persist_event(
                                     &state,
+                                    project_id,
                                     run_id,
                                     conversation_id,
                                     "command_completed",
@@ -414,6 +415,7 @@ async fn drive_turn(
                             Some("fileChange") => {
                                 persist_event(
                                     &state,
+                                    project_id,
                                     run_id,
                                     conversation_id,
                                     "file_change",
@@ -439,8 +441,8 @@ async fn drive_turn(
                             project_id,
                             run_id,
                             conversation_id,
-                            provider_session_id,
-                            &message,
+                            message_stream_id,
+                            message.as_str(),
                         ).await?;
                         bridge.shutdown().await;
                         return Ok(());
@@ -536,8 +538,9 @@ async fn handle_provider_request(
     )
     .await?;
     insert_entry(&mut transaction, conversation_id, event_id).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
     transaction.commit().await?;
-    publish(state, project_id, conversation_id, run_id);
 
     loop {
         sleep(Duration::from_millis(300)).await;
@@ -606,9 +609,11 @@ async fn complete_run(
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
-    provider_session_id: Uuid,
+    worker_message_id: Uuid,
     message: &str,
 ) -> Result<(), AppError> {
+    let validated_message =
+        validated_worker_message(message).map_err(|error| provider_message_error(run_id, error))?;
     let worktree_path = sqlx::query_scalar::<_, String>(
         r#"
         SELECT gw.path
@@ -655,22 +660,26 @@ async fn complete_run(
     .bind(dirty)
     .execute(&mut *transaction)
     .await?;
-    if !message.is_empty() {
-        let message_id = Uuid::now_v7();
+    if let Some(validated_message) = validated_message {
+        let (content, plain_text, mentioned_actor_ids) = validated_message.into_parts();
+        debug_assert!(mentioned_actor_ids.is_empty());
+        let content = serde_json::to_value(content)
+            .map_err(|_| AppError::Internal("serialize provider Worker Message"))?;
         sqlx::query(
             r#"
             INSERT INTO messages (
-                id, conversation_id, author_actor_id, content,
-                plain_text, agent_run_id
+                id, project_id, conversation_id, author_actor_id,
+                content_version, content, plain_text, agent_run_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
             "#,
         )
-        .bind(message_id)
+        .bind(worker_message_id)
+        .bind(project_id)
         .bind(conversation_id)
         .bind(worker_actor_id)
-        .bind(json!({"version": 1, "nodes": [{"type": "text", "text": message}]}))
-        .bind(message)
+        .bind(content)
+        .bind(plain_text)
         .bind(run_id)
         .execute(&mut *transaction)
         .await?;
@@ -686,8 +695,17 @@ async fn complete_run(
         .bind(Uuid::now_v7())
         .bind(conversation_id)
         .bind(sequence)
-        .bind(message_id)
+        .bind(worker_message_id)
         .execute(&mut *transaction)
+        .await?;
+        outbox::enqueue_message_created(
+            &mut transaction,
+            project_id,
+            conversation_id,
+            worker_message_id,
+            sequence,
+            worker_actor_id,
+        )
         .await?;
     }
     transition_run(&mut transaction, run_id, RunState::Completed, None).await?;
@@ -702,10 +720,7 @@ async fn complete_run(
     .bind(run_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("UPDATE provider_sessions SET state = 'idle', updated_at = now() WHERE id = $1")
-        .bind(provider_session_id)
-        .execute(&mut *transaction)
-        .await?;
+    idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
     let event_id = insert_event(
         &mut transaction,
         run_id,
@@ -715,13 +730,15 @@ async fn complete_run(
     )
     .await?;
     insert_entry(&mut transaction, conversation_id, event_id).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
     transaction.commit().await?;
-    publish(state, project_id, conversation_id, run_id);
     Ok(())
 }
 
 async fn persist_event(
     state: &AppState,
+    project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
     kind: &str,
@@ -731,13 +748,9 @@ async fn persist_event(
     let mut transaction = state.pool.begin().await?;
     let event_id = insert_event(&mut transaction, run_id, kind, summary, payload).await?;
     insert_entry(&mut transaction, conversation_id, event_id).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
     transaction.commit().await?;
-    let project_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM conversations WHERE id = $1")
-            .bind(conversation_id)
-            .fetch_one(&state.pool)
-            .await?;
-    publish(state, project_id, conversation_id, run_id);
     Ok(())
 }
 
@@ -821,21 +834,42 @@ async fn fail_run(
     .bind(run_id)
     .execute(&mut *transaction)
     .await?;
+    idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
     let event_id = insert_event(&mut transaction, run_id, "run_failed", reason, json!({})).await?;
     insert_entry(&mut transaction, conversation_id, event_id).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
     transaction.commit().await?;
-    publish(state, project_id, conversation_id, run_id);
     Ok(())
 }
 
-fn publish(state: &AppState, project_id: Uuid, conversation_id: Uuid, run_id: Uuid) {
-    state.realtime.publish(RealtimeEvent {
-        event_id: Uuid::now_v7(),
-        kind: "timeline.updated",
-        project_id,
-        conversation_id: Some(conversation_id),
-        payload: json!({"run_id": run_id}),
-    });
+pub(crate) async fn idle_provider_session_for_terminal_run(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE provider_sessions session
+           SET state = 'idle', updated_at = now()
+          FROM agent_runs run
+         WHERE run.id = $1
+           AND run.provider_session_id = session.id
+           AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM agent_runs other
+                WHERE other.provider_session_id = session.id
+                  AND other.id <> run.id
+                  AND other.state IN (
+                      'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
+                  )
+           )
+        "#,
+    )
+    .bind(run_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 fn provider_error(run_id: Uuid, operation: &'static str, error: impl std::fmt::Debug) -> AppError {
@@ -846,4 +880,52 @@ fn provider_error(run_id: Uuid, operation: &'static str, error: impl std::fmt::D
         "Codex App Server operation failed"
     );
     AppError::Conflict("provider", "Codex App Server operation failed")
+}
+
+fn validated_worker_message(
+    message: &str,
+) -> Result<Option<ValidatedMessageContent>, MessageContentError> {
+    let mut buffer = PlainTextMessageBuffer::default();
+    buffer.push(message)?;
+    if buffer.as_str().trim().is_empty() {
+        return Ok(None);
+    }
+    buffer.into_validated().map(Some)
+}
+
+fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError {
+    tracing::warn!(
+        %run_id,
+        validation_error = ?error,
+        "Codex Message output violated the shared Message boundary"
+    );
+    AppError::Conflict("provider", "Codex Message output is invalid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_worker_message;
+    use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
+
+    #[test]
+    fn worker_messages_share_unicode_and_control_boundaries() {
+        let exact = "🙂".repeat(MAX_MESSAGE_TEXT_CHARACTERS);
+        let validated = validated_worker_message(&exact)
+            .expect("exact scalar-value boundary")
+            .expect("non-empty Worker Message");
+        assert_eq!(validated.plain_text(), exact);
+        assert_eq!(
+            validated_worker_message(&format!("{exact}🙂")),
+            Err(MessageContentError::TextTooLong)
+        );
+        assert_eq!(
+            validated_worker_message("safe\u{0007}unsafe"),
+            Err(MessageContentError::UnsupportedControlCharacter)
+        );
+        assert!(
+            validated_worker_message(" \n\t ")
+                .expect("safe whitespace")
+                .is_none()
+        );
+    }
 }

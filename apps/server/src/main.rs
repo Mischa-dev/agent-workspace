@@ -8,7 +8,7 @@ use agent_workspace_server::{
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,6 +39,27 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&bootstrapped)?);
             return Ok(());
         }
+        Some("bootstrap-member") => {
+            if !config.environment.is_development() || !config.server_addr.ip().is_loopback() {
+                bail!("member bootstrap is available only in development on a loopback listener");
+            }
+            let command = bootstrap::parse_member_command(arguments)
+                .context("parse development member bootstrap command")?;
+            let password =
+                bootstrap::read_password_interactively().context("read member password")?;
+            let bootstrapped = bootstrap::bootstrap_development_member(&pool, command, password)
+                .await
+                .context("bootstrap development member")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "userId": bootstrapped.user_id,
+                    "actorId": bootstrapped.actor_id,
+                    "organizationId": bootstrapped.organization_id,
+                }))?
+            );
+            return Ok(());
+        }
         Some("dev-seed") => {
             let seeded = seed::dev_seed(&pool, &config)
                 .await
@@ -50,11 +71,12 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    let realtime = RealtimeHub::new(256);
     let state = AppState {
         config: Arc::clone(&config),
-        pool,
+        pool: pool.clone(),
         rate_limits: RateLimiters::default(),
-        realtime: RealtimeHub::new(256),
+        realtime: realtime.clone(),
     };
 
     let recovered = recovery::reconcile_non_terminal_runs(&state)
@@ -85,8 +107,62 @@ async fn main() -> anyhow::Result<()> {
         "Agent Workspace server listening"
     );
 
-    axum::serve(listener, router(state).into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve HTTP application")
+    let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let mut outbox_publisher =
+        tokio::spawn(agent_workspace_server::realtime::run_outbox_publisher(
+            pool,
+            realtime,
+            agent_workspace_server::realtime::outbox_worker_id(),
+            shutdown_receiver.clone(),
+        ));
+    let signal_shutdown_sender = shutdown_sender.clone();
+    let coordinated_shutdown = async move {
+        tokio::select! {
+            () = shutdown_signal() => {
+                let _ = signal_shutdown_sender.send(true);
+            }
+            () = wait_for_shutdown(shutdown_receiver) => {}
+        }
+    };
+    let server = async move {
+        axum::serve(listener, router(state).into_make_service())
+            .with_graceful_shutdown(coordinated_shutdown)
+            .await
+    };
+    tokio::pin!(server);
+
+    tokio::select! {
+        server_result = &mut server => {
+            let _ = shutdown_sender.send(true);
+            let worker_result = outbox_publisher
+                .await
+                .context("join outbox publisher")?;
+            server_result.context("serve HTTP application")?;
+            worker_result.context("run outbox publisher")
+        }
+        worker_result = &mut outbox_publisher => {
+            let already_shutting_down = *shutdown_sender.borrow();
+            let _ = shutdown_sender.send(true);
+            server.await.context("serve HTTP application")?;
+            worker_result
+                .context("join outbox publisher")?
+                .context("run outbox publisher")?;
+            if already_shutting_down {
+                Ok(())
+            } else {
+                bail!("outbox publisher stopped unexpectedly")
+            }
+        }
+    }
+}
+
+async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
 }

@@ -13,14 +13,18 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
+    conversations::{
+        ApprovalCapabilities, ApprovalRow, ApprovalView, RunCapabilities, RunRow, RunView,
+    },
     domain::{RunState, allocate_conversation_sequence, transition_run},
     error::{ApiJson, ApiPath, AppError},
     git_runtime,
+    message_content::MessageContent,
+    outbox,
     policy::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
         MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
-    realtime::RealtimeEvent,
 };
 
 pub fn router() -> Router<AppState> {
@@ -28,10 +32,6 @@ pub fn router() -> Router<AppState> {
         .merge(crate::auth::router())
         .merge(crate::projects::router())
         .route("/api/v1/dev/bootstrap", get(development_bootstrap))
-        .route(
-            "/api/v1/conversations/{id}/timeline",
-            get(conversation_timeline),
-        )
         .route("/api/v1/threads/{id}/agent-runs", post(start_agent_run))
         .route(
             "/api/v1/agent-runs/{id}/interrupt",
@@ -125,376 +125,14 @@ struct ConversationRow {
     id: Uuid,
     project_id: Uuid,
     kind: String,
-    parent_channel_id: Option<Uuid>,
-    name: String,
     conversation_archived: bool,
     project_archived: bool,
     membership_role: String,
     membership_enabled: bool,
 }
 
-#[derive(Debug, FromRow)]
-struct TimelineEntryRow {
-    id: Uuid,
-    sequence: i64,
-    kind: String,
-    created_at: String,
-    message_id: Option<Uuid>,
-    author_actor_id: Option<Uuid>,
-    author_kind: Option<String>,
-    author_name: Option<String>,
-    author_handle: Option<String>,
-    content: Option<serde_json::Value>,
-    plain_text: Option<String>,
-    agent_run_event_id: Option<Uuid>,
-    agent_run_id: Option<Uuid>,
-    event_kind: Option<String>,
-    event_summary: Option<String>,
-    event_payload: Option<serde_json::Value>,
-}
-
-#[derive(Debug, FromRow, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunRow {
-    id: Uuid,
-    state: String,
-    repository_id: Uuid,
-    repository_workspace_id: Option<Uuid>,
-    provider_session_id: Option<Uuid>,
-    failure_reason: Option<String>,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RunView {
-    #[serde(flatten)]
-    run: RunRow,
-    capabilities: RunCapabilities,
-}
-
-#[derive(Debug, Serialize)]
-struct RunCapabilities {
-    interrupt: bool,
-}
-
-#[derive(Debug, FromRow, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ApprovalRow {
-    id: Uuid,
-    agent_run_id: Uuid,
-    kind: String,
-    summary: String,
-    options: serde_json::Value,
-    status: String,
-    response: Option<serde_json::Value>,
-    created_at: String,
-    #[serde(skip_serializing)]
-    repository_id: Uuid,
-    #[serde(skip_serializing)]
-    requesting_actor_id: Uuid,
-    #[serde(skip_serializing)]
-    eligible_role: String,
-    #[serde(skip_serializing)]
-    human_required: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ApprovalView {
-    #[serde(flatten)]
-    approval: ApprovalRow,
-    capabilities: ApprovalCapabilities,
-}
-
-#[derive(Debug, Serialize)]
-struct ApprovalCapabilities {
-    respond: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TimelineCapabilities {
-    worker_invoke: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TimelineResponse {
-    conversation: ConversationView,
-    entries: Vec<TimelineEntry>,
-    active_run: Option<RunView>,
-    approvals: Vec<ApprovalView>,
-    capabilities: TimelineCapabilities,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ConversationView {
-    id: Uuid,
-    project_id: Uuid,
-    kind: String,
-    parent_channel_id: Option<Uuid>,
-    name: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TimelineEntry {
-    id: Uuid,
-    sequence: i64,
-    kind: String,
-    created_at: String,
-    message: Option<MessageView>,
-    worker_event: Option<WorkerEventView>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MessageView {
-    id: Uuid,
-    author: ActorView,
-    content: serde_json::Value,
-    plain_text: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ActorView {
-    id: Uuid,
-    kind: String,
-    display_name: String,
-    handle: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkerEventView {
-    id: Uuid,
-    agent_run_id: Uuid,
-    kind: String,
-    summary: String,
-    payload: serde_json::Value,
-}
-
-async fn conversation_timeline(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-) -> Result<Json<TimelineResponse>, AppError> {
-    let conversation =
-        authorized_conversation(&state, &principal, conversation_id, Action::ProjectView).await?;
-    if conversation.conversation_archived {
-        return Err(AppError::NotFound("conversation"));
-    }
-
-    let rows = sqlx::query_as::<_, TimelineEntryRow>(
-        r#"
-        SELECT
-            ce.id,
-            ce.sequence,
-            ce.kind,
-            ce.created_at::text AS created_at,
-            m.id AS message_id,
-            m.author_actor_id,
-            a.kind AS author_kind,
-            pm.display_name AS author_name,
-            pm.handle AS author_handle,
-            m.content,
-            m.plain_text,
-            are.id AS agent_run_event_id,
-            are.agent_run_id,
-            are.kind AS event_kind,
-            are.summary AS event_summary,
-            are.payload AS event_payload
-        FROM conversation_entries ce
-        JOIN conversations c
-          ON c.id = ce.conversation_id
-         AND c.project_id = $2
-        LEFT JOIN messages m ON m.id = ce.message_id
-        LEFT JOIN actors a ON a.id = m.author_actor_id
-        LEFT JOIN project_memberships pm
-          ON pm.actor_id = m.author_actor_id
-         AND pm.project_id = $2
-        LEFT JOIN agent_run_events are ON are.id = ce.agent_run_event_id
-        WHERE ce.conversation_id = $1
-        ORDER BY ce.sequence ASC
-        LIMIT 500
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(conversation.project_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let active_run = sqlx::query_as::<_, RunRow>(
-        r#"
-        SELECT
-            agent_runs.id,
-            agent_runs.state,
-            agent_runs.repository_id,
-            agent_runs.repository_workspace_id,
-            agent_runs.provider_session_id,
-            agent_runs.failure_reason,
-            agent_runs.created_at::text AS created_at,
-            agent_runs.updated_at::text AS updated_at
-        FROM agent_runs
-        JOIN conversations c
-          ON c.id = agent_runs.conversation_id
-         AND c.project_id = $2
-        WHERE agent_runs.conversation_id = $1
-          AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        ORDER BY agent_runs.created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(conversation.project_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    let approvals = sqlx::query_as::<_, ApprovalRow>(
-        r#"
-        SELECT
-            aa.id, aa.agent_run_id, aa.kind, aa.summary, aa.options,
-            aa.status, aa.response, aa.created_at::text AS created_at,
-            ar.repository_id,
-            aa.requesting_actor_id,
-            aa.eligible_role,
-            aa.human_required
-        FROM agent_approvals aa
-        JOIN agent_runs ar ON ar.id = aa.agent_run_id
-        JOIN conversations c
-          ON c.id = ar.conversation_id
-         AND c.project_id = $2
-        WHERE ar.conversation_id = $1
-        ORDER BY aa.created_at ASC
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(conversation.project_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let worker_invoke = conversation.kind == "thread"
-        && !conversation.project_archived
-        && authorize_project_action(
-            &principal,
-            conversation.project_id,
-            &conversation.membership_role,
-            conversation.membership_enabled,
-            Action::WorkerInvoke,
-            Resource::Project(ProjectScope::thread(
-                conversation.project_id,
-                conversation.id,
-            )),
-        )
-        .is_ok();
-    let active_run = active_run.map(|run| {
-        let interrupt = authorize_project_action(
-            &principal,
-            conversation.project_id,
-            &conversation.membership_role,
-            conversation.membership_enabled,
-            Action::RunInterrupt,
-            Resource::Project(ProjectScope::run(
-                conversation.project_id,
-                conversation.id,
-                run.id,
-                run.repository_id,
-            )),
-        )
-        .is_ok();
-        RunView {
-            run,
-            capabilities: RunCapabilities { interrupt },
-        }
-    });
-    let approvals = approvals
-        .into_iter()
-        .map(|approval| {
-            let eligible_role = parse_membership_role(&approval.eligible_role)?;
-            let respond = approval.status == "pending"
-                && authorize_project_action(
-                    &principal,
-                    conversation.project_id,
-                    &conversation.membership_role,
-                    conversation.membership_enabled,
-                    Action::ApprovalRespond,
-                    Resource::Approval {
-                        scope: ProjectScope::approval(
-                            conversation.project_id,
-                            conversation.id,
-                            approval.agent_run_id,
-                            approval.repository_id,
-                            approval.id,
-                        ),
-                        requirements: ApprovalRequirements {
-                            requesting_actor_id: approval.requesting_actor_id,
-                            eligibility: ApprovalEligibility::Role(eligible_role),
-                            human_required: approval.human_required,
-                            separation_of_duty: false,
-                        },
-                    },
-                )
-                .is_ok();
-            Ok(ApprovalView {
-                approval,
-                capabilities: ApprovalCapabilities { respond },
-            })
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
-
-    Ok(Json(TimelineResponse {
-        conversation: ConversationView {
-            id: conversation.id,
-            project_id: conversation.project_id,
-            kind: conversation.kind,
-            parent_channel_id: conversation.parent_channel_id,
-            name: conversation.name,
-        },
-        entries: rows.into_iter().map(TimelineEntry::from).collect(),
-        active_run,
-        approvals,
-        capabilities: TimelineCapabilities { worker_invoke },
-    }))
-}
-
-impl From<TimelineEntryRow> for TimelineEntry {
-    fn from(row: TimelineEntryRow) -> Self {
-        let message = row.message_id.map(|id| MessageView {
-            id,
-            author: ActorView {
-                id: row.author_actor_id.unwrap_or_else(Uuid::nil),
-                kind: row.author_kind.unwrap_or_else(|| "unknown".to_owned()),
-                display_name: row
-                    .author_name
-                    .unwrap_or_else(|| "Unknown actor".to_owned()),
-                handle: row.author_handle.unwrap_or_else(|| "unknown".to_owned()),
-            },
-            content: row.content.unwrap_or(serde_json::Value::Null),
-            plain_text: row.plain_text.unwrap_or_default(),
-        });
-        let worker_event = row.agent_run_event_id.map(|id| WorkerEventView {
-            id,
-            agent_run_id: row.agent_run_id.unwrap_or_else(Uuid::nil),
-            kind: row.event_kind.unwrap_or_else(|| "unknown".to_owned()),
-            summary: row.event_summary.unwrap_or_default(),
-            payload: row.event_payload.unwrap_or_else(|| serde_json::json!({})),
-        });
-        Self {
-            id: row.id,
-            sequence: row.sequence,
-            kind: row.kind,
-            created_at: row.created_at,
-            message,
-            worker_event,
-        }
-    }
-}
-
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StartRunRequest {
     prompt: String,
 }
@@ -520,6 +158,11 @@ struct StartRunResponse {
     worktree_path: String,
 }
 
+const WORKTREE_START_FAILURE_REASON: &str =
+    "Worktree creation failed; inspect the retained repository workspace.";
+const PROVIDER_START_FAILURE_REASON: &str =
+    "Codex App Server could not start. The worktree was preserved.";
+
 async fn start_agent_run(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -528,20 +171,20 @@ async fn start_agent_run(
     ApiJson(request): ApiJson<StartRunRequest>,
 ) -> Result<Json<StartRunResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let prompt = request.prompt.trim();
-    if prompt.is_empty() || prompt.len() > 20_000 {
-        return Err(AppError::Invalid("prompt length"));
-    }
+    let (prompt_content, prompt, prompt_mentions) =
+        MessageContent::from_plain_text(request.prompt.trim().to_owned())
+            .map_err(|_| AppError::Validation("Message content"))?
+            .into_parts();
+    debug_assert!(prompt_mentions.is_empty());
+    let prompt_content = serde_json::to_value(prompt_content)
+        .map_err(|_| AppError::Internal("serialize hosted prompt Message"))?;
     let conversation =
         authorized_conversation(&state, &principal, conversation_id, Action::WorkerInvoke).await?;
     if conversation.project_archived {
         return Err(AppError::ProjectArchived);
     }
     if conversation.conversation_archived {
-        return Err(AppError::Conflict(
-            "conversation",
-            "archived Conversations reject Agent Runs",
-        ));
+        return Err(AppError::NotFound("conversation"));
     }
     if conversation.kind != "thread" {
         return Err(AppError::Invalid("agent runs require a Thread"));
@@ -662,19 +305,18 @@ async fn start_agent_run(
     sqlx::query(
         r#"
         INSERT INTO messages (
-            id, conversation_id, author_actor_id, content, plain_text
+            id, project_id, conversation_id, author_actor_id,
+            content_version, content, plain_text
         )
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3, $4, 1, $5, $6)
         "#,
     )
     .bind(prompt_message_id)
+    .bind(identity.project_id)
     .bind(conversation_id)
     .bind(identity.actor_id)
-    .bind(serde_json::json!({
-        "version": 1,
-        "nodes": [{"type": "text", "text": prompt}]
-    }))
-    .bind(prompt)
+    .bind(prompt_content)
+    .bind(&prompt)
     .execute(&mut *transaction)
     .await?;
     let prompt_sequence = allocate_conversation_sequence(&mut transaction, conversation_id).await?;
@@ -738,7 +380,7 @@ async fn start_agent_run(
     .bind(setup.execution_profile_id)
     .bind(setup.repository_id)
     .bind(workspace_id)
-    .bind(prompt)
+    .bind(&prompt)
     .bind(serde_json::json!({
         "actor_id": identity.actor_id,
         "project_id": identity.project_id,
@@ -747,6 +389,22 @@ async fn start_agent_run(
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Starting, None).await?;
+    outbox::enqueue_message_created(
+        &mut transaction,
+        identity.project_id,
+        conversation_id,
+        prompt_message_id,
+        prompt_sequence,
+        identity.actor_id,
+    )
+    .await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        identity.project_id,
+        conversation_id,
+        run_id,
+    )
+    .await?;
     transaction.commit().await?;
 
     let mirror_for_worktree = mirror.clone();
@@ -761,21 +419,50 @@ async fn start_agent_run(
             &base_for_creation,
         )
     })
-    .await
-    .map_err(|_| AppError::Internal("join worktree task"))?;
+    .await;
+    let creation = match creation {
+        Ok(creation) => creation,
+        Err(_) => {
+            fail_worktree_start(
+                &state,
+                run_id,
+                worktree_id,
+                conversation_id,
+                WORKTREE_START_FAILURE_REASON,
+            )
+            .await?;
+            return Err(AppError::Internal("join worktree task"));
+        }
+    };
     if let Err(error) = creation {
-        fail_worktree_start(&state, run_id, worktree_id).await?;
+        fail_worktree_start(
+            &state,
+            run_id,
+            worktree_id,
+            conversation_id,
+            WORKTREE_START_FAILURE_REASON,
+        )
+        .await?;
         return Err(error);
     }
 
     let response_state = if state.config.demo_executor {
         let approval_id =
             prepare_demo_blocker(&state, identity, run_id, worktree_id, conversation_id).await?;
-        publish_timeline_update(&state, identity.project_id, conversation_id, run_id);
         tracing::info!(%run_id, %approval_id, "development Agent Run is waiting for approval");
         RunState::Blocked
     } else {
-        mark_worktree_ready(&state, worktree_id).await?;
+        if let Err(error) = mark_worktree_ready(&state, worktree_id).await {
+            fail_worktree_start(
+                &state,
+                run_id,
+                worktree_id,
+                conversation_id,
+                WORKTREE_START_FAILURE_REASON,
+            )
+            .await?;
+            return Err(error);
+        }
         let provider_start = crate::provider::start_run(
             &state,
             identity.project_id,
@@ -783,7 +470,7 @@ async fn start_agent_run(
             conversation_id,
             setup.execution_profile_id,
             worktree_path.clone(),
-            prompt.to_owned(),
+            prompt.clone(),
         )
         .await;
         match provider_start {
@@ -794,11 +481,10 @@ async fn start_agent_run(
                     provider_thread_id = %started.provider_thread_id,
                     "hosted Codex Agent Run started"
                 );
-                publish_timeline_update(&state, identity.project_id, conversation_id, run_id);
                 RunState::Working
             }
             Err(error) => {
-                fail_provider_start(&state, run_id).await?;
+                fail_provider_start(&state, run_id, conversation_id).await?;
                 return Err(error);
             }
         }
@@ -815,25 +501,34 @@ async fn start_agent_run(
 }
 
 async fn mark_worktree_ready(state: &AppState, worktree_id: Uuid) -> Result<(), AppError> {
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE git_worktrees SET state = 'ready', last_inspected_at = now(), updated_at = now() WHERE id = $1",
     )
     .bind(worktree_id)
     .execute(&state.pool)
     .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "created worktree record is unavailable",
+        ));
+    }
     Ok(())
 }
 
-async fn fail_provider_start(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
+async fn fail_provider_start(
+    state: &AppState,
+    run_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<(), AppError> {
     let mut transaction = state.pool.begin().await?;
-    transition_run(
+    persist_run_start_failure(
         &mut transaction,
         run_id,
-        RunState::Failed,
-        Some("Codex App Server could not start. The worktree was preserved."),
+        conversation_id,
+        PROVIDER_START_FAILURE_REASON,
     )
     .await?;
-    retain_run_workspace(&mut transaction, run_id).await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -888,6 +583,13 @@ async fn prepare_demo_blocker(
     .await?;
     insert_event_entry(&mut transaction, conversation_id, event_id).await?;
     transition_run(&mut transaction, run_id, RunState::Blocked, None).await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        identity.project_id,
+        conversation_id,
+        run_id,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(approval_id)
 }
@@ -896,21 +598,37 @@ async fn fail_worktree_start(
     state: &AppState,
     run_id: Uuid,
     worktree_id: Uuid,
+    conversation_id: Uuid,
+    reason: &'static str,
 ) -> Result<(), AppError> {
     let mut transaction = state.pool.begin().await?;
     sqlx::query("UPDATE git_worktrees SET state = 'failed', updated_at = now() WHERE id = $1")
         .bind(worktree_id)
         .execute(&mut *transaction)
         .await?;
-    transition_run(
-        &mut transaction,
+    persist_run_start_failure(&mut transaction, run_id, conversation_id, reason).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn persist_run_start_failure(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: Uuid,
+    conversation_id: Uuid,
+    reason: &'static str,
+) -> Result<(), AppError> {
+    transition_run(transaction, run_id, RunState::Failed, Some(reason)).await?;
+    retain_run_workspace(transaction, run_id).await?;
+    let event_id = insert_significant_event(
+        transaction,
         run_id,
-        RunState::Failed,
-        Some("Worktree creation failed; inspect the retained repository workspace."),
+        "run_failed",
+        reason,
+        serde_json::json!({}),
     )
     .await?;
-    retain_run_workspace(&mut transaction, run_id).await?;
-    transaction.commit().await?;
+    insert_event_entry(transaction, conversation_id, event_id).await?;
+    enqueue_run_updated_for_id(transaction, run_id).await?;
     Ok(())
 }
 
@@ -1059,6 +777,8 @@ async fn respond_to_approval(
         )
         .await?;
         retain_run_workspace(&mut transaction, context.run_id).await?;
+        crate::provider::idle_provider_session_for_terminal_run(&mut transaction, context.run_id)
+            .await?;
         let interrupted_event = insert_significant_event(
             &mut transaction,
             context.run_id,
@@ -1069,13 +789,14 @@ async fn respond_to_approval(
         .await?;
         insert_event_entry(&mut transaction, context.conversation_id, interrupted_event).await?;
     }
-    transaction.commit().await?;
-    publish_timeline_update(
-        &state,
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
         context.project_id,
         context.conversation_id,
         context.run_id,
-    );
+    )
+    .await?;
+    transaction.commit().await?;
 
     if response.decision == "approve" && state.config.demo_executor {
         let background_state = state.clone();
@@ -1183,23 +904,29 @@ async fn complete_demo_run(
     .await?;
 
     let message_id = Uuid::now_v7();
-    let message_text = "The development walking skeleton completed its isolated file change and preserved the worktree.";
+    let (message_content, message_text, message_mentions) = MessageContent::from_plain_text(
+        "The development walking skeleton completed its isolated file change and preserved the worktree.",
+    )
+    .map_err(|_| AppError::Internal("validate development Worker Message"))?
+    .into_parts();
+    debug_assert!(message_mentions.is_empty());
+    let message_content = serde_json::to_value(message_content)
+        .map_err(|_| AppError::Internal("serialize development Worker Message"))?;
     sqlx::query(
         r#"
         INSERT INTO messages (
-            id, conversation_id, author_actor_id, content, plain_text, agent_run_id
+            id, project_id, conversation_id, author_actor_id,
+            content_version, content, plain_text, agent_run_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
         "#,
     )
     .bind(message_id)
+    .bind(context.project_id)
     .bind(conversation_id)
     .bind(worker_actor_id)
-    .bind(serde_json::json!({
-        "version": 1,
-        "nodes": [{"type": "text", "text": message_text}]
-    }))
-    .bind(message_text)
+    .bind(message_content)
+    .bind(&message_text)
     .bind(run_id)
     .execute(&mut *transaction)
     .await?;
@@ -1230,8 +957,23 @@ async fn complete_demo_run(
     )
     .await?;
     insert_event_entry(&mut transaction, conversation_id, completed_event).await?;
+    outbox::enqueue_message_created(
+        &mut transaction,
+        context.project_id,
+        conversation_id,
+        message_id,
+        message_sequence,
+        worker_actor_id,
+    )
+    .await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        context.project_id,
+        conversation_id,
+        run_id,
+    )
+    .await?;
     transaction.commit().await?;
-    publish_timeline_update(&state, context.project_id, conversation_id, run_id);
     Ok(())
 }
 
@@ -1298,6 +1040,7 @@ async fn interrupt_agent_run(
     )
     .await?;
     retain_run_workspace(&mut transaction, run_id).await?;
+    crate::provider::idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
     let event_id = insert_significant_event(
         &mut transaction,
         run_id,
@@ -1313,8 +1056,14 @@ async fn interrupt_agent_run(
     .bind(run_id)
     .execute(&mut *transaction)
     .await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        context.project_id,
+        context.conversation_id,
+        run_id,
+    )
+    .await?;
     transaction.commit().await?;
-    publish_timeline_update(&state, context.project_id, context.conversation_id, run_id);
     fetch_run(&state, run_id, context.project_id)
         .await
         .map(Json)
@@ -1467,6 +1216,7 @@ async fn guard_conversation_mutation(
     #[derive(FromRow)]
     struct MutationGuard {
         kind: String,
+        parent_channel_id: Option<Uuid>,
         conversation_archived: bool,
         project_archived: bool,
         membership_role: String,
@@ -1477,6 +1227,7 @@ async fn guard_conversation_mutation(
         r#"
         SELECT
             c.kind,
+            c.parent_channel_id,
             c.archived_at IS NOT NULL AS conversation_archived,
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
@@ -1515,11 +1266,25 @@ async fn guard_conversation_mutation(
     if guard.project_archived {
         return Err(AppError::ProjectArchived);
     }
-    if guard.conversation_archived {
-        return Err(AppError::Conflict(
-            "conversation",
-            "archived Conversations reject mutations",
-        ));
+    let parent_archived = if let Some(parent_channel_id) = guard.parent_channel_id {
+        !sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT archived_at IS NULL
+            FROM conversations
+            WHERE id = $1 AND project_id = $2 AND kind = 'channel'
+            FOR SHARE
+            "#,
+        )
+        .bind(parent_channel_id)
+        .bind(project_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("conversation"))?
+    } else {
+        false
+    };
+    if guard.conversation_archived || parent_archived {
+        return Err(AppError::NotFound("conversation"));
     }
     Ok(())
 }
@@ -1538,11 +1303,15 @@ async fn authorized_conversation(
             c.kind,
             c.parent_channel_id,
             c.name,
-            c.archived_at IS NOT NULL AS conversation_archived,
+            (c.archived_at IS NOT NULL OR parent.archived_at IS NOT NULL)
+                AS conversation_archived,
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
             pm.enabled AS membership_enabled
         FROM conversations c
+        LEFT JOIN conversations parent
+          ON parent.project_id = c.project_id
+         AND parent.id = c.parent_channel_id
         JOIN projects p ON p.id = c.project_id
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
@@ -1618,17 +1387,21 @@ fn parse_membership_role(value: &str) -> Result<MembershipRole, AppError> {
     }
 }
 
-fn publish_timeline_update(
-    state: &AppState,
-    project_id: Uuid,
-    conversation_id: Uuid,
+async fn enqueue_run_updated_for_id(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
-) {
-    state.realtime.publish(RealtimeEvent {
-        event_id: Uuid::now_v7(),
-        kind: "timeline.updated",
-        project_id,
-        conversation_id: Some(conversation_id),
-        payload: serde_json::json!({"run_id": run_id}),
-    });
+) -> Result<(), AppError> {
+    let (project_id, conversation_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT conversation.project_id, run.conversation_id
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    outbox::enqueue_agent_run_updated(transaction, project_id, conversation_id, run_id).await?;
+    Ok(())
 }

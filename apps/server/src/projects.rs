@@ -203,13 +203,13 @@ async fn list_projects(
             p.archived_at::text AS archived_at,
             CASE
                 WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind = 'thread' AND navc.id IS NULL)
+                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
                 WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind = 'thread' AND navc.id IS NULL)
+                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
@@ -225,8 +225,17 @@ async fn list_projects(
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
-         AND navc.kind = 'thread'
+         AND navc.kind = pns.location_kind
+         AND pns.location_kind IN ('channel', 'thread')
          AND navc.archived_at IS NULL
+         AND NOT EXISTS (
+             SELECT 1
+             FROM conversations nav_parent
+             WHERE navc.kind = 'thread'
+               AND nav_parent.project_id = navc.project_id
+               AND nav_parent.id = navc.parent_channel_id
+               AND nav_parent.archived_at IS NOT NULL
+         )
         WHERE pm.actor_id = $1
           AND pm.enabled
           AND p.archived_at IS NULL
@@ -801,13 +810,13 @@ async fn fetch_project_row(
             p.archived_at::text AS archived_at,
             CASE
                 WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind = 'thread' AND navc.id IS NULL)
+                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
                 WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind = 'thread' AND navc.id IS NULL)
+                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
@@ -824,8 +833,17 @@ async fn fetch_project_row(
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
-         AND navc.kind = 'thread'
+         AND navc.kind = pns.location_kind
+         AND pns.location_kind IN ('channel', 'thread')
          AND navc.archived_at IS NULL
+         AND NOT EXISTS (
+             SELECT 1
+             FROM conversations nav_parent
+             WHERE navc.kind = 'thread'
+               AND nav_parent.project_id = navc.project_id
+               AND nav_parent.id = navc.parent_channel_id
+               AND nav_parent.archived_at IS NOT NULL
+         )
         WHERE p.id = $1
         "#,
     )
@@ -852,13 +870,13 @@ async fn fetch_project_row_in_transaction(
             p.archived_at::text AS archived_at,
             CASE
                 WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind = 'thread' AND navc.id IS NULL)
+                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN 'project_overview'
                 ELSE pns.location_kind
             END AS location_kind,
             CASE
                 WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind = 'thread' AND navc.id IS NULL)
+                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
                 THEN NULL
                 ELSE pns.conversation_id
             END AS conversation_id,
@@ -875,7 +893,8 @@ async fn fetch_project_row_in_transaction(
         LEFT JOIN conversations navc
           ON navc.project_id = p.id
          AND navc.id = pns.conversation_id
-         AND navc.kind = 'thread'
+         AND navc.kind = pns.location_kind
+         AND pns.location_kind IN ('channel', 'thread')
          AND navc.archived_at IS NULL
         WHERE p.id = $1
         FOR SHARE OF p, pm
@@ -967,6 +986,9 @@ fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<St
         ("thread", Some(conversation_id)) => {
             Ok(format!("/projects/{project_id}/threads/{conversation_id}"))
         }
+        ("channel", Some(conversation_id)) => {
+            Ok(format!("/projects/{project_id}/channels/{conversation_id}"))
+        }
         _ => Err(AppError::Internal("stored Project navigation location")),
     }
 }
@@ -978,26 +1000,43 @@ async fn validate_navigation_location(
 ) -> Result<(), AppError> {
     match (location.kind.as_str(), location.conversation_id) {
         ("project_overview" | "settings", None) => Ok(()),
-        ("thread", Some(conversation_id)) => {
-            let valid = sqlx::query_scalar::<_, bool>(
+        (kind @ ("channel" | "thread"), Some(conversation_id)) => {
+            let conversation = sqlx::query_as::<_, (String, Option<Uuid>)>(
                 r#"
-                SELECT true
+                SELECT kind, parent_channel_id
                 FROM conversations
                 WHERE id = $1 AND project_id = $2
-                  AND kind = 'thread' AND archived_at IS NULL
+                  AND kind = $3 AND archived_at IS NULL
                 FOR SHARE
                 "#,
             )
             .bind(conversation_id)
             .bind(project_id)
+            .bind(kind)
             .fetch_optional(&mut **transaction)
-            .await?
-            .unwrap_or(false);
-            if valid {
-                Ok(())
-            } else {
-                Err(AppError::NotFound("conversation"))
+            .await?;
+            let Some((_, parent_channel_id)) = conversation else {
+                return Err(AppError::NotFound("conversation"));
+            };
+            if let Some(parent_channel_id) = parent_channel_id {
+                let parent_active = sqlx::query_scalar::<_, bool>(
+                    r#"
+                    SELECT archived_at IS NULL
+                    FROM conversations
+                    WHERE id = $1 AND project_id = $2 AND kind = 'channel'
+                    FOR SHARE
+                    "#,
+                )
+                .bind(parent_channel_id)
+                .bind(project_id)
+                .fetch_optional(&mut **transaction)
+                .await?
+                .unwrap_or(false);
+                if !parent_active {
+                    return Err(AppError::NotFound("conversation"));
+                }
             }
+            Ok(())
         }
         _ => Err(AppError::Validation("navigation location")),
     }
@@ -1275,6 +1314,17 @@ mod tests {
                 },
             )
             .is_err()
+        );
+        assert_eq!(
+            navigation_href(
+                project_id,
+                &NavigationLocation {
+                    kind: "channel".to_owned(),
+                    conversation_id: Some(conversation_id),
+                },
+            )
+            .expect("channel href"),
+            format!("/projects/{project_id}/channels/{conversation_id}")
         );
     }
 

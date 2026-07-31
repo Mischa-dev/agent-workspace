@@ -6,7 +6,7 @@ import { enqueueProjectNavigationUpdate } from './navigationQueue'
 import type { ProjectLocation, ProjectNavigation } from './types'
 
 function locationKey(location: ProjectLocation) {
-  return location.kind === 'thread'
+  return location.kind === 'thread' || location.kind === 'channel'
     ? `${location.kind}:${location.conversationId}`
     : location.kind
 }

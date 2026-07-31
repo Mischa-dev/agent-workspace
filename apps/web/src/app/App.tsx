@@ -12,6 +12,8 @@ import { SessionBoundary } from '../auth/SessionBoundary'
 import { SignInPage } from '../auth/SignInPage'
 import { useAuthenticatedSession } from '../auth/session'
 import { CreateProjectPage } from '../projects/CreateProjectPage'
+import { ChannelPage } from '../conversations/ChannelPage'
+import { ConversationArchivePage } from '../conversations/ConversationArchivePage'
 import { HomePage } from '../projects/HomePage'
 import { ProjectOverviewPage } from '../projects/ProjectOverviewPage'
 import { ProjectSettingsPage } from '../projects/ProjectSettingsPage'
@@ -50,6 +52,14 @@ export function App() {
             <Route
               element={<ProjectSettingsPage />}
               path="/projects/:projectId/settings"
+            />
+            <Route
+              element={<ChannelPage />}
+              path="/projects/:projectId/channels/:channelId"
+            />
+            <Route
+              element={<ConversationArchivePage />}
+              path="/projects/:projectId/conversations/archived"
             />
             <Route
               element={<ThreadPage />}

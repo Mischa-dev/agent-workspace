@@ -1,12 +1,20 @@
 import type { ProjectLocation } from './types'
 
-const supportedKinds = new Set(['project_overview', 'thread', 'settings'])
+const supportedKinds = new Set([
+  'project_overview',
+  'channel',
+  'thread',
+  'settings',
+])
 
 export function projectLocationHref(
   projectId: string,
   location: ProjectLocation,
 ): string {
   const project = encodeURIComponent(projectId)
+  if (location.kind === 'channel') {
+    return `/projects/${project}/channels/${encodeURIComponent(location.conversationId)}`
+  }
   if (location.kind === 'thread') {
     return `/projects/${project}/threads/${encodeURIComponent(location.conversationId)}`
   }
@@ -30,6 +38,17 @@ export function projectLocationFromPath(
   const projectRoot = `/projects/${encodeURIComponent(projectId)}`
   if (pathname === projectRoot) return { kind: 'project_overview' }
   if (pathname === `${projectRoot}/settings`) return { kind: 'settings' }
+  const channelPrefix = `${projectRoot}/channels/`
+  if (pathname.startsWith(channelPrefix)) {
+    const encodedId = pathname.slice(channelPrefix.length)
+    if (!encodedId || encodedId.includes('/')) return null
+    try {
+      const conversationId = decodeURIComponent(encodedId)
+      return conversationId ? { kind: 'channel', conversationId } : null
+    } catch {
+      return null
+    }
+  }
   const threadPrefix = `${projectRoot}/threads/`
   if (pathname.startsWith(threadPrefix)) {
     const encodedId = pathname.slice(threadPrefix.length)
@@ -54,11 +73,11 @@ export function normalizeLocation(value: unknown): ProjectLocation {
     return { kind: 'project_overview' }
   }
   if (
-    candidate.kind === 'thread' &&
+    (candidate.kind === 'channel' || candidate.kind === 'thread') &&
     typeof candidate.conversationId === 'string' &&
     candidate.conversationId
   ) {
-    return { kind: 'thread', conversationId: candidate.conversationId }
+    return { kind: candidate.kind, conversationId: candidate.conversationId }
   }
   if (candidate.kind === 'settings') return { kind: 'settings' }
   return { kind: 'project_overview' }
@@ -69,7 +88,10 @@ export function locationsEqual(
   right: ProjectLocation,
 ): boolean {
   if (left.kind !== right.kind) return false
-  if (left.kind === 'thread' && right.kind === 'thread') {
+  if (
+    (left.kind === 'channel' || left.kind === 'thread') &&
+    (right.kind === 'channel' || right.kind === 'thread')
+  ) {
     return left.conversationId === right.conversationId
   }
   return true

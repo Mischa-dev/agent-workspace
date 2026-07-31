@@ -111,7 +111,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
     let foreign_event_id = Uuid::now_v7();
     realtime.publish(RealtimeEvent {
         event_id: foreign_event_id,
-        kind: "timeline.updated",
+        kind: "message.delta",
         project_id: fixture.foreign_project_id,
         conversation_id: Some(fixture.foreign_conversation_id),
         payload: serde_json::json!({"scope": "foreign"}),
@@ -119,7 +119,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
     let own_event_id = Uuid::now_v7();
     realtime.publish(RealtimeEvent {
         event_id: own_event_id,
-        kind: "timeline.updated",
+        kind: "message.delta",
         project_id: fixture.own_project_id,
         conversation_id: Some(fixture.own_conversation_id),
         payload: serde_json::json!({"scope": "own"}),
@@ -207,7 +207,7 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
     for sequence in 0..32 {
         realtime.publish(RealtimeEvent {
             event_id: Uuid::now_v7(),
-            kind: "timeline.updated",
+            kind: "message.delta",
             project_id: fixture.own_project_id,
             conversation_id: Some(fixture.own_conversation_id),
             payload: serde_json::json!({"sequence": sequence}),
