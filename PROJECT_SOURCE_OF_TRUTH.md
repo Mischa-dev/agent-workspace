@@ -2,7 +2,8 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** Implementation-ready baseline v0.3  
+**Status:** M0 implementation baseline v0.4
+
 **Owner:** Mischa Nelson  
 **Date:** July 30, 2026  
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
@@ -11,6 +12,14 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.4 — verified M0 toolchain correction
+
+- corrected the initial Rust pin from the unpublished `1.98.0` assumption to
+  the verified stable `1.97.1` toolchain available for both target
+  architectures
+- required bootstrap pins to be checked against their official distribution
+  artifacts before CI and host installation
 
 ### v0.3 — actor and execution-worker architecture
 
@@ -3690,7 +3699,8 @@ Version one does not require a Hermes, OpenClaw, or other external-agent connect
 
 ## D-001: Rust backend
 
-**Status:** Accepted  
+**Status:** Accepted
+
 **Reason:** Strong fit for a long-running, low-overhead, process-supervising, security-sensitive server. Motivation matters, and Rust is acceptable if constrained by the guardrails in this document.
 
 ## D-002: React and TypeScript frontend
@@ -3827,6 +3837,12 @@ Version one does not require a Hermes, OpenClaw, or other external-agent connect
 
 **Status:** Accepted  
 **Reason:** The application domain, data, UX, and Worker Provider boundaries should remain commercially usable and replaceable. Billing, public SaaS isolation, and a final OpenAI authentication and cost model are deferred and must not block the private self-hosted build.
+
+## D-029: M0 uses verified published toolchain pins
+
+**Status:** Accepted
+
+**Reason:** The planned Rust `1.98.0` artifact did not exist for the target architectures when M0 began. M0 pins Rust `1.97.1`, the current published stable release verified from the official channel manifest. Future pin changes require the same artifact check before CI or host installation.
 
 ---
 

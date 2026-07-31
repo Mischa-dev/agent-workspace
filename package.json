@@ -1,0 +1,22 @@
+{
+  "name": "agent-workspace",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@11.18.0",
+  "engines": {
+    "node": "24.18.1",
+    "pnpm": "11.18.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @agent-workspace/web build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "db:down": "docker compose -f docker-compose.dev.yml down",
+    "db:up": "docker compose -f docker-compose.dev.yml up -d --wait",
+    "dev": "pnpm --parallel dev",
+    "dev:server": "cargo run -p agent-workspace-server",
+    "dev:web": "pnpm --filter @agent-workspace/web dev",
+    "lint": "pnpm --filter @agent-workspace/web lint",
+    "test": "pnpm --filter @agent-workspace/web test",
+    "typecheck": "pnpm --filter @agent-workspace/web typecheck"
+  }
+}
