@@ -71,17 +71,26 @@ export function normalizeNavigation(
 export function normalizeProject(value: unknown): Project {
   const record = asRecord(value)
   const id = asString(record.id)
+  const archivedAt = asNullableString(record.archivedAt)
+  const navigation = normalizeNavigation(id, record.navigation)
+  const overviewLocation = { kind: 'project_overview' } as const
   return {
     id,
     organizationId: asString(record.organizationId),
     key: asString(record.key, asString(record.projectKey)),
     name: asString(record.name),
-    archivedAt: asNullableString(record.archivedAt),
+    archivedAt,
     role: asString(record.role),
     version: Math.max(0, asNumber(record.version)),
     attentionCount: Math.max(0, asNumber(record.attentionCount)),
     capabilities: normalizeCapabilities(record.capabilities),
-    navigation: normalizeNavigation(id, record.navigation),
+    navigation: archivedAt
+      ? {
+          ...navigation,
+          location: overviewLocation,
+          href: safeProjectHref(id, null, overviewLocation),
+        }
+      : navigation,
   }
 }
 

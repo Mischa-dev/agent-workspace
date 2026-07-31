@@ -1,5 +1,5 @@
-import { FormEvent, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { FormEvent, useEffect, useRef, useState } from 'react'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
@@ -7,6 +7,7 @@ import { AppShell } from '../shell/AppShell'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import { ProjectContextDrawer } from './ProjectContextDrawer'
 import { useArchiveProject, useProject } from './hooks'
+import { projectLocationHref } from './locations'
 import {
   ProjectPageError,
   ProjectPageLoading,
@@ -22,6 +23,11 @@ export function ProjectSettingsPage() {
   const errorRef = useRef<HTMLDivElement>(null)
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [archiveSubmissionStarted, setArchiveSubmissionStarted] =
+    useState(false)
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'settings' },
@@ -45,10 +51,21 @@ export function ProjectSettingsPage() {
       </AppShell>
     )
   }
+  if (project.data.archivedAt && !archiveSubmissionStarted) {
+    return (
+      <Navigate
+        replace
+        to={projectLocationHref(project.data.id, {
+          kind: 'project_overview',
+        })}
+      />
+    )
+  }
 
   const submitArchive = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (confirmation !== project.data.key) return
+    setArchiveSubmissionStarted(true)
     setError(null)
     try {
       await archive.mutateAsync({
@@ -60,6 +77,7 @@ export function ProjectSettingsPage() {
         state: { notice: `${project.data.name} was archived. Its history was preserved.` },
       })
     } catch (reason) {
+      setArchiveSubmissionStarted(false)
       if (isApiError(reason) && reason.code === 'version_conflict') {
         const details =
           reason.details && typeof reason.details === 'object'
@@ -84,7 +102,6 @@ export function ProjectSettingsPage() {
             : 'The Project could not be archived.',
         )
       }
-      window.requestAnimationFrame(() => errorRef.current?.focus())
     }
   }
 

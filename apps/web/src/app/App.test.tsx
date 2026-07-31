@@ -464,6 +464,83 @@ describe('M1 authenticated shell', () => {
     ).toEqual([])
   })
 
+  it('finishes the Project rail when a hard-route location sync cancels its cold read', async () => {
+    const projectCId = '019fb600-0000-7000-8000-000000000006'
+    const postgresTimestampProjects = [
+      {
+        ...projectA,
+        navigation: {
+          ...projectA.navigation,
+          lastOpenedAt: '2026-07-31 06:00:00.123456+00',
+        },
+      },
+      {
+        ...projectB,
+        navigation: {
+          ...projectB.navigation,
+          lastOpenedAt: '2026-07-31 05:00:00.123456+00',
+        },
+      },
+      project(projectCId, 'GAMMA', 'Gamma Project', {
+        navigation: {
+          location: { kind: 'project_overview' },
+          href: `/projects/${projectCId}`,
+          pinned: false,
+          lastOpenedAt: '2026-07-31 04:00:00.123456+00',
+          version: 1,
+        },
+      }),
+    ]
+    window.history.replaceState({}, '', `/projects/${projectBId}`)
+    let projectListReads = 0
+    let releaseInitialList: ((response: Response) => void) | undefined
+    const initialListRead = new Promise<Response>((resolve) => {
+      releaseInitialList = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const path = String(input)
+          const method = init?.method ?? 'GET'
+          if (path.endsWith('/auth/session')) {
+            return jsonResponse(authenticatedSession)
+          }
+          if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+            projectListReads += 1
+            if (projectListReads === 1) return initialListRead
+            releaseInitialList?.(
+              new Response(JSON.stringify({ projects: postgresTimestampProjects }), {
+                headers: { 'content-type': 'application/json' },
+              }),
+            )
+            return jsonResponse({ projects: postgresTimestampProjects })
+          }
+          if (path.endsWith(`/projects/${projectBId}`)) {
+            return jsonResponse(projectB)
+          }
+          if (
+            path.endsWith(`/projects/${projectBId}/navigation`) &&
+            method === 'GET'
+          ) {
+            return jsonResponse(projectB.navigation)
+          }
+          throw new Error(`Unexpected request: ${method} ${path}`)
+        },
+      ),
+    )
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Beta Project' }),
+    ).toBeVisible()
+    expect(
+      await screen.findByRole('link', { name: 'Gamma Project' }),
+    ).toBeVisible()
+    expect(screen.queryByLabelText('Loading Projects')).not.toBeInTheDocument()
+    expect(projectListReads).toBe(2)
+  })
+
   it('restores independent A to B to A locations after a client reload', async () => {
     installStandardApi()
     const firstRender = render(<App />)

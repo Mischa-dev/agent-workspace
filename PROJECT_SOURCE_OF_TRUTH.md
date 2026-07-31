@@ -4447,7 +4447,9 @@ worktree. A completed provider turn may be reconciled as completed. An
 interrupted, non-terminal, missing, or ambiguous turn becomes an actionable
 application `interrupted` result with its worktree preserved. This proved the
 required M0 recovery boundary without inventing continuation or resetting
-dirty state.
+dirty state. Recovery is re-entrant for a run already marked `recovering`, and
+an `active` provider session returns to `idle` once no linked Agent Run remains
+non-terminal, so a second service interruption cannot strand the Thread.
 
 ## D-033: Private-build authentication uses host-bootstrapped local sessions through M6
 

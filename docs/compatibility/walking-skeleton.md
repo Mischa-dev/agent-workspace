@@ -33,15 +33,17 @@ significant file and lifecycle events; it never stores one row per token. This
 executor is deterministic test scaffolding and is not accepted as the required
 real Codex App Server run.
 
-At startup, non-terminal runs enter `recovering`. M0 inspects both their
-worktrees and every registered worktree, records the observed dirty state, and
-preserves every worktree. It restarts the retained profile's App Server,
-resumes the stored provider Thread, and reads the latest provider turn. A
-provably completed turn may be reconciled to completion; an interrupted,
-non-terminal, or ambiguous turn becomes an application `interrupted` result
-with an actionable recovery event. Startup also cancels stale pending
-approvals owned by terminal runs. Recovery never guesses, resets, or deletes
-filesystem state.
+At startup, non-terminal runs enter `recovering`; a run already left in
+`recovering` by a second process interruption re-enters the same reconciliation
+path. M0 inspects both their worktrees and every registered worktree, records
+the observed dirty state, and preserves every worktree. It restarts the
+retained profile's App Server, resumes the stored provider Thread, and reads
+the latest provider turn. A provably completed turn may be reconciled to
+completion; an interrupted, non-terminal, or ambiguous turn becomes an
+application `interrupted` result with an actionable recovery event. Startup
+also cancels stale pending approvals owned by terminal runs and returns an
+`active` provider session to `idle` once it is linked only to terminal runs.
+Recovery never guesses, resets, or deletes filesystem state.
 
 ## Reader surface
 

@@ -235,6 +235,40 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
             .expect("count Projects"),
         1
     );
+
+    let duplicate_key = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/projects",
+            &[
+                ("origin", "http://127.0.0.1:3100"),
+                ("cookie", cookie_header.as_str()),
+                ("x-csrf-token", csrf.as_str()),
+                ("idempotency-key", "m1-create-duplicate-key"),
+            ],
+            json!({
+                "organizationId": bootstrapped.organization_id,
+                "key": "oNe",
+                "name": "Duplicate Project Key"
+            }),
+        ))
+        .await
+        .expect("duplicate Project key response");
+    assert_eq!(duplicate_key.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(duplicate_key).await["error"]["code"],
+        "project_key_conflict"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
+            .fetch_one(&pool)
+            .await
+            .expect("count Projects after duplicate-key conflict"),
+        1,
+        "a duplicate-key HTTP conflict must roll back its Project transaction"
+    );
+
     sqlx::query(
         "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -474,7 +508,46 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .await
         .expect("archive response");
     assert_eq!(archive.status(), StatusCode::OK);
-    assert!(response_json(archive).await["archivedAt"].is_string());
+    let archived_project = response_json(archive).await;
+    let archived_at = archived_project["archivedAt"]
+        .as_str()
+        .expect("archive timestamp")
+        .to_owned();
+    assert_eq!(archived_project["version"], 2);
+
+    let repeated_archive = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/api/v1/projects/{first_project_id}/archive"),
+            &[
+                ("origin", "http://127.0.0.1:3100"),
+                ("cookie", cookie_header.as_str()),
+                ("x-csrf-token", csrf.as_str()),
+            ],
+            json!({"expectedVersion": 1}),
+        ))
+        .await
+        .expect("repeated archive response");
+    assert_eq!(repeated_archive.status(), StatusCode::OK);
+    let repeated_archived_project = response_json(repeated_archive).await;
+    assert_eq!(repeated_archived_project["version"], 2);
+    assert_eq!(repeated_archived_project["archivedAt"], archived_at);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*)
+            FROM audit_events
+            WHERE action = 'project.archived' AND target_id = $1
+            "#,
+        )
+        .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
+        .fetch_one(&pool)
+        .await
+        .expect("count Project archive audit events"),
+        1,
+        "replaying archive must not version or audit the Project twice"
+    );
 
     let archived_replay = app
         .clone()

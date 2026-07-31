@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query'
+import { QueryClient, QueryObserver } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resetQueryScope } from '../api/queryScope'
@@ -309,5 +309,106 @@ describe('serialized Project navigation queue', () => {
           init?.method === 'PUT',
       ),
     ).toHaveLength(1)
+  })
+
+  it('does not wait for a stalled active search before switching Projects', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    const current = navigation(1)
+    let railReads = 0
+    let searchReads = 0
+    let releaseSearch: (() => void) | undefined
+    const stalledSearch = new Promise<{ projects: ReturnType<typeof projectWire>[] }>(
+      (resolve) => {
+        releaseSearch = () => resolve({ projects: [projectWire(current)] })
+      },
+    )
+    const railObserver = new QueryObserver(queryClient, {
+      queryKey: ['projects', 'rail'],
+      queryFn: async () => {
+        railReads += 1
+        return { projects: [projectWire(current)] }
+      },
+      initialData: { projects: [projectWire(current)] },
+    })
+    const searchObserver = new QueryObserver(queryClient, {
+      queryKey: ['projects', 'search', 'project'],
+      queryFn: () => {
+        searchReads += 1
+        return stalledSearch
+      },
+      initialData: { projects: [projectWire(current)] },
+    })
+    const unsubscribeRail = railObserver.subscribe(() => undefined)
+    const unsubscribeSearch = searchObserver.subscribe(() => undefined)
+    let announceSwitch: (() => void) | undefined
+    const switchStarted = new Promise<void>((resolve) => {
+      announceSwitch = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+          const path = String(input)
+          const method = init?.method ?? 'GET'
+          if (path.endsWith(`/${projectId}/navigation`) && method === 'GET') {
+            return jsonResponse(current)
+          }
+          if (path.endsWith(`/${projectId}/switch`) && method === 'POST') {
+            announceSwitch?.()
+            const switchedNavigation = navigation(2, {
+              lastOpenedAt: '2026-07-31T08:00:00Z',
+            })
+            return jsonResponse({
+              project: projectWire(switchedNavigation),
+              navigation: switchedNavigation,
+              href: switchedNavigation.href,
+            })
+          }
+          throw new Error(`Unexpected request: ${method} ${path}`)
+        },
+      ),
+    )
+
+    const switched = enqueueProjectSwitch(queryClient, {
+      projectId,
+      expectedVersion: current.version,
+      navigation: current,
+    })
+    await expect(
+      Promise.race([
+        switchStarted.then(() => 'started'),
+        new Promise<string>((_, reject) => {
+          window.setTimeout(
+            () => reject(new Error('Project switch waited for stalled search')),
+            250,
+          )
+        }),
+      ]),
+    ).resolves.toBe('started')
+    await expect(switched).resolves.toMatchObject({
+      navigation: { version: 2 },
+    })
+    expect(railReads).toBe(1)
+    expect(searchReads).toBe(1)
+
+    releaseSearch?.()
+    await expect
+      .poll(
+        () =>
+          queryClient.getQueryData<{
+            projects: Array<{ navigation: ProjectNavigation }>
+          }>(['projects', 'search', 'project'])?.projects[0].navigation.version,
+      )
+      .toBe(2)
+    expect(
+      queryClient.getQueryData<{
+        projects: Array<{ navigation: ProjectNavigation }>
+      }>(['projects', 'rail'])?.projects[0].navigation.version,
+    ).toBe(2)
+    unsubscribeRail()
+    unsubscribeSearch()
+    await queryClient.cancelQueries({ queryKey: ['projects'] })
   })
 })

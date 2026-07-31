@@ -47,6 +47,7 @@ export function ProjectSwitcher({
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault()
+      event.stopPropagation()
       onClose()
       return
     }

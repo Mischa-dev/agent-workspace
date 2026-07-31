@@ -5,7 +5,6 @@ import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import { useProjects, useSwitchProject } from './hooks'
-import { projectLocationHref } from './locations'
 import type { Project } from './types'
 
 export function HomePage() {
@@ -52,6 +51,10 @@ export function HomePage() {
     }
     event.preventDefault()
     setSwitchError(null)
+    if (!project.capabilities.navigationWrite) {
+      navigate(project.navigation.href)
+      return
+    }
     try {
       const result = await switchProject.mutateAsync({
         projectId: project.id,
@@ -118,10 +121,7 @@ export function HomePage() {
               {recentProjects.map((project) => (
                 <li key={project.id}>
                   <a
-                    href={projectLocationHref(
-                      project.id,
-                      project.navigation.location,
-                    )}
+                    href={project.navigation.href}
                     onClick={(event) => void openProject(project, event)}
                   >
                     <span aria-hidden="true" className="project-row-key">

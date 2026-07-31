@@ -87,6 +87,12 @@ export function ProjectRail({
     if (!unmodifiedPrimaryClick(event)) return
     event.preventDefault()
     setStatus(null)
+    if (!project.capabilities.navigationWrite) {
+      setSwitcherOpen(false)
+      onNavigate()
+      navigate(projectHref(project))
+      return
+    }
     try {
       const result = await switchProject.mutateAsync({
         projectId: project.id,

@@ -162,6 +162,11 @@ async function prepareNavigation(
   queryClient: QueryClient,
   context: NavigationMutationContext,
 ) {
+  const generation = currentQueryScopeGeneration()
+  const activeProjectListQueries = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: ['projects'], type: 'active' })
+    .map((query) => query.queryKey)
   await Promise.all([
     queryClient.cancelQueries({ queryKey: ['projects'] }),
     queryClient.cancelQueries({
@@ -178,15 +183,43 @@ async function prepareNavigation(
     context.projectId,
     context.navigation,
   )
-  const current = await getProjectNavigation(context.projectId)
-  const authoritative =
-    known &&
-    known.version >= Math.max(0, context.expectedVersion) &&
-    known.version > current.version
-      ? known
-      : current
-  installNavigation(queryClient, context.projectId, authoritative)
-  return authoritative
+  const authoritativeNavigation = getProjectNavigation(context.projectId).then(
+    (current) => {
+      assertCurrentQueryScope(generation)
+      const authoritative =
+        known &&
+        known.version >= Math.max(0, context.expectedVersion) &&
+        known.version > current.version
+          ? known
+          : current
+      installNavigation(queryClient, context.projectId, authoritative)
+      return authoritative
+    },
+  )
+
+  // Cancellation protects list caches from an older navigation response, but
+  // a cold read has no data to restore and otherwise remains pending/idle.
+  // Restart each active rail/search query independently. Reapply the
+  // authoritative navigation after that exact read settles so one stalled
+  // search cannot delay the mutation or another list query's recovery.
+  for (const queryKey of activeProjectListQueries) {
+    void queryClient
+      .refetchQueries({ queryKey, exact: true, type: 'active' })
+      .then(async () => {
+        const prepared = await authoritativeNavigation
+        assertCurrentQueryScope(generation)
+        const authoritative =
+          cachedNavigation(queryClient, context.projectId, prepared) ?? prepared
+        installNavigation(
+          queryClient,
+          context.projectId,
+          authoritative,
+        )
+      })
+      .catch(() => undefined)
+  }
+
+  return authoritativeNavigation
 }
 
 async function retryAfterConflict<T>(

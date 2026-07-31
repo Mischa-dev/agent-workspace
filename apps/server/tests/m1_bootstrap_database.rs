@@ -133,11 +133,143 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
     assert_eq!(stored.2, 1);
     assert_eq!(stored.3, 1);
 
+    let repeated = bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: "another-admin".to_owned(),
+            display_name: "Another Administrator".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: None,
+            organization_id: None,
+        },
+        "another correct horse battery staple".to_owned(),
+    )
+    .await;
+    assert!(
+        matches!(repeated, Err(BootstrapError::AlreadyBootstrapped)),
+        "a later deployed-style bootstrap attempt must reject once the first User exists"
+    );
+    let persisted_counts = sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(
+        r#"
+        SELECT
+            (SELECT count(*) FROM users),
+            (SELECT count(*) FROM user_password_credentials),
+            (SELECT count(*) FROM organization_memberships WHERE role = 'owner'),
+            (SELECT count(*) FROM project_memberships WHERE role = 'owner'),
+            (SELECT count(*) FROM audit_events
+              WHERE action = 'identity.bootstrap_admin'
+                AND outcome = 'succeeded')
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read state after repeated bootstrap");
+    assert_eq!(
+        persisted_counts,
+        (1, 1, 1, 1, 1),
+        "a rejected repeat must not create another User, credential, Owner, or audit event"
+    );
+
     pool.close().await;
     administrative_pool
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
         .await
         .expect("drop isolated bootstrap schema");
+}
+
+#[tokio::test]
+async fn bootstrap_rolls_back_every_insert_when_a_late_database_write_fails() {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return;
+    };
+    let administrative_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect to PostgreSQL");
+    let schema = format!("m1_bootstrap_rollback_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create isolated bootstrap rollback schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    for migration in [
+        include_str!("../migrations/0001_foundation.sql"),
+        include_str!("../migrations/0002_walking_skeleton.sql"),
+        include_str!("../migrations/0003_m0_consistency.sql"),
+        include_str!("../migrations/0004_m1_identity_projects.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(&pool)
+            .await
+            .expect("apply migration");
+    }
+    sqlx::raw_sql(
+        r#"
+        CREATE FUNCTION reject_bootstrap_organization_membership()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            RAISE EXCEPTION 'induced bootstrap membership failure';
+        END;
+        $$;
+
+        CREATE TRIGGER reject_bootstrap_organization_membership
+        BEFORE INSERT ON organization_memberships
+        FOR EACH ROW
+        EXECUTE FUNCTION reject_bootstrap_organization_membership();
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("install late bootstrap failure trigger");
+
+    let failed = bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: "rollback-admin".to_owned(),
+            display_name: "Rollback Administrator".to_owned(),
+            organization_name: Some("Rollback Organization".to_owned()),
+            organization_slug: Some(format!("rollback-{}", Uuid::now_v7().simple())),
+            adopt_actor_id: None,
+            organization_id: None,
+        },
+        "correct horse battery staple".to_owned(),
+    )
+    .await;
+    assert!(
+        matches!(failed, Err(BootstrapError::Database(_))),
+        "the induced late database failure must escape as a bootstrap database error"
+    );
+
+    let counts = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
+        r#"
+        SELECT
+            (SELECT count(*) FROM actors),
+            (SELECT count(*) FROM organizations),
+            (SELECT count(*) FROM users),
+            (SELECT count(*) FROM user_password_credentials),
+            (SELECT count(*) FROM organization_memberships),
+            (SELECT count(*) FROM audit_events)
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read state after failed bootstrap");
+    assert_eq!(
+        counts,
+        (0, 0, 0, 0, 0, 0),
+        "Actor, Organization, User, credential, membership, and audit inserts must roll back together"
+    );
+
+    pool.close().await;
+    administrative_pool
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("drop isolated bootstrap rollback schema");
 }
 
 async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
