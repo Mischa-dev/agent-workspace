@@ -16,6 +16,11 @@ The development App is installed only on
 `Mischa-dev/agent-workspace-m0-spike`. The private key and webhook secret are
 stored outside Git with owner-only permissions.
 
+The live development registration is `Agent Workspace M0 Development` (App ID
+`4442593`, installation ID `150232852`). App and installation IDs are public
+identifiers, not credentials. The installation has access to the spike
+repository only.
+
 ## Credentialed Git boundary
 
 Clone/fetch/push operations use an absolute Git executable, argument arrays,
@@ -42,7 +47,31 @@ immediately after the signed delivery proof.
 
 Automated tests cover signature rejection, repository identity, delivery
 deduplication, opaque-token redaction, and the child-only Git credential
-boundary. Live App creation/installation, installation token issuance,
-clone/fetch, unique branch push, pull request creation, check read, tunnel
-activation, duplicate redelivery, PR closure, and branch deletion are the
-operator-assisted M0-008 acceptance sequence.
+boundary.
+
+The live M0-008 sequence completed on July 30, 2026 (America/Denver):
+
+- The App was created and installed only on the private spike repository.
+- Each remote operation requested a fresh repository-scoped installation
+  token. The backend cloned the repository, pushed a unique branch, opened
+  pull request `#2`, read an empty Checks result, closed the pull request, and
+  deleted the branch.
+- Actions access was not added because the Checks endpoint was readable; the
+  spike repository simply had no check runs configured.
+- GitHub delivered signed push and pull-request events through the Quick
+  Tunnel. Delivery `7790a17e-8c99-11f1-9b64-0d912688f536` returned HTTP 202.
+  Redelivering the same delivery produced `duplicate: true` and HTTP 200.
+- The tunnel was stopped immediately after duplicate proof. The App webhook
+  was then deactivated while the development App and repository installation
+  were retained for repeatability.
+- The redacted evidence fixture is
+  `tools/github-spike/fixtures/live-evidence.json`.
+
+The current GitHub settings form retained
+`integration[hook_attributes][_destroy]=true` when the previously inactive
+webhook was first enabled. The browser acceptance run corrected that hidden
+marker to `false`, submitted the intended active configuration, and re-read
+the persisted state. Once the App webhook exists, later temporary URL and
+secret changes use the documented `PATCH /app/hook/config` JWT endpoint through
+the checked-in `configure-webhook` binary. The App remained inactive after the
+proof.

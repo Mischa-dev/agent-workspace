@@ -1,0 +1,46 @@
+{
+  "captured_at": "2026-07-31T04:38:38Z",
+  "api_version": "2026-03-10",
+  "app": {
+    "name": "Agent Workspace M0 Development",
+    "app_id": 4442593,
+    "installation_id": 150232852,
+    "installed_repository": "Mischa-dev/agent-workspace-m0-spike",
+    "active_after_proof": false
+  },
+  "permissions": {
+    "metadata": "read",
+    "contents": "write",
+    "pull_requests": "write",
+    "checks": "read",
+    "actions": "none"
+  },
+  "events": [
+    "installation",
+    "installation_repositories",
+    "installation_target",
+    "push",
+    "pull_request",
+    "pull_request_review",
+    "check_suite",
+    "check_run"
+  ],
+  "git_and_api_proof": {
+    "branch": "codex/m0-github-spike-019fb676-0348-7830-b351-5921229b8f33",
+    "pull_request_number": 2,
+    "checks_returned": 0,
+    "pull_request_closed": true,
+    "branch_deleted": true
+  },
+  "webhook_proof": {
+    "event": "push",
+    "delivery_id": "7790a17e-8c99-11f1-9b64-0d912688f536",
+    "first_response_status": 202,
+    "redelivery_duplicate": true,
+    "duplicate_response_status": 200,
+    "tunnel_started_at": "2026-07-31T04:26:58Z",
+    "tunnel_stopped_at": "2026-07-31T04:38:38Z",
+    "temporary_url_redacted": true
+  },
+  "credentials_redacted": true
+}

@@ -59,11 +59,18 @@ pub struct PullRequest {
     pub html_url: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CheckRun {
     pub name: String,
     pub status: String,
     pub conclusion: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WebhookConfig {
+    pub url: String,
+    pub content_type: String,
+    pub insecure_ssl: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,12 +95,27 @@ impl std::fmt::Debug for InstallationToken {
 }
 
 impl GitHubAppClient {
+    pub fn new_app(app_id: u64, private_key_pem: Vec<u8>) -> Result<Self, GitHubSpikeError> {
+        Self::build(app_id, 0, private_key_pem)
+    }
+
     pub fn new(
         app_id: u64,
         installation_id: u64,
         private_key_pem: Vec<u8>,
     ) -> Result<Self, GitHubSpikeError> {
-        if app_id == 0 || installation_id == 0 || private_key_pem.is_empty() {
+        if installation_id == 0 {
+            return Err(GitHubSpikeError::InvalidConfig);
+        }
+        Self::build(app_id, installation_id, private_key_pem)
+    }
+
+    fn build(
+        app_id: u64,
+        installation_id: u64,
+        private_key_pem: Vec<u8>,
+    ) -> Result<Self, GitHubSpikeError> {
+        if app_id == 0 || private_key_pem.is_empty() {
             return Err(GitHubSpikeError::InvalidConfig);
         }
         Ok(Self {
@@ -129,6 +151,9 @@ impl GitHubAppClient {
         &self,
         repository: &str,
     ) -> Result<InstallationToken, GitHubSpikeError> {
+        if self.installation_id == 0 {
+            return Err(GitHubSpikeError::InvalidConfig);
+        }
         validate_repository_name(repository)?;
         let jwt = self.app_jwt()?;
         let url = format!(
@@ -163,6 +188,31 @@ impl GitHubAppClient {
             secret: SecretString::from(response.token),
             expires_at: response.expires_at,
         })
+    }
+
+    pub async fn update_webhook_config(
+        &self,
+        url: &str,
+        secret: &str,
+    ) -> Result<WebhookConfig, GitHubSpikeError> {
+        if !url.starts_with("https://") || url.len() > 2_048 || secret.len() < 32 {
+            return Err(GitHubSpikeError::InvalidConfig);
+        }
+        let jwt = self.app_jwt()?;
+        let response = self
+            .http
+            .patch(format!("{}/app/hook/config", self.api_root))
+            .headers(github_headers(jwt.expose_secret())?)
+            .json(&json!({
+                "url": url,
+                "content_type": "json",
+                "insecure_ssl": "0",
+                "secret": secret,
+            }))
+            .send()
+            .await
+            .map_err(GitHubSpikeError::Http)?;
+        decode_api_response(response).await
     }
 
     pub async fn create_pull_request(
@@ -723,5 +773,18 @@ mod tests {
             redact_and_bound(b"failure opaque-token-value", token.expose()),
             "failure [REDACTED]"
         );
+    }
+
+    #[test]
+    fn live_evidence_fixture_is_redacted_and_bounded() {
+        let fixture = include_str!("../fixtures/live-evidence.json");
+        let parsed: serde_json::Value =
+            serde_json::from_str(fixture).expect("valid live evidence fixture");
+        assert_eq!(parsed["credentials_redacted"], true);
+        assert_eq!(parsed["webhook_proof"]["temporary_url_redacted"], true);
+        assert!(!fixture.contains("trycloudflare.com"));
+        assert!(!fixture.contains("BEGIN RSA PRIVATE KEY"));
+        assert!(!fixture.contains("BEGIN PRIVATE KEY"));
+        assert!(fixture.len() < 8 * 1024);
     }
 }

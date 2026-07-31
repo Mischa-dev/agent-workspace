@@ -45,12 +45,20 @@ async fn handle_webhook(
 ) -> Result<(StatusCode, String), StatusCode> {
     let VerifiedWebhook {
         delivery_id,
+        event,
         duplicate,
-        ..
     } = state
         .verifier
         .verify(&headers, &body)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "delivery_id": delivery_id,
+            "event": event,
+            "duplicate": duplicate,
+        })
+    );
     let status = if duplicate {
         StatusCode::OK
     } else {
