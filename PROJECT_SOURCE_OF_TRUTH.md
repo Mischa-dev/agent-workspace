@@ -2,16 +2,31 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M1 satisfied; M2 active v0.10
+**Status:** M2 satisfied; M3 active v0.11
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 and M1 are complete. Milestone M2 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
+**Implementation authorization:** Milestones M0, M1, and M2 are complete. Milestone M3 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.11 — M2 acceptance and M3 authorization
+
+- accepted M2 against exact green commit
+  `d4b08d025d82d1b83a5aaae677499b23b405f840`, GitHub CI run
+  `30652464974`, and its immutable Red Hat release
+- recorded browser-driven two-Actor Channel, semantic mention, linked Thread,
+  pagination, independent read-cursor, one-session realtime, archive fallback,
+  and explicit read-only history evidence
+- recorded controlled systemd restart and exact outbox-event replay recovery
+  without duplicate Messages, consumed peer cursors, or manual repair
+- retained the immutable M2 migration checksums and the M0/M1 host, provider,
+  worktree, and security boundaries
+- declared M2 satisfied and authorized the elaborated M3 hosted Execution
+  Worker backlog
 
 ### v0.10 — M2 implementation record and M3 entry backlog
 
@@ -3988,11 +4003,11 @@ Worker invocation, and O-002 inline execution.
 
 ## Milestone M3: Execution Worker and hosted Codex
 
-M3 begins only after every M2 exit criterion is accepted against one exact
-green Red Hat release. It productionizes the hosted-execution slice proven in
-M0; it must evolve those tables, routes, fixtures, and compatibility contracts
-rather than create a second execution path. M3 remains Thread-only. O-002
-continues to prohibit inline Channel execution.
+M3 is authorized by the accepted M2 evidence in `docs/acceptance/m2.md` against
+one exact green Red Hat release. It productionizes the hosted-execution slice
+proven in M0; it must evolve those tables, routes, fixtures, and compatibility
+contracts rather than create a second execution path. M3 remains Thread-only.
+O-002 continues to prohibit inline Channel execution.
 
 ### M3-001 Execution Worker entity and Actor identity
 
