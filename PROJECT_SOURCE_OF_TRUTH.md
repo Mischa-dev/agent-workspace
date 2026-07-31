@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M2 satisfied; M3 active v0.11
+**Status:** M2 satisfied; M3 active v0.12
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
@@ -12,6 +12,21 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.12 — M3 execution foundation hardening
+
+- recorded the additive M3 ownership, Project-scope, optimistic-version,
+  repository-preparation, provider-session, and Agent Run admission foundation
+- retained the already-applied `0009` migration byte-for-byte and moved every
+  review correction into additive `0010`
+- made an authenticated personal Execution Profile and a prepared trusted
+  Repository explicit fail-closed admission requirements for M3 hosted runs
+- recorded descriptor-relative, no-follow creation of profile directories
+  beneath the configured data root and uniqueness of provider/Git runtime paths
+- added a bounded pre-`0009` repair for only the known legacy seed paths;
+  unknown layouts fail closed for operator repair
+- kept team-owned/shared Execution Profile policy open for M7 while fixing M3
+  personal-profile execution to the authenticated owning Actor
 
 ### v0.11 — M2 acceptance and M3 authorization
 
@@ -5181,6 +5196,36 @@ through `0008` are now applied to the retained validation database and are all
 immutable. Any later correction must use a new migration; application code,
 tests, and deployment tooling must never repair a checksum by rewriting an
 applied file or editing `_sqlx_migrations`.
+
+## D-038: M3 execution admission is fail-closed and personal-profile owned
+
+**Status:** Accepted
+
+**Reason:** An adopted provider or repository row is not proof that its current
+host state is executable. M3 therefore records adopted Execution Profiles as
+`account_state = unknown` and adopted Repositories as
+`preparation_state = pending`. A non-terminal Agent Run may enter admission,
+`starting`, or `working` only when its Provider Connection, Worker Actor and
+membership, assigned personal Execution Profile and owner, and trusted prepared
+Repository are all active and same-Project. The requesting Actor must own the
+personal profile used by the M3 run. Project-service and team-sharing policy
+remains intentionally open under O-003 for M7.
+
+The retained validation database applied `0009_m3_execution_foundation.sql`
+before its final cross-review, so that migration remains byte-for-byte
+immutable. `0010_m3_execution_admission_hardening.sql` additively enforces
+profile authentication, repository preparation, Worker/Profile identity,
+runtime-path uniqueness, archive-attribution immutability, and deferred
+Repository/run consistency. The application revalidates the same admission
+facts before selection and when a queued run becomes executable.
+
+Each profile directory is created beneath the configured data root through
+descriptor-relative no-follow operations with owner-only permissions. The
+pre-`0009` startup preflight may canonicalize only the two relative paths
+written by the known M0 development seed and may conservatively disable a
+Worker whose dependencies are unavailable. Unknown legacy paths or ambiguous
+ownership fail closed for explicit operator repair; startup never guesses,
+moves credentials, or rewrites an applied migration.
 
 ---
 

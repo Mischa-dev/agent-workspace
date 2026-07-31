@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use agent_workspace_server::{
-    AppState, bootstrap, config::AppConfig, rate_limit::RateLimiters, realtime::RealtimeHub,
-    recovery, router, seed, shutdown_signal, telemetry::init_tracing,
+    AppState, bootstrap, config::AppConfig, migration_preflight, rate_limit::RateLimiters,
+    realtime::RealtimeHub, recovery, router, seed, shutdown_signal, telemetry::init_tracing,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
@@ -20,6 +20,18 @@ async fn main() -> anyhow::Result<()> {
         .connect(config.database_url.expose())
         .await
         .context("connect to PostgreSQL")?;
+
+    let migration_preflight = migration_preflight::prepare_m3_upgrade(&pool, &config)
+        .await
+        .context("prepare legacy data for M3 migration")?;
+    if migration_preflight.required {
+        tracing::warn!(
+            profile_paths_repaired = migration_preflight.profile_paths_repaired,
+            repository_paths_repaired = migration_preflight.repository_paths_repaired,
+            workers_disabled = migration_preflight.workers_disabled,
+            "prepared legacy execution data for the M3 migration"
+        );
+    }
 
     sqlx::migrate!()
         .run(&pool)

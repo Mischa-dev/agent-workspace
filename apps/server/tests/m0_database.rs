@@ -33,6 +33,10 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
             "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
             "/tmp/agent-workspace-test".to_owned(),
         ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            "/tmp/agent-workspace-test/codex/profiles".to_owned(),
+        ),
     ]))
     .expect("development config");
 
@@ -68,6 +72,18 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         .expect("rollback foreign-key transaction");
 
     let mut transaction = pool.begin().await.expect("invariant transaction");
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(first.execution_profile_id)
+        .execute(&mut *transaction)
+        .await
+        .expect("authenticate Profile inside rolled-back invariant transaction");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(first.repository_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("prepare Repository inside rolled-back invariant transaction");
     let first_sequence = allocate_conversation_sequence(&mut transaction, first.thread_id)
         .await
         .expect("first sequence");

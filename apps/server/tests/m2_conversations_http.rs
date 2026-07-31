@@ -43,6 +43,8 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         include_str!("../migrations/0006_m2_message_mentions_projection.sql"),
         include_str!("../migrations/0007_m2_archived_parent_navigation.sql"),
         include_str!("../migrations/0008_m2_conversation_lock_boundaries.sql"),
+        include_str!("../migrations/0009_m3_execution_foundation.sql"),
+        include_str!("../migrations/0010_m3_execution_admission_hardening.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)
