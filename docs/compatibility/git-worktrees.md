@@ -40,5 +40,5 @@ changes. No dirty worktree is reset or deleted automatically.
 Deterministic temporary-repository tests prove mirror creation, exact base
 capture, two concurrently requested linked worktrees, collision-safe unique
 branches, scoped locking, unsafe input rejection, dirty preservation, clean
-removal, and prune. The same suite is rerun with Git 2.47.3 on the Red Hat host
-before M0 acceptance.
+removal, and prune. The complete suite passed on macOS and on the Red Hat 10.1
+ARM64 validation host with `git version 2.47.3` at commit `3117b81`.
