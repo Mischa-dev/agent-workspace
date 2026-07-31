@@ -4,6 +4,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
+    git_runtime::expected_repository_mirror_path,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
     router,
@@ -142,12 +143,8 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
     };
     create_test_mirror(
         harness.temporary_root.path(),
-        &harness
-            .config
-            .data_root
-            .join("repositories")
-            .join("m0-spike")
-            .join("mirror.git"),
+        &expected_repository_mirror_path(&harness.config.data_root, harness.seed.repository_id)
+            .expect("canonical Provider Session mirror path"),
     );
 
     let response = harness

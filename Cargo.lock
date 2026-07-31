@@ -12,6 +12,7 @@ dependencies = [
  "base64 0.22.1",
  "codex-bridge-spike",
  "dotenvy",
+ "fs2",
  "futures-util",
  "http",
  "rand_core 0.6.4",

@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { ExecutionAccountSettings } from '../execution/ExecutionAccountSettings'
+import { RepositorySettings } from '../repositories/RepositorySettings'
 import { AppShell } from '../shell/AppShell'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import { ProjectContextDrawer } from './ProjectContextDrawer'
@@ -146,6 +147,15 @@ export function ProjectSettingsPage() {
             actorId={session.user.actorId}
             projectId={project.data.id}
           />
+        </section>
+
+        <section aria-labelledby="repositories-heading" className="page-section">
+          <h2 id="repositories-heading">Repositories</h2>
+          <p>
+            Register trusted code boundaries and prepare their service-owned
+            mirrors before starting hosted runs.
+          </p>
+          <RepositorySettings projectId={project.data.id} />
         </section>
 
         {project.data.capabilities.archive && !project.data.archivedAt && (

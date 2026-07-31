@@ -289,10 +289,8 @@ async fn start_agent_run(
     let worktree_id = Uuid::now_v7();
     let branch = git_runtime::unique_run_branch(&setup.project_key)?;
     let data_root = git_runtime::absolute_runtime_path(&state.config.data_root)?;
-    let worktree_path = data_root
-        .join("worktrees")
-        .join(setup.repository_id.to_string())
-        .join(run_id.to_string());
+    let worktree_path =
+        git_runtime::managed_worktree_path(&data_root, setup.repository_id, workspace_id)?;
 
     let mut transaction = state.pool.begin().await?;
     guard_conversation_mutation(

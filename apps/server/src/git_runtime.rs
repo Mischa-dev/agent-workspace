@@ -1,14 +1,160 @@
 use std::{
-    fs,
+    ffi::{OsStr, OsString},
+    fs::{self, OpenOptions},
+    io::Read,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output, Stdio},
+    thread,
 };
 
+use fs2::FileExt;
 use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::{
+    error::AppError,
+    profile_runtime::{prepare_private_profile_directory, resolve_path_within_data_root},
+};
 
 const MAX_GIT_ERROR_BYTES: usize = 8 * 1024;
+const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct RegisteredRepository {
+    pub id: Uuid,
+    pub clone_url: String,
+    pub default_branch: String,
+    pub mirror_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedRepository {
+    pub base_commit: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorktreeInspection {
+    pub dirty: bool,
+    pub branch: String,
+}
+
+pub fn expected_repository_mirror_path(
+    data_root: &Path,
+    repository_id: Uuid,
+) -> Result<PathBuf, AppError> {
+    let data_root = absolute_runtime_path(data_root)?;
+    let repository_root = prepare_private_profile_directory(
+        &data_root,
+        &data_root.join("repositories"),
+        &repository_id.to_string(),
+    )?;
+    Ok(repository_root.join("mirror.git"))
+}
+
+pub fn managed_worktree_path(
+    data_root: &Path,
+    repository_id: Uuid,
+    workspace_id: Uuid,
+) -> Result<PathBuf, AppError> {
+    let data_root = absolute_runtime_path(data_root)?;
+    let repository_root = prepare_private_profile_directory(
+        &data_root,
+        &data_root.join("worktrees"),
+        &repository_id.to_string(),
+    )?;
+    let candidate = repository_root.join(workspace_id.to_string());
+    let canonical_data_root = data_root
+        .canonicalize()
+        .map_err(|_| AppError::Internal("canonicalize worktree data root"))?;
+    resolve_path_within_data_root(&canonical_data_root, &candidate)
+}
+
+pub fn prepare_repository(
+    data_root: &Path,
+    repository: &RegisteredRepository,
+) -> Result<PreparedRepository, AppError> {
+    let data_root = absolute_runtime_path(data_root)?;
+    let repository_root = prepare_private_profile_directory(
+        &data_root,
+        &data_root.join("repositories"),
+        &repository.id.to_string(),
+    )?;
+    let expected_mirror = repository_root.join("mirror.git");
+    if repository.mirror_path != expected_mirror {
+        return Err(AppError::Conflict(
+            "repository",
+            "stored mirror path does not match the runtime root",
+        ));
+    }
+    let _lock = repository_lock(&repository_root)?;
+    if repository.mirror_path.exists() {
+        validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
+    } else {
+        run_git([
+            OsString::from("clone"),
+            OsString::from("--mirror"),
+            OsString::from("--no-local"),
+            OsString::from("--config"),
+            OsString::from("core.hooksPath=/dev/null"),
+            OsString::from(&repository.clone_url),
+            repository.mirror_path.as_os_str().to_owned(),
+        ])?;
+        validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
+    }
+    run_git([
+        OsString::from("--git-dir"),
+        repository.mirror_path.as_os_str().to_owned(),
+        OsString::from("remote"),
+        OsString::from("update"),
+        OsString::from("--prune"),
+        OsString::from("origin"),
+    ])?;
+    let base_commit = resolve_base_commit(&repository.mirror_path, &repository.default_branch)?;
+    Ok(PreparedRepository { base_commit })
+}
+
+pub fn adopt_legacy_mirror(
+    data_root: &Path,
+    repository: &RegisteredRepository,
+    legacy_mirror: &Path,
+) -> Result<PreparedRepository, AppError> {
+    let data_root = absolute_runtime_path(data_root)?;
+    let legacy_mirror = resolve_path_within_data_root(&data_root, legacy_mirror)?;
+    validate_existing_mirror(&legacy_mirror, &repository.clone_url)?;
+    let repository_root = prepare_private_profile_directory(
+        &data_root,
+        &data_root.join("repositories"),
+        &repository.id.to_string(),
+    )?;
+    let expected_mirror = repository_root.join("mirror.git");
+    if repository.mirror_path != expected_mirror {
+        return Err(AppError::Conflict(
+            "repository",
+            "canonical mirror path does not match the runtime root",
+        ));
+    }
+    let _lock = repository_lock(&repository_root)?;
+    if !expected_mirror.exists() {
+        run_git([
+            OsString::from("clone"),
+            OsString::from("--mirror"),
+            OsString::from("--no-local"),
+            legacy_mirror.as_os_str().to_owned(),
+            expected_mirror.as_os_str().to_owned(),
+        ])?;
+        run_git([
+            OsString::from("--git-dir"),
+            expected_mirror.as_os_str().to_owned(),
+            OsString::from("remote"),
+            OsString::from("set-url"),
+            OsString::from("origin"),
+            OsString::from(&repository.clone_url),
+        ])?;
+    }
+    validate_existing_mirror(&expected_mirror, &repository.clone_url)?;
+    let base_commit = resolve_base_commit(&expected_mirror, &repository.default_branch)?;
+    Ok(PreparedRepository { base_commit })
+}
 
 pub fn unique_run_branch(project_key: &str) -> Result<String, AppError> {
     let slug = project_key.to_ascii_lowercase();
@@ -65,6 +211,10 @@ pub fn create_worktree(
         return Err(AppError::Invalid("worktree parent is not canonical"));
     }
 
+    let repository_root = mirror
+        .parent()
+        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+    let _lock = repository_lock(repository_root)?;
     run_git([
         "--git-dir",
         &mirror.to_string_lossy(),
@@ -76,6 +226,97 @@ pub fn create_worktree(
         base_commit,
     ])?;
     Ok(())
+}
+
+pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspection, AppError> {
+    validate_mirror(mirror)?;
+    if !worktree.is_absolute() || !worktree.is_dir() {
+        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+    }
+    let common_dir = run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("rev-parse"),
+        OsString::from("--git-common-dir"),
+    ])?;
+    let common_dir = String::from_utf8(common_dir.stdout)
+        .map_err(|_| AppError::Conflict("git_worktree", "Git metadata is invalid"))?;
+    let common_dir = PathBuf::from(common_dir.trim());
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        worktree.join(common_dir)
+    }
+    .canonicalize()
+    .map_err(|_| AppError::Conflict("git_worktree", "Git metadata is missing"))?;
+    let expected = mirror
+        .canonicalize()
+        .map_err(|_| AppError::Conflict("repository", "mirror is not ready"))?;
+    if common_dir != expected {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "worktree belongs to another repository",
+        ));
+    }
+    let branch = run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("symbolic-ref"),
+        OsString::from("--short"),
+        OsString::from("HEAD"),
+    ])?;
+    let branch = String::from_utf8(branch.stdout)
+        .map_err(|_| AppError::Conflict("git_worktree", "Git branch is invalid"))?
+        .trim()
+        .to_owned();
+    validate_branch(&branch)?;
+    Ok(WorktreeInspection {
+        dirty: worktree_is_dirty(worktree)?,
+        branch,
+    })
+}
+
+pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppError> {
+    let inspection = inspect_worktree(mirror, worktree)?;
+    if inspection.dirty {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "dirty worktree is retained",
+        ));
+    }
+    let repository_root = mirror
+        .parent()
+        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+    let _lock = repository_lock(repository_root)?;
+    run_git([
+        OsString::from("--git-dir"),
+        mirror.as_os_str().to_owned(),
+        OsString::from("worktree"),
+        OsString::from("remove"),
+        worktree.as_os_str().to_owned(),
+    ])?;
+    prune_worktrees_locked(mirror)
+}
+
+pub fn repair_and_prune_worktrees(mirror: &Path, worktree: Option<&Path>) -> Result<(), AppError> {
+    validate_mirror(mirror)?;
+    let repository_root = mirror
+        .parent()
+        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+    let _lock = repository_lock(repository_root)?;
+    if let Some(worktree) = worktree {
+        if !worktree.is_absolute() {
+            return Err(AppError::Invalid("unsafe worktree path"));
+        }
+        run_git([
+            OsString::from("--git-dir"),
+            mirror.as_os_str().to_owned(),
+            OsString::from("worktree"),
+            OsString::from("repair"),
+            worktree.as_os_str().to_owned(),
+        ])?;
+    }
+    prune_worktrees_locked(mirror)
 }
 
 pub fn absolute_runtime_path(path: &Path) -> Result<PathBuf, AppError> {
@@ -109,17 +350,51 @@ fn validate_mirror(mirror: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), AppError> {
+    validate_mirror(mirror)?;
+    let origin = run_git([
+        OsString::from("--git-dir"),
+        mirror.as_os_str().to_owned(),
+        OsString::from("remote"),
+        OsString::from("get-url"),
+        OsString::from("origin"),
+    ])?;
+    let origin = String::from_utf8(origin.stdout)
+        .map_err(|_| AppError::Conflict("repository", "origin is invalid"))?;
+    if origin.trim() != expected_origin {
+        return Err(AppError::Conflict(
+            "repository",
+            "mirror origin does not match registration",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_ref(value: &str) -> Result<(), AppError> {
     if value.is_empty()
+        || value.len() > 255
+        || value == "@"
         || value.starts_with('-')
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.ends_with('.')
+        || value.contains("//")
         || value.contains("..")
         || value.contains("@{")
-        || value.contains('\\')
-        || value.chars().any(char::is_whitespace)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
+        || value.split('/').any(|component| {
+            component.is_empty() || component.starts_with('.') || component.ends_with(".lock")
+        })
     {
         return Err(AppError::Invalid("unsafe Git reference"));
     }
     Ok(())
+}
+
+pub fn validate_registered_ref(value: &str) -> Result<(), AppError> {
+    validate_ref(value)
 }
 
 fn validate_branch(value: &str) -> Result<(), AppError> {
@@ -129,8 +404,44 @@ fn validate_branch(value: &str) -> Result<(), AppError> {
     validate_ref(value)
 }
 
-fn run_git<const N: usize>(arguments: [&str; N]) -> Result<std::process::Output, AppError> {
-    let output = Command::new("/usr/bin/git")
+fn repository_lock(repository_root: &Path) -> Result<RepositoryLock, AppError> {
+    if !repository_root.is_absolute() || !repository_root.is_dir() {
+        return Err(AppError::Invalid("unsafe repository root"));
+    }
+    let path = repository_root.join("metadata.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| AppError::Internal("open repository metadata lock"))?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| AppError::Internal("protect repository metadata lock"))?;
+    file.lock_exclusive()
+        .map_err(|_| AppError::Internal("lock repository metadata"))?;
+    Ok(RepositoryLock { file })
+}
+
+fn prune_worktrees_locked(mirror: &Path) -> Result<(), AppError> {
+    run_git([
+        OsString::from("--git-dir"),
+        mirror.as_os_str().to_owned(),
+        OsString::from("worktree"),
+        OsString::from("prune"),
+        OsString::from("--expire=now"),
+    ])?;
+    Ok(())
+}
+
+fn run_git<I, S>(arguments: I) -> Result<Output, AppError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new("/usr/bin/git");
+    command
         .args(arguments)
         .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -138,24 +449,93 @@ fn run_git<const N: usize>(arguments: [&str; N]) -> Result<std::process::Output,
         .env("LC_ALL", "C.UTF-8")
         .env("HOME", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "2")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "/dev/null")
+        .env("GIT_CONFIG_KEY_1", "credential.helper")
+        .env("GIT_CONFIG_VALUE_1", "")
+        .env("GIT_ASKPASS", "/bin/false")
+        .env("GIT_SSH_COMMAND", "/bin/false")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
         .map_err(|_| AppError::Internal("start Git"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(AppError::Internal("capture Git stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(AppError::Internal("capture Git stderr"))?;
+    let stdout_reader = thread::spawn(move || bounded_read(stdout, MAX_GIT_OUTPUT_BYTES));
+    let stderr_reader = thread::spawn(move || bounded_read(stderr, MAX_GIT_ERROR_BYTES));
+    let status = child
+        .wait()
+        .map_err(|_| AppError::Internal("wait for Git"))?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| AppError::Internal("join Git stdout reader"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| AppError::Internal("join Git stderr reader"))??;
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
     if output.status.success() {
         return Ok(output);
     }
-    let stderr = &output.stderr[..output.stderr.len().min(MAX_GIT_ERROR_BYTES)];
+    let stderr_bytes = output.stderr.len().min(MAX_GIT_ERROR_BYTES);
     tracing::warn!(
-        stderr = %String::from_utf8_lossy(stderr),
+        stderr_bytes,
+        truncated = output.stderr.len() > MAX_GIT_ERROR_BYTES,
         "bounded Git command failed"
     );
     Err(AppError::Conflict("repository", "Git operation failed"))
 }
 
+fn bounded_read(mut input: impl Read, maximum: usize) -> Result<Vec<u8>, AppError> {
+    let mut bytes = Vec::with_capacity(maximum.min(16 * 1024));
+    input
+        .by_ref()
+        .take(u64::try_from(maximum).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| AppError::Conflict("repository", "Git output could not be read"))?;
+    if bytes.len() > maximum {
+        return Err(AppError::Conflict(
+            "repository",
+            "Git output exceeded its bound",
+        ));
+    }
+    Ok(bytes)
+}
+
+struct RepositoryLock {
+    file: fs::File,
+}
+
+impl Drop for RepositoryLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{unique_run_branch, validate_branch, validate_ref, worktree_is_dirty};
-    use std::path::Path;
+    use super::{
+        RegisteredRepository, create_worktree, expected_repository_mirror_path, inspect_worktree,
+        managed_worktree_path, prepare_repository, remove_clean_worktree,
+        repair_and_prune_worktrees, unique_run_branch, validate_branch, validate_ref,
+        worktree_is_dirty,
+    };
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, thread};
+    use uuid::Uuid;
 
     #[test]
     fn rejects_unsafe_refs_and_branches() {
@@ -165,6 +545,10 @@ mod tests {
             "main@{1}",
             "white space",
             r"bad\ref",
+            "main~1",
+            "main:other",
+            "refs/.hidden",
+            "main.lock",
         ] {
             assert!(validate_ref(value).is_err(), "{value}");
         }
@@ -183,5 +567,100 @@ mod tests {
     #[test]
     fn rejects_missing_worktrees_during_inspection() {
         assert!(worktree_is_dirty(Path::new("/definitely/missing/worktree")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepares_canonical_mirror_and_preserves_dirty_parallel_worktrees() {
+        let temporary = tempfile::tempdir().expect("temporary Git runtime root");
+        let data_root = temporary.path().join("data");
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).expect("create source repository");
+        git(&source, ["init", "-b", "main"]);
+        fs::write(source.join("known.txt"), "known\n").expect("write known file");
+        git(&source, ["add", "known.txt"]);
+        git(
+            &source,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+        );
+
+        let repository_id = Uuid::now_v7();
+        let mirror = expected_repository_mirror_path(&data_root, repository_id)
+            .expect("expected mirror path");
+        let repository = RegisteredRepository {
+            id: repository_id,
+            clone_url: source.to_string_lossy().into_owned(),
+            default_branch: "main".to_owned(),
+            mirror_path: mirror.clone(),
+        };
+        let first_preparation =
+            prepare_repository(&data_root, &repository).expect("prepare canonical mirror");
+        let second_preparation =
+            prepare_repository(&data_root, &repository).expect("reuse canonical mirror");
+        assert_eq!(first_preparation, second_preparation);
+        assert_eq!(
+            fs::metadata(mirror.parent().expect("repository root"))
+                .expect("repository root metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        let workspaces = [Uuid::now_v7(), Uuid::now_v7()];
+        let mut workers = Vec::new();
+        for workspace_id in workspaces {
+            let data_root = data_root.clone();
+            let mirror = mirror.clone();
+            let base_commit = first_preparation.base_commit.clone();
+            workers.push(thread::spawn(move || {
+                let worktree = managed_worktree_path(&data_root, repository_id, workspace_id)
+                    .expect("managed worktree path");
+                let branch = unique_run_branch("aw").expect("unique branch");
+                create_worktree(&mirror, &worktree, &branch, &base_commit)
+                    .expect("create linked worktree");
+                (worktree, branch)
+            }));
+        }
+        let created = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("join worktree creator"))
+            .collect::<Vec<_>>();
+        assert_ne!(created[0].0, created[1].0);
+        assert_ne!(created[0].1, created[1].1);
+        for (worktree, branch) in &created {
+            let inspection = inspect_worktree(&mirror, worktree).expect("inspect worktree");
+            assert!(!inspection.dirty);
+            assert_eq!(&inspection.branch, branch);
+        }
+
+        fs::write(created[0].0.join("dirty.txt"), "retain\n").expect("dirty worktree");
+        assert!(remove_clean_worktree(&mirror, &created[0].0).is_err());
+        assert!(created[0].0.exists(), "dirty worktree must be preserved");
+        fs::remove_file(created[0].0.join("dirty.txt")).expect("clean temporary worktree");
+        remove_clean_worktree(&mirror, &created[0].0).expect("remove clean worktree");
+        assert!(!created[0].0.exists());
+        repair_and_prune_worktrees(&mirror, Some(&created[1].0)).expect("repair and prune");
+    }
+
+    #[cfg(unix)]
+    fn git<const N: usize>(repository: &Path, arguments: [&str; N]) {
+        let output = Command::new("/usr/bin/git")
+            .current_dir(repository)
+            .args(arguments)
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("HOME", "/dev/null")
+            .output()
+            .expect("run fixture Git command");
+        assert!(output.status.success());
     }
 }

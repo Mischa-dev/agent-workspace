@@ -33,6 +33,15 @@ async fn main() -> anyhow::Result<()> {
             "prepared legacy execution data for the M3 migration"
         );
     }
+    let repository_preflight = migration_preflight::prepare_m3_repository_upgrade(&pool, &config)
+        .await
+        .context("prepare canonical M3 repository mirrors")?;
+    if repository_preflight.required {
+        tracing::warn!(
+            mirrors_adopted = repository_preflight.mirrors_adopted,
+            "prepared retained repository mirrors for the canonical M3 layout"
+        );
+    }
 
     sqlx::migrate!()
         .run(&pool)
