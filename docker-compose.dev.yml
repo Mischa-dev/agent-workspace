@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    environment:
+      POSTGRES_DB: agent_workspace
+      POSTGRES_PASSWORD: ${AGENT_WORKSPACE_POSTGRES_PASSWORD:-change-me}
+      POSTGRES_USER: agent_workspace
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_workspace -d agent_workspace"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:55432:5432"
+    restart: unless-stopped
+    volumes:
+      - agent-workspace-postgres:/var/lib/postgresql/data
+
+volumes:
+  agent-workspace-postgres:

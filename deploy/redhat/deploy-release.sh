@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly checkout_root="${1:-/home/bot/deployments/agent-workspace}"
+readonly commit_sha="$(git -C "${checkout_root}" rev-parse HEAD)"
+readonly install_root="/opt/agent-workspace"
+readonly release_root="${install_root}/releases/${commit_sha}"
+readonly node_bin="${install_root}/toolchains/node-v24.18.1-linux-arm64/bin"
+
+if [[ -n "$(git -C "${checkout_root}" status --porcelain)" ]]; then
+  echo "Refusing to deploy a dirty checkout." >&2
+  exit 1
+fi
+
+export PATH="${node_bin}:${PATH}"
+export COREPACK_HOME="${checkout_root}/.corepack"
+
+cd "${checkout_root}"
+corepack prepare pnpm@11.18.0 --activate
+pnpm install --frozen-lockfile
+pnpm build
+cargo build --release --locked -p agent-workspace-server
+
+sudo install -d -m 0755 "${release_root}/bin" "${release_root}/web"
+sudo install -m 0755 \
+  target/release/agent-workspace-server \
+  "${release_root}/bin/agent-workspace-server"
+sudo cp -R apps/web/dist/. "${release_root}/web/"
+sudo chown -R root:root "${release_root}"
+
+sudo ln -sfn "${release_root}" "${install_root}/current.next"
+sudo mv -Tf "${install_root}/current.next" "${install_root}/current"
+sudo systemctl restart agent-workspace.service
+sudo systemctl --no-pager --full status agent-workspace.service
