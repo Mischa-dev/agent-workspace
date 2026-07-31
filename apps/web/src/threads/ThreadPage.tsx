@@ -5,10 +5,16 @@ import {
   useRef,
   useState,
 } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Navigate, useParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Navigate,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProject } from '../projects/hooks'
@@ -19,38 +25,26 @@ import {
 } from '../projects/ProjectOverviewPage'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
-import { coalesceDeltaBatch } from '../app/streaming'
-
-type Actor = {
-  id: string
-  kind: string
-  displayName: string
-  handle: string
-}
-
-type Message = {
-  id: string
-  author: Actor
-  content: unknown
-  plainText: string
-}
-
-type WorkerEvent = {
-  id: string
-  agentRunId: string
-  kind: string
-  summary: string
-  payload: Record<string, unknown>
-}
-
-type TimelineEntry = {
-  id: string
-  sequence: number
-  kind: 'message' | 'worker_event' | 'system'
-  createdAt: string
-  message: Message | null
-  workerEvent: WorkerEvent | null
-}
+import { MessageContent } from '../conversations/MessageContent'
+import {
+  isSafeMessageText,
+  messageTextScalarValues,
+} from '../conversations/messageContentModel'
+import { StructuredComposer } from '../conversations/StructuredComposer'
+import { SystemTimelineEntry } from '../conversations/SystemTimelineEntry'
+import type { ComposerSubmission } from '../conversations/composerModel'
+import {
+  archiveConversation,
+  markConversationSeen,
+  normalizeTimelinePage,
+  searchMentionableActors,
+  sendConversationMessage,
+} from '../conversations/api'
+import type {
+  ConversationTimelineEntry,
+  ConversationTimelinePage,
+} from '../conversations/types'
+import { useConversationRealtime } from '../realtime/realtimeContext'
 
 type RunState =
   | 'created'
@@ -93,18 +87,22 @@ type Approval = {
 }
 
 type Timeline = {
-  conversation: {
-    id: string
-    projectId: string
-    kind: string
-    parentChannelId: string | null
-    name: string
+  conversation: ConversationTimelinePage['conversation']
+  entries: ConversationTimelineEntry[]
+  nextCursor: string | null
+  highestSequence: number
+  readState: {
+    highestSeenSequence: number
+    version: number
   }
-  entries: TimelineEntry[]
   activeRun: Run | null
   approvals: Approval[]
   capabilities: {
     workerInvoke: boolean
+    view: boolean
+    sendMessage: boolean
+    archive: boolean
+    markSeen: boolean
   }
 }
 
@@ -121,11 +119,6 @@ const stateLabels: Record<RunState, string> = {
   interrupted: 'Interrupted',
 }
 
-function websocketUrl() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}/api/v1/realtime`
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object'
     ? (value as Record<string, unknown>)
@@ -138,13 +131,7 @@ function explicitCapability(value: unknown, name: string) {
 
 function normalizeTimeline(value: unknown): Timeline {
   const record = asRecord(value)
-  const conversation = asRecord(record.conversation)
-  if (
-    typeof conversation.id !== 'string' ||
-    typeof conversation.projectId !== 'string'
-  ) {
-    throw new Error('Timeline response is missing its conversation boundary.')
-  }
+  const durable = normalizeTimelinePage(value)
   const activeRunRecord = asRecord(record.activeRun)
   const activeRun =
     typeof activeRunRecord.id === 'string'
@@ -176,13 +163,11 @@ function normalizeTimeline(value: unknown): Timeline {
         )
     : []
   return {
-    conversation: conversation as Timeline['conversation'],
-    entries: Array.isArray(record.entries)
-      ? (record.entries as TimelineEntry[])
-      : [],
+    ...durable,
     activeRun,
     approvals,
     capabilities: {
+      ...durable.capabilities,
       workerInvoke: explicitCapability(
         record.capabilities,
         'workerInvoke',
@@ -191,125 +176,32 @@ function normalizeTimeline(value: unknown): Timeline {
   }
 }
 
-function useThread(projectId: string, threadId: string) {
+function useThread(
+  projectId: string,
+  threadId: string,
+  includeArchived: boolean,
+) {
   const timeline = useQuery({
-    queryKey: queryKeys.timeline(projectId, threadId),
+    queryKey: queryKeys.timeline(projectId, threadId, includeArchived),
     queryFn: async () =>
       normalizeTimeline(
         await requestJson<unknown>(
-          `/api/v1/conversations/${encodeURIComponent(threadId)}/timeline`,
+          `/api/v1/conversations/${encodeURIComponent(threadId)}/timeline${
+            includeArchived ? '?includeArchived=true' : ''
+          }`,
         ),
       ),
     enabled: Boolean(threadId),
     retry: false,
   })
-  const projectMatches = timeline.data?.conversation.projectId === projectId
-  const [streamingState, setStreamingState] = useState<{
-    threadId: string
-    messages: Record<string, string>
-  }>({ threadId: '', messages: {} })
-  const [connectionState, setConnectionState] = useState<{
-    threadId: string
-    status: 'connecting' | 'live' | 'retrying'
-  }>({ threadId: '', status: 'connecting' })
-  const reconnectAttempt = useRef(0)
-
-  useEffect(() => {
-    if (!threadId || !projectMatches) return
-    let disposed = false
-    let socket: WebSocket | undefined
-    let retry: number | undefined
-    let streamFrame: number | undefined
-    let pendingDeltas: Record<string, string> = {}
-
-    const queueDelta = (messageId: string, delta: string) => {
-      pendingDeltas[messageId] = `${pendingDeltas[messageId] ?? ''}${delta}`
-      if (streamFrame !== undefined) return
-      streamFrame = window.requestAnimationFrame(() => {
-        const batch = pendingDeltas
-        pendingDeltas = {}
-        streamFrame = undefined
-        setStreamingState((current) => ({
-          threadId,
-          messages: coalesceDeltaBatch(
-            current.threadId === threadId ? current.messages : {},
-            batch,
-          ),
-        }))
-      })
-    }
-
-    const connect = () => {
-      if (disposed) return
-      setConnectionState({
-        threadId,
-        status:
-          reconnectAttempt.current === 0 ? 'connecting' : 'retrying',
-      })
-      socket = new WebSocket(websocketUrl())
-      socket.addEventListener('open', () => {
-        reconnectAttempt.current = 0
-        setConnectionState({ threadId, status: 'live' })
-        setStreamingState({ threadId, messages: {} })
-        void timeline.refetch()
-      })
-      socket.addEventListener('message', (event) => {
-        let payload: {
-          kind?: string
-          conversation_id?: string
-          conversationId?: string
-          payload?: { message_id?: string; delta?: string }
-        }
-        try {
-          payload = JSON.parse(String(event.data)) as typeof payload
-        } catch {
-          return
-        }
-        const conversationId =
-          payload.conversation_id ?? payload.conversationId
-        if (conversationId !== threadId) return
-        if (
-          payload.kind === 'message.delta' &&
-          payload.payload?.message_id &&
-          typeof payload.payload.delta === 'string'
-        ) {
-          queueDelta(payload.payload.message_id, payload.payload.delta)
-          return
-        }
-        setStreamingState({ threadId, messages: {} })
-        void timeline.refetch()
-      })
-      socket.addEventListener('close', () => {
-        if (disposed) return
-        reconnectAttempt.current += 1
-        setConnectionState({ threadId, status: 'retrying' })
-        void timeline.refetch()
-        const delay = Math.min(1_000 * 2 ** reconnectAttempt.current, 10_000)
-        retry = window.setTimeout(connect, delay)
-      })
-    }
-
-    connect()
-    return () => {
-      disposed = true
-      if (retry) window.clearTimeout(retry)
-      if (streamFrame !== undefined) window.cancelAnimationFrame(streamFrame)
-      socket?.close()
-    }
-    // The query's stable refetch function is intentionally scoped to this Thread.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectMatches, threadId])
+  const routeMatches = Boolean(
+    timeline.data?.conversation.projectId === projectId &&
+      timeline.data.conversation.id === threadId &&
+      timeline.data.conversation.kind === 'thread',
+  )
 
   return {
-    connection:
-      connectionState.threadId === threadId
-        ? connectionState.status
-        : 'connecting',
-    projectMatches,
-    streaming:
-      projectMatches && streamingState.threadId === threadId
-        ? streamingState.messages
-        : {},
+    routeMatches,
     timeline,
   }
 }
@@ -317,21 +209,35 @@ function useThread(projectId: string, threadId: string) {
 export function ThreadPage() {
   const session = useAuthenticatedSession()
   const { projectId = '', threadId = '' } = useParams()
+  const [searchParams] = useSearchParams()
+  const includeArchived = searchParams.get('includeArchived') === 'true'
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const project = useProject(projectId)
-  const thread = useThread(projectId, threadId)
+  const thread = useThread(projectId, threadId, includeArchived)
+  const realtime = useConversationRealtime(threadId)
   const timeline = thread.timeline.data
-  const verifiedTimeline = thread.projectMatches ? timeline : undefined
+  const verifiedTimeline = thread.routeMatches ? timeline : undefined
   const activeRun = verifiedTimeline?.activeRun ?? null
   const [prompt, setPrompt] = useState('')
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [olderEntries, setOlderEntries] = useState<{
+    threadId: string
+    entries: ConversationTimelineEntry[]
+    nextCursor: string | null
+  }>({ threadId: '', entries: [], nextCursor: null })
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const markedSeen = useRef({ threadId: '', sequence: 0 })
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'thread', conversationId: threadId },
     project.isSuccess &&
       project.data.capabilities.navigationWrite &&
       thread.timeline.isSuccess &&
-      thread.projectMatches,
+      thread.routeMatches &&
+      !includeArchived &&
+      !verifiedTimeline?.conversation.archivedAt,
     project.data?.navigation,
   )
 
@@ -342,6 +248,53 @@ export function ThreadPage() {
       ),
     [verifiedTimeline],
   )
+  const entries = useMemo(() => {
+    const bySequence = new Map<number, ConversationTimelineEntry>()
+    const historical =
+      olderEntries.threadId === threadId ? olderEntries.entries : []
+    for (const entry of [...historical, ...(verifiedTimeline?.entries ?? [])]) {
+      bySequence.set(entry.sequence, entry)
+    }
+    return [...bySequence.values()].sort(
+      (left, right) => left.sequence - right.sequence,
+    )
+  }, [olderEntries, threadId, verifiedTimeline?.entries])
+  const olderCursor =
+    olderEntries.threadId === threadId
+      ? olderEntries.nextCursor
+      : verifiedTimeline?.nextCursor ?? null
+
+  useEffect(() => {
+    if (
+      !verifiedTimeline?.capabilities.markSeen ||
+      verifiedTimeline.highestSequence <=
+        verifiedTimeline.readState.highestSeenSequence ||
+      (markedSeen.current.threadId === threadId &&
+        verifiedTimeline.highestSequence <= markedSeen.current.sequence) ||
+      entries.at(-1)?.sequence !== verifiedTimeline.highestSequence
+    ) {
+      return
+    }
+    markedSeen.current = {
+      threadId,
+      sequence: verifiedTimeline.highestSequence,
+    }
+    void markConversationSeen({
+      conversationId: threadId,
+      highestSeenSequence: verifiedTimeline.highestSequence,
+    })
+      .then(() =>
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.conversationSidebarRoot(projectId),
+        }),
+      )
+      .catch(() => {
+        markedSeen.current = {
+          threadId,
+          sequence: verifiedTimeline.readState.highestSeenSequence,
+        }
+      })
+  }, [entries, projectId, queryClient, threadId, verifiedTimeline])
 
   const perform = async (key: string, action: () => Promise<unknown>) => {
     setBusyAction(key)
@@ -363,7 +316,7 @@ export function ThreadPage() {
       return
     }
     const value = prompt.trim()
-    if (!value) return
+    if (!value || !isSafeMessageText(value)) return
     void perform('start', () =>
       requestJson(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, {
         method: 'POST',
@@ -405,7 +358,69 @@ export function ThreadPage() {
     )
   }
 
-  if (thread.timeline.isSuccess && !thread.projectMatches) {
+  const loadOlder = async () => {
+    if (!olderCursor || loadingOlder) return
+    setLoadingOlder(true)
+    setActionError(null)
+    try {
+      const parameters = new URLSearchParams({
+        limit: '50',
+        cursor: olderCursor,
+      })
+      if (includeArchived) parameters.set('includeArchived', 'true')
+      const older = normalizeTimeline(
+        await requestJson<unknown>(
+          `/api/v1/conversations/${encodeURIComponent(threadId)}/timeline?${parameters}`,
+        ),
+      )
+      if (
+        older.conversation.id !== threadId ||
+        older.conversation.projectId !== projectId ||
+        older.conversation.kind !== 'thread'
+      ) {
+        throw new Error('Older timeline page crossed its Project boundary.')
+      }
+      setOlderEntries((current) => ({
+        threadId,
+        entries: [
+          ...older.entries,
+          ...(current.threadId === threadId ? current.entries : []),
+        ],
+        nextCursor: older.nextCursor,
+      }))
+    } catch (reason) {
+      setActionError(
+        reason instanceof Error ? reason.message : 'Older Messages could not load.',
+      )
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+
+  const sendMessage = async (submission: ComposerSubmission) => {
+    await sendConversationMessage({
+      conversationId: threadId,
+      kind: 'thread',
+      ...submission,
+    })
+    await thread.timeline.refetch()
+  }
+
+  if (isApiError(thread.timeline.error) && thread.timeline.error.status === 404) {
+    const parent = verifiedTimeline?.conversation.parentChannelId ?? null
+    return (
+      <Navigate
+        replace
+        to={
+          parent
+            ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parent)}`
+            : `/projects/${encodeURIComponent(projectId)}`
+        }
+      />
+    )
+  }
+
+  if (thread.timeline.isSuccess && !thread.routeMatches) {
     return (
       <Navigate
         replace
@@ -449,6 +464,9 @@ export function ThreadPage() {
       context={context}
       mainClassName="workspace thread-workspace"
       project={project.data}
+      selectedChannelId={
+        verifiedTimeline?.conversation.parentChannelId ?? undefined
+      }
       thread={
         verifiedTimeline ? { id: threadId, name: threadName } : null
       }
@@ -464,12 +482,36 @@ export function ThreadPage() {
           <div className="header-status">
             <span
               className="connection-state"
-              data-connection={thread.connection}
+              data-connection={realtime.connection}
             >
               <span aria-hidden="true">●</span>{' '}
-              {thread.connection === 'live' ? 'Live' : 'Reconnecting'}
+              {realtime.connection === 'live' ? 'Live' : 'Reconnecting'}
             </span>
             <RunBadge run={activeRun} />
+            {verifiedTimeline.capabilities.archive &&
+            !verifiedTimeline.conversation.archivedAt ? (
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  void archiveConversation({
+                    conversationId: threadId,
+                    kind: 'thread',
+                    expectedVersion: verifiedTimeline.conversation.version ?? 1,
+                  }).then(() => {
+                    const parent = verifiedTimeline.conversation.parentChannelId
+                    navigate(
+                      parent
+                        ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parent)}`
+                        : `/projects/${encodeURIComponent(projectId)}`,
+                      { replace: true },
+                    )
+                  })
+                }}
+                type="button"
+              >
+                Archive Thread
+              </button>
+            ) : null}
           </div>
         )}
       </header>
@@ -479,6 +521,16 @@ export function ThreadPage() {
         className="timeline"
         data-empty={!verifiedTimeline?.entries.length}
       >
+        {olderCursor ? (
+          <button
+            className="load-older-button"
+            disabled={loadingOlder}
+            onClick={() => void loadOlder()}
+            type="button"
+          >
+            {loadingOlder ? 'Loading…' : 'Load older Messages'}
+          </button>
+        ) : null}
         {thread.timeline.isPending && <TimelineSkeleton />}
         {thread.timeline.isError && (
           <div className="error-state" role="alert">
@@ -506,10 +558,10 @@ export function ThreadPage() {
               </p>
             </div>
           )}
-        {verifiedTimeline?.entries.map((entry) => (
+        {entries.map((entry) => (
           <TimelineItem entry={entry} key={entry.id} />
         ))}
-        {Object.entries(thread.streaming).map(([messageId, text]) => (
+        {Object.entries(realtime.streaming).map(([messageId, text]) => (
           <article
             className="message worker-message streaming-message"
             key={messageId}
@@ -537,13 +589,22 @@ export function ThreadPage() {
         </p>
       </div>
 
+      {verifiedTimeline?.capabilities.sendMessage &&
+      !verifiedTimeline.conversation.archivedAt ? (
+        <StructuredComposer
+          onSubmit={sendMessage}
+          searchActors={async (query) =>
+            (await searchMentionableActors(projectId, query)).actors
+          }
+        />
+      ) : null}
+
       {showComposer && (
         <form className="composer" onSubmit={startRun}>
           <label htmlFor="agent-prompt">Ask the execution worker</label>
           <textarea
             disabled={Boolean(activeRun) || busyAction === 'start'}
             id="agent-prompt"
-            maxLength={20_000}
             onChange={(event) => setPrompt(event.target.value)}
             placeholder={
               activeRun
@@ -554,7 +615,9 @@ export function ThreadPage() {
             value={prompt}
           />
           <div className="composer-actions">
-            <span>{prompt.length.toLocaleString()} / 20,000</span>
+            <span>
+              {messageTextScalarValues(prompt).toLocaleString()} / 20,000
+            </span>
             {activeRun ? (
               <button
                 className="danger-button"
@@ -569,7 +632,11 @@ export function ThreadPage() {
             ) : (
               <button
                 className="primary-button"
-                disabled={!prompt.trim() || busyAction === 'start'}
+                disabled={
+                  !prompt.trim() ||
+                  !isSafeMessageText(prompt.trim()) ||
+                  busyAction === 'start'
+                }
                 type="submit"
               >
                 {busyAction === 'start' ? 'Starting…' : 'Start run'}
@@ -606,7 +673,7 @@ function RunBadge({ run }: { run: Run | null }) {
   )
 }
 
-function TimelineItem({ entry }: { entry: TimelineEntry }) {
+function TimelineItem({ entry }: { entry: ConversationTimelineEntry }) {
   if (entry.message) {
     const worker = entry.message.author.kind === 'execution_worker'
     return (
@@ -623,7 +690,13 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
             })}
           </time>
         </header>
-        <p>{entry.message.plainText}</p>
+        <p>
+          <MessageContent
+            actors={entry.message.mentionedActors ?? []}
+            content={entry.message.content}
+            fallbackPlainText={entry.message.plainText}
+          />
+        </p>
       </article>
     )
   }
@@ -646,7 +719,7 @@ function TimelineItem({ entry }: { entry: TimelineEntry }) {
       </article>
     )
   }
-  return null
+  return <SystemTimelineEntry createdAt={entry.createdAt} />
 }
 
 function eventIcon(kind: string) {

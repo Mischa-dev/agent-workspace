@@ -1,9 +1,14 @@
+import { isSafeMessageText } from '../conversations/messageContentModel'
+
 export function coalesceDelta(
   current: Record<string, string>,
   messageId: string,
   delta: string,
 ) {
-  return { ...current, [messageId]: `${current[messageId] ?? ''}${delta}` }
+  const candidate = `${current[messageId] ?? ''}${delta}`
+  return isSafeMessageText(candidate)
+    ? { ...current, [messageId]: candidate }
+    : current
 }
 
 export function coalesceDeltaBatch(
@@ -12,7 +17,8 @@ export function coalesceDeltaBatch(
 ) {
   const next = { ...current }
   for (const [messageId, delta] of Object.entries(pending)) {
-    next[messageId] = `${next[messageId] ?? ''}${delta}`
+    const candidate = `${next[messageId] ?? ''}${delta}`
+    if (isSafeMessageText(candidate)) next[messageId] = candidate
   }
   return next
 }

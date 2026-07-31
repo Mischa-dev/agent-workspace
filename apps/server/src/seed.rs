@@ -9,6 +9,7 @@ use crate::{config::AppConfig, error::AppError};
 #[derive(Debug, Serialize)]
 pub struct DevSeed {
     pub human_actor_id: Uuid,
+    pub collaborator_actor_id: Uuid,
     pub organization_id: Uuid,
     pub project_id: Uuid,
     pub channel_id: Uuid,
@@ -83,6 +84,58 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         "#,
     )
     .bind(human_actor_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    let existing_collaborator_actor = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT pm.actor_id
+          FROM project_memberships pm
+         WHERE pm.project_id = $1
+           AND lower(pm.handle) = 'm2_collaborator'
+        "#,
+    )
+    .bind(project_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let collaborator_actor_id = existing_collaborator_actor.unwrap_or_else(Uuid::now_v7);
+    sqlx::query(
+        r#"
+        INSERT INTO actors (id, kind)
+        VALUES ($1, 'human')
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(collaborator_actor_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO organization_memberships (
+            organization_id, actor_id, role, enabled
+        )
+        VALUES ($1, $2, 'member', true)
+        ON CONFLICT (organization_id, actor_id)
+        DO UPDATE SET enabled = true, updated_at = now()
+        "#,
+    )
+    .bind(organization_id)
+    .bind(collaborator_actor_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO project_memberships (
+            id, project_id, actor_id, role, display_name, handle
+        )
+        VALUES ($1, $2, $3, 'member', 'M2 Collaborator', 'm2_collaborator')
+        ON CONFLICT (project_id, actor_id)
+        DO UPDATE SET enabled = true, updated_at = now()
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(project_id)
+    .bind(collaborator_actor_id)
     .execute(&mut *transaction)
     .await?;
 
@@ -283,6 +336,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
 
     Ok(DevSeed {
         human_actor_id,
+        collaborator_actor_id,
         organization_id,
         project_id,
         channel_id,

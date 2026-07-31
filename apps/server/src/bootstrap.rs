@@ -41,6 +41,10 @@ pub enum BootstrapError {
     AmbiguousAdoption,
     #[error("the selected Actor and Organization are not an eligible active M0 ownership pair")]
     InvalidAdoption,
+    #[error("the selected Actor is not an eligible active development member")]
+    InvalidMemberAdoption,
+    #[error("the selected Actor already has a User account")]
+    MemberAlreadyProvisioned,
     #[error("bootstrap requires an interactive terminal")]
     InteractiveTerminalRequired,
     #[error("the password entries did not match")]
@@ -116,6 +120,22 @@ pub fn parse_command(
         adopt_actor_id,
         organization_id,
     })
+}
+
+pub fn parse_member_command(
+    arguments: impl IntoIterator<Item = String>,
+) -> Result<BootstrapCommand, BootstrapError> {
+    let command = parse_command(arguments)?;
+    if command.adopt_actor_id.is_none()
+        || command.organization_id.is_none()
+        || command.organization_name.is_some()
+        || command.organization_slug.is_some()
+    {
+        return Err(BootstrapError::Usage(
+            "member bootstrap requires --adopt-actor and --organization-id and does not create an Organization",
+        ));
+    }
+    Ok(command)
 }
 
 pub fn read_password_interactively() -> Result<String, BootstrapError> {
@@ -272,6 +292,116 @@ pub async fn bootstrap_admin(
     })
 }
 
+/// Provisions credentials for an existing human Actor during loopback-only
+/// development acceptance. The caller must enforce that runtime boundary.
+pub async fn bootstrap_development_member(
+    pool: &PgPool,
+    command: BootstrapCommand,
+    mut password: String,
+) -> Result<BootstrapResult, BootstrapError> {
+    if let Err(error) = validate_password(&password) {
+        password.zeroize();
+        return Err(error);
+    }
+    let actor_id = command
+        .adopt_actor_id
+        .ok_or(BootstrapError::InvalidMemberAdoption)?;
+    let organization_id = command
+        .organization_id
+        .ok_or(BootstrapError::InvalidMemberAdoption)?;
+    let password_phc = password::hash_password(password).await?;
+
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("agent-workspace.bootstrap-member:{actor_id}"))
+        .execute(&mut *transaction)
+        .await?;
+    let eligible = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM actors actor
+            JOIN organization_memberships organization_member
+              ON organization_member.actor_id = actor.id
+             AND organization_member.organization_id = $2
+             AND organization_member.enabled
+            JOIN projects project ON project.organization_id = $2
+            JOIN project_memberships project_member
+              ON project_member.project_id = project.id
+             AND project_member.actor_id = actor.id
+             AND project_member.enabled
+            WHERE actor.id = $1
+              AND actor.kind = 'human'
+              AND actor.status = 'active'
+        )
+        "#,
+    )
+    .bind(actor_id)
+    .bind(organization_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !eligible {
+        return Err(BootstrapError::InvalidMemberAdoption);
+    }
+    if sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users WHERE actor_id = $1)")
+        .bind(actor_id)
+        .fetch_one(&mut *transaction)
+        .await?
+    {
+        return Err(BootstrapError::MemberAlreadyProvisioned);
+    }
+
+    let user_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO users (id, actor_id, login_name, display_name)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(user_id)
+    .bind(actor_id)
+    .bind(&command.login_name)
+    .bind(&command.display_name)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO user_password_credentials (user_id, password_phc)
+        VALUES ($1, $2)
+        "#,
+    )
+    .bind(user_id)
+    .bind(password_phc)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, authentication_class, action, target_kind,
+            target_id, outcome, metadata
+        )
+        VALUES (
+            $1, $2, 'host_local_bootstrap', 'identity.bootstrap_development_member',
+            'user', $3, 'succeeded', $4
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(actor_id)
+    .bind(user_id)
+    .bind(serde_json::json!({ "organization_id": organization_id }))
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+
+    Ok(BootstrapResult {
+        user_id,
+        actor_id,
+        organization_id,
+        adopted_existing_actor: true,
+    })
+}
+
 async fn select_actor_and_organization(
     transaction: &mut Transaction<'_, Postgres>,
     command: &BootstrapCommand,
@@ -391,7 +521,8 @@ fn normalize_organization_slug(value: String) -> Result<String, BootstrapError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{BootstrapError, parse_command, validate_password};
+    use super::{BootstrapError, parse_command, parse_member_command, validate_password};
+    use uuid::Uuid;
 
     #[test]
     fn command_contains_no_password_option_and_normalizes_non_secret_values() {
@@ -433,5 +564,33 @@ mod tests {
         assert!(validate_password("short").is_err());
         assert!(validate_password("correct horse battery staple").is_ok());
         assert!(validate_password(&"x".repeat(1025)).is_err());
+    }
+
+    #[test]
+    fn member_command_requires_an_existing_actor_and_never_accepts_a_password() {
+        let actor_id = Uuid::now_v7();
+        let organization_id = Uuid::now_v7();
+        let command = parse_member_command([
+            "--login-name".to_owned(),
+            "m2.collaborator".to_owned(),
+            "--display-name".to_owned(),
+            "M2 Collaborator".to_owned(),
+            "--adopt-actor".to_owned(),
+            actor_id.to_string(),
+            "--organization-id".to_owned(),
+            organization_id.to_string(),
+        ])
+        .expect("valid member command");
+        assert_eq!(command.adopt_actor_id, Some(actor_id));
+        assert_eq!(command.organization_id, Some(organization_id));
+        assert!(
+            parse_member_command([
+                "--login-name".to_owned(),
+                "member".to_owned(),
+                "--display-name".to_owned(),
+                "Member".to_owned(),
+            ])
+            .is_err()
+        );
     }
 }

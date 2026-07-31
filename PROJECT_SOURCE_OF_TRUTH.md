@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M1 satisfied; M2 active v0.9
+**Status:** M1 satisfied; M2 active v0.10
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
@@ -12,6 +12,23 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.10 — M2 implementation record and M3 entry backlog
+
+- recorded the implemented M2 Conversation, Message, read-state, outbox,
+  realtime, sidebar, archive, and structured-mention boundaries without
+  declaring M2 accepted before exact-commit host and browser evidence exists
+- fixed the version-one Message AST limits and the Conversation-specific
+  not-found non-disclosure response in the Decision Log
+- recorded at-least-once outbox publication plus reconnect/refetch convergence
+  as the realtime correctness contract
+- preserved the immutable applied M2 migration checksums and recorded the
+  additive `0006` distinct-Actor mention projection plus the `0007`/`0008`
+  archived-parent navigation and transaction-lock boundaries
+- expanded every M3 hosted Execution Worker backlog item with acceptance
+  criteria, dependencies, expected tests, and explicit exclusions
+- retained M3 as unauthorized until the remaining M2 CI, Red Hat deployment,
+  restart, and browser-driven two-Actor gates are accepted
 
 ### v0.9 — M1 acceptance record and M2 authorization
 
@@ -3971,39 +3988,634 @@ Worker invocation, and O-002 inline execution.
 
 ## Milestone M3: Execution Worker and hosted Codex
 
+M3 begins only after every M2 exit criterion is accepted against one exact
+green Red Hat release. It productionizes the hosted-execution slice proven in
+M0; it must evolve those tables, routes, fixtures, and compatibility contracts
+rather than create a second execution path. M3 remains Thread-only. O-002
+continues to prohibit inline Channel execution.
+
 ### M3-001 Execution Worker entity and Actor identity
 
 Create the default Execution Worker with provisional `@agent` handle.
 
+**Acceptance criteria**
+
+- evolve the existing `actors`, `project_memberships`, and
+  `execution_workers` rows so every Worker has one `execution_worker` Actor,
+  one enabled same-Project Worker membership, and one same-Project Provider
+  Connection
+- add an idempotent Project command that creates or returns the default Worker
+  with display name `Agent` and handle `agent`, creating or adopting the one
+  same-Project local Codex Provider Connection in the same transaction; do not
+  create a duplicate when the seed or a retry already established either row
+- enforce same-Project ownership and the reserved Worker membership role in
+  PostgreSQL as well as the domain command; active handles remain
+  case-insensitively unique inside a Project
+- expose bounded Project-scoped Worker identity and capability data to the
+  Thread composer and settings UI without returning provider credentials or
+  provider-private configuration
+- resolve the Worker and requesting Actor server-side when an Agent Run is
+  created; the client may select an authorized Worker ID but cannot submit
+  authorship, requester identity, or delegated authority
+- disabling the Worker, its Actor, or its membership prevents new runs and
+  mentions while retaining historical Messages, runs, approvals, and audit
+  attribution
+
+**Dependencies:** accepted M2 Actor mentions and centralized policy, and the
+existing M0 `execution_workers` and `provider_connections` projections.
+
+**Expected tests:** idempotent default creation, existing-seed adoption,
+same-Project foreign keys, duplicate-handle rejection, disabled Worker and
+membership behavior, spoofed requester/Worker rejection, human/Worker mention
+parity, and retained historical attribution.
+
+**Exclusions:** external agent members, Worker marketplaces, arbitrary custom
+Worker providers, multiple simultaneous Workers per invocation, autonomous
+Worker scheduling, and final product naming.
+
 ### M3-002 Execution Profile schema and isolated CODEX_HOME
+
+Turn the M0 profile fixture into a durable, owner-attributed execution
+configuration without storing provider credentials in PostgreSQL.
+
+**Acceptance criteria**
+
+- append a migration after M2 that evolves `provider_connections` and
+  `execution_profiles` with optimistic versioning, enabled/availability state,
+  owning Actor, safe account-status metadata, concurrency limit, last health
+  time, and bounded failure category
+- keep `kind = codex_app_server` and `host = local_project_host` for M3; record
+  the exact provider capability set and pinned binary version on the
+  connection
+- generate each profile's absolute `CODEX_HOME` beneath the configured data
+  root, reject caller-provided filesystem paths, create it with service-account
+  ownership and owner-only permissions, and prevent path escape or symlink
+  substitution
+- store provider credential files only inside that profile directory; database
+  rows, browser DTOs, logs, audit metadata, and diagnostics contain status and
+  redacted categories only
+- select the solo profile deterministically and reject an unavailable,
+  disabled, foreign-Project, or wrong-owner profile before queue admission
+- keep the technical-alpha concurrency limit at one active provider turn per
+  profile and make the global host limit a bounded typed configuration value
+
+**Dependencies:** M3-001 Worker ownership, the accepted M0 App Server
+compatibility record, configured runtime/data roots, and host service-account
+permissions.
+
+**Expected tests:** migration of the M0 fixture, idempotent profile creation,
+same-Project and owner constraints, generated-path containment, symlink/path
+escape rejection, permission checks, status-only serialization, secret
+redaction, disabled/unavailable selection, and concurrency-bound validation.
+
+**Exclusions:** shared personal credentials, O-003 team profile policy, public
+multi-tenant credential isolation, remote provider hosts, billing, and provider
+version upgrades.
 
 ### M3-003 Codex process supervisor
 
+Replace per-request process ownership with one bounded supervised App Server
+process per active Execution Profile.
+
+**Acceptance criteria**
+
+- start the pinned Codex binary by verified absolute path, clear the inherited
+  environment, and pass only the profile `CODEX_HOME`, required safe runtime
+  variables, and the worktree `cwd` on each Thread/turn request
+- perform `initialize` with `clientInfo.name = "agent_workspace"`, then send
+  `initialized`, before accepting profile work; keep raw method names and
+  provider JSON inside the adapter module
+- correlate JSONL responses to bounded pending requests and route
+  notifications by provider Thread/turn identity so events cannot cross Agent
+  Runs or Projects
+- enforce protocol-line, pending-request, stderr-buffer, request-timeout, event,
+  and shutdown limits; malformed or oversized provider output fails the
+  affected process without exhausting server resources
+- supervise the process group with bounded exponential restart backoff,
+  graceful shutdown followed by full process-tree termination, and a circuit
+  state visible through redacted profile health
+- admit no more than one active turn per profile in M3; process concurrency is
+  never used as a substitute for the durable scheduler
+
+**Dependencies:** M3-002 isolated profile, committed Codex `0.146.0` schemas
+and compatibility fixtures, the existing bridge implementation, and the
+server's supervised-task shutdown boundary.
+
+**Expected tests:** handshake ordering, request correlation, interleaved
+Thread routing, malformed/oversized lines, bounded stderr, request timeout,
+child-tree shutdown, backoff/circuit behavior, environment allowlist, profile
+isolation, cancellation, and deterministic fake-App-Server fixtures with no
+live credentials in CI.
+
+**Exclusions:** exposing App Server over the network, unpinned provider
+upgrades, multiple active turns per profile, generic all-provider transport,
+and raw provider JSON outside the adapter.
+
 ### M3-004 Codex account setup UI
+
+Provide an authenticated settings flow for preparing and inspecting one
+isolated Execution Profile.
+
+**Acceptance criteria**
+
+- add authorized status, browser-login start, device-code-login start/poll,
+  API-key-login when explicitly selected, and logout commands beneath the
+  Execution Profile resource; every mutation requires session, exact Origin,
+  CSRF, current Project policy, and a bounded idempotency key where retryable
+- return browser callback URLs, device verification URLs/codes, ceremony
+  expiry, account summary, authentication state, and rate-limit summary only;
+  never return cached credentials, API-key contents, cookies, or profile files
+- bind every ceremony to the initiating session, Actor, and Execution Profile,
+  permit only one active ceremony per profile, expire it durably or in bounded
+  server memory, and make cancel/restart behavior explicit
+- support the SSH-forwarded callback path used by the private Red Hat host and
+  the headless device-code path; keep any public callback/tunnel activation an
+  explicit operator checkpoint
+- refresh account and rate-limit state through the pinned `account/read` and
+  `account/rateLimits/read` adapter operations and present unavailable/expired
+  status without leaking provider error bodies
+- make logout stop new admission, terminate the profile supervisor safely,
+  invoke the provider logout operation, and preserve application Threads,
+  Agent Runs, and transcripts
+
+**Dependencies:** M3-002 profile ownership, M3-003 supervisor/account adapter,
+M1 private sessions, and the M0 browser/device authentication evidence.
+
+**Expected tests:** authorization and CSRF, ceremony ownership/expiry,
+concurrent ceremony rejection, bounded device polling, callback state
+validation, status/rate-limit redaction, logout with an active or idle process,
+profile isolation, and manual browser plus device-code acceptance on Red Hat.
+
+**Exclusions:** final team authentication, credential sharing, automatic login,
+API-key purchase or billing changes, OAuth for MCP, and public callback
+exposure without an operator checkpoint.
 
 ### M3-005 Trusted repository registration
 
+Add the Project-owned repository record and UI required before hosted code work
+can leave the development seed.
+
+**Acceptance criteria**
+
+- implement authorized Project repository list, register, and archive commands
+  with optimistic versioning and bounded idempotency; a new registration is
+  `pending` until M3-006 verifies its mirror, and an archived repository remains
+  linked to history but cannot be selected for new runs
+- register immutable GitHub repository identity, normalized owner/name,
+  expected HTTPS clone URL, default branch, trust acknowledgement, enabled
+  state, and server-generated mirror location; clients never submit a host
+  filesystem destination
+- validate supported GitHub HTTPS identity, safe owner/name/ref syntax, and
+  uniqueness inside the Project before any clone or fetch; reject embedded
+  credentials, local/file URLs, SSH command options, and ambiguous remotes
+- make trust explicit in the UI and state that M3 runs repository code under
+  the dedicated service account; only authorized Owner/Admin Actors can change
+  trust or repository registration
+- define the internal activation result consumed by M3-006 so only a verified
+  mirror with the expected `origin` and resolved default branch can change a
+  registration from `pending` to `ready`
+- keep GitHub App installation credentials and pull-request delivery out of the
+  provider environment; M3 may use the already approved private repository
+  access path, while full GitHub delivery remains M5
+
+**Dependencies:** M1 Project settings/policy, the M0 Git and GitHub spike
+results, the existing repository projection, and configured repository roots.
+
+**Expected tests:** valid registration and idempotent replay, duplicate and
+cross-Project rejection, role enforcement, unsafe URL/ref/path input,
+credential-bearing URL rejection, pending-to-ready activation authorization,
+remote-identity mismatch result, archive with historical runs, archived
+selection denial, and UI trust disclosure.
+
+**Exclusions:** arbitrary Git hosts, repository creation, GitHub App setup UI,
+pull requests/checks/reviews, submodule guarantees beyond a documented
+fallback, and untrusted public repositories.
+
 ### M3-006 Repository mirror and managed worktree lifecycle
+
+Promote the M0 Git spike into the service-owned repository workspace manager.
+
+**Acceptance criteria**
+
+- create or repair one canonical bare mirror beneath
+  `repositories/<repository-id>/mirror.git`, using a known Git executable,
+  direct argument arrays, sanitized environment, disabled hooks, and validated
+  registered remotes
+- activate a pending repository only after the mirror's `origin` matches the
+  immutable registered identity and the configured default branch resolves;
+  persist a bounded failed state for inspection when preparation fails
+- serialize fetch, branch creation, worktree add/remove, prune, and repair with
+  a short repository-scoped metadata lock; never hold that lock while Codex is
+  executing
+- keep `repository_workspaces` as the logical branch/base-commit owner and
+  `git_worktrees` as the generated physical instance; allow at most one live
+  physical worktree per logical workspace
+- generate all physical paths beneath
+  `worktrees/<repository-id>/<workspace-id>`, reject path escape/symlink
+  substitution, and verify the resulting worktree belongs to the expected
+  mirror and branch
+- inspect and persist ready, dirty, missing, failed, retained, and cleanup
+  state with bounded operator-safe diagnostics; never delete or reset a dirty
+  or failed worktree automatically
+- permit safe removal only when no non-terminal run owns the workspace, the
+  tree is clean, the branch is eligible, and the retention policy is met;
+  prune/repair must preserve recoverable state
+
+**Dependencies:** M3-005 trusted repository identity, the M0 worktree spike
+and compatibility note, the dedicated service account, and generated runtime
+roots.
+
+**Expected tests:** canonical mirror creation, concurrent repository locking,
+two repositories in parallel, one-live-worktree uniqueness, branch/path
+sanitation, hook/config isolation, dirty preservation, safe clean removal,
+missing worktree inspection, prune/repair, crash during creation, and no lock
+held during an execution fixture.
+
+**Exclusions:** hostile-code sandboxing, automatic dirty cleanup, repository
+garbage collection beyond measured need, cross-repository worktrees, and
+authenticated push owned by M5.
 
 ### M3-007 Branch creation and Agent Run workspace selection
 
+Choose and bind one repository, base commit, branch, logical workspace, and
+physical worktree deterministically for each admitted code-changing Thread.
+
+**Acceptance criteria**
+
+- apply the repository precedence from section 15.1: existing Thread binding,
+  explicit authorized selection, future primary Work Item repository, the sole
+  enabled Project repository, otherwise a typed choice-required response; the
+  model never chooses
+- reject an explicit repository that conflicts with a Thread's existing
+  binding and return a `Start a new Thread` action without mutating either
+  Conversation
+- when the scheduler admits a run to `starting`, fetch/resolve the registered
+  default or selected base ref, record the exact commit, allocate a
+  collision-safe branch with a stable opaque suffix, bind the Thread if
+  unbound, and create the logical workspace in one coordinated operation
+- create no mirror mutation or worktree while a run remains `created` or
+  `queued`; compensate a failed physical add by retaining inspectable failed
+  database state rather than silently deleting ownership rows
+- make the run's repository immutable at creation and its workspace immutable
+  once `starting`; the Thread repository is immutable after its first run as
+  already enforced by M2
+- reuse a Thread workspace only after a locked Git inspection proves the
+  branch/worktree is the owned, unmerged, safe continuation; otherwise require
+  a new Thread or allocate a new eligible workspace under the documented rule
+
+**Dependencies:** M3-006 workspace manager, the existing M0 Agent Run and
+transition foundation, the M2 one-active-run constraint, and later M4 primary
+repository as an optional precedence input only when present.
+
+**Expected tests:** every selection-precedence branch, zero/one/multiple
+repository behavior, conflicting Thread binding, exact base commit under a
+concurrent upstream change, branch collision resistance, queued run creating
+no worktree, immutable run/workspace bindings, failed add preservation, and
+safe versus unsafe retry reuse.
+
+**Exclusions:** model-selected repositories, one run spanning repositories,
+automatic rebases, branch merging, pull-request creation, and Work Item schema
+before M4.
+
 ### M3-008 Provider session start and resume
+
+Map one hosted application Thread and Execution Profile to one durable Codex
+provider Thread without conflating either identity.
+
+**Acceptance criteria**
+
+- after the workspace is ready, start or resume through the profile supervisor
+  with the generated worktree as `cwd`, the stored provider capability policy,
+  and the bounded approval/sandbox configuration
+- create `provider_sessions` only from a successful `thread/start` response;
+  on later runs, call `thread/resume` for the exact stored provider Thread and
+  bind the Agent Run only after resume succeeds
+- enforce one Provider Session per `(application Thread, Execution Profile)`;
+  preserve multiple historical Agent Runs against that session and prevent a
+  session from changing application Thread, Project, profile, or repository
+- start one provider turn for the admitted Agent Run, persist its provider turn
+  ID before treating the run as `working`, and route only matching
+  notifications and requests to that run
+- start every turn with the same verified owned worktree; do not pass database,
+  GitHub, browser-session, webhook, MCP, or other profile credentials in the
+  turn environment
+- when start/resume is rejected, preserve the workspace and return a bounded
+  actionable application failure; never invent a replacement provider Thread
+  silently for an existing transcript
+
+**Dependencies:** M3-003 supervisor, M3-007 ready workspace, the existing M0
+Agent Run transition foundation, and the pinned App Server adapter/schema.
+
+**Expected tests:** first `thread/start`, subsequent `thread/resume`, bind only
+after success, turn-ID persistence, duplicate start idempotency, Thread/profile
+uniqueness, wrong-worktree and cross-Project rejection, notification routing,
+environment isolation, provider refusal/timeout, and previous-version resume
+compatibility fixture.
+
+**Exclusions:** Provider Sessions for Channels, silent transcript replacement,
+cross-profile resume, remote Codex Cloud, and flattening provider-specific
+capabilities into generic chat.
 
 ### M3-009 Agent Run lifecycle
 
-Record `requesting_actor_id`, Execution Worker, delegated scope, Execution Profile, Provider Session, and immutable repository selection.
+Make Agent Run creation, durable scheduling, state transitions, and audit
+ownership the single production entry to hosted execution.
+
+**Acceptance criteria**
+
+- evolve `POST /api/v1/threads/:id/agent-runs` into an idempotent authenticated
+  command that records server-resolved `requesting_actor_id`, Execution Worker,
+  delegated-scope snapshot, Execution Profile, immutable repository selection,
+  bounded prompt, and nullable Provider Session/workspace until their start
+  operations succeed
+- enforce transactionally at most one non-terminal run per Thread, one active
+  provider turn per Execution Profile, and the configured global host ceiling;
+  additional eligible runs remain durably `queued` in creation order
+- use the exhaustive state graph in section 13.1 through one centralized domain
+  transition function; every transition validates timestamps/reason shape and
+  writes a significant run event, Conversation entry when user-visible, and
+  outbox invalidation in the same transaction
+- let the scheduler claim queued runs with short database leases and
+  `FOR UPDATE SKIP LOCKED`, recover expired claims, and move a run to `starting`
+  before M3-007 creates its workspace
+- keep terminal runs immutable; a retry always creates a new Agent Run even
+  when a safe Provider Session/workspace is reused
+- return typed run state, capabilities, queue position where meaningful,
+  repository/base/branch ownership, current blocker, and bounded failure reason
+  without raw provider payloads or server filesystem paths
+
+**Dependencies:** M3-001 through M3-008, M2 transactional outbox and ordered
+Conversation entries, and the existing M0 transition tests.
+
+**Expected tests:** exhaustive allowed/forbidden transitions, terminal
+immutability, concurrent one-active-per-Thread creation, idempotent start and
+payload mismatch, profile/global scheduler fairness, lease expiry/recovery,
+queued runs creating no workspace, Actor/scope attribution, disabled Actor or
+Worker, transition/outbox atomicity, and safe DTO redaction.
+
+**Exclusions:** run priorities, scheduled/autonomous runs, multiple active runs
+in one Thread, unbounded queues, external-agent credentials, and inline Channel
+execution.
 
 ### M3-010 Event normalization and ordered timeline persistence
 
+Convert App Server notifications into bounded application events while
+preserving one coherent Conversation timeline.
+
+**Acceptance criteria**
+
+- normalize the event set from section 14.7 inside the Codex adapter and keep
+  raw method names/payload shapes out of Conversation, API, and frontend
+  modules
+- assign each significant event a provider identity or deterministic adapter
+  key, make persistence idempotent, allocate exactly one ordered
+  `conversation_entries.sequence`, and enqueue its realtime invalidation in the
+  same transaction
+- stream `agent_message_delta` ephemerally with bounded coalescing, then persist
+  exactly one consolidated immutable Worker Message and one timeline entry on
+  completion; never store one row per token
+- persist command, file-change, approval/question, test, artifact, completion,
+  and failure summaries as typed significant cards with bounded safe payloads;
+  large output is referenced/lazy rather than embedded without limit
+- treat command and repository output as hostile: strip terminal control
+  sequences, escape in the browser, enforce byte/line limits, and redact known
+  application-owned secrets before persistence or logging
+- retain unknown/malformed provider events only as redacted bounded diagnostics;
+  they do not become ordinary Messages or block later valid events forever
+
+**Dependencies:** M3-003 notification routing, M3-008 turn identity, M3-009
+transitions, M2 Message/outbox/timeline contracts, and the Codex fixtures.
+
+**Expected tests:** every normalized event shape, duplicate and out-of-order
+notification handling, delta coalescing, consolidated Message retry after
+restart, sequence ordering with concurrent human Messages, output/control
+character bounds, secret redaction, unknown event isolation, raw payload
+non-disclosure, and malformed fixture recovery.
+
+**Exclusions:** arbitrary raw-provider event UI, permanent token-delta storage,
+unbounded command logs, complete terminal emulation, semantic interpretation
+of repository output, and GitHub artifact synchronization before M5.
+
 ### M3-011 Streamed Thread UI
+
+Complete the browser Thread loop for starting and observing a real hosted run.
+
+**Acceptance criteria**
+
+- add a Thread-only `Work with Agent` action and bounded prompt composer that
+  presents deterministic repository choice when required, keeps the prompt on
+  retryable failure, and starts through the M3-009 idempotent command
+- render created/queued/starting/working/recovering state, queue text,
+  repository/branch context, coalesced Worker text, and significant provider
+  cards in the existing ordered timeline without replacing ordinary Messages
+- coalesce stream deltas per animation frame or bounded interval, discard
+  duplicates by run/event identity, and reconcile the final durable Worker
+  Message through HTTP without visual duplication
+- after reload, relogin, missed events, or WebSocket reconnect, reconstruct the
+  run and timeline solely from durable HTTP state; ephemeral deltas may be lost
+  without losing correctness
+- collapse large command/file output, use accessible status/live-region rules,
+  preserve focus and keyboard operation, and render hostile output as inert
+  text with non-color state labels
+- keep the Channel composer non-executing; a semantic `@agent` mention may
+  offer `Run in a Thread` but never starts work until the user confirms a Thread
+  and submits the run action
+
+**Dependencies:** M2 Channel/Thread UI and one-session realtime client,
+M3-005 repository choices, M3-009 run API, and M3-010 normalized events.
+
+**Expected tests:** repository-choice prompt, idempotent start retry, each run
+state, delta coalescing/final reconciliation, duplicate/missed event,
+reload/relogin recovery, long hostile output, keyboard and screen-reader
+behavior, narrow viewport, and literal or semantic Channel `@agent` not
+auto-running.
+
+**Exclusions:** final visual design, inline Channel execution, diff review,
+pull-request UI, attachments, offline run creation, and multiple simultaneous
+run panels in one Thread.
 
 ### M3-012 Approval and blocker flow
 
+Make provider approvals and questions durable, Actor-authorized blockers.
+
+**Acceptance criteria**
+
+- create one `agent_approvals` row for each provider approval or question with
+  Agent Run, provider request ID, kind, bounded summary/options, eligible Actor
+  or Project role, human-required/separation-of-duty flags, status, and
+  timestamps; duplicate provider requests return the same row
+- transition the run to `blocked`, add one ordered significant event, and emit
+  an outbox invalidation in the same transaction; the eligible viewing Actor
+  receives response-required attention without exposing hidden provider data
+- implement `POST /api/v1/agent-approvals/:id/respond` with session/Origin/CSRF,
+  bounded idempotency, response-time authorization, typed approval decision or
+  question answer, and server-resolved responder Actor
+- accept the first valid pending-to-resolved response atomically, return the
+  durable result for the same idempotent retry, reject a conflicting later
+  response, and forward to the exact waiting provider request at most once
+- reconcile provider-side resolution arriving before or after the browser
+  response, transition back to `working` only when the turn remains active,
+  and record the answering Actor and normalized resolution event
+- on interruption, denial, revocation, timeout, or recovery failure, resolve or
+  cancel pending approvals explicitly so no stale orange state survives
+
+**Dependencies:** M3-008 request routing, M3-009 state machine, M3-010 ordered
+events, and M2 policy/outbox. M3-013 consumes the durable eligibility and
+resolution state established here.
+
+**Expected tests:** approval and free-text/choice question, eligible and
+ineligible Actors, authorization revoked while pending, concurrent first
+response wins, idempotent same response, conflicting later response, provider
+resolution race, denial/interruption/timeout cleanup, response redaction, and
+two-Actor orange-state isolation.
+
+**Exclusions:** approval delegation outside the Project, public approval links,
+provider policy editing, autonomous approval by the Worker, notifications
+outside the app, and O-003 team service-profile policy.
+
 ### M3-013 Thread attention colors and per-user unseen logic
+
+Replace the M2 interim run-state projection with the complete durable
+per-Actor attention semantics from section 13.2.
+
+**Acceptance criteria**
+
+- derive precedence as response required for this Actor, active, newest failed
+  and unacknowledged, completed after this Actor's read cursor, then inactive
+  and seen; store causes and cursors, never color names
+- add the minimum per-Actor Agent Run acknowledgement record and authorized
+  idempotent acknowledgement command needed for failed-run attention; clients
+  cannot acknowledge for another Actor or before rendering the durable event
+- use approval eligibility for orange response-required state, Agent Run state
+  for blue active state, acknowledgement for red failure state, and
+  `conversation_read_states.highest_seen_sequence` for white completion state
+- treat queued as active with explicit `Queued` text; canceled and interrupted
+  become inactive after their durable entries are seen and retain explicit
+  labels/icons in history
+- preserve the compact selected-Channel recent-five union, deduplication,
+  stable server ordering, Show more/View all, archived filter, and Project
+  scoping established by M2
+- invalidate through the outbox and converge through HTTP refetch so two Actors
+  can hold different attention for the same Thread across reload and reconnect
+
+**Dependencies:** M2 read state/sidebar projection, M3-009 durable run events,
+M3-012 approval eligibility, and one-session realtime invalidation.
+
+**Expected tests:** every precedence state, queued label, addressed versus
+unaddressed blocker, two-Actor failure acknowledgement, completion before/after
+read cursor, canceled/interrupted seen behavior, older failed run versus newer
+active/completed run, compact-list boundaries, duplicate/missed events,
+cross-Project non-disclosure, and non-color accessibility.
+
+**Exclusions:** global Home attention inbox, email/web-push notification,
+presence, read receipts shown to peers, custom Thread pinning, and arbitrary
+attention ranking.
 
 ### M3-014 Interrupt and retry
 
+Provide terminal interruption and explicit new-run retry without destructive
+Git recovery.
+
+**Acceptance criteria**
+
+- keep `POST /api/v1/agent-runs/:id/interrupt` idempotent and Actor-authorized;
+  only a non-terminal visible run can be interrupted, and terminal state never
+  reopens
+- persist `interrupted`, a bounded reason, canceled pending approvals, one
+  significant timeline entry, and outbox invalidation transactionally before
+  or while issuing the bounded provider `turn/interrupt`
+- treat provider interrupt success, timeout, already-terminal response, and
+  process loss as reconciliation inputs; none may reset or delete the owned
+  worktree
+- add an explicit retry command that creates a new Agent Run with a new ID and
+  authorization snapshot while linking its predecessor for history
+- before reusing a Provider Session, branch, logical workspace, or worktree,
+  inspect provider and Git ownership/state; reuse only when the original Thread
+  and repository still match and the state is provably safe
+- preserve dirty/failed worktrees and return an actionable choice when reuse is
+  unsafe; a merged, closed, missing, foreign, or ambiguous workspace is never
+  silently repaired by reset
+
+**Dependencies:** M3-006 inspection, M3-008 provider interrupt/resume, M3-009
+terminal lifecycle, and M3-012 pending-approval cleanup.
+
+**Expected tests:** interrupt from every non-terminal state, terminal repeat,
+unauthorized/cross-Project access, provider success/timeout/crash race,
+transactional approval cleanup, retry creates a distinct run, safe session and
+workspace reuse, dirty/missing/merged rejection, and preserved branch/base
+commit history.
+
+**Exclusions:** pause/resume as a non-terminal user feature, force-killing the
+whole server, automatic reset/rebase, retrying in another repository inside the
+same Thread, and destructive cleanup.
+
 ### M3-015 Provider crash and restart recovery
+
+Generalize the accepted M0 conservative recovery proof across supervised
+profiles, queued runs, durable events, approvals, and managed worktrees.
+
+**Acceptance criteria**
+
+- on application startup, claim every non-terminal run idempotently and move it
+  through `recovering` with a durable event; separately release expired
+  scheduler/outbox leases without duplicating domain work
+- restart the exact Execution Profile supervisor, resume and read the stored
+  provider Thread/turn when available, and inspect the registered mirror,
+  branch, logical workspace, physical worktree, and dirty state
+- complete a run only when provider history proves its turn completed and the
+  consolidated Message/events can be idempotently reconciled; reattach to a
+  still-running turn only when the pinned adapter proves notification routing
+  and turn identity are safe
+- otherwise mark the old run terminal `interrupted` with an actionable bounded
+  reason, cancel pending approvals, return the Provider Session to a consistent
+  state, and preserve the branch/worktree exactly as found
+- make reconciliation re-entrant across a second crash at every checkpoint;
+  duplicate provider events, outbox publication, and Conversation entries must
+  converge through stable identities and unique constraints
+- expose recovery result and safe next action in the Thread UI and redacted
+  operator logs; require no manual database edits or filesystem moves
+
+**Dependencies:** M3-003 supervisor, M3-006 inspection, M3-008 Provider
+Session identity, M3-009 lifecycle/scheduler, M3-010 idempotent events,
+M3-012 approval cleanup, and accepted D-032 behavior.
+
+**Expected tests:** crash before/after workspace add, provider Thread bind, turn
+start, delta, consolidated Message, approval request/response, completion, and
+outbox publish; clean/dirty/missing worktree; provider completed/running/
+interrupted/missing/ambiguous history; second-crash reentrancy; profile session
+state repair; and systemd restart acceptance on Red Hat.
+
+**Exclusions:** inventing provider continuation, deleting or resetting dirty
+state, cross-version resume without compatibility proof, operator database
+repair as an acceptance step, and remote executor failover.
+
+### M3 exit criteria
+
+- an authorized Actor can prepare an isolated Codex Execution Profile, register
+  a trusted repository, open a Thread, select the deterministic repository, and
+  start a real hosted run through the authenticated browser
+- queued admission creates no worktree before `starting`; the admitted run
+  records exact repository, base commit, unique branch, logical workspace,
+  physical worktree, requesting Actor, Worker, delegated scope, profile,
+  Provider Session, and provider turn identity
+- the pinned App Server streams one coalesced Worker Message plus significant
+  command/file/test events into the ordered durable timeline without raw
+  provider payloads, unbounded output, or one row per token
+- two Actors observe correct independent blue, orange, red, white, and gray
+  attention; an eligible Actor can answer one approval/question atomically and
+  an ineligible Actor cannot
+- interruption is terminal, retry creates a new Agent Run, and safe reuse versus
+  dirty/ambiguous preservation is deterministic and requires no destructive
+  cleanup
+- a systemd restart during a non-terminal real run produces either a proven
+  resume/completion or an actionable terminal interruption while preserving
+  Provider Session, branch, base commit, and worktree consistency
+- provider, Git, PostgreSQL, HTTP, WebSocket, scheduler, concurrency,
+  hostile-output, secret-isolation, frontend accessibility, and browser-driven
+  Red Hat acceptance tests pass against one exact green commit
+- `docs/compatibility/codex-app-server.md`, Git worktree compatibility evidence,
+  and the Decision Log record every changed M0 assumption
+- the M4 Work Items backlog is elaborated before M4 implementation begins
 
 ## Milestone M4: Work Items
 
@@ -4484,6 +5096,76 @@ Host-local bootstrap plus Argon2id password verification and opaque,
 server-side cookie sessions provide that boundary without exposing a setup
 route or choosing the final team authentication product. Passkeys, OIDC, and
 the final combination remain O-004 and must be resolved before M7.
+
+## D-034: M2 fixes a small bounded version-one Message AST
+
+**Status:** Accepted
+
+**Reason:** M2 Messages need semantic Actor mentions without adopting a general
+rich-text system. Version one therefore accepts only an explicitly tagged
+`version = 1` object containing one to 128 flat `text` or `mention` nodes, at
+most 32 mention occurrences, and at most 20,000 Unicode scalar values in both
+the submitted text and the server-derived plain-text rendering. Mention IDs
+must be non-nil UUIDs and resolve to enabled active same-Project memberships;
+duplicate occurrences remain in the immutable AST but project to one distinct
+Message/Actor relationship. Text permits line feed, carriage return, and tab
+but rejects other control characters. Unknown fields, unknown node types,
+nested shapes, URL nodes, HTML authority, invalid handles, and empty derived
+content are rejected. This bound keeps storage, rendering, notification, and
+provider inputs deterministic while leaving future AST versions additive.
+
+## D-035: Conversation existence is hidden with a common not-found response
+
+**Status:** Accepted
+
+**Reason:** A caller who cannot currently view a Channel or Thread must not be
+able to distinguish it from a missing Conversation. Conversation-specific
+timeline, Message, Thread, archive, read-state, and navigation operations
+therefore return the same `404 Not Found` resource response for missing,
+cross-Project, disabled-membership, and otherwise unauthorized Conversation
+targets. Authentication, Origin, CSRF, malformed input, and authorized role
+failures keep their own responses. This Conversation non-disclosure rule
+supersedes the older M1 test expectation that every policy denial surface as a
+generic `403`.
+
+## D-036: Realtime correctness is at-least-once invalidation plus HTTP refetch
+
+**Status:** Accepted
+
+**Reason:** A durable M2 mutation and its typed outbox event commit in one
+PostgreSQL transaction. A supervised worker claims events by database cursor
+with a short lease, publishes them at least once under a stable UUIDv7 event
+ID, and records `published_at` after handing the event to the in-process
+Project-scoped broadcaster. Publication does not claim that any browser
+received the event. The single authenticated session WebSocket is an
+invalidation and ephemeral-stream channel: clients bound duplicate IDs,
+tolerate future event types, coalesce refetches, and recover navigation,
+timeline, read, and attention state through authorized HTTP after reconnect.
+No per-client replay or exactly-once network-delivery promise is implied.
+
+## D-037: Applied migrations are immutable; M2 corrections remain additive
+
+**Status:** Accepted
+
+**Reason:** The retained Red Hat validation database records the exact SHA-384
+checksums of every applied migration. `0005_m2_conversations.sql` remains
+byte-for-byte immutable. Its initial `message_mentions` shape included a
+`node_index`; the same unreleased M2 migration set already projected repeated
+AST occurrences to one distinct Actor row. The immutable additive
+`0006_m2_message_mentions_projection.sql` drops the occurrence key and
+establishes `(message_id, actor_id)` as the projection key while retaining
+same-Project/AST validation and mutation rejection. The Message AST remains
+the authoritative occurrence and ordering record.
+
+`0007_m2_archived_parent_navigation.sql` makes a Thread below an archived
+Channel invalid as a remembered active route while preserving explicit
+history access. `0008_m2_conversation_lock_boundaries.sql` replaces the parent
+and navigation validation functions additively so `FOR SHARE` serializes their
+active-state decisions with concurrent archive updates. Versions `0005`
+through `0008` are now applied to the retained validation database and are all
+immutable. Any later correction must use a new migration; application code,
+tests, and deployment tooling must never repair a checksum by rewriting an
+applied file or editing `_sqlx_migrations`.
 
 ---
 

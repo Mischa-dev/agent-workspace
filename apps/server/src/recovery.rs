@@ -8,6 +8,7 @@ use crate::{
     domain::{RunState, transition_run},
     error::AppError,
     git_runtime::worktree_is_dirty,
+    outbox,
     provider::{self, ProviderRecovery},
 };
 
@@ -16,6 +17,7 @@ struct RecoverableRun {
     id: Uuid,
     previous_state: String,
     conversation_id: Uuid,
+    project_id: Uuid,
 }
 
 /// Reconciles runs that were non-terminal when the host process stopped.
@@ -27,10 +29,12 @@ struct RecoverableRun {
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
     let runs = sqlx::query_as::<_, RecoverableRun>(
         r#"
-        SELECT id, state AS previous_state, conversation_id
-        FROM agent_runs
-        WHERE state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
-        ORDER BY created_at
+        SELECT run.id, run.state AS previous_state, run.conversation_id,
+               conversation.project_id
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        WHERE run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        ORDER BY run.created_at
         "#,
     )
     .fetch_all(&state.pool)
@@ -39,6 +43,13 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
     for run in &runs {
         let mut transition = state.pool.begin().await?;
         transition_run(&mut transition, run.id, RunState::Recovering, None).await?;
+        outbox::enqueue_agent_run_updated(
+            &mut transition,
+            run.project_id,
+            run.conversation_id,
+            run.id,
+        )
+        .await?;
         transition.commit().await?;
 
         let worktree = sqlx::query_as::<_, (Uuid, String)>(
@@ -109,6 +120,13 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
                 true,
             )
             .await?;
+            outbox::enqueue_agent_run_updated(
+                &mut transaction,
+                run.project_id,
+                run.conversation_id,
+                run.id,
+            )
+            .await?;
             transaction.commit().await?;
             continue;
         }
@@ -123,6 +141,9 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
             }
             ProviderRecovery::Completed { .. } => {
                 "Service restarted during a run. Provider completion was observed but could not be reconciled transactionally; the worktree was preserved for inspection.".to_owned()
+            }
+            ProviderRecovery::RejectedMessage => {
+                "Service restarted during a run. Provider completion contained an invalid or oversized Message, so the run was interrupted and the worktree was preserved for inspection.".to_owned()
             }
             ProviderRecovery::Unavailable if dirty => {
                 "Service restarted during a run. Provider resume was unavailable and the dirty worktree was preserved; inspect it before retrying.".to_owned()
@@ -150,6 +171,13 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
             worktree_state,
             dirty,
             provider_resumed,
+        )
+        .await?;
+        outbox::enqueue_agent_run_updated(
+            &mut transaction,
+            run.project_id,
+            run.conversation_id,
+            run.id,
         )
         .await?;
         transaction.commit().await?;

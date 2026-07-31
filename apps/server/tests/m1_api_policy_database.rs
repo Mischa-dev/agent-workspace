@@ -194,7 +194,11 @@ async fn durable_m0_routes_require_a_session_and_exact_project_membership() {
         )
         .await
         .expect("disabled membership response");
-    assert_eq!(disabled_membership.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        disabled_membership.status(),
+        StatusCode::NOT_FOUND,
+        "M2 makes missing and unauthorized Conversations indistinguishable"
+    );
 
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

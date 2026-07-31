@@ -27,6 +27,7 @@ export function AppShell({
   context,
   mainClassName = 'project-workspace',
   project = null,
+  selectedChannelId,
   thread = null,
   user,
 }: {
@@ -34,6 +35,7 @@ export function AppShell({
   context?: ReactNode
   mainClassName?: string
   project?: Project | null
+  selectedChannelId?: string
   thread?: { id: string; name: string } | null
   user: SessionUser
 }) {
@@ -158,6 +160,7 @@ export function AppShell({
           mobileOpen={sidebarOpen}
           onNavigate={closeDrawers}
           project={project}
+          selectedChannelId={selectedChannelId}
           thread={thread}
         />
       )}

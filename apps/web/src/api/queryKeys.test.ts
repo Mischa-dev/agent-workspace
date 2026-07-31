@@ -10,9 +10,10 @@ describe('query-key isolation', () => {
     expect(queryKeys.timeline('project-a', 'thread-shared')).toEqual([
       'project',
       'project-a',
-      'thread',
+      'conversation',
       'thread-shared',
       'timeline',
+      'active',
     ])
   })
 })

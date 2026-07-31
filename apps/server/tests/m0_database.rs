@@ -39,6 +39,7 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
     let first = dev_seed(&pool, &config).await.expect("first seed");
     let second = dev_seed(&pool, &config).await.expect("idempotent seed");
     assert_eq!(first.human_actor_id, second.human_actor_id);
+    assert_eq!(first.collaborator_actor_id, second.collaborator_actor_id);
     assert_eq!(first.project_id, second.project_id);
     assert_eq!(first.thread_id, second.thread_id);
     assert_eq!(first.repository_id, second.repository_id);
