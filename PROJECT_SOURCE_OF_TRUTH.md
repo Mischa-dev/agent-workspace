@@ -2,16 +2,24 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 implementation baseline v0.5
+**Status:** M0 accepted; M1 entry elaboration pending v0.6
 
 **Owner:** Mischa Nelson  
 **Date:** July 30, 2026  
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestone M0 is approved to begin. Later milestones require the entry checks defined in this document.
+**Implementation authorization:** Milestone M0 is complete. Milestone M1 may begin after its task-level entry criteria are added; every later milestone remains subject to the entry checks defined in this document.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.6 — M0 acceptance record
+
+- recorded completion of the repository, CI, Red Hat host, Codex App Server,
+  MCP, Git worktree, GitHub App, and browser-driven walking-skeleton gates
+- recorded the exact MCP protocol negotiated by Codex `0.146.0`
+- recorded the proven provider-Thread resume and conservative startup
+  reconciliation contract
 
 ### v0.5 — PostgreSQL 18 container layout correction
 
@@ -3331,11 +3339,19 @@ Acceptance criteria are defined in Phase 0.5.
 
 ### M0 exit criteria
 
+**Status:** Satisfied on July 31, 2026.
+
 - all four compatibility notes are checked in
 - the walking skeleton completes one real Thread run in an isolated worktree
 - restart reconciliation succeeds without manual database or filesystem repair
 - spike shortcuts are either removed or clearly confined to development-only code
 - every invalidated assumption in this document is corrected with a Decision Log entry
+
+The compatibility records under `docs/compatibility` and their redacted
+fixtures retain the exact M0 evidence. The accepted browser run used the real
+hosted Codex path on Red Hat, and the restart exercise resumed the stored
+provider Thread, classified the interrupted provider turn, and preserved the
+worktree without manual repair.
 
 ## Milestone M1: Identity and Projects
 
@@ -3860,6 +3876,27 @@ clusters below `/var/lib/postgresql`. Mounting a named volume at the older
 `/var/lib/postgresql/data` path is rejected by the image and prevents startup.
 Docker Compose and rootless Podman Compose therefore mount the isolated
 Agent Workspace volume at `/var/lib/postgresql`.
+
+## D-031: Codex 0.146.0 negotiates MCP protocol 2025-06-18
+
+**Status:** Accepted
+
+**Reason:** The isolated local Codex `0.146.0` profile negotiated MCP protocol
+`2025-06-18` over the SSH-forwarded Streamable HTTP endpoint and called both
+the read and optimistic-write tools. The exact compatibility result is pinned
+for M0; a Codex or SDK upgrade must repeat negotiation and fixture validation.
+
+## D-032: Startup recovery completes only when provider history proves completion
+
+**Status:** Accepted
+
+**Reason:** On restart, the host restarts the profile App Server, resumes the
+stored provider Thread, reads its latest turn, and inspects the physical
+worktree. A completed provider turn may be reconciled as completed. An
+interrupted, non-terminal, missing, or ambiguous turn becomes an actionable
+application `interrupted` result with its worktree preserved. This proved the
+required M0 recovery boundary without inventing continuation or resetting
+dirty state.
 
 ---
 

@@ -57,8 +57,57 @@ Schema capture succeeded on macOS ARM64 with `codex-cli 0.146.0`.
 - The environment is cleared before launch. Only `CODEX_HOME`, `PWD`, and an
   explicit `PATH`, `LANG`, and `LC_ALL` allowlist are passed.
 
-The browser callback, device-code login, authenticated rate-limit read, live
-turn/approval/interruption/resume fixture, and restart behavior remain explicit
-operator-assisted M0-005 acceptance steps. No credential, login URL or code,
-reasoning, command output, Message content, arbitrary repository content, or
-absolute operator path is retained in committed fixtures.
+Both operator-assisted authentication ceremonies completed against the pinned
+Red Hat binary:
+
+- Browser callback authentication completed with a disposable profile.
+- Device-code authentication completed with the retained M0 execution profile.
+- The retained-profile probe reported `authenticated = true`,
+  `requiresOpenaiAuth = true`, and `rateLimitsAvailable = true`.
+
+No credential, login URL, device code, callback parameter, or cached
+authentication material is retained in the repository.
+
+## Live retained-profile exercise
+
+The live bridge used `initialize`, `initialized`, `account/read`,
+`account/rateLimits/read`, `thread/start`, `thread/resume`, `turn/start`, and
+`turn/interrupt`. It answered a server request for
+`item/commandExecution/requestApproval`; accepting that request allowed the
+bounded test turn to modify the known fixture file.
+
+The first exercise created provider Thread
+`019fb77a-ff64-73c3-960d-01e7d79e25e6` and completed Turn
+`019fb77b-003c-7361-8f10-cbdfdc2fed64`. Its observed streamed shapes were:
+
+| Shape | Count |
+| --- | ---: |
+| `account/rateLimits/updated` | 3 |
+| `item/agentMessage/delta` | 43 |
+| `item/commandExecution/requestApproval` | 1 |
+| `item/completed` | 5 |
+| `item/started` | 5 |
+| `mcpServer/startupStatus/updated` | 13 |
+| `serverRequest/resolved` | 1 |
+| `thread/status/changed` | 4 |
+| `thread/tokenUsage/updated` | 3 |
+| `turn/completed` | 1 |
+| `turn/started` | 1 |
+
+The bridge then resumed the same provider Thread and completed Turn
+`019fb77b-decc-70e2-831b-f734f7677dfd`.
+
+The fixed interrupt path waited for `turn/started` before sending
+`turn/interrupt`. It interrupted Turn
+`019fb77e-a2a7-7d40-af41-1406e487cdab` on the same provider Thread and observed
+8 `mcpServer/startupStatus/updated` events, 2 `thread/status/changed` events,
+1 `turn/started` event, and 1 `turn/completed` event. A subsequent
+`thread/resume` on that Thread completed Turn
+`019fb77e-e5db-72a1-ba7f-df41736484cc`, including 21
+`item/agentMessage/delta` events and 1 `turn/completed` event.
+
+The redacted machine-readable record is
+`tools/codex-bridge-spike/fixtures/live-evidence.json`. It retains only
+contract methods, correlation IDs, booleans, outcomes, and bounded event
+counts. Reasoning, prompts, command output, Message content, arbitrary
+repository content, and absolute operator paths are excluded.

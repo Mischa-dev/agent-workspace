@@ -1,0 +1,96 @@
+{
+  "fixtureVersion": 1,
+  "codexCliVersion": "0.146.0",
+  "transport": "jsonl-stdio",
+  "clientName": "agent_workspace",
+  "authentication": {
+    "browserCallbackDisposableProfile": {
+      "completed": true,
+      "secretMaterialPresentInFixture": false
+    },
+    "deviceCodeRetainedProfile": {
+      "completed": true,
+      "secretMaterialPresentInFixture": false
+    }
+  },
+  "probe": {
+    "authenticated": true,
+    "requiresOpenaiAuth": true,
+    "rateLimitsAvailable": true
+  },
+  "liveMethods": [
+    "initialize",
+    "initialized",
+    "account/read",
+    "account/rateLimits/read",
+    "thread/start",
+    "thread/resume",
+    "turn/start",
+    "turn/interrupt"
+  ],
+  "exercises": [
+    {
+      "name": "approved-known-file-modification",
+      "threadId": "019fb77a-ff64-73c3-960d-01e7d79e25e6",
+      "turnId": "019fb77b-003c-7361-8f10-cbdfdc2fed64",
+      "outcome": "completed",
+      "approval": {
+        "method": "item/commandExecution/requestApproval",
+        "decision": "accept",
+        "knownFileModified": true
+      },
+      "eventCounts": {
+        "account/rateLimits/updated": 3,
+        "item/agentMessage/delta": 43,
+        "item/commandExecution/requestApproval": 1,
+        "item/completed": 5,
+        "item/started": 5,
+        "mcpServer/startupStatus/updated": 13,
+        "serverRequest/resolved": 1,
+        "thread/status/changed": 4,
+        "thread/tokenUsage/updated": 3,
+        "turn/completed": 1,
+        "turn/started": 1
+      }
+    },
+    {
+      "name": "same-thread-resume",
+      "threadId": "019fb77a-ff64-73c3-960d-01e7d79e25e6",
+      "turnId": "019fb77b-decc-70e2-831b-f734f7677dfd",
+      "outcome": "completed"
+    },
+    {
+      "name": "started-then-interrupted",
+      "threadId": "019fb77a-ff64-73c3-960d-01e7d79e25e6",
+      "turnId": "019fb77e-a2a7-7d40-af41-1406e487cdab",
+      "outcome": "interrupted",
+      "eventCounts": {
+        "mcpServer/startupStatus/updated": 8,
+        "thread/status/changed": 2,
+        "turn/completed": 1,
+        "turn/started": 1
+      }
+    },
+    {
+      "name": "post-interrupt-same-thread-resume",
+      "threadId": "019fb77a-ff64-73c3-960d-01e7d79e25e6",
+      "turnId": "019fb77e-e5db-72a1-ba7f-df41736484cc",
+      "outcome": "completed",
+      "eventCounts": {
+        "item/agentMessage/delta": 21,
+        "turn/completed": 1
+      }
+    }
+  ],
+  "excluded": [
+    "credentials",
+    "login URLs and codes",
+    "callback parameters",
+    "reasoning",
+    "prompts",
+    "message content",
+    "command output",
+    "repository content",
+    "absolute operator paths"
+  ]
+}

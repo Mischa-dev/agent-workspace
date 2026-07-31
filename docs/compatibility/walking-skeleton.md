@@ -33,11 +33,15 @@ significant file and lifecycle events; it never stores one row per token. This
 executor is deterministic test scaffolding and is not accepted as the required
 real Codex App Server run.
 
-At startup, non-terminal runs enter `recovering`. M0 inspects their worktrees,
-marks a provably dirty worktree as dirty, and preserves every worktree. Until
-the retained Codex profile is authenticated and provider resume is proven, the
-old run terminates as `interrupted` with an actionable recovery event instead
-of guessing, resetting, or deleting filesystem state.
+At startup, non-terminal runs enter `recovering`. M0 inspects both their
+worktrees and every registered worktree, records the observed dirty state, and
+preserves every worktree. It restarts the retained profile's App Server,
+resumes the stored provider Thread, and reads the latest provider turn. A
+provably completed turn may be reconciled to completion; an interrupted,
+non-terminal, or ambiguous turn becomes an application `interrupted` result
+with an actionable recovery event. Startup also cancels stale pending
+approvals owned by terminal runs. Recovery never guesses, resets, or deletes
+filesystem state.
 
 ## Reader surface
 
@@ -56,5 +60,45 @@ from becoming executable markup.
   Actor foreign keys, sequence allocation, and the one-active-run constraint.
 - Vitest covers timeline rendering, hostile output escaping, approval
   response/refetch, WebSocket refetch, and delta coalescing.
-- The deterministic browser acceptance and restart run are performed on the
-  Red Hat host before the real Codex acceptance run.
+
+## Red Hat live acceptance
+
+On 2026-07-31 at 09:29Z, Chrome reached the Red Hat loopback service through
+the approved SSH forward and visibly started hosted run
+`019fb781-85fc-78b0-9805-08e0b6ba24fa`. Codex executed in an isolated
+worktree and completed the bounded proof-file task. PostgreSQL retained these
+ordered entries:
+
+- sequence 25: command started
+- sequence 26: command completed
+- sequence 27: file change
+- sequence 28: command started
+- sequence 29: command completed
+- sequence 30: consolidated worker Message
+- sequence 31: run completed
+
+The browser timeline rendered the submitted task, significant command and file
+events, one consolidated worker Message, and terminal completion. This was the
+real hosted Codex path, not the deterministic development executor. The
+acceptance record deliberately excludes the prompt text, Message contents,
+absolute worktree paths, and credentials.
+
+A separate recovery run, `019fb783-f135-7be2-a2ad-64f3cccb50aa`, reached
+`working` and persisted a command-started event at sequence 33 before the
+systemd service was restarted. The service returned ready without database or
+filesystem repair. Startup resumed the stored provider Thread and persisted
+the sequence-34 recovery event with:
+
+```text
+provider_resumed=true
+latest_turn=interrupted
+result=interrupted
+worktree_preserved=true
+worktree_state=ready
+dirty=false
+```
+
+After reload, Chrome visibly rendered the recovery result and the API reported
+no active run. This proves the bounded M0 restart behavior: deterministic
+provider reconciliation, terminal interruption when continuation is not
+provable, and preservation of a clean isolated worktree.
