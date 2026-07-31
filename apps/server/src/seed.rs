@@ -1,10 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{config::AppConfig, error::AppError};
+use crate::{
+    config::AppConfig,
+    error::AppError,
+    profile_runtime::{prepare_private_profile_directory, resolve_path_within_data_root},
+};
 
 #[derive(Debug, Serialize)]
 pub struct DevSeed {
@@ -26,15 +30,11 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         return Err(AppError::DevelopmentAuthUnavailable);
     }
 
-    let retained_profile = config.codex_home_root.join("m0-retained");
-    std::fs::create_dir_all(&retained_profile)
-        .map_err(|_| AppError::Internal("create retained Codex profile"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&retained_profile, std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| AppError::Internal("protect retained Codex profile"))?;
-    }
+    let retained_profile = prepare_private_profile_directory(
+        &config.data_root,
+        &config.codex_home_root,
+        "m0-retained",
+    )?;
 
     let mut transaction = pool.begin().await?;
 
@@ -155,7 +155,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .execute(&mut *transaction)
     .await?;
 
-    let mirror_path = seed_mirror_path(config);
+    let mirror_path = resolve_path_within_data_root(&config.data_root, &seed_mirror_path(config))?;
     let repository_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO repositories (
@@ -168,18 +168,13 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
             'main', 150232852, $3, true
         )
         ON CONFLICT (project_id, owner, name)
-        DO UPDATE SET
-            mirror_path = EXCLUDED.mirror_path,
-            github_app_installation_id = EXCLUDED.github_app_installation_id,
-            trusted = true,
-            enabled = true,
-            updated_at = now()
+        DO UPDATE SET id = repositories.id
         RETURNING id
         "#,
     )
     .bind(Uuid::now_v7())
     .bind(project_id)
-    .bind(mirror_path.to_string_lossy().as_ref())
+    .bind(runtime_path_text(&mirror_path)?)
     .fetch_one(&mut *transaction)
     .await?;
 
@@ -227,20 +222,22 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
             $3
         )
         ON CONFLICT (project_id, kind, host)
-        DO UPDATE SET capabilities = EXCLUDED.capabilities, enabled = true, updated_at = now()
+        DO UPDATE SET id = provider_connections.id
         RETURNING id
         "#,
     )
     .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(serde_json::json!({
-        "streaming": true,
-        "commands": true,
-        "file_changes": true,
-        "approvals": true,
-        "questions": true,
-        "resume": true,
-        "interrupt": true
+        "supports_streaming": true,
+        "supports_commands": true,
+        "supports_file_changes": true,
+        "supports_approvals": true,
+        "supports_questions": true,
+        "supports_resume": true,
+        "supports_interrupt": true,
+        "supports_pull_request_creation": false,
+        "supports_remote_execution": false
     }))
     .fetch_one(&mut *transaction)
     .await?;
@@ -253,11 +250,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         )
         VALUES ($1, $2, $3, $4, 'M0 retained profile', $5, 'available')
         ON CONFLICT (project_id, name)
-        DO UPDATE SET
-            provider_connection_id = EXCLUDED.provider_connection_id,
-            owner_actor_id = EXCLUDED.owner_actor_id,
-            codex_home_path = EXCLUDED.codex_home_path,
-            updated_at = now()
+        DO UPDATE SET id = execution_profiles.id
         RETURNING id
         "#,
     )
@@ -265,9 +258,34 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .bind(project_id)
     .bind(provider_connection_id)
     .bind(human_actor_id)
-    .bind(retained_profile.to_string_lossy().as_ref())
+    .bind(runtime_path_text(&retained_profile)?)
     .fetch_one(&mut *transaction)
     .await?;
+
+    let stored_profile_path = sqlx::query_scalar::<_, String>(
+        "SELECT codex_home_path FROM execution_profiles WHERE id = $1",
+    )
+    .bind(execution_profile_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if stored_profile_path != runtime_path_text(&retained_profile)? {
+        return Err(AppError::Conflict(
+            "execution_profile",
+            "stored profile path does not match the configured data root",
+        ));
+    }
+
+    let stored_mirror_path =
+        sqlx::query_scalar::<_, String>("SELECT mirror_path FROM repositories WHERE id = $1")
+            .bind(repository_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+    if stored_mirror_path != runtime_path_text(&mirror_path)? {
+        return Err(AppError::Conflict(
+            "repository",
+            "stored mirror path does not match the configured data root",
+        ));
+    }
 
     let existing_worker_actor = sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -299,7 +317,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         )
         VALUES ($1, $2, $3, 'worker', 'Agent Workspace Worker', 'agent')
         ON CONFLICT (project_id, actor_id)
-        DO UPDATE SET enabled = true, updated_at = now()
+        DO UPDATE SET updated_at = now()
         "#,
     )
     .bind(Uuid::now_v7())
@@ -312,15 +330,21 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         r#"
         INSERT INTO execution_workers (
             id, project_id, actor_id, provider_connection_id,
-            execution_profile_id
+            execution_profile_id, enabled
         )
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES (
+            $1, $2, $3, $4, $5,
+            COALESCE(
+                (
+                    SELECT existing.enabled
+                    FROM execution_workers existing
+                    WHERE existing.project_id = $2 AND existing.actor_id = $3
+                ),
+                true
+            )
+        )
         ON CONFLICT (project_id, actor_id)
-        DO UPDATE SET
-            provider_connection_id = EXCLUDED.provider_connection_id,
-            execution_profile_id = EXCLUDED.execution_profile_id,
-            enabled = true,
-            updated_at = now()
+        DO UPDATE SET id = execution_workers.id
         RETURNING id
         "#,
     )
@@ -349,7 +373,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     })
 }
 
-fn seed_mirror_path(config: &AppConfig) -> PathBuf {
+pub(crate) fn seed_mirror_path(config: &AppConfig) -> PathBuf {
     let configured = std::env::var_os("AGENT_WORKSPACE_DEV_REPOSITORY_MIRROR");
     configured.map_or_else(
         || {
@@ -361,4 +385,9 @@ fn seed_mirror_path(config: &AppConfig) -> PathBuf {
         },
         PathBuf::from,
     )
+}
+
+pub(crate) fn runtime_path_text(path: &Path) -> Result<&str, AppError> {
+    path.to_str()
+        .ok_or(AppError::Invalid("runtime paths must be valid UTF-8"))
 }

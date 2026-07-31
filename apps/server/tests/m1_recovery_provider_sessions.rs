@@ -44,6 +44,18 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed recovery fixture");
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(seed.execution_profile_id)
+        .execute(&pool)
+        .await
+        .expect("authenticate recovery Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare recovery Repository");
     let provider_session_id = Uuid::now_v7();
     sqlx::query(
         r#"

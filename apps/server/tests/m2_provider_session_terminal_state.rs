@@ -284,7 +284,7 @@ impl TestHarness {
             .canonicalize()
             .expect("canonical test runtime root");
         let data_root = runtime_root.join("data");
-        let codex_home_root = runtime_root.join("codex");
+        let codex_home_root = data_root.join("codex");
         let fake_codex = runtime_root.join("fake-codex");
         if fake_provider {
             write_fake_codex(&fake_codex);
@@ -318,6 +318,18 @@ impl TestHarness {
         let seed = dev_seed(&pool, &config)
             .await
             .expect("seed Provider Session fixture");
+        sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+            .bind(seed.execution_profile_id)
+            .execute(&pool)
+            .await
+            .expect("authenticate Provider Session Profile");
+        sqlx::query(
+            "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+        )
+        .bind(seed.repository_id)
+        .execute(&pool)
+        .await
+        .expect("prepare Provider Session Repository");
         bootstrap_admin(
             &pool,
             BootstrapCommand {

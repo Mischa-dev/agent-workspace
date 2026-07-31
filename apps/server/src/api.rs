@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(crate::auth::router())
         .merge(crate::projects::router())
+        .merge(crate::execution::router())
         .route("/api/v1/dev/bootstrap", get(development_bootstrap))
         .route("/api/v1/threads/{id}/agent-runs", post(start_agent_run))
         .route(
@@ -206,16 +207,49 @@ async fn start_agent_run(
         FROM projects p
         JOIN execution_workers ew
           ON ew.project_id = p.id AND ew.enabled
+        JOIN project_memberships worker_membership
+          ON worker_membership.project_id = ew.project_id
+         AND worker_membership.actor_id = ew.actor_id
+         AND worker_membership.role = 'worker'
+         AND worker_membership.enabled
+        JOIN actors worker_actor
+          ON worker_actor.id = ew.actor_id
+         AND worker_actor.kind = 'execution_worker'
+         AND worker_actor.status = 'active'
+        JOIN provider_connections connection
+          ON connection.project_id = ew.project_id
+         AND connection.id = ew.provider_connection_id
+         AND connection.enabled
         JOIN execution_profiles ep
-          ON ep.id = ew.execution_profile_id AND ep.status = 'available'
+          ON ep.project_id = ew.project_id
+         AND ep.id = ew.execution_profile_id
+         AND ep.provider_connection_id = connection.id
+         AND ep.owner_actor_id = $3
+         AND ep.status = 'available'
+         AND ep.account_state = 'authenticated'
+        JOIN project_memberships owner_membership
+          ON owner_membership.project_id = ep.project_id
+         AND owner_membership.actor_id = ep.owner_actor_id
+         AND owner_membership.enabled
+        JOIN actors owner_actor
+          ON owner_actor.id = ep.owner_actor_id
+         AND owner_actor.status = 'active'
         JOIN repositories r
-          ON r.project_id = p.id AND r.enabled AND r.trusted
+          ON r.project_id = p.id
+         AND r.enabled
+         AND r.trusted
+         AND r.archived_at IS NULL
+         AND r.preparation_state = 'ready'
         WHERE p.id = $1
           AND r.id = COALESCE(
               $2,
               CASE
                   WHEN (SELECT count(*) FROM repositories rr
-                         WHERE rr.project_id = p.id AND rr.enabled AND rr.trusted) = 1
+                         WHERE rr.project_id = p.id
+                           AND rr.enabled
+                           AND rr.trusted
+                           AND rr.archived_at IS NULL
+                           AND rr.preparation_state = 'ready') = 1
                   THEN r.id
                   ELSE NULL
               END
@@ -233,6 +267,7 @@ async fn start_agent_run(
         .fetch_one(&state.pool)
         .await?,
     )
+    .bind(identity.actor_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::Conflict(
