@@ -51,13 +51,16 @@ jobs:
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # pnpm/action-setup v4.1.0
+      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+        with:
+          version: 11.18.0
+          run_install: false
       # actions/setup-node v7.0.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.18.1
           cache: pnpm
-      - run: corepack enable
-      - run: corepack prepare pnpm@11.18.0 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
