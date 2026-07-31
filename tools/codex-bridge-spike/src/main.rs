@@ -153,7 +153,25 @@ async fn run(bridge: &mut CodexBridge, cli: &Cli) -> Result<(), Box<dyn std::err
                 .and_then(Value::as_str)
                 .ok_or("turn response omitted turn.id")?;
 
+            let deadline = Instant::now() + Duration::from_secs(cli.timeout_seconds);
+            let mut counts = BTreeMap::<String, usize>::new();
             if *interrupt {
+                loop {
+                    if Instant::now() >= deadline {
+                        return Err("turn start event deadline exceeded".into());
+                    }
+                    let event = bridge.next_event().await?;
+                    let Some(method) = event.get("method").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    *counts.entry(method.to_owned()).or_default() += 1;
+                    if method == "turn/completed" {
+                        return Err("turn completed before interrupt could be sent".into());
+                    }
+                    if method == "turn/started" {
+                        break;
+                    }
+                }
                 bridge
                     .request(
                         "turn/interrupt",
@@ -162,8 +180,6 @@ async fn run(bridge: &mut CodexBridge, cli: &Cli) -> Result<(), Box<dyn std::err
                     .await?;
             }
 
-            let deadline = Instant::now() + Duration::from_secs(cli.timeout_seconds);
-            let mut counts = BTreeMap::<String, usize>::new();
             loop {
                 if Instant::now() >= deadline {
                     return Err("turn event deadline exceeded".into());
