@@ -17,8 +17,11 @@ use crate::{
 
 mod codex_app_server;
 
+pub use codex_app_server::{
+    AccountSummary, LoginCeremonyError, LoginCeremonySnapshot, LoginKind, LoginReservation,
+    LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, SupervisorRegistry,
+};
 use codex_app_server::{ApprovalKind, ItemKind, ProfileLease, ProviderEvent};
-pub use codex_app_server::{ProfileHealth, SupervisorRegistry};
 
 #[derive(Debug)]
 pub struct StartedProviderRun {
@@ -305,6 +308,7 @@ async fn drive_turn(
 ) -> Result<(), AppError> {
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
+    let execution_profile_id = provider.profile_id();
     loop {
         tokio::select! {
             event = provider.next_event() => {
@@ -394,6 +398,21 @@ async fn drive_turn(
                 }
             }
             () = sleep(Duration::from_millis(500)) => {
+                if state.supervisors.is_shutting_down() {
+                    provider.shutdown_process().await;
+                    return Ok(());
+                }
+                if state.supervisors.profile_is_stopping(execution_profile_id).await {
+                    provider.shutdown_process().await;
+                    fail_run(
+                        &state,
+                        project_id,
+                        run_id,
+                        conversation_id,
+                        "The Execution Profile was stopped. The worktree was preserved.",
+                    ).await?;
+                    return Ok(());
+                }
                 let run_state = sqlx::query_scalar::<_, String>(
                     "SELECT state FROM agent_runs WHERE id = $1",
                 )
@@ -483,13 +502,28 @@ async fn handle_provider_request(
     transaction.commit().await?;
 
     loop {
-        tokio::select! {
-            () = sleep(Duration::from_millis(300)) => {}
-            () = state.supervisors.shutdown_requested() => {
-                let _ = provider.answer_request(request, false).await;
-                provider.shutdown_process().await;
-                return Ok(());
-            }
+        sleep(Duration::from_millis(300)).await;
+        if state.supervisors.is_shutting_down() {
+            let _ = provider.answer_request(request, false).await;
+            provider.shutdown_process().await;
+            return Ok(());
+        }
+        if state
+            .supervisors
+            .profile_is_stopping(provider.profile_id())
+            .await
+        {
+            let _ = provider.answer_request(request, false).await;
+            provider.shutdown_process().await;
+            fail_run(
+                state,
+                project_id,
+                run_id,
+                conversation_id,
+                "The Execution Profile was stopped. The worktree was preserved.",
+            )
+            .await?;
+            return Ok(());
         }
         #[derive(FromRow)]
         struct Resolution {

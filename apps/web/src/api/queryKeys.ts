@@ -4,6 +4,10 @@ export const queryKeys = {
   project: (projectId: string) => ['project', projectId] as const,
   navigation: (projectId: string) =>
     ['project', projectId, 'navigation'] as const,
+  executionProfiles: (projectId: string) =>
+    ['project', projectId, 'execution-profiles'] as const,
+  executionProfileAccount: (projectId: string, profileId: string) =>
+    ['project', projectId, 'execution-profile', profileId, 'account'] as const,
   timeline: (
     projectId: string,
     conversationId: string,

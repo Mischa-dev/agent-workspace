@@ -1346,6 +1346,48 @@ p {
   color: var(--text-secondary);
 }
 
+.execution-profile-list {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.execution-profile-card {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.execution-profile-card > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.execution-profile-card h3,
+.execution-profile-card header p {
+  margin: 0;
+}
+
+.execution-login-options {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.execution-login-options form {
+  align-items: end;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.device-code-instructions strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
 .archive-project {
   margin-top: 42px;
   padding: 22px;

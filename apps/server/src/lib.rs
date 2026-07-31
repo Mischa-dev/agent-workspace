@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod account;
 pub mod api;
 pub mod auth;
 pub mod bootstrap;
@@ -62,6 +63,7 @@ pub fn router(state: AppState) -> Router {
             pool: state.pool.clone(),
         }))
         .merge(api::router())
+        .merge(account::router())
         .merge(conversations::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
