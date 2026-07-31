@@ -158,6 +158,57 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
     Ok(runs.len() as u64)
 }
 
+pub async fn reconcile_registered_worktrees(state: &AppState) -> Result<u64, AppError> {
+    let worktrees = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT id, path
+        FROM git_worktrees
+        WHERE state IN ('creating', 'ready', 'dirty', 'missing', 'failed')
+        ORDER BY created_at
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    for (worktree_id, path) in &worktrees {
+        let inspection_path = PathBuf::from(path);
+        let (worktree_state, dirty) =
+            tokio::task::spawn_blocking(move || inspect_worktree(&inspection_path))
+                .await
+                .map_err(|_| AppError::Internal("join registered worktree inspection"))?;
+        sqlx::query(
+            r#"
+            UPDATE git_worktrees
+            SET state = $2, dirty = $3,
+                last_inspected_at = now(), updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(worktree_id)
+        .bind(worktree_state)
+        .bind(dirty)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(worktrees.len() as u64)
+}
+
+pub async fn cancel_terminal_run_approvals(state: &AppState) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        r#"
+        UPDATE agent_approvals aa
+        SET status = 'canceled', updated_at = now()
+        FROM agent_runs ar
+        WHERE ar.id = aa.agent_run_id
+          AND aa.status = 'pending'
+          AND ar.state IN ('completed', 'failed', 'canceled', 'interrupted')
+        "#,
+    )
+    .execute(&state.pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 fn inspect_worktree(path: &Path) -> (&'static str, bool) {
     if !path.is_dir() {
         return ("missing", false);

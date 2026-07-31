@@ -46,6 +46,17 @@ async fn main() -> anyhow::Result<()> {
     if recovered > 0 {
         tracing::warn!(recovered, "reconciled non-terminal Agent Runs");
     }
+    let inspected_worktrees = recovery::reconcile_registered_worktrees(&state)
+        .await
+        .context("reconcile registered Git worktrees")?;
+    let canceled_approvals = recovery::cancel_terminal_run_approvals(&state)
+        .await
+        .context("cancel approvals owned by terminal Agent Runs")?;
+    tracing::info!(
+        inspected_worktrees,
+        canceled_approvals,
+        "startup reconciliation completed"
+    );
 
     let listener = TcpListener::bind(config.server_addr)
         .await
