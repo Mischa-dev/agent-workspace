@@ -22,6 +22,7 @@ pub mod provider;
 pub mod rate_limit;
 pub mod realtime;
 pub mod recovery;
+pub mod repositories;
 pub mod seed;
 pub mod telemetry;
 
@@ -65,6 +66,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api::router())
         .merge(account::router())
         .merge(conversations::router())
+        .merge(repositories::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(

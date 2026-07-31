@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::{
     config::AppConfig,
     error::AppError,
+    git_runtime::{RegisteredRepository, adopt_legacy_mirror, expected_repository_mirror_path},
     profile_runtime::{prepare_private_profile_directory, resolve_path_within_data_root},
     seed::{runtime_path_text, seed_mirror_path},
 };
@@ -18,6 +19,98 @@ pub struct M3UpgradePreflight {
     pub profile_paths_repaired: u64,
     pub repository_paths_repaired: u64,
     pub workers_disabled: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct M3RepositoryUpgradePreflight {
+    pub required: bool,
+    pub mirrors_adopted: u64,
+}
+
+#[derive(Debug, FromRow)]
+struct RepositoryMirrorUpgrade {
+    id: Uuid,
+    clone_url: String,
+    default_branch: String,
+    mirror_path: String,
+}
+
+pub async fn prepare_m3_repository_upgrade(
+    pool: &PgPool,
+    config: &AppConfig,
+) -> Result<M3RepositoryUpgradePreflight, AppError> {
+    if !migration_pending(pool, 8, 11).await? {
+        return Ok(M3RepositoryUpgradePreflight::default());
+    }
+    let repositories = sqlx::query_as::<_, RepositoryMirrorUpgrade>(
+        "SELECT id, clone_url, default_branch, mirror_path FROM repositories",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut upgrades = Vec::new();
+    for repository in repositories {
+        let canonical = expected_repository_mirror_path(&config.data_root, repository.id)?;
+        let legacy = PathBuf::from(&repository.mirror_path);
+        if legacy == canonical {
+            continue;
+        }
+        let registration = RegisteredRepository {
+            id: repository.id,
+            clone_url: repository.clone_url,
+            default_branch: repository.default_branch,
+            mirror_path: canonical.clone(),
+        };
+        let data_root = config.data_root.clone();
+        let legacy_for_adoption = legacy.clone();
+        tokio::task::spawn_blocking(move || {
+            adopt_legacy_mirror(&data_root, &registration, &legacy_for_adoption)
+        })
+        .await
+        .map_err(|_| AppError::Internal("join legacy mirror adoption"))??;
+        upgrades.push((repository.id, legacy, canonical));
+    }
+    if upgrades.is_empty() {
+        return Ok(M3RepositoryUpgradePreflight {
+            required: true,
+            mirrors_adopted: 0,
+        });
+    }
+    let mut transaction = pool.begin().await?;
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS m3_repository_path_upgrades (
+            repository_id UUID PRIMARY KEY,
+            legacy_path TEXT NOT NULL,
+            canonical_path TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(&mut *transaction)
+    .await?;
+    for (repository_id, legacy, canonical) in &upgrades {
+        sqlx::query(
+            r#"
+            INSERT INTO m3_repository_path_upgrades (
+                repository_id, legacy_path, canonical_path
+            )
+            VALUES ($1, $2, $3)
+            ON CONFLICT (repository_id) DO UPDATE
+            SET legacy_path = EXCLUDED.legacy_path,
+                canonical_path = EXCLUDED.canonical_path
+            "#,
+        )
+        .bind(repository_id)
+        .bind(runtime_path_text(legacy)?)
+        .bind(runtime_path_text(canonical)?)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(M3RepositoryUpgradePreflight {
+        required: true,
+        mirrors_adopted: u64::try_from(upgrades.len()).unwrap_or(u64::MAX),
+    })
 }
 
 #[derive(Debug, FromRow)]
@@ -198,6 +291,37 @@ async fn m3_preflight_required(pool: &PgPool) -> Result<bool, AppError> {
                )
         "#,
     )
+    .fetch_one(pool)
+    .await
+    .map_err(AppError::from)
+}
+
+async fn migration_pending(
+    pool: &PgPool,
+    completed_version: i64,
+    pending_version: i64,
+) -> Result<bool, AppError> {
+    let migrations_table_exists =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+    if !migrations_table_exists {
+        return Ok(false);
+    }
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+                   SELECT 1 FROM _sqlx_migrations
+                    WHERE version = $1 AND success
+               )
+           AND NOT EXISTS (
+                   SELECT 1 FROM _sqlx_migrations
+                    WHERE version = $2 AND success
+               )
+        "#,
+    )
+    .bind(completed_version)
+    .bind(pending_version)
     .fetch_one(pool)
     .await
     .map_err(AppError::from)

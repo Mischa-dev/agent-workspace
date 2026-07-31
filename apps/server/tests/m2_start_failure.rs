@@ -4,6 +4,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
+    git_runtime::expected_repository_mirror_path,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
     router,
@@ -77,10 +78,8 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
     .execute(&pool)
     .await
     .expect("prepare start-failure Repository");
-    let mirror_path = data_root
-        .join("repositories")
-        .join("m0-spike")
-        .join("mirror.git");
+    let mirror_path = expected_repository_mirror_path(&data_root, seed.repository_id)
+        .expect("canonical start-failure mirror path");
     create_test_mirror(&runtime_root, &mirror_path);
 
     bootstrap_admin(

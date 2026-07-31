@@ -5,9 +5,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    config::AppConfig,
-    error::AppError,
-    profile_runtime::{prepare_private_profile_directory, resolve_path_within_data_root},
+    config::AppConfig, error::AppError, git_runtime::expected_repository_mirror_path,
+    profile_runtime::prepare_private_profile_directory,
 };
 
 #[derive(Debug, Serialize)]
@@ -155,7 +154,14 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .execute(&mut *transaction)
     .await?;
 
-    let mirror_path = resolve_path_within_data_root(&config.data_root, &seed_mirror_path(config))?;
+    let repository_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM repositories WHERE project_id = $1 AND lower(owner) = 'mischa-dev' AND lower(name) = 'agent-workspace-m0-spike'",
+    )
+    .bind(project_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .unwrap_or_else(Uuid::now_v7);
+    let mirror_path = expected_repository_mirror_path(&config.data_root, repository_id)?;
     let repository_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO repositories (
@@ -172,7 +178,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         RETURNING id
         "#,
     )
-    .bind(Uuid::now_v7())
+    .bind(repository_id)
     .bind(project_id)
     .bind(runtime_path_text(&mirror_path)?)
     .fetch_one(&mut *transaction)
