@@ -3,6 +3,7 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
+import { ExecutionAccountSettings } from '../execution/ExecutionAccountSettings'
 import { AppShell } from '../shell/AppShell'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import { ProjectContextDrawer } from './ProjectContextDrawer'
@@ -132,6 +133,19 @@ export function ProjectSettingsPage() {
               <dd>{project.data.key}</dd>
             </div>
           </dl>
+        </section>
+
+        <section aria-labelledby="execution-account-heading" className="page-section">
+          <h2 id="execution-account-heading">Codex account</h2>
+          <p>
+            Connect the personal Execution Profile used for hosted runs. Provider
+            credentials are handled by the isolated Codex profile and are never
+            returned to this page.
+          </p>
+          <ExecutionAccountSettings
+            actorId={session.user.actorId}
+            projectId={project.data.id}
+          />
         </section>
 
         {project.data.capabilities.archive && !project.data.archivedAt && (

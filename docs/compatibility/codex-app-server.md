@@ -99,6 +99,34 @@ second profile at host capacity, and exercises coordinated shutdown. Live Red
 Hat process-reuse and restart evidence remains part of the open M3 acceptance
 gate.
 
+## M3 account adapter contract
+
+The application account boundary uses only the pinned `account/read`,
+`account/rateLimits/read`, `account/login/start`, `account/login/cancel`, and
+`account/logout` methods. Browser and device-code results are converted to
+bounded typed ceremonies. Login identifiers stay inside the adapter; browser
+responses receive only an `http` or `https` URL, device responses receive the
+verification URL and bounded user code, and no provider response body or
+profile file is exposed on an error.
+
+Each ceremony is bound in bounded server memory to one Execution Profile,
+Actor, authenticated session, login kind, and idempotency key for ten minutes.
+Only one ceremony per active host-profile slot is retained. Replaying the same
+completed start returns the same ceremony, while another session, Actor, key,
+kind, or profile fails closed. Status polling through `account/read` removes an
+expired ceremony and clears a completed ceremony once authentication is
+observed. The App Server owns and validates its browser callback state; Agent
+Workspace does not implement a second callback endpoint or accept callback
+parameters.
+
+API-key login is an explicit settings action. The value exists only in the
+bounded request body and the child JSONL request, is zeroized by the server
+handler after the awaited adapter call, and is never stored in PostgreSQL,
+ceremony state, browser cache data, logs, fixtures, or response DTOs. Logout
+first changes durable admission state, stops an active profile lease and its
+run safely, invokes the provider logout on a fresh isolated process, then
+terminates that process. Cancellation and logout are safe to repeat.
+
 Both operator-assisted authentication ceremonies completed against the pinned
 Red Hat binary:
 

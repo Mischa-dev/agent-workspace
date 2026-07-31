@@ -33,6 +33,7 @@ struct RegistryInner {
     profiles: Mutex<HashMap<Uuid, Arc<ProfileSupervisor>>>,
     shutting_down: AtomicBool,
     shutdown: Notify,
+    ceremonies: Mutex<HashMap<Uuid, LoginCeremony>>,
 }
 
 #[derive(Clone)]
@@ -52,6 +53,7 @@ struct ProfileSupervisor {
     codex_home: PathBuf,
     config: SupervisorConfig,
     state: Arc<Mutex<SupervisorState>>,
+    stopping: AtomicBool,
 }
 
 struct SupervisorState {
@@ -141,6 +143,74 @@ pub struct AccountSummary {
     pub email: Option<String>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub enum LoginStart {
+    Browser {
+        login_id: String,
+        auth_url: String,
+    },
+    DeviceCode {
+        login_id: String,
+        verification_url: String,
+        user_code: String,
+    },
+    ApiKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RateLimitWindow {
+    pub used_percent: u16,
+    pub resets_at: Option<i64>,
+    pub window_duration_minutes: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RateLimitSummary {
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginKind {
+    Browser,
+    DeviceCode,
+    ApiKey,
+}
+
+#[derive(Clone)]
+pub struct LoginCeremonySnapshot {
+    pub ceremony_id: Uuid,
+    pub kind: LoginKind,
+    pub response: Option<LoginStart>,
+    pub expires_at_unix_seconds: u64,
+}
+
+pub enum LoginReservation {
+    Reserved(Uuid),
+    Replay(LoginCeremonySnapshot),
+}
+
+#[derive(Debug, Error)]
+pub enum LoginCeremonyError {
+    #[error("another login ceremony is active for this Execution Profile")]
+    Active,
+    #[error("the host login ceremony limit is reached")]
+    Capacity,
+    #[error("the login ceremony is not available to this session")]
+    NotFound,
+}
+
+struct LoginCeremony {
+    ceremony_id: Uuid,
+    actor_id: Uuid,
+    session_id: Uuid,
+    idempotency_key: String,
+    kind: LoginKind,
+    response: Option<LoginStart>,
+    expires_at: Instant,
+    expires_at_unix_seconds: u64,
+}
+
 pub struct ProfileLease {
     supervisor: Arc<ProfileSupervisor>,
     guard: OwnedMutexGuard<SupervisorState>,
@@ -167,6 +237,7 @@ impl SupervisorRegistry {
                 profiles: Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
                 shutdown: Notify::new(),
+                ceremonies: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -182,6 +253,9 @@ impl SupervisorRegistry {
         let supervisor = {
             let mut profiles = self.inner.profiles.lock().await;
             if let Some(existing) = profiles.get(&profile_id) {
+                if existing.stopping.load(Ordering::Acquire) {
+                    return Err(SupervisorError::ShuttingDown);
+                }
                 if existing.codex_home != codex_home {
                     return Err(SupervisorError::ProfileConfigurationChanged);
                 }
@@ -201,6 +275,7 @@ impl SupervisorRegistry {
                         circuit_open_until: None,
                         process_starts: 0,
                     })),
+                    stopping: AtomicBool::new(false),
                 });
                 profiles.insert(profile_id, Arc::clone(&supervisor));
                 supervisor
@@ -232,20 +307,46 @@ impl SupervisorRegistry {
     }
 
     pub async fn shutdown_profile(&self, profile_id: Uuid) {
-        let supervisor = self.inner.profiles.lock().await.remove(&profile_id);
+        let supervisor = {
+            let profiles = self.inner.profiles.lock().await;
+            profiles.get(&profile_id).cloned()
+        };
         if let Some(supervisor) = supervisor {
+            supervisor.stopping.store(true, Ordering::Release);
             let mut state = supervisor.state.lock().await;
             shutdown_bridge(&mut state).await;
+            drop(state);
+            let mut profiles = self.inner.profiles.lock().await;
+            if profiles
+                .get(&profile_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &supervisor))
+            {
+                profiles.remove(&profile_id);
+            }
         }
+    }
+
+    pub async fn profile_is_stopping(&self, profile_id: Uuid) -> bool {
+        let supervisor = {
+            let profiles = self.inner.profiles.lock().await;
+            profiles.get(&profile_id).cloned()
+        };
+        let Some(supervisor) = supervisor else {
+            return true;
+        };
+        supervisor.stopping.load(Ordering::Acquire)
     }
 
     pub async fn shutdown_all(&self) {
         self.inner.shutting_down.store(true, Ordering::Release);
         self.inner.shutdown.notify_waiters();
         let supervisors = {
-            let mut profiles = self.inner.profiles.lock().await;
-            profiles.drain().map(|(_, value)| value).collect::<Vec<_>>()
+            let profiles = self.inner.profiles.lock().await;
+            profiles.values().cloned().collect::<Vec<_>>()
         };
+        for supervisor in &supervisors {
+            supervisor.stopping.store(true, Ordering::Release);
+        }
         for supervisor in supervisors {
             if let Ok(mut state) = timeout(
                 supervisor.config.shutdown_timeout + Duration::from_secs(1),
@@ -260,6 +361,110 @@ impl SupervisorRegistry {
                     "timed out waiting for the Codex profile lease during shutdown"
                 );
             }
+        }
+        self.inner.profiles.lock().await.clear();
+    }
+
+    pub async fn reserve_login(
+        &self,
+        profile_id: Uuid,
+        actor_id: Uuid,
+        session_id: Uuid,
+        idempotency_key: &str,
+        kind: LoginKind,
+    ) -> Result<LoginReservation, LoginCeremonyError> {
+        let mut ceremonies = self.inner.ceremonies.lock().await;
+        let now = Instant::now();
+        ceremonies.retain(|_, ceremony| ceremony.expires_at > now);
+        if let Some(ceremony) = ceremonies.get(&profile_id) {
+            if ceremony.actor_id == actor_id
+                && ceremony.session_id == session_id
+                && ceremony.idempotency_key == idempotency_key
+                && ceremony.kind == kind
+                && ceremony.response.is_some()
+            {
+                return Ok(LoginReservation::Replay(ceremony.snapshot()));
+            }
+            return Err(LoginCeremonyError::Active);
+        }
+        if ceremonies.len() >= self.inner.config.max_profiles {
+            return Err(LoginCeremonyError::Capacity);
+        }
+        let ceremony_id = Uuid::now_v7();
+        let lifetime = Duration::from_secs(10 * 60);
+        let expires_at_unix_seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_add(lifetime.as_secs());
+        ceremonies.insert(
+            profile_id,
+            LoginCeremony {
+                ceremony_id,
+                actor_id,
+                session_id,
+                idempotency_key: idempotency_key.to_owned(),
+                kind,
+                response: None,
+                expires_at: Instant::now() + lifetime,
+                expires_at_unix_seconds,
+            },
+        );
+        Ok(LoginReservation::Reserved(ceremony_id))
+    }
+
+    pub async fn complete_login(
+        &self,
+        profile_id: Uuid,
+        ceremony_id: Uuid,
+        response: LoginStart,
+    ) -> Result<LoginCeremonySnapshot, LoginCeremonyError> {
+        let mut ceremonies = self.inner.ceremonies.lock().await;
+        let ceremony = ceremonies
+            .get_mut(&profile_id)
+            .filter(|ceremony| ceremony.ceremony_id == ceremony_id)
+            .ok_or(LoginCeremonyError::NotFound)?;
+        ceremony.response = Some(response);
+        Ok(ceremony.snapshot())
+    }
+
+    pub async fn login_ceremony(
+        &self,
+        profile_id: Uuid,
+        actor_id: Uuid,
+        session_id: Uuid,
+    ) -> Option<LoginCeremonySnapshot> {
+        let mut ceremonies = self.inner.ceremonies.lock().await;
+        if ceremonies
+            .get(&profile_id)
+            .is_some_and(|ceremony| ceremony.expires_at <= Instant::now())
+        {
+            ceremonies.remove(&profile_id);
+        }
+        ceremonies
+            .get(&profile_id)
+            .filter(|ceremony| ceremony.actor_id == actor_id && ceremony.session_id == session_id)
+            .map(LoginCeremony::snapshot)
+    }
+
+    pub async fn clear_login(&self, profile_id: Uuid, ceremony_id: Option<Uuid>) {
+        let mut ceremonies = self.inner.ceremonies.lock().await;
+        let should_remove = ceremonies.get(&profile_id).is_some_and(|ceremony| {
+            ceremony_id.is_none_or(|ceremony_id| ceremony.ceremony_id == ceremony_id)
+        });
+        if should_remove {
+            ceremonies.remove(&profile_id);
+        }
+    }
+}
+
+impl LoginCeremony {
+    fn snapshot(&self) -> LoginCeremonySnapshot {
+        LoginCeremonySnapshot {
+            ceremony_id: self.ceremony_id,
+            kind: self.kind,
+            response: self.response.clone(),
+            expires_at_unix_seconds: self.expires_at_unix_seconds,
         }
     }
 }
@@ -385,11 +590,13 @@ impl ProfileLease {
         let account_type = account_value
             .and_then(|value| value.get("type"))
             .and_then(Value::as_str)
-            .map(str::to_owned);
+            .map(|value| bounded_provider_text(value, 32))
+            .transpose()?;
         let email = account_value
             .and_then(|value| value.get("email"))
             .and_then(Value::as_str)
-            .map(str::to_owned);
+            .map(|value| bounded_provider_text(value, 320))
+            .transpose()?;
         if authenticated && account_type.is_none() {
             return Err(SupervisorError::InvalidAccountResponse);
         }
@@ -397,6 +604,70 @@ impl ProfileLease {
             authenticated,
             account_type,
             email,
+        })
+    }
+
+    pub async fn start_browser_login(&mut self) -> Result<LoginStart, SupervisorError> {
+        let response = self
+            .request(
+                "account/login/start",
+                json!({
+                    "type": "chatgpt",
+                    "appBrand": "codex",
+                    "codexStreamlinedLogin": false,
+                    "useHostedLoginSuccessPage": true
+                }),
+            )
+            .await?;
+        parse_login_start(response, "chatgpt")
+    }
+
+    pub async fn start_device_code_login(&mut self) -> Result<LoginStart, SupervisorError> {
+        let response = self
+            .request("account/login/start", json!({"type": "chatgptDeviceCode"}))
+            .await?;
+        parse_login_start(response, "chatgptDeviceCode")
+    }
+
+    pub async fn login_with_api_key(
+        &mut self,
+        api_key: &str,
+    ) -> Result<LoginStart, SupervisorError> {
+        if !(20..=4096).contains(&api_key.len()) || api_key.chars().any(char::is_control) {
+            return Err(SupervisorError::InvalidAccountResponse);
+        }
+        let response = self
+            .request(
+                "account/login/start",
+                json!({"type": "apiKey", "apiKey": api_key}),
+            )
+            .await?;
+        if response.get("type").and_then(Value::as_str) != Some("apiKey") {
+            return Err(SupervisorError::InvalidAccountResponse);
+        }
+        Ok(LoginStart::ApiKey)
+    }
+
+    pub async fn cancel_login(&mut self, login_id: &str) -> Result<(), SupervisorError> {
+        let login_id = bounded_provider_text(login_id, 256)?;
+        self.request("account/login/cancel", json!({"loginId": login_id}))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn logout_account(&mut self) -> Result<(), SupervisorError> {
+        self.request("account/logout", Value::Null).await?;
+        Ok(())
+    }
+
+    pub async fn read_rate_limits(&mut self) -> Result<RateLimitSummary, SupervisorError> {
+        let response = self.request("account/rateLimits/read", Value::Null).await?;
+        let rate_limits = response
+            .get("rateLimits")
+            .ok_or(SupervisorError::InvalidAccountResponse)?;
+        Ok(RateLimitSummary {
+            primary: parse_rate_limit_window(rate_limits.get("primary"))?,
+            secondary: parse_rate_limit_window(rate_limits.get("secondary"))?,
         })
     }
 
@@ -618,6 +889,108 @@ fn parse_provider_request(raw: Value) -> Result<ProviderRequest, SupervisorError
     })
 }
 
+fn parse_login_start(response: Value, expected_type: &str) -> Result<LoginStart, SupervisorError> {
+    if response.get("type").and_then(Value::as_str) != Some(expected_type) {
+        return Err(SupervisorError::InvalidAccountResponse);
+    }
+    let login_id = bounded_provider_text(
+        response
+            .get("loginId")
+            .and_then(Value::as_str)
+            .ok_or(SupervisorError::InvalidAccountResponse)?,
+        256,
+    )?;
+    match expected_type {
+        "chatgpt" => Ok(LoginStart::Browser {
+            login_id,
+            auth_url: validated_provider_url(
+                response
+                    .get("authUrl")
+                    .and_then(Value::as_str)
+                    .ok_or(SupervisorError::InvalidAccountResponse)?,
+            )?,
+        }),
+        "chatgptDeviceCode" => Ok(LoginStart::DeviceCode {
+            login_id,
+            verification_url: validated_provider_url(
+                response
+                    .get("verificationUrl")
+                    .and_then(Value::as_str)
+                    .ok_or(SupervisorError::InvalidAccountResponse)?,
+            )?,
+            user_code: bounded_provider_text(
+                response
+                    .get("userCode")
+                    .and_then(Value::as_str)
+                    .ok_or(SupervisorError::InvalidAccountResponse)?,
+                128,
+            )?,
+        }),
+        _ => Err(SupervisorError::InvalidAccountResponse),
+    }
+}
+
+fn parse_rate_limit_window(
+    value: Option<&Value>,
+) -> Result<Option<RateLimitWindow>, SupervisorError> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let used_percent = value
+        .get("usedPercent")
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| *value <= 100)
+        .ok_or(SupervisorError::InvalidAccountResponse)?;
+    let bounded_optional_i64 = |name: &str, maximum: i64| {
+        value
+            .get(name)
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                value
+                    .as_i64()
+                    .filter(|value| (0..=maximum).contains(value))
+                    .ok_or(SupervisorError::InvalidAccountResponse)
+            })
+            .transpose()
+    };
+    Ok(Some(RateLimitWindow {
+        used_percent,
+        resets_at: bounded_optional_i64("resetsAt", 4_102_444_800)?,
+        window_duration_minutes: bounded_optional_i64("windowDurationMins", 525_600)?,
+    }))
+}
+
+fn bounded_provider_text(
+    value: &str,
+    maximum_characters: usize,
+) -> Result<String, SupervisorError> {
+    let character_count = value.chars().count();
+    if character_count == 0
+        || character_count > maximum_characters
+        || value.chars().any(char::is_control)
+    {
+        return Err(SupervisorError::InvalidAccountResponse);
+    }
+    Ok(value.to_owned())
+}
+
+fn validated_provider_url(value: &str) -> Result<String, SupervisorError> {
+    let value = bounded_provider_text(value, 2048)?;
+    let uri = value
+        .parse::<http::Uri>()
+        .map_err(|_| SupervisorError::InvalidAccountResponse)?;
+    if !matches!(uri.scheme_str(), Some("http" | "https"))
+        || uri.authority().is_none()
+        || uri
+            .authority()
+            .is_some_and(|authority| authority.as_str().contains('@'))
+    {
+        return Err(SupervisorError::InvalidAccountResponse);
+    }
+    Ok(value)
+}
+
 fn item_kind(raw: &Value) -> ItemKind {
     match raw.pointer("/params/item/type").and_then(Value::as_str) {
         Some("commandExecution") => ItemKind::CommandExecution,
@@ -666,8 +1039,8 @@ fn health_snapshot(state: &SupervisorState) -> ProfileHealth {
 mod tests {
     use super::{
         ApprovalKind, ItemKind, ProviderEvent, SupervisorError, SupervisorRegistry,
-        SupervisorState, health_snapshot, item_kind, parse_provider_request, record_failure,
-        restart_backoff,
+        SupervisorState, health_snapshot, item_kind, parse_login_start, parse_provider_request,
+        parse_rate_limit_window, record_failure, restart_backoff,
     };
     use crate::config::AppConfig;
     use serde_json::json;
@@ -727,6 +1100,42 @@ mod tests {
             event,
             ProviderEvent::TurnCompleted { completed: true }
         ));
+    }
+
+    #[test]
+    fn account_adapter_bounds_login_and_rate_limit_shapes() {
+        let login = parse_login_start(
+            json!({
+                "type": "chatgptDeviceCode",
+                "loginId": "login-1",
+                "verificationUrl": "https://example.com/device",
+                "userCode": "ABCD-EFGH"
+            }),
+            "chatgptDeviceCode",
+        )
+        .expect("device login response");
+        assert!(matches!(login, super::LoginStart::DeviceCode { .. }));
+        assert!(
+            parse_login_start(
+                json!({
+                    "type": "chatgpt",
+                    "loginId": "login-2",
+                    "authUrl": "javascript:alert(1)"
+                }),
+                "chatgpt"
+            )
+            .is_err()
+        );
+
+        let window = parse_rate_limit_window(Some(&json!({
+            "usedPercent": 42,
+            "resetsAt": 2_000_000_000_i64,
+            "windowDurationMins": 300
+        })))
+        .expect("rate limit window")
+        .expect("present rate limit window");
+        assert_eq!(window.used_percent, 42);
+        assert!(parse_rate_limit_window(Some(&json!({"usedPercent": 101}))).is_err());
     }
 
     #[cfg(unix)]
@@ -863,6 +1272,78 @@ done
         let expected_profile_home = profile_home.to_string_lossy();
         assert_eq!(fields.next(), Some(expected_data_root.as_ref()));
         assert_eq!(fields.next(), Some(expected_profile_home.as_ref()));
+
+        let actor_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        let ceremony_id = match registry
+            .reserve_login(
+                profile_id,
+                actor_id,
+                session_id,
+                "login-key",
+                super::LoginKind::DeviceCode,
+            )
+            .await
+            .expect("reserve login ceremony")
+        {
+            super::LoginReservation::Reserved(ceremony_id) => ceremony_id,
+            super::LoginReservation::Replay(_) => panic!("first login must reserve"),
+        };
+        registry
+            .complete_login(
+                profile_id,
+                ceremony_id,
+                super::LoginStart::DeviceCode {
+                    login_id: "login-1".to_owned(),
+                    verification_url: "https://example.com/device".to_owned(),
+                    user_code: "ABCD-EFGH".to_owned(),
+                },
+            )
+            .await
+            .expect("complete login ceremony");
+        assert!(matches!(
+            registry
+                .reserve_login(
+                    profile_id,
+                    actor_id,
+                    session_id,
+                    "login-key",
+                    super::LoginKind::DeviceCode,
+                )
+                .await
+                .expect("replay login ceremony"),
+            super::LoginReservation::Replay(_)
+        ));
+        assert!(matches!(
+            registry
+                .reserve_login(
+                    profile_id,
+                    actor_id,
+                    Uuid::now_v7(),
+                    "other-key",
+                    super::LoginKind::DeviceCode,
+                )
+                .await,
+            Err(super::LoginCeremonyError::Active)
+        ));
+        assert!(
+            registry
+                .login_ceremony(profile_id, actor_id, Uuid::now_v7())
+                .await
+                .is_none()
+        );
+        assert!(matches!(
+            registry
+                .reserve_login(
+                    Uuid::now_v7(),
+                    actor_id,
+                    session_id,
+                    "capacity-key",
+                    super::LoginKind::Browser,
+                )
+                .await,
+            Err(super::LoginCeremonyError::Capacity)
+        ));
 
         registry.shutdown_all().await;
         assert!(registry.is_shutting_down());
