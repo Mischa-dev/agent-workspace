@@ -143,11 +143,14 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
     .execute(&pool)
     .await
     .expect("insert stale approval");
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(8),
+        supervisors,
     };
     assert_eq!(
         recovery::cancel_terminal_run_approvals(&state)

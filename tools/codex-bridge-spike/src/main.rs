@@ -63,6 +63,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_line_bytes: cli.max_line_bytes,
         max_stderr_bytes: cli.max_stderr_bytes,
         request_timeout: Duration::from_secs(cli.timeout_seconds),
+        shutdown_timeout: Duration::from_secs(5),
+        max_buffered_events: 1024,
+        automatic_server_request_responses: true,
     };
     let mut bridge = CodexBridge::spawn(config).await?;
     bridge.initialize().await?;

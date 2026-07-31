@@ -118,11 +118,14 @@ async fn execution_resources_are_project_scoped_and_status_only() {
     .expect("add provider-private capability fixture");
     let foreign_project_id = insert_foreign_execution_fixture(&pool, seed.organization_id).await;
 
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     let application = router(AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(16),
+        supervisors,
     });
     let cookie = login(&application).await;
 
@@ -178,6 +181,9 @@ async fn execution_resources_are_project_scoped_and_status_only() {
     assert_eq!(profile["maxActiveTurns"], 1);
     assert_eq!(profile["lastFailureCategory"], "process_start_failed");
     assert_eq!(profile["availableForNewRuns"], true);
+    assert_eq!(profile["supervisor"]["state"], "stopped");
+    assert_eq!(profile["supervisor"]["consecutiveFailures"], 0);
+    assert_eq!(profile["supervisor"]["processStarts"], 0);
     assert_eq!(profile["owner"]["id"], seed.human_actor_id.to_string());
     assert_redacted(&profile_text, &runtime_root);
 

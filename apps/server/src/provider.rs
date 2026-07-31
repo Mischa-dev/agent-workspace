@@ -1,6 +1,5 @@
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
-use codex_bridge_spike::{BridgeConfig, CodexBridge};
 use serde_json::{Value, json};
 use sqlx::{FromRow, Postgres, Transaction};
 use tokio::time::sleep;
@@ -15,6 +14,11 @@ use crate::{
     outbox,
     realtime::RealtimeEvent,
 };
+
+mod codex_app_server;
+
+use codex_app_server::{ApprovalKind, ItemKind, ProfileLease, ProviderEvent};
+pub use codex_app_server::{ProfileHealth, SupervisorRegistry};
 
 #[derive(Debug)]
 pub struct StartedProviderRun {
@@ -46,7 +50,20 @@ pub async fn start_run(
     .fetch_one(&state.pool)
     .await?;
     let codex_home = PathBuf::from(codex_home);
-    let mut bridge = spawn_initialized_bridge(state, codex_home, worktree.clone(), run_id).await?;
+    let provider = state
+        .supervisors
+        .acquire(execution_profile_id, codex_home)
+        .await;
+    let mut provider = match provider {
+        Ok(provider) => {
+            mark_profile_healthy(state, execution_profile_id).await?;
+            provider
+        }
+        Err(error) => {
+            mark_profile_failure(state, execution_profile_id, "supervisor_unavailable").await;
+            return Err(provider_error(run_id, "acquire profile supervisor", error));
+        }
+    };
 
     let existing = sqlx::query_as::<_, (Uuid, String)>(
         r#"
@@ -62,32 +79,16 @@ pub async fn start_run(
 
     let (provider_session_id, provider_thread_id) = if let Some((session_id, thread_id)) = existing
     {
-        bridge
-            .request(
-                "thread/resume",
-                json!({"threadId": thread_id, "cwd": worktree}),
-            )
+        provider
+            .resume_thread(&thread_id, &worktree)
             .await
             .map_err(|error| provider_error(run_id, "resume thread", error))?;
         (session_id, thread_id)
     } else {
-        let thread = bridge
-            .request(
-                "thread/start",
-                json!({
-                    "cwd": worktree,
-                    "approvalPolicy": "on-request",
-                    "sandbox": "workspace-write",
-                    "ephemeral": false
-                }),
-            )
+        let thread_id = provider
+            .start_thread(&worktree)
             .await
             .map_err(|error| provider_error(run_id, "start thread", error))?;
-        let thread_id = thread
-            .pointer("/thread/id")
-            .and_then(Value::as_str)
-            .ok_or(AppError::Internal("provider omitted thread id"))?
-            .to_owned();
         let session_id = Uuid::now_v7();
         sqlx::query(
             r#"
@@ -107,22 +108,10 @@ pub async fn start_run(
         (session_id, thread_id)
     };
 
-    let turn = bridge
-        .request(
-            "turn/start",
-            json!({
-                "threadId": provider_thread_id,
-                "cwd": worktree,
-                "input": [{"type": "text", "text": prompt}]
-            }),
-        )
+    let turn_id = provider
+        .start_turn(&provider_thread_id, &worktree, &prompt)
         .await
         .map_err(|error| provider_error(run_id, "start turn", error))?;
-    let turn_id = turn
-        .pointer("/turn/id")
-        .and_then(Value::as_str)
-        .ok_or(AppError::Internal("provider omitted turn id"))?
-        .to_owned();
 
     let mut transaction = state.pool.begin().await?;
     sqlx::query(
@@ -150,7 +139,7 @@ pub async fn start_run(
     tokio::spawn(async move {
         if let Err(error) = drive_turn(
             background_state.clone(),
-            bridge,
+            provider,
             project_id,
             run_id,
             conversation_id,
@@ -181,51 +170,14 @@ pub async fn start_run(
     })
 }
 
-async fn spawn_initialized_bridge(
-    state: &AppState,
-    codex_home: PathBuf,
-    worktree: PathBuf,
-    run_id: Uuid,
-) -> Result<CodexBridge, AppError> {
-    let mut environment = BTreeMap::new();
-    let codex_parent = state
-        .config
-        .codex_binary
-        .parent()
-        .ok_or(AppError::Internal("Codex binary has no parent"))?;
-    environment.insert(
-        "PATH".to_owned(),
-        format!("{}:/usr/local/bin:/usr/bin:/bin", codex_parent.display()),
-    );
-    environment.insert("LANG".to_owned(), "C.UTF-8".to_owned());
-    environment.insert("LC_ALL".to_owned(), "C.UTF-8".to_owned());
-    let config = BridgeConfig {
-        codex_binary: state.config.codex_binary.clone(),
-        codex_home,
-        cwd: worktree.clone(),
-        safe_environment: environment,
-        max_line_bytes: 1_048_576,
-        max_stderr_bytes: 262_144,
-        request_timeout: Duration::from_secs(120),
-    };
-    let mut bridge = CodexBridge::spawn(config)
-        .await
-        .map_err(|error| provider_error(run_id, "spawn", error))?;
-    bridge
-        .initialize()
-        .await
-        .map_err(|error| provider_error(run_id, "initialize", error))?;
-    Ok(bridge)
-}
-
 pub(crate) async fn inspect_provider_for_recovery(
     state: &AppState,
     run_id: Uuid,
     worktree: PathBuf,
 ) -> ProviderRecovery {
-    let provider = sqlx::query_as::<_, (String, String)>(
+    let provider = sqlx::query_as::<_, (String, String, Uuid)>(
         r#"
-        SELECT ps.provider_thread_id, ep.codex_home_path
+        SELECT ps.provider_thread_id, ep.codex_home_path, ep.id
         FROM agent_runs ar
         JOIN provider_sessions ps ON ps.id = ar.provider_session_id
         JOIN execution_profiles ep ON ep.id = ar.execution_profile_id
@@ -235,63 +187,31 @@ pub(crate) async fn inspect_provider_for_recovery(
     .bind(run_id)
     .fetch_optional(&state.pool)
     .await;
-    let Ok(Some((provider_thread_id, codex_home))) = provider else {
+    let Ok(Some((provider_thread_id, codex_home, execution_profile_id))) = provider else {
         return ProviderRecovery::Unavailable;
     };
 
-    let bridge =
-        spawn_initialized_bridge(state, PathBuf::from(codex_home), worktree.clone(), run_id).await;
-    let Ok(mut bridge) = bridge else {
+    let provider = state
+        .supervisors
+        .acquire(execution_profile_id, PathBuf::from(codex_home))
+        .await;
+    let Ok(mut provider) = provider else {
         return ProviderRecovery::Unavailable;
     };
-    if bridge
-        .request(
-            "thread/resume",
-            json!({"threadId": provider_thread_id, "cwd": worktree}),
-        )
+    if provider
+        .resume_thread(&provider_thread_id, &worktree)
         .await
         .is_err()
     {
-        bridge.shutdown().await;
         return ProviderRecovery::Unavailable;
     }
-    let history = bridge
-        .request(
-            "thread/read",
-            json!({"threadId": provider_thread_id, "includeTurns": true}),
-        )
-        .await;
-    bridge.shutdown().await;
+    let history = provider.read_latest_turn(&provider_thread_id).await;
     let Ok(history) = history else {
         return ProviderRecovery::Unavailable;
     };
-    let Some(latest_turn) = history
-        .pointer("/thread/turns")
-        .and_then(Value::as_array)
-        .and_then(|turns| turns.last())
-    else {
-        return ProviderRecovery::Resumed {
-            latest_turn_status: "missing".to_owned(),
-        };
-    };
-    let latest_turn_status = latest_turn
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_owned();
+    let latest_turn_status = history.status;
     if latest_turn_status == "completed" {
-        let message = latest_turn
-            .get("items")
-            .and_then(Value::as_array)
-            .and_then(|items| {
-                items.iter().rev().find_map(|item| {
-                    (item.get("type").and_then(Value::as_str) == Some("agentMessage"))
-                        .then(|| item.get("text").and_then(Value::as_str))
-                        .flatten()
-                })
-            })
-            .map(str::to_owned)
-            .unwrap_or_default();
+        let message = history.final_message.unwrap_or_default();
         if validated_worker_message(&message).is_err() {
             tracing::warn!(
                 %run_id,
@@ -302,6 +222,43 @@ pub(crate) async fn inspect_provider_for_recovery(
         return ProviderRecovery::Completed { message };
     }
     ProviderRecovery::Resumed { latest_turn_status }
+}
+
+async fn mark_profile_healthy(state: &AppState, profile_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE execution_profiles
+        SET last_health_at = now(), last_failure_category = NULL,
+            version = version + 1, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(profile_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_profile_failure(state: &AppState, profile_id: Uuid, category: &'static str) {
+    if let Err(error) = sqlx::query(
+        r#"
+        UPDATE execution_profiles
+        SET last_health_at = now(), last_failure_category = $2,
+            version = version + 1, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(profile_id)
+    .bind(category)
+    .execute(&state.pool)
+    .await
+    {
+        tracing::error!(
+            error_type = std::any::type_name_of_val(&error),
+            %profile_id,
+            "failed to persist redacted Codex profile health"
+        );
+    }
 }
 
 pub(crate) async fn complete_recovered_run(
@@ -339,7 +296,7 @@ pub(crate) async fn complete_recovered_run(
 #[allow(clippy::too_many_arguments)]
 async fn drive_turn(
     state: AppState,
-    mut bridge: CodexBridge,
+    mut provider: ProfileLease,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
@@ -350,87 +307,69 @@ async fn drive_turn(
     let message_stream_id = Uuid::now_v7();
     loop {
         tokio::select! {
-            event = bridge.next_raw_event() => {
+            event = provider.next_event() => {
                 let event = event.map_err(|error| provider_error(run_id, "read event", error))?;
-                if event.get("id").is_some() && event.get("method").is_some() {
-                    handle_provider_request(
+                match event {
+                    ProviderEvent::Request(request) => handle_provider_request(
                         &state,
-                        &mut bridge,
+                        &mut provider,
                         project_id,
                         run_id,
                         conversation_id,
-                        event,
-                    ).await?;
-                    continue;
-                }
-                let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
-                match method {
-                    "item/agentMessage/delta" => {
-                        if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) {
-                            if let Err(error) = message.push(delta) {
-                                bridge.shutdown().await;
-                                return Err(provider_message_error(run_id, error));
-                            }
-                            state.realtime.publish(RealtimeEvent {
-                                event_id: Uuid::now_v7(),
-                                kind: "message.delta",
-                                project_id,
-                                conversation_id: Some(conversation_id),
-                                payload: json!({
-                                    "message_id": message_stream_id,
-                                    "agent_run_id": run_id,
-                                    "delta": delta
-                                }),
-                            });
+                        request,
+                    ).await?,
+                    ProviderEvent::AgentMessageDelta(delta) => {
+                        if let Err(error) = message.push(&delta) {
+                            provider.shutdown_process().await;
+                            return Err(provider_message_error(run_id, error));
                         }
+                        state.realtime.publish(RealtimeEvent {
+                            event_id: Uuid::now_v7(),
+                            kind: "message.delta",
+                            project_id,
+                            conversation_id: Some(conversation_id),
+                            payload: json!({
+                                "message_id": message_stream_id,
+                                "agent_run_id": run_id,
+                                "delta": delta
+                            }),
+                        });
                     }
-                    "item/started" => {
-                        let item_type = event.pointer("/params/item/type").and_then(Value::as_str);
-                        if item_type == Some("commandExecution") {
-                            persist_event(
-                                &state,
-                                project_id,
-                                run_id,
-                                conversation_id,
-                                "command_started",
-                                "Codex started a command in the isolated worktree.",
-                                json!({}),
-                            ).await?;
-                        }
+                    ProviderEvent::ItemStarted(ItemKind::CommandExecution) => {
+                        persist_event(
+                            &state,
+                            project_id,
+                            run_id,
+                            conversation_id,
+                            "command_started",
+                            "Codex started a command in the isolated worktree.",
+                            json!({}),
+                        ).await?;
                     }
-                    "item/completed" => {
-                        let item_type = event.pointer("/params/item/type").and_then(Value::as_str);
-                        match item_type {
-                            Some("commandExecution") => {
-                                persist_event(
-                                    &state,
-                                    project_id,
-                                    run_id,
-                                    conversation_id,
-                                    "command_completed",
-                                    "Codex completed a command in the isolated worktree.",
-                                    json!({}),
-                                ).await?;
-                            }
-                            Some("fileChange") => {
-                                persist_event(
-                                    &state,
-                                    project_id,
-                                    run_id,
-                                    conversation_id,
-                                    "file_change",
-                                    "Codex completed a file change in the isolated worktree.",
-                                    json!({}),
-                                ).await?;
-                            }
-                            _ => {}
-                        }
+                    ProviderEvent::ItemCompleted(ItemKind::CommandExecution) => {
+                        persist_event(
+                            &state,
+                            project_id,
+                            run_id,
+                            conversation_id,
+                            "command_completed",
+                            "Codex completed a command in the isolated worktree.",
+                            json!({}),
+                        ).await?;
                     }
-                    "turn/completed" => {
-                        if event.pointer("/params/turn/status").and_then(Value::as_str)
-                            != Some("completed")
-                        {
-                            bridge.shutdown().await;
+                    ProviderEvent::ItemCompleted(ItemKind::FileChange) => {
+                        persist_event(
+                            &state,
+                            project_id,
+                            run_id,
+                            conversation_id,
+                            "file_change",
+                            "Codex completed a file change in the isolated worktree.",
+                            json!({}),
+                        ).await?;
+                    }
+                    ProviderEvent::TurnCompleted { completed } => {
+                        if !completed {
                             return Err(AppError::Conflict(
                                 "provider",
                                 "Codex turn did not complete successfully",
@@ -444,14 +383,14 @@ async fn drive_turn(
                             message_stream_id,
                             message.as_str(),
                         ).await?;
-                        bridge.shutdown().await;
                         return Ok(());
                     }
-                    "error" => {
-                        bridge.shutdown().await;
+                    ProviderEvent::Error => {
                         return Err(AppError::Conflict("provider", "Codex reported an error"));
                     }
-                    _ => {}
+                    ProviderEvent::ItemStarted(_)
+                    | ProviderEvent::ItemCompleted(_)
+                    | ProviderEvent::Ignored => {}
                 }
             }
             () = sleep(Duration::from_millis(500)) => {
@@ -462,13 +401,13 @@ async fn drive_turn(
                 .fetch_one(&state.pool)
                 .await?;
                 if run_state == "interrupted" {
-                    let _ = bridge.request(
-                        "turn/interrupt",
-                        json!({"threadId": provider_thread_id, "turnId": turn_id}),
-                    ).await;
-                    bridge.shutdown().await;
+                    let _ = provider.interrupt_turn(&provider_thread_id, &turn_id).await;
                     return Ok(());
                 }
+            }
+            () = state.supervisors.shutdown_requested() => {
+                provider.shutdown_process().await;
+                return Ok(());
             }
         }
     }
@@ -476,27 +415,28 @@ async fn drive_turn(
 
 async fn handle_provider_request(
     state: &AppState,
-    bridge: &mut CodexBridge,
+    provider: &mut ProfileLease,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
-    request: Value,
+    request: codex_app_server::ProviderRequest,
 ) -> Result<(), AppError> {
-    let request_id = request
-        .get("id")
-        .cloned()
-        .ok_or(AppError::Internal("provider request omitted id"))?;
-    let method = request
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let kind = if method == "item/tool/requestUserInput" {
-        "question"
-    } else {
-        "approval"
+    if request.kind == ApprovalKind::Unsupported {
+        provider
+            .answer_request(request, false)
+            .await
+            .map_err(|error| {
+                provider_error(run_id, "reject unsupported provider request", error)
+            })?;
+        return Ok(());
+    }
+    let kind = match request.kind {
+        ApprovalKind::Question => "question",
+        ApprovalKind::Approval => "approval",
+        ApprovalKind::Unsupported => unreachable!("unsupported requests return above"),
     };
     let approval_id = Uuid::now_v7();
-    let provider_request_id = request_id.to_string();
+    let provider_request_id = request.durable_id();
     let summary = if kind == "question" {
         "Codex needs an answer before it can continue."
     } else {
@@ -543,7 +483,14 @@ async fn handle_provider_request(
     transaction.commit().await?;
 
     loop {
-        sleep(Duration::from_millis(300)).await;
+        tokio::select! {
+            () = sleep(Duration::from_millis(300)) => {}
+            () = state.supervisors.shutdown_requested() => {
+                let _ = provider.answer_request(request, false).await;
+                provider.shutdown_process().await;
+                return Ok(());
+            }
+        }
         #[derive(FromRow)]
         struct Resolution {
             run_state: String,
@@ -562,8 +509,8 @@ async fn handle_provider_request(
         .fetch_one(&state.pool)
         .await?;
         if resolution.run_state == "interrupted" {
-            bridge
-                .respond(request_id, json!({"decision": "decline"}))
+            provider
+                .answer_request(request, false)
                 .await
                 .map_err(|error| provider_error(run_id, "decline interrupted request", error))?;
             return Ok(());
@@ -577,27 +524,8 @@ async fn handle_provider_request(
             .and_then(|value| value.get("decision"))
             .and_then(Value::as_str)
             == Some("approve");
-        let result = if kind == "question" {
-            let mut answers = serde_json::Map::new();
-            if let Some(questions) = request
-                .pointer("/params/questions")
-                .and_then(Value::as_array)
-            {
-                for question in questions {
-                    if let Some(id) = question.get("id").and_then(Value::as_str) {
-                        answers.insert(
-                            id.to_owned(),
-                            json!({"answers": [if approved { "approved" } else { "denied" }]}),
-                        );
-                    }
-                }
-            }
-            json!({"answers": answers})
-        } else {
-            json!({"decision": if approved { "accept" } else { "decline" }})
-        };
-        bridge
-            .respond(request_id, result)
+        provider
+            .answer_request(request, approved)
             .await
             .map_err(|error| provider_error(run_id, "answer provider request", error))?;
         return Ok(());

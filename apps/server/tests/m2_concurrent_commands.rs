@@ -505,11 +505,14 @@ fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
         database_url.to_owned(),
     )]);
     let config = AppConfig::from_values(&values).expect("test configuration");
+    let supervisors = agent_workspace_server::provider::SupervisorRegistry::new(&config)
+        .expect("test supervisor registry");
     router(AppState {
         config: Arc::new(config),
         pool,
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(32),
+        supervisors,
     })
 }
 

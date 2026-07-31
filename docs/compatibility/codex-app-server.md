@@ -57,6 +57,48 @@ Schema capture succeeded on macOS ARM64 with `codex-cli 0.146.0`.
 - The environment is cleared before launch. Only `CODEX_HOME`, `PWD`, and an
   explicit `PATH`, `LANG`, and `LC_ALL` allowlist are passed.
 
+## M3 supervised-process contract
+
+M3 replaces the walking-skeleton's per-run App Server ownership with one lazy,
+bounded supervisor per Execution Profile. The process starts in the configured
+neutral data root; each typed Thread and turn adapter operation supplies the
+exact managed worktree as `cwd`. Dropping a run lease does not terminate a
+healthy process, so sequential runs on the same profile reuse the initialized
+App Server. The durable scheduler still permits only one active turn for that
+profile.
+
+The registry enforces a typed host profile limit (one by default), one pending
+adapter operation per leased profile, a 64-event pre-response buffer by
+default, the configured JSONL/stderr/request and shutdown bounds, exponential
+restart backoff capped at five seconds, and a 30-second circuit after five
+consecutive transport starts fail. A transport failure terminates the entire
+process group before a later request may restart it. Coordinated application
+shutdown wakes active run drivers and then drains and terminates every retained
+profile process. Notifications observed before a correlated response are
+drained in arrival order; exceeding the event bound fails and terminates the
+process.
+
+Raw method names, response shapes, and provider requests remain in the Codex
+adapter. The rest of the application receives typed thread IDs, turn IDs,
+normalized activity events, approval/question requests, recovery summaries,
+and redacted account status. Authenticated profile status exposes only
+`stopped`, `ready`, or `circuit_open`, a bounded failure count, and process
+start count; it does not expose PIDs, environment, filesystem paths, stderr,
+provider JSON, or credentials.
+
+Production mode never uses the bridge spike's automatic approval helper.
+Command, file, and permission approvals plus user-input questions are the only
+server requests admitted to the durable blocker flow. Every other provider
+request receives a bounded JSON-RPC `method not found` response and cannot be
+converted into an approval decision.
+
+Deterministic CI starts a fake JSONL App Server, proves initialize/initialized
+ordering, performs two sequential Thread/turn starts through the same process,
+confirms the neutral process directory and isolated `CODEX_HOME`, rejects a
+second profile at host capacity, and exercises coordinated shutdown. Live Red
+Hat process-reuse and restart evidence remains part of the open M3 acceptance
+gate.
+
 Both operator-assisted authentication ceremonies completed against the pinned
 Red Hat binary:
 

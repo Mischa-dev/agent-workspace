@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, fmt, net::SocketAddr, path::PathBuf, str::FromStr};
+use std::{
+    collections::BTreeMap, fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration,
+};
 
 use thiserror::Error;
 
@@ -74,6 +76,12 @@ pub struct AppConfig {
     pub web_root: PathBuf,
     pub codex_binary: PathBuf,
     pub codex_home_root: PathBuf,
+    pub codex_host_concurrency_limit: usize,
+    pub codex_max_line_bytes: usize,
+    pub codex_max_stderr_bytes: usize,
+    pub codex_max_buffered_events: usize,
+    pub codex_request_timeout: Duration,
+    pub codex_shutdown_timeout: Duration,
     pub demo_executor: bool,
     pub log_filter: String,
 }
@@ -108,6 +116,14 @@ impl AppConfig {
             "CODEX_HOME_ROOT",
             ".agent-workspace/codex/profiles",
         ));
+        let codex_host_concurrency_limit = parse(values, "CODEX_HOST_CONCURRENCY_LIMIT", "1")?;
+        let codex_max_line_bytes = parse(values, "CODEX_MAX_LINE_BYTES", "1048576")?;
+        let codex_max_stderr_bytes = parse(values, "CODEX_MAX_STDERR_BYTES", "262144")?;
+        let codex_max_buffered_events = parse(values, "CODEX_MAX_BUFFERED_EVENTS", "64")?;
+        let codex_request_timeout =
+            Duration::from_secs(parse(values, "CODEX_REQUEST_TIMEOUT_SECONDS", "120")?);
+        let codex_shutdown_timeout =
+            Duration::from_secs(parse(values, "CODEX_SHUTDOWN_TIMEOUT_SECONDS", "5")?);
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let allowed_origins = allowed_origins(values, environment)?;
@@ -131,6 +147,42 @@ impl AppConfig {
                 reason: "runtime paths cannot be empty".into(),
             });
         }
+        if !(1..=16).contains(&codex_host_concurrency_limit) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_HOST_CONCURRENCY_LIMIT"),
+                reason: "must be between 1 and 16".into(),
+            });
+        }
+        if !(1024..=16 * 1024 * 1024).contains(&codex_max_line_bytes) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_MAX_LINE_BYTES"),
+                reason: "must be between 1024 and 16777216".into(),
+            });
+        }
+        if !(1024..=4 * 1024 * 1024).contains(&codex_max_stderr_bytes) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_MAX_STDERR_BYTES"),
+                reason: "must be between 1024 and 4194304".into(),
+            });
+        }
+        if !(1..=1_024).contains(&codex_max_buffered_events) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_MAX_BUFFERED_EVENTS"),
+                reason: "must be between 1 and 1024".into(),
+            });
+        }
+        if !(Duration::from_secs(1)..=Duration::from_secs(600)).contains(&codex_request_timeout) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_REQUEST_TIMEOUT_SECONDS"),
+                reason: "must be between 1 and 600".into(),
+            });
+        }
+        if !(Duration::from_secs(1)..=Duration::from_secs(30)).contains(&codex_shutdown_timeout) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_SHUTDOWN_TIMEOUT_SECONDS"),
+                reason: "must be between 1 and 30".into(),
+            });
+        }
         if demo_executor && !environment.is_development() {
             return Err(ConfigError::Invalid {
                 key: format!("{PREFIX}DEMO_EXECUTOR"),
@@ -149,6 +201,12 @@ impl AppConfig {
             web_root,
             codex_binary,
             codex_home_root,
+            codex_host_concurrency_limit,
+            codex_max_line_bytes,
+            codex_max_stderr_bytes,
+            codex_max_buffered_events,
+            codex_request_timeout,
+            codex_shutdown_timeout,
             demo_executor,
             log_filter,
         })
@@ -331,5 +389,45 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("wildcard must be rejected");
         assert!(error.to_string().contains("without paths or wildcards"));
+    }
+
+    #[test]
+    fn codex_supervisor_limits_are_bounded() {
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "0".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+            "1".to_owned(),
+        );
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_MAX_LINE_BYTES".to_owned(),
+            "16777217".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_MAX_LINE_BYTES".to_owned(),
+            "1048576".to_owned(),
+        );
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_MAX_BUFFERED_EVENTS".to_owned(),
+            "1025".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_MAX_BUFFERED_EVENTS".to_owned(),
+            "64".to_owned(),
+        );
+        values.insert(
+            "AGENT_WORKSPACE_CODEX_REQUEST_TIMEOUT_SECONDS".to_owned(),
+            "601".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
     }
 }
