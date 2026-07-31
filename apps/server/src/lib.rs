@@ -1,8 +1,15 @@
 #![forbid(unsafe_code)]
 
+pub mod api;
 pub mod config;
+pub mod domain;
 pub mod error;
+pub mod git_runtime;
 pub mod health;
+pub mod provider;
+pub mod realtime;
+pub mod recovery;
+pub mod seed;
 pub mod telemetry;
 
 use std::sync::Arc;
@@ -12,10 +19,12 @@ use http::{HeaderName, Request};
 use sqlx::PgPool;
 use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
 use tracing::Span;
 
+use crate::realtime::RealtimeHub;
 use crate::{config::AppConfig, health::HealthState};
 
 pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -24,15 +33,24 @@ pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id"
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub pool: PgPool,
+    pub realtime: RealtimeHub,
 }
 
 pub fn router(state: AppState) -> Router {
     let request_id = REQUEST_ID_HEADER.clone();
+    let web_root = state.config.web_root.clone();
+    let index = web_root.join("index.html");
 
     Router::new()
         .merge(health::router(HealthState {
             pool: state.pool.clone(),
         }))
+        .merge(api::router())
+        .fallback_service(
+            ServeDir::new(web_root)
+                .append_index_html_on_directories(true)
+                .fallback(ServeFile::new(index)),
+        )
         .with_state(state)
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {

@@ -182,13 +182,21 @@ impl CodexBridge {
     }
 
     pub async fn next_event(&mut self) -> Result<Value, BridgeError> {
-        let message = timeout(self.request_timeout, self.read_message())
-            .await
-            .map_err(|_| BridgeError::Timeout)??;
+        let message = self.next_raw_event().await?;
         if message.get("id").is_some() && message.get("method").is_some() {
             self.respond_to_server_request(&message).await?;
         }
         Ok(redact_fixture(message))
+    }
+
+    pub async fn next_raw_event(&mut self) -> Result<Value, BridgeError> {
+        timeout(self.request_timeout, self.read_message())
+            .await
+            .map_err(|_| BridgeError::Timeout)?
+    }
+
+    pub async fn respond(&mut self, id: Value, result: Value) -> Result<(), BridgeError> {
+        self.write_json(&json!({"id": id, "result": result})).await
     }
 
     pub fn take_notifications(&mut self) -> Vec<Value> {

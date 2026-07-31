@@ -30,6 +30,11 @@ M0 handles `item/started`, `item/completed`, agent-message deltas,
 command-output deltas, `turn/completed`, `error`, approval requests,
 user-input requests, and `serverRequest/resolved`.
 
+`item/tool/requestUserInput` is experimental in the 0.146.0 schema. M0 accepts
+it only at the provider boundary so a real blocking question can use the same
+durable approval record and UI response path; no experimental shape leaks into
+the application domain or browser contract.
+
 ## Verification record
 
 Schema capture succeeded on macOS ARM64 with `codex-cli 0.146.0`.

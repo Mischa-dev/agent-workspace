@@ -70,8 +70,10 @@ pub struct AppConfig {
     pub database_url: SecretString,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
+    pub web_root: PathBuf,
     pub codex_binary: PathBuf,
     pub codex_home_root: PathBuf,
+    pub demo_executor: bool,
     pub log_filter: String,
 }
 
@@ -98,12 +100,14 @@ impl AppConfig {
         let database_url = required(values, "DATABASE_URL")?;
         let database_max_connections = parse(values, "DATABASE_MAX_CONNECTIONS", "5")?;
         let data_root = PathBuf::from(optional(values, "DATA_ROOT", ".agent-workspace"));
+        let web_root = PathBuf::from(optional(values, "WEB_ROOT", "apps/web/dist"));
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
         let codex_home_root = PathBuf::from(optional(
             values,
             "CODEX_HOME_ROOT",
             ".agent-workspace/codex/profiles",
         ));
+        let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
@@ -116,10 +120,19 @@ impl AppConfig {
             });
         }
 
-        if data_root.as_os_str().is_empty() || codex_home_root.as_os_str().is_empty() {
+        if data_root.as_os_str().is_empty()
+            || web_root.as_os_str().is_empty()
+            || codex_home_root.as_os_str().is_empty()
+        {
             return Err(ConfigError::Invalid {
                 key: format!("{PREFIX}DATA_ROOT"),
                 reason: "runtime paths cannot be empty".into(),
+            });
+        }
+        if demo_executor && !environment.is_development() {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DEMO_EXECUTOR"),
+                reason: "the demo executor is development-only".into(),
             });
         }
 
@@ -130,8 +143,10 @@ impl AppConfig {
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,
+            web_root,
             codex_binary,
             codex_home_root,
+            demo_executor,
             log_filter,
         })
     }

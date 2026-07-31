@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 implementation baseline v0.4
+**Status:** M0 implementation baseline v0.5
 
 **Owner:** Mischa Nelson  
 **Date:** July 30, 2026  
@@ -12,6 +12,13 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.5 — PostgreSQL 18 container layout correction
+
+- corrected the PostgreSQL 18 container volume target from
+  `/var/lib/postgresql/data` to `/var/lib/postgresql`
+- recorded the versioned cluster-directory behavior required by the pinned
+  PostgreSQL 18 image
 
 ### v0.4 — verified M0 toolchain correction
 
@@ -3843,6 +3850,16 @@ Version one does not require a Hermes, OpenClaw, or other external-agent connect
 **Status:** Accepted
 
 **Reason:** The planned Rust `1.98.0` artifact did not exist for the target architectures when M0 began. M0 pins Rust `1.97.1`, the current published stable release verified from the official channel manifest. Future pin changes require the same artifact check before CI or host installation.
+
+## D-030: PostgreSQL 18 mounts the cluster parent directory
+
+**Status:** Accepted
+
+**Reason:** The pinned PostgreSQL 18 container image stores versioned database
+clusters below `/var/lib/postgresql`. Mounting a named volume at the older
+`/var/lib/postgresql/data` path is rejected by the image and prevents startup.
+Docker Compose and rootless Podman Compose therefore mount the isolated
+Agent Workspace volume at `/var/lib/postgresql`.
 
 ---
 

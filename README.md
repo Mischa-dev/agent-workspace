@@ -30,6 +30,23 @@ cargo test --workspace
 Copy `.env.example` to `.env` for local development. Never commit `.env`,
 Codex credentials, GitHub App keys, webhook secrets, or bearer tokens.
 
+Start PostgreSQL, then apply migrations and create the idempotent M0 seed:
+
+```bash
+corepack pnpm db:up
+cargo run -p agent-workspace-server -- dev-seed
+```
+
+The seed creates the initial Actor, Organization, Project, `#implementation`
+Channel, `M0 walking skeleton` Thread, `@agent` execution worker, provider
+connection, retained execution profile, and trusted spike repository. Set
+`AGENT_WORKSPACE_DEV_REPOSITORY_MIRROR` to the absolute bare-mirror path.
+`AGENT_WORKSPACE_DEMO_EXECUTOR=true` enables the development-only deterministic
+approval/file-change loop; production configuration rejects this shortcut.
+
+The Rust server serves the built frontend and API on `127.0.0.1:3100`. During
+frontend development, Vite proxies HTTP and WebSocket traffic to that port.
+
 The Red Hat build operator uses `deploy/redhat/install-build-rust.sh` for an
 isolated pinned Rust toolchain. Its `CARGO_HOME` and `RUSTUP_HOME` live under
 the bot account and do not replace Red Hat's `/usr/bin/rustc`.
