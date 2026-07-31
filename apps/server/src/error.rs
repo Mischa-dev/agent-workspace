@@ -10,6 +10,16 @@ use tracing::error;
 pub enum AppError {
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
+    #[error("{0} was not found")]
+    NotFound(&'static str),
+    #[error("{0} conflict: {1}")]
+    Conflict(&'static str, &'static str),
+    #[error("invalid request: {0}")]
+    Invalid(&'static str),
+    #[error("development authentication is unavailable")]
+    DevelopmentAuthUnavailable,
+    #[error("internal invariant failed: {0}")]
+    Internal(&'static str),
 }
 
 #[derive(Serialize)]
@@ -25,15 +35,41 @@ struct ErrorBody {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        error!(error = ?self, "request failed");
+        let (status, code, message) = match self {
+            Self::NotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "The requested resource was not found.",
+            ),
+            Self::Conflict(_, _) => (
+                StatusCode::CONFLICT,
+                "conflict",
+                "The request conflicts with current durable state.",
+            ),
+            Self::Invalid(_) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "The request is invalid.",
+            ),
+            Self::DevelopmentAuthUnavailable => (
+                StatusCode::FORBIDDEN,
+                "development_auth_unavailable",
+                "Development authentication is unavailable.",
+            ),
+            Self::Database(_) | Self::Internal(_) => {
+                error!(error = ?self, "request failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "The request could not be completed.",
+                )
+            }
+        };
 
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            status,
             Json(ErrorEnvelope {
-                error: ErrorBody {
-                    code: "internal_error",
-                    message: "The request could not be completed.",
-                },
+                error: ErrorBody { code, message },
             }),
         )
             .into_response()

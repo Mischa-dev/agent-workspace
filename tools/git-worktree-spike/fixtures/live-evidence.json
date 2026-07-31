@@ -1,0 +1,25 @@
+{
+  "captured_at": "2026-07-30",
+  "host": {
+    "operating_system": "Red Hat Enterprise Linux 10.1",
+    "architecture": "arm64",
+    "git_version": "2.47.3"
+  },
+  "repository": {
+    "storage": "canonical_mirror",
+    "source": "[REDACTED]",
+    "base_commit_recorded": true
+  },
+  "proofs": {
+    "concurrent_linked_worktrees": 2,
+    "unique_namespaced_branches": true,
+    "metadata_lock_released_before_execution": true,
+    "unsafe_branch_inputs_rejected": true,
+    "unsafe_path_inputs_rejected": true,
+    "dirty_failure_preserved": true,
+    "clean_worktree_removed": true,
+    "prune_and_repair_succeeded": true
+  },
+  "repository_content": "[REDACTED]",
+  "absolute_paths": "[REDACTED]"
+}

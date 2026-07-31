@@ -5,6 +5,7 @@
 .idea/
 .vscode/
 node_modules/
+.corepack/
 target/
 dist/
 coverage/

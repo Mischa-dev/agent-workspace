@@ -182,13 +182,21 @@ impl CodexBridge {
     }
 
     pub async fn next_event(&mut self) -> Result<Value, BridgeError> {
-        let message = timeout(self.request_timeout, self.read_message())
-            .await
-            .map_err(|_| BridgeError::Timeout)??;
+        let message = self.next_raw_event().await?;
         if message.get("id").is_some() && message.get("method").is_some() {
             self.respond_to_server_request(&message).await?;
         }
         Ok(redact_fixture(message))
+    }
+
+    pub async fn next_raw_event(&mut self) -> Result<Value, BridgeError> {
+        timeout(self.request_timeout, self.read_message())
+            .await
+            .map_err(|_| BridgeError::Timeout)?
+    }
+
+    pub async fn respond(&mut self, id: Value, result: Value) -> Result<(), BridgeError> {
+        self.write_json(&json!({"id": id, "result": result})).await
     }
 
     pub fn take_notifications(&mut self) -> Vec<Value> {
@@ -241,15 +249,30 @@ impl CodexBridge {
     }
 
     async fn read_message(&mut self) -> Result<Value, BridgeError> {
-        let mut bytes = Vec::new();
-        let read = self.stdout.read_until(b'\n', &mut bytes).await?;
-        if read == 0 {
-            return Err(BridgeError::Closed);
-        }
-        if bytes.len() > self.max_line_bytes {
-            return Err(BridgeError::OversizedLine {
-                limit: self.max_line_bytes,
-            });
+        let mut bytes = Vec::with_capacity(self.max_line_bytes.min(8 * 1024));
+        loop {
+            let (consumed, complete) = {
+                let available = self.stdout.fill_buf().await?;
+                if available.is_empty() {
+                    if bytes.is_empty() {
+                        return Err(BridgeError::Closed);
+                    }
+                    break;
+                }
+                let newline = available.iter().position(|byte| *byte == b'\n');
+                let consumed = newline.map_or(available.len(), |index| index + 1);
+                if bytes.len().saturating_add(consumed) > self.max_line_bytes {
+                    return Err(BridgeError::OversizedLine {
+                        limit: self.max_line_bytes,
+                    });
+                }
+                bytes.extend_from_slice(&available[..consumed]);
+                (consumed, newline.is_some())
+            };
+            self.stdout.consume(consumed);
+            if complete {
+                break;
+            }
         }
         while matches!(bytes.last(), Some(b'\n' | b'\r')) {
             bytes.pop();

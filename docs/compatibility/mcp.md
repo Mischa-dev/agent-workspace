@@ -36,6 +36,20 @@ Thread for MCP calls.
 Automated tests cover token strength, missing-token rejection, authenticated
 initialization, read, update, conflict details, and idempotent retry.
 
-The exact protocol version negotiated by the separate Codex 0.146.0 profile,
-the live tool-list/call shapes, and the SSH-tunneled evidence are captured at
-the operator-assisted M0-006 acceptance step without the bearer token.
+The live M0-006 sequence completed on July 31, 2026:
+
+- exact `codex-cli 0.146.0` ran from an additive project-local installation
+  with a separate `CODEX_HOME`
+- Codex reached the Red Hat loopback listener through SSH forwarding
+- the initialization request selected MCP protocol `2025-06-18`; `rmcp`
+  recognized that version and echoed it as the negotiated protocol
+- Codex called `get_fake_work_item`, then
+  `update_fake_work_item(expected_version=1, status=in_progress)`, then read
+  the record again
+- the initial record was version 1 in `ready`; the final record was version 2
+  in `in_progress`
+- the operation created no Agent Workspace Conversation or Thread
+
+The bearer token remained in an owner-only file and child process environment.
+It did not appear in terminal output, Codex output, or the redacted fixture at
+`tools/mcp-spike/fixtures/live-evidence.json`.

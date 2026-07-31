@@ -10,6 +10,7 @@ Group=agent-workspace
 WorkingDirectory=/var/lib/agent-workspace
 Environment=HOME=/var/lib/agent-workspace
 Environment=PATH=/opt/agent-workspace/toolchains/node-v24.18.1-linux-arm64/bin:/usr/local/bin:/usr/bin
+Environment=AGENT_WORKSPACE_WEB_ROOT=/opt/agent-workspace/current/web
 EnvironmentFile=/etc/agent-workspace/agent-workspace.env
 ExecStart=/opt/agent-workspace/current/bin/agent-workspace-server
 Restart=on-failure
