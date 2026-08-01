@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
     AppState,
+    bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     mcp::{self, IssueCredentialCommand, MCP_PATH},
     provider::SupervisorRegistry,
@@ -14,10 +15,15 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use tower::ServiceExt;
 use uuid::Uuid;
+
+const OAUTH_LOGIN: &str = "m6-oauth-owner";
+const OAUTH_PASSWORD: &str = "correct horse battery staple";
 
 #[tokio::test]
 async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
@@ -68,6 +74,20 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     ]))
     .expect("M6 configuration");
     let seed = dev_seed(&pool, &config).await.expect("seed M6 fixture");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: OAUTH_LOGIN.to_owned(),
+            display_name: "M6 OAuth Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        OAUTH_PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap OAuth resource owner");
     let work_item_number = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE project_counters
@@ -516,6 +536,261 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     )
     .await;
     assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+
+    let metadata = json_response(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/oauth-protected-resource/api/v1/mcp")
+                    .body(Body::empty())
+                    .expect("metadata request"),
+            )
+            .await
+            .expect("metadata response"),
+    )
+    .await;
+    assert_eq!(metadata["resource"], "http://127.0.0.1:3100/api/v1/mcp");
+    assert_eq!(metadata["scopes_supported"], json!(["read", "write"]));
+
+    let redirect_uri = "http://127.0.0.1:45678/callback";
+    let registration = json_response(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "client_name":"codex-m6-oauth",
+                            "redirect_uris":[redirect_uri],
+                            "token_endpoint_auth_method":"none",
+                            "grant_types":["authorization_code","refresh_token"],
+                            "response_types":["code"]
+                        }))
+                        .expect("registration JSON"),
+                    ))
+                    .expect("registration request"),
+            )
+            .await
+            .expect("registration response"),
+    )
+    .await;
+    let client_id = registration["client_id"]
+        .as_str()
+        .expect("OAuth client ID")
+        .to_owned();
+    assert!(registration.get("client_secret").is_none());
+
+    let cookie = login(&application).await;
+    let csrf = csrf_from_cookie(&cookie);
+    let verifier = "v".repeat(43);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let mut authorize_url =
+        url::Url::parse("http://127.0.0.1:3100/oauth/authorize").expect("authorize URL");
+    authorize_url
+        .query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", &client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("scope", "read write")
+        .append_pair("state", "m6-state")
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp");
+    let consent_page = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(authorize_url.path().to_owned() + "?" + authorize_url.query().expect("query"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("authorize request"),
+        )
+        .await
+        .expect("authorize response");
+    assert_eq!(consent_page.status(), StatusCode::OK);
+    let consent_html = String::from_utf8(
+        to_bytes(consent_page.into_body(), 100_000)
+            .await
+            .expect("consent body")
+            .to_vec(),
+    )
+    .expect("consent UTF-8");
+    assert!(consent_html.contains("Authorize codex-m6-oauth"));
+    assert!(consent_html.contains("read write"));
+    assert!(!consent_html.contains(OAUTH_PASSWORD));
+
+    let consent_body = serde_urlencoded::to_string([
+        ("response_type", "code"),
+        ("client_id", &client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", "read write"),
+        ("state", "m6-state"),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("resource", "http://127.0.0.1:3100/api/v1/mcp"),
+        ("project_id", &seed.project_id.to_string()),
+        ("csrf_token", &csrf),
+        ("decision", "approve"),
+    ])
+    .expect("consent form");
+    let consent_response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/oauth/authorize")
+                .header(header::COOKIE, &cookie)
+                .header(header::ORIGIN, "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(consent_body))
+                .expect("consent request"),
+        )
+        .await
+        .expect("consent response");
+    assert_eq!(consent_response.status(), StatusCode::SEE_OTHER);
+    let callback = url::Url::parse(
+        consent_response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .expect("consent redirect"),
+    )
+    .expect("callback URL");
+    assert_eq!(
+        callback
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .map(|(_, value)| value.into_owned()),
+        Some("m6-state".to_owned())
+    );
+    let code = callback
+        .query_pairs()
+        .find(|(name, _)| name == "code")
+        .map(|(_, value)| value.into_owned())
+        .expect("authorization code");
+    let token_body = serde_urlencoded::to_string([
+        ("grant_type", "authorization_code"),
+        ("client_id", &client_id),
+        ("code", &code),
+        ("redirect_uri", redirect_uri),
+        ("code_verifier", &verifier),
+    ])
+    .expect("token form");
+    let tokens = json_response(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(token_body.clone()))
+                    .expect("token request"),
+            )
+            .await
+            .expect("token response"),
+    )
+    .await;
+    let access_token = tokens["access_token"].as_str().expect("access token");
+    let refresh_token = tokens["refresh_token"].as_str().expect("refresh token");
+    assert_eq!(tokens["scope"], "read write");
+    let stored_oauth = serde_json::to_string(&sqlx::query_as::<_, (Vec<u8>, Vec<u8>)>(
+        "SELECT access.token_digest, refresh.token_digest FROM mcp_oauth_access_tokens access JOIN mcp_oauth_refresh_tokens refresh ON refresh.grant_id = access.grant_id LIMIT 1",
+    ).fetch_one(&pool).await.expect("stored OAuth digests")).expect("digest JSON");
+    assert!(!stored_oauth.contains(access_token));
+    assert!(!stored_oauth.contains(refresh_token));
+
+    let oauth_initialized = mcp_request(&application, Some(access_token), None, &initialize).await;
+    assert_eq!(oauth_initialized.status(), StatusCode::OK);
+    let oauth_session = oauth_initialized
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("OAuth MCP session")
+        .to_owned();
+    let oauth_update = call_tool(
+        &application,
+        access_token,
+        &oauth_session,
+        20,
+        "work_item_post_update",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "update":"OAuth-attributed useful update.",
+            "clientRequestId":"m6-oauth-post-1"
+        }),
+    )
+    .await;
+    assert_eq!(oauth_update["outcome"], "applied");
+    let oauth_audit = sqlx::query_as::<_, (String, String, Option<Uuid>, Option<Uuid>)>(
+        "SELECT authentication_class, channel, mcp_credential_id, mcp_oauth_grant_id FROM audit_events WHERE request_id = 'm6-oauth-post-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("OAuth audit");
+    assert_eq!(oauth_audit.0, "mcp_oauth");
+    assert_eq!(oauth_audit.1, "mcp");
+    assert!(oauth_audit.2.is_none());
+    assert!(oauth_audit.3.is_some());
+
+    let replayed_code = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(token_body))
+                .expect("replayed code request"),
+        )
+        .await
+        .expect("replayed code response");
+    assert_eq!(replayed_code.status(), StatusCode::BAD_REQUEST);
+
+    let refresh_body = serde_urlencoded::to_string([
+        ("grant_type", "refresh_token"),
+        ("client_id", &client_id),
+        ("refresh_token", refresh_token),
+    ])
+    .expect("refresh form");
+    let refreshed = json_response(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(refresh_body.clone()))
+                    .expect("refresh request"),
+            )
+            .await
+            .expect("refresh response"),
+    )
+    .await;
+    let refreshed_access = refreshed["access_token"]
+        .as_str()
+        .expect("refreshed access token");
+    let replayed_refresh = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(refresh_body))
+                .expect("refresh replay request"),
+        )
+        .await
+        .expect("refresh replay response");
+    assert_eq!(replayed_refresh.status(), StatusCode::BAD_REQUEST);
+    let family_revoked = mcp_request(&application, Some(refreshed_access), None, &initialize).await;
+    assert_eq!(family_revoked.status(), StatusCode::UNAUTHORIZED);
+
     let after_conversations = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversations")
         .fetch_one(&pool)
         .await
@@ -528,6 +803,62 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .execute(&administrative_pool)
         .await
         .expect("drop isolated M6 schema");
+}
+
+async fn login(application: &axum::Router) -> String {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header(header::ORIGIN, "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"loginName":OAUTH_LOGIN,"password":OAUTH_PASSWORD}))
+                        .expect("login JSON"),
+                ))
+                .expect("login request"),
+        )
+        .await
+        .expect("login response");
+    assert_eq!(response.status(), StatusCode::OK);
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|value| {
+            value
+                .to_str()
+                .expect("cookie")
+                .split(';')
+                .next()
+                .expect("cookie pair")
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn csrf_from_cookie(cookie: &str) -> String {
+    cookie
+        .split("; ")
+        .find_map(|part| part.strip_prefix("agent_workspace_csrf="))
+        .expect("CSRF cookie")
+        .to_owned()
+}
+
+async fn json_response(response: axum::response::Response) -> Value {
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1_000_000)
+        .await
+        .expect("JSON body");
+    serde_json::from_slice(&body).unwrap_or_else(|error| {
+        panic!(
+            "JSON response {status}: {error}; {}",
+            String::from_utf8_lossy(&body)
+        )
+    })
 }
 
 async fn mcp_request(

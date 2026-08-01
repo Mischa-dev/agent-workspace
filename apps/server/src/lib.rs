@@ -73,6 +73,7 @@ pub fn router(state: AppState) -> Router {
         .merge(repositories::router())
         .merge(github::router())
         .merge(work_items::router())
+        .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))

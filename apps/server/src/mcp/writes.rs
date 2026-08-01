@@ -1174,8 +1174,8 @@ async fn insert_mcp_audit(
         INSERT INTO audit_events (
             id, actor_id, project_id, authentication_class, action, target_kind,
             target_id, outcome, request_id, metadata, channel, client_name,
-            mcp_credential_id
-        ) VALUES ($1, $2, $3, $4, $5, 'work_item', $6, 'succeeded', $7, $8, 'mcp', $9, $10)
+            mcp_credential_id, mcp_oauth_grant_id
+        ) VALUES ($1, $2, $3, $4, $5, 'work_item', $6, 'succeeded', $7, $8, 'mcp', $9, $10, $11)
         "#,
     )
     .bind(audit_id)
@@ -1187,7 +1187,8 @@ async fn insert_mcp_audit(
     .bind(request_id)
     .bind(metadata)
     .bind(&principal.client_name)
-    .bind(principal.credential_id)
+    .bind(principal.mcp_credential_id)
+    .bind(principal.oauth_grant_id)
     .execute(&mut **transaction)
     .await?;
     Ok(audit_id)
