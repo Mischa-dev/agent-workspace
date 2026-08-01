@@ -2216,8 +2216,14 @@ async fn claim_pull_request_sync_job(
                pull_request.base_ref,
                pull_request.external_created_at,
                CASE
-                   WHEN (job.payload ->> 'merge_commit_sha') ~ '^[0-9a-f]{40}$'
-                   THEN job.payload ->> 'merge_commit_sha'
+                   WHEN COALESCE(
+                       job.payload ->> 'merge_commit_sha',
+                       delivery.redelivery_payload ->> 'merge_commit_sha'
+                   ) ~ '^[0-9a-f]{40}$'
+                   THEN COALESCE(
+                       job.payload ->> 'merge_commit_sha',
+                       delivery.redelivery_payload ->> 'merge_commit_sha'
+                   )
                END AS webhook_merge_commit_sha,
                installation.enabled
                    AND installation.state = 'available'
@@ -2237,6 +2243,9 @@ async fn claim_pull_request_sync_job(
           ON access.project_id = job.project_id
          AND access.github_installation_id = installation.id
          AND access.repository_id = repository.id
+        LEFT JOIN github_webhook_deliveries delivery
+          ON delivery.project_id = job.project_id
+         AND delivery.id = job.webhook_delivery_id
         JOIN github_pull_requests pull_request
           ON pull_request.project_id = job.project_id
          AND pull_request.repository_id = repository.id
@@ -4443,7 +4452,7 @@ async fn receive_webhook_inner(
         let requeued = sqlx::query_scalar::<_, Uuid>(
             r#"
             UPDATE github_jobs job
-            SET payload = $3, state = 'queued', attempts = 0,
+            SET state = 'queued', attempts = 0,
                 lease_owner = NULL, lease_expires_at = NULL,
                 failure_category = NULL, next_attempt_at = now(),
                 completed_at = NULL, updated_at = now()
@@ -4457,15 +4466,15 @@ async fn receive_webhook_inner(
         )
         .bind(registration.0)
         .bind(&parsed.delivery_id)
-        .bind(&parsed.payload)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| WebhookError::Database)?;
         if let Some(delivery_id) = requeued {
             sqlx::query(
-                "UPDATE github_webhook_deliveries SET state = 'received', failure_category = NULL, processed_at = NULL, updated_at = now() WHERE id = $1",
+                "UPDATE github_webhook_deliveries SET state = 'received', failure_category = NULL, processed_at = NULL, redelivery_payload = $2, updated_at = now() WHERE id = $1",
             )
             .bind(delivery_id)
+            .bind(&parsed.payload)
             .execute(&mut *transaction)
             .await
             .map_err(|_| WebhookError::Database)?;
