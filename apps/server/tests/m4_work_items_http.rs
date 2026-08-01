@@ -757,7 +757,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     );
     assert_eq!(
         primary_repository.2["linkedRepositories"][0]["cloneUrl"],
-        "https://github.com/Mischa-dev/agent-workspace.git"
+        "https://github.com/Mischa-dev/agent-workspace-m0-spike.git"
     );
     assert_eq!(
         primary_repository.2["linkedRepositories"][0]["trusted"],
