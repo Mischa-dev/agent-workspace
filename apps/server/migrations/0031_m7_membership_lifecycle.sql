@@ -26,6 +26,27 @@ UPDATE project_memberships
 SET disabled_at = updated_at
 WHERE NOT enabled AND disabled_at IS NULL;
 
+CREATE FUNCTION maintain_project_membership_disable_provenance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT NEW.enabled THEN
+        NEW.disabled_at := COALESCE(NEW.disabled_at, now());
+    ELSE
+        NEW.disabled_by_actor_id := NULL;
+        NEW.disabled_at := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER project_memberships_disable_provenance_trigger
+BEFORE INSERT OR UPDATE OF enabled, disabled_by_actor_id, disabled_at
+ON project_memberships
+FOR EACH ROW
+EXECUTE FUNCTION maintain_project_membership_disable_provenance();
+
 ALTER TABLE project_memberships
     ADD CONSTRAINT project_memberships_disable_shape_check CHECK (
         (enabled AND disabled_by_actor_id IS NULL AND disabled_at IS NULL)
