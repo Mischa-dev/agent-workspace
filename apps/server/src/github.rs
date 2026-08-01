@@ -4439,7 +4439,7 @@ async fn receive_webhook_inner(
     .map_err(|_| WebhookError::Database)?;
     if inserted.is_none() {
         let existing = sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT payload_sha256 FROM github_webhook_deliveries WHERE github_installation_id = $1 AND delivery_id = $2 FOR UPDATE",
+            "SELECT payload_sha256 FROM github_webhook_deliveries WHERE github_installation_id = $1 AND delivery_id = $2",
         )
         .bind(registration.0)
         .bind(&parsed.delivery_id)
