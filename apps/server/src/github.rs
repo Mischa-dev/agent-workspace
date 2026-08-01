@@ -50,6 +50,13 @@ use crate::{
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
 const MAX_GITHUB_RESPONSE_BYTES: usize = 1024 * 1024;
 const GITHUB_JOB_LEASE: Duration = Duration::from_secs(30);
+
+const APPLY_AUTOMATION_STATUS_SQL: &str = r#"
+    UPDATE work_items
+    SET status_id = $3, version = version + 1, updated_at = now()
+    WHERE project_id = $1 AND id = $2 AND version = $4
+    RETURNING version
+"#;
 const REQUIRED_EVENTS: [&str; 5] = [
     "push",
     "pull_request",
@@ -3694,23 +3701,14 @@ async fn apply_pull_request_work_item_automation(
             reasons.insert("transition_not_allowed");
             continue;
         }
-        let new_version = sqlx::query_scalar::<_, i64>(
-            r#"
-            UPDATE work_items
-            SET status_id = $3, version = version + 1,
-                updated_by_actor_id = $4, updated_at = now()
-            WHERE project_id = $1 AND id = $2 AND version = $5
-            RETURNING version
-            "#,
-        )
-        .bind(job.project_id)
-        .bind(item.id)
-        .bind(target_status_id)
-        .bind(job.integration_actor_id)
-        .bind(item.version)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::Conflict("work_item", "version"))?;
+        let new_version = sqlx::query_scalar::<_, i64>(APPLY_AUTOMATION_STATUS_SQL)
+            .bind(job.project_id)
+            .bind(item.id)
+            .bind(target_status_id)
+            .bind(item.version)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AppError::Conflict("work_item", "version"))?;
         let payload = json!({
             "githubPullRequestId": job.pull_request_id,
             "pullRequestNumber": job.pull_request_number,
@@ -4816,6 +4814,13 @@ mod tests {
             reconcile_merge_commit_identity(&mut conflicting_provider_sha, Some(merge_sha), true,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn automation_status_update_uses_the_m4_work_item_schema() {
+        assert!(APPLY_AUTOMATION_STATUS_SQL.contains("SET status_id = $3"));
+        assert!(APPLY_AUTOMATION_STATUS_SQL.contains("version = version + 1"));
+        assert!(!APPLY_AUTOMATION_STATUS_SQL.contains("updated_by_actor_id"));
     }
 
     #[test]
