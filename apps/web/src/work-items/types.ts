@@ -84,6 +84,8 @@ export type LinkedPullRequest = {
   mergeabilityState: string
   syncState: string
   syncFailureCategory: string | null
+  automationState: string
+  automationReason: string | null
 }
 
 export type AcceptanceCriterion = {

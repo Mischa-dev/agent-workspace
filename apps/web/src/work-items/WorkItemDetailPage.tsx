@@ -648,6 +648,9 @@ function WorkItemLinks({
                     {pullRequest.syncState === 'failed'
                       ? ` · sync failed: ${(pullRequest.syncFailureCategory ?? 'unknown').replaceAll('_', ' ')}`
                       : ''}
+                    {pullRequest.automationState !== 'not_evaluated'
+                      ? ` · automation ${pullRequest.automationState}${pullRequest.automationReason ? `: ${pullRequest.automationReason.replaceAll('_', ' ')}` : ''}`
+                      : ''}
                   </small>
                 </div>
               </li>

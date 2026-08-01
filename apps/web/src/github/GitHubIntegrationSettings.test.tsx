@@ -3,19 +3,27 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { listRepositories } from '../repositories/api'
-import { getGitHubStatus, syncGitHubInstallation } from './api'
+import {
+  getGitHubAutomationSettings,
+  getGitHubStatus,
+  syncGitHubInstallation,
+  updateGitHubAutomationSettings,
+} from './api'
 import { GitHubIntegrationSettings } from './GitHubIntegrationSettings'
 
 vi.mock('../repositories/api', () => ({ listRepositories: vi.fn() }))
 vi.mock('./api', () => ({
+  getGitHubAutomationSettings: vi.fn(),
   getGitHubStatus: vi.fn(),
   syncGitHubInstallation: vi.fn(),
+  updateGitHubAutomationSettings: vi.fn(),
 }))
 
 describe('GitHubIntegrationSettings', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('renders only bounded public installation status', async () => {
+    mockAutomationSettings()
     vi.mocked(getGitHubStatus).mockResolvedValue({
       configured: true,
       apiVersion: '2026-03-10',
@@ -64,6 +72,64 @@ describe('GitHubIntegrationSettings', () => {
       screen.getByText('Mischa-dev/agent-workspace-m0-spike'),
     ).toBeVisible()
     expect(screen.queryByText(/private key|webhook secret|token value/i)).not.toBeInTheDocument()
+    expect(
+      await screen.findByLabelText('Move explicitly linked eligible work to Verification when merged'),
+    ).toBeChecked()
+    expect(
+      screen.getByLabelText('Move explicitly linked work to Review when a pull request opens'),
+    ).not.toBeChecked()
+  })
+
+  it('updates project-owned automation with optimistic versioning', async () => {
+    mockAutomationSettings()
+    vi.mocked(getGitHubStatus).mockResolvedValue({
+      configured: true,
+      apiVersion: '2026-03-10',
+      installation: {
+        id: '019fbc80-0000-7000-8000-000000000001',
+        appId: 4442593,
+        installationId: 150232852,
+        accountId: 777,
+        accountLogin: 'Mischa-dev',
+        targetType: 'Organization',
+        repositorySelection: 'selected',
+        permissions: {
+          metadata: 'read', contents: 'write', pullRequests: 'write', checks: 'read', actions: null,
+        },
+        subscribedEvents: ['pull_request'],
+        state: 'available',
+        enabled: true,
+        version: 1,
+        lastAttemptAt: '2026-08-01T08:00:00Z',
+        lastSuccessAt: '2026-08-01T08:00:00Z',
+        failureCategory: null,
+        repositories: [],
+      },
+      capabilities: { manage: true },
+    })
+    vi.mocked(updateGitHubAutomationSettings).mockResolvedValue({
+      projectId: '019fbc80-0000-7000-8000-000000000003',
+      pullRequestOpenEnabled: true,
+      pullRequestMergeEnabled: true,
+      version: 8,
+      updatedAt: '2026-08-01T08:01:00Z',
+    })
+
+    renderSettings()
+    fireEvent.click(await screen.findByLabelText(
+      'Move explicitly linked work to Review when a pull request opens',
+    ))
+
+    await waitFor(() => {
+      expect(updateGitHubAutomationSettings).toHaveBeenCalledWith(
+        '019fbc80-0000-7000-8000-000000000003',
+        {
+          expectedVersion: 7,
+          pullRequestOpenEnabled: true,
+          pullRequestMergeEnabled: true,
+        },
+      )
+    })
   })
 
   it('shows the operator boundary when host credentials are absent', async () => {
@@ -140,4 +206,14 @@ function renderSettings() {
       <GitHubIntegrationSettings projectId="019fbc80-0000-7000-8000-000000000003" />
     </QueryClientProvider>,
   )
+}
+
+function mockAutomationSettings() {
+  vi.mocked(getGitHubAutomationSettings).mockResolvedValue({
+    projectId: '019fbc80-0000-7000-8000-000000000003',
+    pullRequestOpenEnabled: false,
+    pullRequestMergeEnabled: true,
+    version: 7,
+    updatedAt: '2026-08-01T08:00:00Z',
+  })
 }

@@ -87,6 +87,8 @@ type Run = {
   pullRequestMergeabilityState: string | null
   pullRequestSyncState: string | null
   pullRequestSyncFailureCategory: string | null
+  pullRequestAutomationState: string | null
+  pullRequestAutomationReason: string | null
   queuePosition: number | null
   failureReason: string | null
   failureAcknowledged: boolean
@@ -205,6 +207,8 @@ function normalizeTimeline(value: unknown): Timeline {
           pullRequestMergeabilityState: null,
           pullRequestSyncState: null,
           pullRequestSyncFailureCategory: null,
+          pullRequestAutomationState: null,
+          pullRequestAutomationReason: null,
           queuePosition:
             typeof activeRunRecord.queuePosition === 'number'
               ? activeRunRecord.queuePosition
@@ -305,6 +309,16 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof latestTerminalRunRecord.pullRequestSyncFailureCategory ===
             'string'
               ? latestTerminalRunRecord.pullRequestSyncFailureCategory
+              : null,
+          pullRequestAutomationState:
+            typeof latestTerminalRunRecord.pullRequestAutomationState ===
+            'string'
+              ? latestTerminalRunRecord.pullRequestAutomationState
+              : null,
+          pullRequestAutomationReason:
+            typeof latestTerminalRunRecord.pullRequestAutomationReason ===
+            'string'
+              ? latestTerminalRunRecord.pullRequestAutomationReason
               : null,
           queuePosition: null,
           failureAcknowledged:
@@ -1108,6 +1122,15 @@ export function ThreadPage() {
               )}.
             </p>
           )}
+          {latestTerminalRun?.pullRequestAutomationState &&
+            latestTerminalRun.pullRequestAutomationState !== 'not_evaluated' && (
+              <p className="compact-note">
+                Work Item automation: {latestTerminalRun.pullRequestAutomationState}
+                {latestTerminalRun.pullRequestAutomationReason
+                  ? ` · ${latestTerminalRun.pullRequestAutomationReason.replaceAll('_', ' ')}`
+                  : ''}
+              </p>
+            )}
           {latestTerminalRun?.pullRequestRequestState &&
             !latestTerminalRun.pullRequestUrl && (
               <p className="compact-note">

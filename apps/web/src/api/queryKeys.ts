@@ -12,6 +12,8 @@ export const queryKeys = {
     ['project', projectId, 'repositories'] as const,
   githubIntegration: (projectId: string) =>
     ['project', projectId, 'github-integration'] as const,
+  githubAutomation: (projectId: string) =>
+    ['project', projectId, 'github-automation'] as const,
   workItemsRoot: (projectId: string) =>
     ['project', projectId, 'work-items'] as const,
   workItems: (projectId: string, filters: Record<string, unknown>) =>

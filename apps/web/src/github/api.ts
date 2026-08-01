@@ -41,6 +41,14 @@ export type GitHubStatus = {
   capabilities: { manage: boolean }
 }
 
+export type GitHubAutomationSettings = {
+  projectId: string
+  pullRequestOpenEnabled: boolean
+  pullRequestMergeEnabled: boolean
+  version: number
+  updatedAt: string
+}
+
 export function getGitHubStatus(projectId: string) {
   return requestJson<GitHubStatus>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github`,
@@ -54,5 +62,25 @@ export function syncGitHubInstallation(
   return requestJson<GitHubStatus>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/sync`,
     { method: 'POST', json: input },
+  )
+}
+
+export function getGitHubAutomationSettings(projectId: string) {
+  return requestJson<GitHubAutomationSettings>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/automation`,
+  )
+}
+
+export function updateGitHubAutomationSettings(
+  projectId: string,
+  input: {
+    expectedVersion: number
+    pullRequestOpenEnabled: boolean
+    pullRequestMergeEnabled: boolean
+  },
+) {
+  return requestJson<GitHubAutomationSettings>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/automation`,
+    { method: 'PUT', idempotencyKey: crypto.randomUUID(), json: input },
   )
 }
