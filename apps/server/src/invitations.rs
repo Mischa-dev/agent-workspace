@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     AppState,
@@ -76,13 +76,13 @@ struct ReplaceInvitationRequest {
     expires_in_hours: i32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResolveInvitationRequest {
     token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AcceptNewInvitationRequest {
     token: String,
@@ -92,7 +92,7 @@ struct AcceptNewInvitationRequest {
     password: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AcceptExistingInvitationRequest {
     token: String,
@@ -489,8 +489,9 @@ async fn resolve_invitation(
     headers: HeaderMap,
     ApiJson(mut request): ApiJson<ResolveInvitationRequest>,
 ) -> Result<Json<ResolvedInvitation>, AppError> {
+    let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_allowed_origin(&state.config, &headers)?;
-    let (prefix, digest) = consume_invitation_token(&mut request.token, &state)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
     let row = fetch_valid_invitation(&state, &prefix)
         .await?
         .filter(|row| digest_matches(&row.token_digest, &digest))
@@ -508,26 +509,25 @@ async fn accept_new_user(
     headers: HeaderMap,
     ApiJson(mut request): ApiJson<AcceptNewInvitationRequest>,
 ) -> Result<Response, AppError> {
+    let mut token = Zeroizing::new(std::mem::take(&mut request.token));
+    let mut submitted_password = Zeroizing::new(std::mem::take(&mut request.password));
     require_allowed_origin(&state.config, &headers)?;
     if load_authenticated_actor(&state, &headers).await?.is_some() {
-        request.password.zeroize();
-        request.token.zeroize();
         return Err(AppError::Conflict(
             "project_invitation",
             "signed-in users must accept with their existing identity",
         ));
     }
-    let (prefix, digest) = consume_invitation_token(&mut request.token, &state)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
     let login_name = normalize_login_name(&request.login_name)
         .map_err(|_| AppError::Validation("login name"))?;
     let display_name = normalize_display_name(&request.display_name)?;
     let handle = normalize_handle(&request.handle)?;
-    if !(12..=1024).contains(&request.password.len()) {
-        request.password.zeroize();
+    if !(12..=1024).contains(&submitted_password.len()) {
         return Err(AppError::Validation("password"));
     }
     let _password_kdf_permit = state.rate_limits.try_acquire_password_kdf()?;
-    let password_phc = password::hash_password(std::mem::take(&mut request.password)).await?;
+    let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
 
     let mut transaction = state.pool.begin().await?;
     let invitation = lock_valid_invitation(&mut transaction, &prefix)
@@ -643,8 +643,9 @@ async fn accept_existing_user(
     principal: AuthenticatedActor,
     ApiJson(mut request): ApiJson<AcceptExistingInvitationRequest>,
 ) -> Result<Response, AppError> {
+    let mut token = Zeroizing::new(std::mem::take(&mut request.token));
     require_authenticated_write(&state, &headers, &principal)?;
-    let (prefix, digest) = consume_invitation_token(&mut request.token, &state)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
     let handle = normalize_handle(&request.handle)?;
     let mut transaction = state.pool.begin().await?;
     let invitation = lock_valid_invitation(&mut transaction, &prefix)
