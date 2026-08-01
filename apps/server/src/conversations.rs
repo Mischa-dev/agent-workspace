@@ -335,6 +335,8 @@ pub(crate) struct RunRow {
     pub(crate) pull_request_mergeability_state: Option<String>,
     pub(crate) pull_request_sync_state: Option<String>,
     pub(crate) pull_request_sync_failure_category: Option<String>,
+    pub(crate) pull_request_automation_state: Option<String>,
+    pub(crate) pull_request_automation_reason: Option<String>,
     pub(crate) queue_position: Option<i64>,
     pub(crate) failure_reason: Option<String>,
     pub(crate) created_at: String,
@@ -2527,6 +2529,8 @@ async fn fetch_run_projection(
             pull_request.mergeability_state AS pull_request_mergeability_state,
             pull_request.sync_state AS pull_request_sync_state,
             pull_request.sync_failure_category AS pull_request_sync_failure_category,
+            pull_request.automation_state AS pull_request_automation_state,
+            pull_request.automation_reason AS pull_request_automation_reason,
             CASE WHEN run.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
@@ -2574,6 +2578,8 @@ async fn fetch_run_projection(
             pull_request.mergeability_state AS pull_request_mergeability_state,
             pull_request.sync_state AS pull_request_sync_state,
             pull_request.sync_failure_category AS pull_request_sync_failure_category,
+            pull_request.automation_state AS pull_request_automation_state,
+            pull_request.automation_reason AS pull_request_automation_reason,
             NULL::bigint AS queue_position,
             run.failure_reason,
             run.created_at::text AS created_at,

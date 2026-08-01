@@ -2010,6 +2010,8 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             pull_request.mergeability_state AS pull_request_mergeability_state,
             pull_request.sync_state AS pull_request_sync_state,
             pull_request.sync_failure_category AS pull_request_sync_failure_category,
+            pull_request.automation_state AS pull_request_automation_state,
+            pull_request.automation_reason AS pull_request_automation_reason,
             CASE WHEN ar.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
