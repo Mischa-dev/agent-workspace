@@ -351,6 +351,7 @@ pub(crate) struct RunView {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RunCapabilities {
     pub(crate) interrupt: bool,
     pub(crate) retry: bool,
@@ -2980,9 +2981,9 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        MentionCursor, SidebarThreadRow, decode_mention_cursor, decode_timeline_cursor,
-        encode_mention_cursor, encode_timeline_cursor, normalize_conversation_name,
-        project_sidebar_threads, thread_attention,
+        MentionCursor, RunCapabilities, SidebarThreadRow, decode_mention_cursor,
+        decode_timeline_cursor, encode_mention_cursor, encode_timeline_cursor,
+        normalize_conversation_name, project_sidebar_threads, thread_attention,
     };
     use uuid::Uuid;
 
@@ -3045,6 +3046,23 @@ mod tests {
         assert!(normalize_conversation_name("").is_err());
         assert!(normalize_conversation_name("bad\nname").is_err());
         assert!(normalize_conversation_name(&"x".repeat(121)).is_err());
+    }
+
+    #[test]
+    fn run_capabilities_use_the_public_camel_case_contract() {
+        let value = serde_json::to_value(RunCapabilities {
+            interrupt: false,
+            retry: true,
+            publish: true,
+            create_pull_request: true,
+            refresh_pull_request: true,
+        })
+        .expect("serialize run capabilities");
+
+        assert_eq!(value["createPullRequest"], true);
+        assert_eq!(value["refreshPullRequest"], true);
+        assert!(value.get("create_pull_request").is_none());
+        assert!(value.get("refresh_pull_request").is_none());
     }
 
     #[test]
