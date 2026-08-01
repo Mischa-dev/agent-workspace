@@ -6,6 +6,7 @@ use std::{
     path::Path,
     process::Command,
     sync::Arc,
+    time::Duration,
 };
 
 use agent_workspace_server::{
@@ -653,10 +654,28 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
 
     supervisors.shutdown_all().await;
     pool.close().await;
-    administrative_pool
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
-        .await
-        .expect("drop isolated M5 GitHub schema");
+    drop_isolated_schema(&administrative_pool, &schema).await;
+}
+
+async fn drop_isolated_schema(administrative_pool: &PgPool, schema: &str) {
+    const MAX_ATTEMPTS: u32 = 5;
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        match administrative_pool
+            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+            .await
+        {
+            Ok(_) => return,
+            Err(sqlx::Error::Database(error))
+                if error.code().as_deref() == Some("40P01") && attempt < MAX_ATTEMPTS =>
+            {
+                tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+            }
+            Err(error) => panic!("drop isolated M5 GitHub schema: {error}"),
+        }
+    }
+
+    unreachable!("the final schema-drop attempt either returns or panics");
 }
 
 fn csrf_from_cookie(cookie: &str) -> String {
