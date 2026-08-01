@@ -5108,7 +5108,10 @@ for M0; a Codex or SDK upgrade must repeat negotiation and fixture validation.
 
 **Reason:** On restart, the host restarts the profile App Server, resumes the
 stored provider Thread, reads its latest turn, and inspects the physical
-worktree. A completed provider turn may be reconciled as completed. An
+worktree. Recovery must match that history to the exact durable
+`provider_turn_id`; a missing application turn binding or a different latest
+provider turn is ambiguous and can never inherit an older completion. A
+completed provider turn may be reconciled as completed. An
 interrupted, non-terminal, missing, or ambiguous turn becomes an actionable
 application `interrupted` result with its worktree preserved. This proved the
 required M0 recovery boundary without inventing continuation or resetting

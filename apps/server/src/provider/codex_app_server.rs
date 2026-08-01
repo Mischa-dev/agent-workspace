@@ -163,6 +163,7 @@ pub enum ProviderEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveredTurn {
+    pub id: Option<String>,
     pub status: String,
     pub final_message: Option<String>,
 }
@@ -586,10 +587,15 @@ impl ProfileLease {
             .and_then(|turns| turns.last())
         else {
             return Ok(RecoveredTurn {
+                id: None,
                 status: "missing".to_owned(),
                 final_message: None,
             });
         };
+        let id = latest_turn
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let status = latest_turn
             .get("status")
             .and_then(Value::as_str)
@@ -607,6 +613,7 @@ impl ProfileLease {
             })
             .map(str::to_owned);
         Ok(RecoveredTurn {
+            id,
             status,
             final_message,
         })
@@ -1160,7 +1167,7 @@ fn health_snapshot(state: &SupervisorState) -> ProfileHealth {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApprovalKind, ItemKind, ProviderEvent, ProviderItemEvent, SupervisorError,
+        ApprovalKind, ItemKind, ProviderEvent, ProviderItemEvent, RecoveredTurn, SupervisorError,
         SupervisorRegistry, SupervisorState, health_snapshot, item_kind, parse_login_start,
         parse_provider_request, parse_rate_limit_window, provider_event_key, record_failure,
         restart_backoff,
@@ -1320,6 +1327,8 @@ while IFS= read -r line; do
     printf '{{"id":%s,"result":{{"thread":{{"id":"thread-%s"}}}}}}\n' "$request_id" "$request_id"
   elif [[ "$line" == *'"method":"turn/start"'* ]]; then
     printf '{{"id":%s,"result":{{"turn":{{"id":"turn-%s"}}}}}}\n' "$request_id" "$request_id"
+  elif [[ "$line" == *'"method":"thread/read"'* ]]; then
+    printf '{{"id":%s,"result":{{"thread":{{"turns":[{{"id":"turn-5","status":"completed","items":[{{"type":"agentMessage","text":"recovered proof"}}]}}]}}}}}}\n' "$request_id"
   else
     printf '{{"id":%s,"result":{{}}}}\n' "$request_id"
   fi
@@ -1409,6 +1418,21 @@ done
                     .await
                     .expect("start second turn"),
                 "turn-5"
+            );
+            second
+                .resume_thread("thread-4", &second_worktree)
+                .await
+                .expect("resume second thread");
+            assert_eq!(
+                second
+                    .read_latest_turn("thread-4")
+                    .await
+                    .expect("read exact recovered turn"),
+                RecoveredTurn {
+                    id: Some("turn-5".to_owned()),
+                    status: "completed".to_owned(),
+                    final_message: Some("recovered proof".to_owned()),
+                }
             );
         }
 

@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, fs, path::Path, process::Command, sync::Arc};
+use std::{
+    collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path, process::Command,
+    sync::Arc,
+};
 
 use agent_workspace_server::{
     AppState,
@@ -43,7 +46,31 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
         .expect("canonical runtime root");
     let data_root = runtime_root.join("data");
     let codex_home_root = data_root.join("codex");
-    let missing_codex = runtime_root.join("missing-codex");
+    let fake_codex = runtime_root.join("fake-codex");
+    fs::write(
+        &fake_codex,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r line; do
+  if [[ "$line" != *'"id"'* ]]; then
+    continue
+  fi
+  request_id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+  if [[ "$line" == *'"method":"initialize"'* ]]; then
+    printf '{"id":%s,"result":{"server":"fake"}}\n' "$request_id"
+  elif [[ "$line" == *'"method":"thread/start"'* ]]; then
+    printf '{"id":%s,"result":{"thread":{"id":"thread-checkpoint"}}}\n' "$request_id"
+  elif [[ "$line" == *'"method":"turn/start"'* ]]; then
+    printf '{"id":%s,"error":{"code":-32000,"message":"synthetic failure"}}\n' "$request_id"
+  else
+    printf '{"id":%s,"result":{}}\n' "$request_id"
+  fi
+done
+"#,
+    )
+    .expect("write fake Codex binary");
+    fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o700))
+        .expect("make fake Codex executable");
     let config = AppConfig::from_values(&BTreeMap::from([
         (
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
@@ -60,7 +87,7 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
         ),
         (
             "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
-            missing_codex.to_string_lossy().into_owned(),
+            fake_codex.to_string_lossy().into_owned(),
         ),
     ]))
     .expect("development configuration");
@@ -105,7 +132,7 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(16),
-        supervisors,
+        supervisors: supervisors.clone(),
     });
     let (cookie, csrf) = login(&application).await;
     let response = application
@@ -131,8 +158,31 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
     let _ = response_json(response).await;
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    let (run_id, state, failure_reason, workspace_state, worktree_state, worktree_path) = loop {
-        let row = sqlx::query_as::<_, (Uuid, String, Option<String>, String, String, String)>(
+    let (
+        run_id,
+        state,
+        failure_reason,
+        workspace_state,
+        worktree_state,
+        worktree_path,
+        provider_session_id,
+        provider_turn_id,
+        provider_session_state,
+    ) = loop {
+        let row = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                String,
+                Option<String>,
+                String,
+                String,
+                String,
+                Option<Uuid>,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
             r#"
             SELECT
                 run.id,
@@ -140,12 +190,17 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
                 run.failure_reason,
                 workspace.state,
                 worktree.state,
-                worktree.path
+                worktree.path,
+                run.provider_session_id,
+                run.provider_turn_id,
+                provider_session.state
             FROM agent_runs run
             JOIN repository_workspaces workspace
               ON workspace.id = run.repository_workspace_id
             JOIN git_worktrees worktree
               ON worktree.repository_workspace_id = workspace.id
+            LEFT JOIN provider_sessions provider_session
+              ON provider_session.id = run.provider_session_id
             WHERE run.conversation_id = $1
             ORDER BY run.created_at DESC, run.id DESC
             LIMIT 1
@@ -171,6 +226,9 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
     );
     assert_eq!(workspace_state, "retained");
     assert_eq!(worktree_state, "ready");
+    assert!(provider_session_id.is_some());
+    assert!(provider_turn_id.is_none());
+    assert_eq!(provider_session_state.as_deref(), Some("idle"));
     assert!(
         Path::new(&worktree_path).is_dir(),
         "the worktree is preserved"
@@ -238,6 +296,7 @@ async fn provider_start_failure_is_a_durable_failed_timeline_entry() {
         "Run failed"
     );
 
+    supervisors.shutdown_all().await;
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&administrative_pool)

@@ -118,39 +118,29 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         };
 
         let recovered_completion = match &provider_outcome {
-            ProviderRecovery::Completed { message } => {
-                provider::complete_recovered_run(state, run.id, message)
-                    .await
-                    .is_ok()
-            }
+            ProviderRecovery::Completed { message } => provider::complete_recovered_run(
+                state,
+                run.id,
+                message,
+                &run.previous_state,
+                worktree_state,
+                dirty,
+            )
+            .await
+            .is_ok(),
             _ => false,
         };
         if recovered_completion {
-            let summary = "Service restarted during a run. Provider history proved that the turn completed, so the durable run was reconciled as completed.";
-            let mut transaction = state.pool.begin().await?;
-            cancel_pending_approvals(&mut transaction, run.id).await?;
-            insert_recovery_event(
-                &mut transaction,
-                run,
-                summary,
-                "completed",
-                worktree_state,
-                dirty,
-                true,
-            )
-            .await?;
-            outbox::enqueue_agent_run_updated(
-                &mut transaction,
-                run.project_id,
-                run.conversation_id,
-                run.id,
-            )
-            .await?;
-            transaction.commit().await?;
             continue;
         }
 
-        let provider_resumed = !matches!(&provider_outcome, ProviderRecovery::Unavailable);
+        let provider_resumed = matches!(
+            &provider_outcome,
+            ProviderRecovery::Completed { .. }
+                | ProviderRecovery::Resumed { .. }
+                | ProviderRecovery::MismatchedTurn
+                | ProviderRecovery::RejectedMessage
+        );
         let reason = match &provider_outcome {
             ProviderRecovery::Resumed { latest_turn_status } => {
                 let status = known_turn_status(latest_turn_status);
@@ -160,6 +150,12 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
             }
             ProviderRecovery::Completed { .. } => {
                 "Service restarted during a run. Provider completion was observed but could not be reconciled transactionally; the worktree was preserved for inspection.".to_owned()
+            }
+            ProviderRecovery::UnboundTurn => {
+                "Service restarted after the provider Thread was recorded but before an exact turn identity was durable. No older provider result was inferred; the worktree was preserved for explicit retry.".to_owned()
+            }
+            ProviderRecovery::MismatchedTurn => {
+                "Service restarted during a run, but the provider's latest turn did not match the durable turn identity. The ambiguous provider history and worktree were preserved for inspection.".to_owned()
             }
             ProviderRecovery::RejectedMessage => {
                 "Service restarted during a run. Provider completion contained an invalid or oversized Message, so the run was interrupted and the worktree was preserved for inspection.".to_owned()
