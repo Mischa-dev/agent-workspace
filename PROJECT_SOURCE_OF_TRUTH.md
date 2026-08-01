@@ -2,16 +2,34 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 implementation complete; acceptance pending; M5 entry backlog v0.15
+**Status:** M4 accepted; M5 authorized; source of truth v0.16
 
 **Owner:** Mischa Nelson  
-**Date:** July 31, 2026
+**Date:** August 1, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M3 are complete. M4 is implemented and remains subject to its exact-commit acceptance gate. M5 is elaborated but is not authorized until M4 is accepted; every later milestone remains subject to the same entry gate.
+**Implementation authorization:** Milestones M0 through M4 are complete. M5 is elaborated and authorized. Every later milestone remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.16 — M4 acceptance and M5 authorization
+
+- accepted M4 against exact green commit
+  `f68b9b52262784bbc6389603f52f57982488629b`, GitHub CI run
+  `30690082172`, and its immutable Red Hat release
+- recorded the browser-created `AW-1` Work Item, primary Repository link,
+  durable Work-with-Worker Thread and Agent Run, one consolidated Worker
+  Message, significant command/file events, and no automatic status change
+- recorded exact Repository Workspace, branch, base commit, Provider Session,
+  and one-file dirty-worktree evidence while preserving every retained tree
+- confirmed controlled systemd restart convergence with the run completed,
+  Provider Session idle, Work Item and link projections durable, and no manual
+  database or filesystem repair
+- confirmed the provider environment and bounded journal excluded application
+  secrets, credentials, unbounded records, and disallowed control characters
+- declared the M4 exit criteria satisfied and authorized the elaborated M5
+  GitHub delivery backlog
 
 ### v0.15 — M5 GitHub delivery entry backlog
 
