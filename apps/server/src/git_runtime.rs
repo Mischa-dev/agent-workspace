@@ -1,14 +1,16 @@
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
-    io::Read,
+    io::{Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
+    time::{Duration, Instant},
 };
 
 use fs2::FileExt;
+use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
 use crate::{
@@ -18,6 +20,7 @@ use crate::{
 
 const MAX_GIT_ERROR_BYTES: usize = 8 * 1024;
 const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Clone, Debug)]
 pub struct RegisteredRepository {
@@ -36,6 +39,23 @@ pub struct PreparedRepository {
 pub struct WorktreeInspection {
     pub dirty: bool,
     pub branch: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishInspection {
+    pub branch: String,
+    pub head_commit: String,
+}
+
+pub struct PublishPush<'a> {
+    pub data_root: &'a Path,
+    pub mirror: &'a Path,
+    pub worktree: &'a Path,
+    pub expected_branch: &'a str,
+    pub base_commit: &'a str,
+    pub intended_commit: &'a str,
+    pub remote_url: &'a str,
+    pub token: &'a SecretString,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -306,6 +326,178 @@ pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspec
     })
 }
 
+pub fn inspect_publishable_worktree(
+    mirror: &Path,
+    worktree: &Path,
+    expected_branch: &str,
+    base_commit: &str,
+) -> Result<PublishInspection, AppError> {
+    validate_branch(expected_branch)?;
+    validate_commit(base_commit)?;
+    let repository_root = mirror
+        .parent()
+        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+    let _lock = repository_lock(repository_root)?;
+    let inspection = inspect_worktree(mirror, worktree)?;
+    if inspection.dirty {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "dirty worktree is retained; commit intended changes through the Thread before publishing",
+        ));
+    }
+    if inspection.branch != expected_branch {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "worktree branch does not match its durable workspace",
+        ));
+    }
+    let head = run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("rev-parse"),
+        OsString::from("--verify"),
+        OsString::from("HEAD^{commit}"),
+    ])?;
+    let head_commit = String::from_utf8(head.stdout)
+        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .trim()
+        .to_owned();
+    validate_commit(&head_commit)?;
+    if head_commit == base_commit {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "workspace has no commit ahead of its recorded base",
+        ));
+    }
+    run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("merge-base"),
+        OsString::from("--is-ancestor"),
+        OsString::from(base_commit),
+        OsString::from(&head_commit),
+    ])
+    .map_err(|_| {
+        AppError::Conflict(
+            "git_worktree",
+            "workspace HEAD is not descended from its recorded base",
+        )
+    })?;
+    Ok(PublishInspection {
+        branch: inspection.branch,
+        head_commit,
+    })
+}
+
+pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError> {
+    let inspection = inspect_publishable_worktree(
+        request.mirror,
+        request.worktree,
+        request.expected_branch,
+        request.base_commit,
+    )?;
+    if inspection.head_commit != request.intended_commit {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "workspace HEAD changed after publication was queued",
+        ));
+    }
+    if !request.remote_url.starts_with("https://github.com/")
+        || !request.remote_url.ends_with(".git")
+        || request.remote_url.contains('@')
+        || request
+            .remote_url
+            .bytes()
+            .any(|byte| byte.is_ascii_control())
+    {
+        return Err(AppError::Invalid("unsafe GitHub remote"));
+    }
+    let askpass = TemporaryAskpass::create(request.data_root)?;
+    let refspec = format!(
+        "{}:refs/heads/{}",
+        request.intended_commit, request.expected_branch
+    );
+    let mut command = Command::new("/usr/bin/git");
+    command
+        .args([
+            OsStr::new("-C"),
+            request.worktree.as_os_str(),
+            OsStr::new("push"),
+            OsStr::new("--porcelain"),
+            OsStr::new(request.remote_url),
+            OsStr::new(&refspec),
+        ])
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("HOME", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "4")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "/dev/null")
+        .env("GIT_CONFIG_KEY_1", "credential.helper")
+        .env("GIT_CONFIG_VALUE_1", "")
+        .env("GIT_CONFIG_KEY_2", "credential.useHttpPath")
+        .env("GIT_CONFIG_VALUE_2", "true")
+        .env("GIT_CONFIG_KEY_3", "http.followRedirects")
+        .env("GIT_CONFIG_VALUE_3", "false")
+        .env("GIT_ASKPASS", askpass.path())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "/bin/false")
+        .env(
+            "AGENT_WORKSPACE_GIT_PASSWORD",
+            request.token.expose_secret(),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|_| AppError::Internal("start credentialed Git push"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(AppError::Internal("capture Git push stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(AppError::Internal("capture Git push stderr"))?;
+    let stdout_reader = thread::spawn(move || bounded_read(stdout, MAX_GIT_OUTPUT_BYTES));
+    let stderr_reader = thread::spawn(move || bounded_read(stderr, MAX_GIT_ERROR_BYTES));
+    let deadline = Instant::now() + GIT_NETWORK_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| AppError::Internal("wait for credentialed Git push"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Conflict("repository", "Git push timed out"));
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| AppError::Internal("join Git push stdout reader"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| AppError::Internal("join Git push stderr reader"))??;
+    if status.success() {
+        return Ok(());
+    }
+    tracing::warn!(
+        stdout_bytes = stdout.len(),
+        stderr_bytes = stderr.len(),
+        "bounded credentialed Git push failed"
+    );
+    Err(AppError::Conflict("repository", "Git push failed"))
+}
+
 pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppError> {
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
@@ -434,6 +626,13 @@ fn validate_branch(value: &str) -> Result<(), AppError> {
     validate_ref(value)
 }
 
+fn validate_commit(value: &str) -> Result<(), AppError> {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AppError::Invalid("unsafe Git commit"));
+    }
+    Ok(())
+}
+
 fn repository_lock(repository_root: &Path) -> Result<RepositoryLock, AppError> {
     if !repository_root.is_absolute() || !repository_root.is_dir() {
         return Err(AppError::Invalid("unsafe repository root"));
@@ -546,6 +745,46 @@ fn bounded_read(mut input: impl Read, maximum: usize) -> Result<Vec<u8>, AppErro
     Ok(bytes)
 }
 
+struct TemporaryAskpass {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl TemporaryAskpass {
+    fn create(data_root: &Path) -> Result<Self, AppError> {
+        let key = Uuid::now_v7().simple().to_string();
+        let directory =
+            prepare_private_profile_directory(data_root, &data_root.join("github/askpass"), &key)?;
+        let path = directory.join("git-askpass");
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o700)
+            .open(&path)
+            .map_err(|_| AppError::Internal("create Git askpass helper"))?;
+        file.write_all(
+            b"#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' 'x-access-token' ;;\n  *Password*) printf '%s\\n' \"$AGENT_WORKSPACE_GIT_PASSWORD\" ;;\n  *) exit 1 ;;\nesac\n",
+        )
+        .map_err(|_| AppError::Internal("write Git askpass helper"))?;
+        file.sync_all()
+            .map_err(|_| AppError::Internal("sync Git askpass helper"))?;
+        file.set_permissions(fs::Permissions::from_mode(0o700))
+            .map_err(|_| AppError::Internal("protect Git askpass helper"))?;
+        Ok(Self { directory, path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryAskpass {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
 struct RepositoryLock {
     file: fs::File,
 }
@@ -559,10 +798,11 @@ impl Drop for RepositoryLock {
 #[cfg(test)]
 mod tests {
     use super::{
-        RegisteredRepository, RepositoryPreparationMode, create_worktree,
-        expected_repository_mirror_path, inspect_worktree, managed_worktree_path,
-        prepare_repository, remove_clean_worktree, repair_and_prune_worktrees, unique_run_branch,
-        validate_branch, validate_ref, worktree_is_dirty,
+        RegisteredRepository, RepositoryPreparationMode, TemporaryAskpass, create_worktree,
+        expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
+        managed_worktree_path, prepare_repository, remove_clean_worktree,
+        repair_and_prune_worktrees, unique_run_branch, validate_branch, validate_ref,
+        worktree_is_dirty,
     };
     use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, thread};
     use uuid::Uuid;
@@ -597,6 +837,30 @@ mod tests {
     #[test]
     fn rejects_missing_worktrees_during_inspection() {
         assert!(worktree_is_dirty(Path::new("/definitely/missing/worktree")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn askpass_helper_is_owner_only_contains_no_token_and_is_removed() {
+        let temporary = tempfile::tempdir().expect("temporary askpass runtime root");
+        let data_root = temporary.path().join("data");
+        let helper = TemporaryAskpass::create(&data_root).expect("create askpass helper");
+        let helper_path = helper.path().to_path_buf();
+        let directory = helper.directory.clone();
+        let contents = fs::read_to_string(&helper_path).expect("read askpass helper");
+        assert!(contents.contains("AGENT_WORKSPACE_GIT_PASSWORD"));
+        assert!(!contents.contains("opaque-test-token"));
+        assert_eq!(
+            fs::metadata(&helper_path)
+                .expect("askpass helper metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        drop(helper);
+        assert!(!helper_path.exists());
+        assert!(!directory.exists());
     }
 
     #[cfg(unix)]
@@ -679,6 +943,37 @@ mod tests {
             assert!(!inspection.dirty);
             assert_eq!(&inspection.branch, branch);
         }
+
+        let no_commit = inspect_publishable_worktree(
+            &mirror,
+            &created[1].0,
+            &created[1].1,
+            &first_preparation.base_commit,
+        );
+        assert!(no_commit.is_err());
+        fs::write(created[1].0.join("published.txt"), "publish\n").expect("write publish fixture");
+        git(&created[1].0, ["add", "published.txt"]);
+        git(
+            &created[1].0,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "publish fixture",
+            ],
+        );
+        let publishable = inspect_publishable_worktree(
+            &mirror,
+            &created[1].0,
+            &created[1].1,
+            &first_preparation.base_commit,
+        )
+        .expect("inspect publishable worktree");
+        assert_eq!(publishable.branch, created[1].1);
+        assert_ne!(publishable.head_commit, first_preparation.base_commit);
 
         fs::write(created[0].0.join("dirty.txt"), "retain\n").expect("dirty worktree");
         assert!(remove_clean_worktree(&mirror, &created[0].0).is_err());

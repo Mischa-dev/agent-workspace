@@ -1994,6 +1994,9 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             ar.provider_turn_id,
             workspace.branch_name AS branch,
             workspace.base_commit,
+            workspace.published_commit,
+            workspace.published_at::text AS published_at,
+            workspace.publish_failure_category,
             CASE WHEN ar.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
@@ -2022,6 +2025,7 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
         capabilities: RunCapabilities {
             interrupt: false,
             retry: false,
+            publish: false,
         },
     })
 }

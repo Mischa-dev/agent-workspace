@@ -47,10 +47,11 @@ pub enum Action {
     WorkItemView,
     WorkItemCreate,
     WorkItemEdit,
+    RepositoryPublish,
 }
 
 impl Action {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -68,6 +69,7 @@ impl Action {
         Self::WorkItemView,
         Self::WorkItemCreate,
         Self::WorkItemEdit,
+        Self::RepositoryPublish,
     ];
 }
 
@@ -346,7 +348,8 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::MentionSearch
             | Action::WorkItemView
             | Action::WorkItemCreate
-            | Action::WorkItemEdit,
+            | Action::WorkItemEdit
+            | Action::RepositoryPublish,
             Resource::Project(scope),
         ) => MembershipScope::Project(scope.project_id),
         (Action::ApprovalRespond, Resource::Approval { scope, .. }) => {
@@ -416,6 +419,7 @@ const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
                 | Action::WorkItemView
                 | Action::WorkItemCreate
                 | Action::WorkItemEdit
+                | Action::RepositoryPublish
         ),
         MembershipRole::Viewer => {
             matches!(
@@ -561,6 +565,7 @@ mod tests {
                             | Action::NavigationRead
                             | Action::NavigationWrite
                             | Action::WorkerInvoke
+                            | Action::RepositoryPublish
                             | Action::RunInterrupt
                             | Action::ApprovalRespond
                             | Action::ChannelCreate

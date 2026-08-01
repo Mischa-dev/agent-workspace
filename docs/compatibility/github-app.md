@@ -31,12 +31,28 @@ repository only.
 
 ## Credentialed Git boundary
 
-Clone/fetch/push operations use an absolute Git executable, argument arrays,
+M5 publication is an explicit Project-scoped action against one terminal Agent
+Run. The backend re-inspects the managed worktree and accepts only a clean
+worktree on the recorded branch whose exact 40-character HEAD descends from the
+recorded base commit. It records that intended commit in a durable leased job
+before requesting credentials. The backend does not stage, commit, force-push,
+or hold a repository lock during a network operation.
+
+Pushes use an absolute Git executable, argument arrays,
 `core.hooksPath=/dev/null`, empty credential helpers, a temporary owner-only
-`GIT_ASKPASS` script, and a cleared child environment. The installation token
-exists only in the child environment and is redacted from bounded error output.
-It never appears in a URL, argument, durable Git configuration, log, fixture,
-or provider environment.
+`GIT_ASKPASS` script, and a cleared child environment. System and global Git
+configuration, interactive prompts, SSH commands, and HTTP redirects are
+disabled. The exact intended commit is pushed through a non-force refspec to
+the recorded collision-safe branch. The installation token exists only in the
+child environment and is redacted from bounded error output. It never appears
+in a URL, argument, durable Git configuration, log, fixture, or provider
+environment.
+
+The worker compares the remote branch before the push and again afterward.
+An already matching ref completes idempotently; a different remote commit is a
+terminal divergence; and an unconfirmed remote result remains retryable. Job
+identity is immutable, leases recover after restart, retry count and backoff are
+bounded, and a dirty or changed worktree is preserved for operator inspection.
 
 ## Webhook boundary
 
@@ -46,7 +62,8 @@ The listener binds separately on `127.0.0.1:3101`. It verifies:
 - a non-empty `X-GitHub-Delivery`
 - an explicitly subscribed `X-GitHub-Event`
 - exact `repository.full_name`
-- bounded in-memory duplicate delivery IDs
+- durable, installation-scoped duplicate delivery IDs with payload-checksum
+  mismatch rejection
 
 The Cloudflare Quick Tunnel exposes only this listener and is stopped
 immediately after the signed delivery proof.

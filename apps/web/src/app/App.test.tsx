@@ -1306,6 +1306,59 @@ describe('M1 authenticated shell', () => {
     })
   })
 
+  it('queues publication for the exact terminal run through the Project-scoped boundary', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const terminalTimeline = {
+      ...timeline,
+      activeRun: null,
+      latestTerminalRun: {
+        ...timeline.activeRun,
+        state: 'completed',
+        capabilities: { interrupt: false, retry: false, publish: true },
+      },
+      approvals: [],
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(terminalTimeline)
+      }
+      if (
+        path.includes(
+          `/projects/${projectAId}/agent-runs/run-1/publish`,
+        )
+      ) {
+        return jsonResponse({ jobId: 'publish-job-1', state: 'queued' }, 202)
+      }
+      return standardImplementation?.(input, init) ?? Promise.reject()
+    })
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Publish branch' }),
+    )
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([path]) =>
+        String(path).includes(
+          `/projects/${projectAId}/agent-runs/run-1/publish`,
+        ),
+      )
+      expect(request).toBeDefined()
+      expect(request?.[1]?.method).toBe('POST')
+      expect(
+        new Headers(request?.[1]?.headers).get('idempotency-key'),
+      ).toMatch(/^[0-9a-f-]{36}$/i)
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({})
+    })
+  })
+
   it('does not remember an active child while browsing archived-parent history', async () => {
     const archivedChildId = '019fb600-0000-7000-8000-000000000014'
     window.history.replaceState(
