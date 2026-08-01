@@ -152,7 +152,7 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         ))
         .await
         .expect("invalid expiry response");
-    assert_eq!(invalid_expiry.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid_expiry.status(), StatusCode::BAD_REQUEST);
 
     let issued_response = application
         .clone()
