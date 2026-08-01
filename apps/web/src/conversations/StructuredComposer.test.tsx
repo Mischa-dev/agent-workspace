@@ -19,6 +19,15 @@ const worker = {
   avatarUrl: null,
 }
 
+const workItem = {
+  id: '019fb8b0-0000-7000-8000-000000000003',
+  key: 'AW-42',
+  title: 'Structured reference proof',
+  statusCategory: 'started',
+  archivedAt: null,
+  href: '/projects/project-a/work-items/019fb8b0-0000-7000-8000-000000000003',
+}
+
 afterEach(cleanup)
 
 describe('StructuredComposer', () => {
@@ -88,6 +97,32 @@ describe('StructuredComposer', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
       { type: 'text', text: 'literal @agent text' },
+    ])
+  })
+
+  it('selects a Work Item by keyboard and submits only its canonical ID', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(
+      <StructuredComposer
+        onSubmit={onSubmit}
+        searchActors={vi.fn()}
+        searchWorkItems={vi.fn().mockResolvedValue([workItem])}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Track' } })
+    const trigger = screen.getByRole('button', { name: 'Reference Work Item' })
+    fireEvent.click(trigger)
+    const search = await screen.findByRole('combobox')
+    await screen.findByRole('option', { name: /AW-42/ })
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(screen.getByLabelText('Selected Work Item references')).toHaveTextContent('AW-42')
+    await waitFor(() => expect(trigger).toHaveFocus())
+    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
+      { type: 'text', text: 'Track' },
+      { type: 'text', text: ' ' },
+      { type: 'work_item_ref', workItemId: workItem.id },
     ])
   })
 

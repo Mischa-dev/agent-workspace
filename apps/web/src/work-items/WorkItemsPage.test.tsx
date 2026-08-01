@@ -10,6 +10,7 @@ import {
   useCreateAcceptanceCriterion,
   useCreateWorkItem,
   useCreateWorkItemComment,
+  useMoveWorkItem,
   useRemoveAcceptanceCriterion,
   useSetWorkItemArchived,
   useSetWorkItemPrimaryRepository,
@@ -18,6 +19,7 @@ import {
   useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
+  useWorkItemBoard,
   useWorkItems,
   useWorkItemWorkflow,
   useWorkItemTimeline,
@@ -49,6 +51,7 @@ vi.mock('./hooks', () => ({
   useCreateAcceptanceCriterion: vi.fn(),
   useCreateWorkItem: vi.fn(),
   useCreateWorkItemComment: vi.fn(),
+  useMoveWorkItem: vi.fn(),
   useRemoveAcceptanceCriterion: vi.fn(),
   useSetWorkItemArchived: vi.fn(),
   useSetWorkItemPrimaryRepository: vi.fn(),
@@ -57,6 +60,7 @@ vi.mock('./hooks', () => ({
   useUpdateAcceptanceCriterion: vi.fn(),
   useUpdateWorkItem: vi.fn(),
   useWorkItem: vi.fn(),
+  useWorkItemBoard: vi.fn(),
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
   useWorkItemTimeline: vi.fn(),
@@ -162,6 +166,17 @@ beforeEach(() => {
     isError: false,
     isSuccess: true,
   } as unknown as ReturnType<typeof useWorkItems>)
+  vi.mocked(useWorkItemBoard).mockReturnValue({
+    data: { columns: [] },
+    isPending: false,
+    isError: false,
+    isSuccess: true,
+  } as unknown as ReturnType<typeof useWorkItemBoard>)
+  vi.mocked(useMoveWorkItem).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useMoveWorkItem>)
   vi.mocked(useCreateWorkItem).mockReturnValue({
     mutate: vi.fn(),
     isPending: false,
@@ -275,6 +290,21 @@ describe('Work Items list', () => {
       }),
       expect.any(Object),
     )
+  })
+
+  it('renders the Kanban projection with keyboard-equivalent move controls', () => {
+    vi.mocked(useWorkItemBoard).mockReturnValue({
+      data: {
+        columns: [{ status: workItem.status, items: [workItem], hasMore: false }],
+      },
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+    } as unknown as ReturnType<typeof useWorkItemBoard>)
+    renderPage(`/projects/${projectId}/work-items?view=board`)
+    expect(screen.getByRole('region', { name: 'Backlog column' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Move AW-1 up' })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Move AW-1 to status' })).toBeVisible()
   })
 })
 

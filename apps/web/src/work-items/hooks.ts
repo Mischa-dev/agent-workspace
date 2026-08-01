@@ -6,8 +6,10 @@ import {
   createAcceptanceCriterion,
   createWorkItemComment,
   getWorkItem,
+  getWorkItemBoard,
   getWorkItemWorkflow,
   listWorkItems,
+  moveWorkItem,
   getWorkItemTimeline,
   removeAcceptanceCriterion,
   searchAssignableActors,
@@ -25,6 +27,14 @@ export function useWorkItems(projectId: string, filters: WorkItemFilters) {
     queryKey: queryKeys.workItems(projectId, filters),
     queryFn: () => listWorkItems(projectId, filters),
     enabled: Boolean(projectId),
+  })
+}
+
+export function useWorkItemBoard(projectId: string, filters: WorkItemFilters, enabled = true) {
+  return useQuery({
+    queryKey: [...queryKeys.workItems(projectId, { ...filters, cursor: undefined }), 'board'],
+    queryFn: () => getWorkItemBoard(projectId, filters),
+    enabled: Boolean(projectId) && enabled,
   })
 }
 
@@ -86,6 +96,10 @@ export function useUpdateWorkItem() {
       void invalidate(item.projectId)
     },
   })
+}
+
+export function useMoveWorkItem() {
+  return useWorkItemChildMutation(moveWorkItem)
 }
 
 export function useSetWorkItemArchived() {

@@ -1,10 +1,14 @@
 import { requestJson } from '../api/client'
+import type { ConversationWorkItemReference } from '../conversations/types'
+import type { MessageContentV1 } from '../conversations/types'
+import { parseMessageContent } from '../conversations/messageContentModel'
 import type {
   AssignableActor,
   WorkItem,
   WorkItemCard,
   WorkItemFilters,
   WorkItemListResponse,
+  WorkItemBoardResponse,
   WorkItemPatch,
   WorkItemPriority,
   WorkItemTimelineEntry,
@@ -236,6 +240,75 @@ export async function listWorkItems(
   }
 }
 
+export async function getWorkItemBoard(
+  projectId: string,
+  filters: WorkItemFilters,
+): Promise<WorkItemBoardResponse> {
+  const parameters = new URLSearchParams()
+  for (const [key, value] of Object.entries({ ...filters, cursor: undefined })) {
+    if (value !== undefined && value !== '' && value !== false) parameters.set(key, String(value))
+  }
+  const payload = record(await requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/board?${parameters}`,
+  ))
+  return {
+    columns: (Array.isArray(payload.columns) ? payload.columns : []).map((value) => {
+      const column = record(value)
+      const status = record(column.status)
+      return {
+        status: {
+          id: string(status.id),
+          name: string(status.name),
+          semanticCategory: string(status.semanticCategory),
+        },
+        items: (Array.isArray(column.items) ? column.items : []).map(normalizeCard),
+        hasMore: boolean(column.hasMore),
+      }
+    }),
+  }
+}
+
+export async function searchWorkItemReferences(
+  projectId: string,
+  query: string,
+): Promise<ConversationWorkItemReference[]> {
+  const parameters = new URLSearchParams({ q: query, limit: '20' })
+  const payload = record(await requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/work-item-references?${parameters}`,
+  ))
+  return (Array.isArray(payload.items) ? payload.items : []).flatMap((value) => {
+    const item = record(value)
+    const id = string(item.id)
+    const key = string(item.key)
+    const title = string(item.title)
+    const href = string(item.href)
+    if (!id || !key || !title || !href.startsWith('/projects/')) return []
+    return [{
+      id,
+      key,
+      title,
+      statusCategory: string(item.statusCategory),
+      archivedAt: nullableString(item.archivedAt),
+      href,
+    }]
+  })
+}
+
+export async function moveWorkItem(input: {
+  projectId: string
+  workItemId: string
+  expectedVersion: number
+  targetStatusId: string
+  targetPosition: number
+  idempotencyKey: string
+}) {
+  const { projectId, workItemId, idempotencyKey, ...json } = input
+  return normalizeWorkItem(await requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/move`,
+    { method: 'POST', idempotencyKey, json },
+  ))
+}
+
 export async function getWorkItem(projectId: string, workItemId: string) {
   return normalizeWorkItem(
     await requestJson<unknown>(
@@ -421,7 +494,7 @@ export async function removeAcceptanceCriterion(input: {
 export async function createWorkItemComment(input: {
   projectId: string
   workItemId: string
-  text: string
+  content: MessageContentV1
   idempotencyKey: string
 }) {
   return requestJson<unknown>(
@@ -430,7 +503,7 @@ export async function createWorkItemComment(input: {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
       json: {
-        content: { version: 1, nodes: [{ type: 'text', text: input.text }] },
+        content: input.content,
       },
     },
   )
@@ -451,6 +524,7 @@ export async function getWorkItemTimeline(
     const activityActor = activity?.actor ? record(activity.actor) : null
     const comment = entry.comment ? record(entry.comment) : null
     const commentAuthor = comment?.author ? record(comment.author) : null
+    const commentContent = comment ? parseMessageContent(comment.content) : null
     return {
       sequence: number(entry.sequence),
       kind: entry.kind === 'comment' ? 'comment' : 'activity',
@@ -470,7 +544,7 @@ export async function getWorkItemTimeline(
             }
           : null,
       comment:
-        comment && commentAuthor
+        comment && commentAuthor && commentContent
           ? {
               id: string(comment.id),
               author: {
@@ -479,7 +553,18 @@ export async function getWorkItemTimeline(
                 handle: string(commentAuthor.handle),
                 kind: string(commentAuthor.kind),
               },
+              content: commentContent,
               plainText: string(comment.plainText),
+              mentionedActors: (Array.isArray(comment.mentionedActors) ? comment.mentionedActors : []).map((value) => {
+                const actor = record(value)
+                return { id: string(actor.id), displayName: string(actor.displayName), handle: string(actor.handle), kind: string(actor.kind) }
+              }),
+              referencedWorkItems: (Array.isArray(comment.referencedWorkItems) ? comment.referencedWorkItems : []).flatMap((value) => {
+                const item = record(value)
+                const href = string(item.href)
+                if (!string(item.id) || !href.startsWith('/projects/')) return []
+                return [{ id: string(item.id), key: string(item.key), title: string(item.title), statusCategory: string(item.statusCategory), archivedAt: nullableString(item.archivedAt), href }]
+              }),
               createdAt: string(comment.createdAt),
             }
           : null,

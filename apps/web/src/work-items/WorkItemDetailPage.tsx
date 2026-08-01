@@ -5,12 +5,15 @@ import { useQuery } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
+import { searchMentionableActors } from '../conversations/api'
+import { StructuredComposer } from '../conversations/StructuredComposer'
+import { MessageContent } from '../conversations/MessageContent'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { listRepositories } from '../repositories/api'
 import { AppShell } from '../shell/AppShell'
-import { normalizeWorkItem } from './api'
+import { normalizeWorkItem, searchWorkItemReferences } from './api'
 import { workItemPriorities } from './constants'
 import {
   useAssignableActors,
@@ -546,16 +549,6 @@ function WorkItemLinks({
 function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: WorkItem }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
   const createComment = useCreateWorkItemComment()
-  const [comment, setComment] = useState('')
-  const key = useRef(crypto.randomUUID())
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!comment.trim() || createComment.isPending) return
-    createComment.mutate(
-      { projectId: item.projectId, workItemId: item.id, text: comment.trim(), idempotencyKey: key.current },
-      { onSuccess: () => { key.current = crypto.randomUUID(); setComment('') } },
-    )
-  }
   return (
     <section className="work-item-section" aria-labelledby="activity-heading">
       <header><div><h2 id="activity-heading">Activity</h2><p>Comments and durable changes in one ordered history.</p></div></header>
@@ -568,7 +561,7 @@ function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: Wo
               <span className="activity-avatar" aria-hidden="true">{(entry.comment?.author.displayName ?? entry.activity?.actor.displayName ?? 'A').charAt(0)}</span>
               <div>
                 <p><strong>{entry.comment?.author.displayName ?? entry.activity?.actor.displayName}</strong> {entry.comment ? 'commented' : entry.activity?.summary.toLowerCase()}</p>
-                {entry.comment ? <p className="activity-comment">{entry.comment.plainText}</p> : null}
+                {entry.comment ? <div className="activity-comment"><MessageContent actors={entry.comment.mentionedActors.map((actor) => ({ ...actor, kind: actor.kind as 'human' | 'external_agent' | 'execution_worker' | 'integration' | 'system', avatarUrl: null }))} content={entry.comment.content} fallbackPlainText={entry.comment.plainText} workItems={entry.comment.referencedWorkItems} /></div> : null}
                 <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
               </div>
             </li>
@@ -576,11 +569,17 @@ function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: Wo
         </ol>
       ) : timeline.isSuccess ? <p className="compact-note">No activity yet.</p> : null}
       {!disabled ? (
-        <form className="comment-composer" onSubmit={submit}>
-          <label htmlFor={`comment-${item.id}`}>Add a comment</label>
-          <textarea id={`comment-${item.id}`} maxLength={20000} onChange={(event) => setComment(event.target.value)} placeholder="Add context without changing the Work Item fields." rows={4} value={comment} />
-          <div className="composer-actions"><span>{comment.length.toLocaleString()} / 20,000</span><button className="primary-button" disabled={!comment.trim() || createComment.isPending} type="submit">{createComment.isPending ? 'Posting…' : 'Post comment'}</button></div>
-        </form>
+        <StructuredComposer
+          disabled={createComment.isPending}
+          label="Add a comment"
+          onSubmit={async ({ content, idempotencyKey }) => {
+            await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content, idempotencyKey })
+          }}
+          placeholder="Add context without changing the Work Item fields."
+          searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
+          searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}
+          submitLabel="Post comment"
+        />
       ) : null}
     </section>
   )

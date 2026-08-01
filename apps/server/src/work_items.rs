@@ -81,12 +81,20 @@ pub fn router() -> Router<AppState> {
             get(list_work_items).post(create_work_item),
         )
         .route(
+            "/api/v1/projects/{project_id}/work-items/board",
+            get(get_work_item_board),
+        )
+        .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}",
             get(get_work_item).patch(update_work_item),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
             axum::routing::post(archive_work_item),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
+            axum::routing::post(move_work_item),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
@@ -532,6 +540,28 @@ struct WorkItemListResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WorkItemBoardResponse {
+    columns: Vec<WorkItemBoardColumn>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemBoardColumn {
+    status: WorkItemStatusView,
+    items: Vec<WorkItemCardView>,
+    has_more: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MoveWorkItemRequest {
+    expected_version: i64,
+    target_status_id: Uuid,
+    target_position: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WorkItemCardView {
     id: Uuid,
     project_id: Uuid,
@@ -934,6 +964,127 @@ async fn list_work_items(
         .map(|row| work_item_view(row, capabilities).map(WorkItemCardView::from))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(WorkItemListResponse { items, next_cursor }))
+}
+
+async fn get_work_item_board(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<WorkItemListQuery>,
+) -> Result<Json<WorkItemBoardResponse>, AppError> {
+    let membership = project_membership(&state.pool, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
+    let search = normalize_search(query.q.as_deref())?;
+    validate_priority_filter(query.priority.as_deref())?;
+    validate_semantic_category(query.semantic_category.as_deref())?;
+    if query.cursor.is_some() {
+        return Err(AppError::Invalid("board cursor"));
+    }
+    if query.unassigned == Some(true) && query.assignee_actor_id.is_some() {
+        return Err(AppError::Validation("assignee filter"));
+    }
+    validate_list_filter_ids(
+        &state.pool,
+        project_id,
+        query.type_id,
+        query.status_id,
+        query.assignee_actor_id,
+    )
+    .await?;
+    let statuses = sqlx::query_as::<_, WorkflowStatusRow>(
+        "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position, id",
+    )
+    .bind(project_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let limit = i64::from(
+        query
+            .limit
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .clamp(1, MAX_PAGE_SIZE),
+    );
+    let caps = capabilities(&membership)?;
+    let mut columns = Vec::with_capacity(statuses.len());
+    for status in statuses {
+        if query
+            .status_id
+            .is_some_and(|status_id| status_id != status.id)
+        {
+            continue;
+        }
+        let rows = sqlx::query_as::<_, WorkItemRow>(
+            r#"
+            SELECT
+                item.id, item.project_id, project.project_key,
+                item.number, item.title, ''::text AS description,
+                item.type_id, item_type.name AS type_name,
+                item.status_id, status.name AS status_name,
+                status.semantic_category, item.priority,
+                item.assignee_actor_id,
+                assignee.display_name AS assignee_display_name,
+                assignee.handle AS assignee_handle,
+                assignee_actor.kind AS assignee_kind,
+                CASE WHEN assignee.actor_id IS NULL THEN NULL
+                     ELSE assignee.enabled AND assignee_actor.status = 'active'
+                END AS assignee_active,
+                item.version, item.archived_at::text AS archived_at,
+                item.created_at::text AS created_at,
+                item.updated_at::text AS updated_at,
+                '[]'::jsonb AS acceptance_criteria,
+                '[]'::jsonb AS linked_threads,
+                '[]'::jsonb AS linked_repositories
+            FROM work_items item
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_types item_type
+              ON item_type.project_id = item.project_id AND item_type.id = item.type_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            LEFT JOIN project_memberships assignee
+              ON assignee.project_id = item.project_id AND assignee.actor_id = item.assignee_actor_id
+            LEFT JOIN actors assignee_actor ON assignee_actor.id = assignee.actor_id
+            WHERE item.project_id = $1 AND item.status_id = $2
+              AND ($3::text IS NULL OR item.title ILIKE $3 OR (project.project_key || '-' || item.number::text) ILIKE $3)
+              AND ($4::uuid IS NULL OR item.type_id = $4)
+              AND ($5::text IS NULL OR status.semantic_category = $5)
+              AND ($6::text IS NULL OR item.priority = $6)
+              AND ($7::uuid IS NULL OR item.assignee_actor_id = $7)
+              AND (NOT $8::boolean OR item.assignee_actor_id IS NULL)
+              AND (($9::boolean AND item.archived_at IS NOT NULL) OR (NOT $9::boolean AND item.archived_at IS NULL))
+            ORDER BY item.board_rank, item.id
+            LIMIT $10
+            "#,
+        )
+        .bind(project_id)
+        .bind(status.id)
+        .bind(search.as_ref().map(|value| format!("%{value}%")))
+        .bind(query.type_id)
+        .bind(query.semantic_category.as_deref())
+        .bind(query.priority.as_deref())
+        .bind(query.assignee_actor_id)
+        .bind(query.unassigned.unwrap_or(false))
+        .bind(query.archived.unwrap_or(false))
+        .bind(limit + 1)
+        .fetch_all(&state.pool)
+        .await?;
+        let has_more = rows.len() > limit as usize;
+        let items = rows
+            .into_iter()
+            .take(limit as usize)
+            .map(|row| work_item_view(row, caps).map(WorkItemCardView::from))
+            .collect::<Result<Vec<_>, _>>()?;
+        columns.push(WorkItemBoardColumn {
+            status: WorkItemStatusView {
+                id: status.id,
+                name: status.name,
+                semantic_category: status.semantic_category,
+            },
+            items,
+            has_more,
+        });
+    }
+    Ok(Json(WorkItemBoardResponse { columns }))
 }
 
 async fn validate_list_filter_ids(
@@ -1856,6 +2007,185 @@ async fn search_work_item_references(
             .map(|row| work_item_reference_view(project_id, row))
             .collect(),
     }))
+}
+
+async fn move_work_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(request): ApiJson<MoveWorkItemRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if request.target_position < 1 || request.target_position > 10_000 {
+        return Err(AppError::Validation("targetPosition"));
+    }
+    let key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("work_items", work_item_id, "move")?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let caps = capabilities(&membership)?;
+    if current.version != request.expected_version {
+        return work_item_version_conflict_response(work_item_view(current, caps)?);
+    }
+    if current.archived_at.is_some() {
+        return Err(AppError::NotFound("work_item"));
+    }
+    let target_status = sqlx::query_as::<_, WorkflowStatusRow>(
+        "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 AND id = $2 AND enabled",
+    )
+    .bind(project_id)
+    .bind(request.target_status_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::Validation("targetStatusId"))?;
+    if current.status_id != request.target_status_id {
+        let allowed = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM work_item_status_transitions WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3)",
+        )
+        .bind(project_id)
+        .bind(current.status_id)
+        .bind(request.target_status_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if !allowed {
+            return Err(AppError::Conflict("work_item_status", "transition"));
+        }
+    }
+    let mut target_rows = sqlx::query_as::<_, (Uuid, i64)>(
+        r#"
+        SELECT id, board_rank FROM work_items
+        WHERE project_id = $1 AND status_id = $2 AND id <> $3 AND archived_at IS NULL
+        ORDER BY board_rank, id
+        FOR UPDATE
+        "#,
+    )
+    .bind(project_id)
+    .bind(request.target_status_id)
+    .bind(work_item_id)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let target_index = usize::try_from(request.target_position - 1)
+        .map_err(|_| AppError::Validation("targetPosition"))?;
+    if target_index > target_rows.len() {
+        return Err(AppError::Validation("targetPosition"));
+    }
+    let mut rank = allocate_board_rank(&target_rows, target_index)?;
+    if rank.is_none() {
+        for (index, (id, existing_rank)) in target_rows.iter_mut().enumerate() {
+            let balanced_rank = i64::try_from(index + 1)
+                .ok()
+                .and_then(|value| value.checked_mul(BOARD_RANK_STEP))
+                .ok_or(AppError::Internal("rebalance Work Item board rank"))?;
+            if *existing_rank != balanced_rank {
+                sqlx::query(
+                    "UPDATE work_items SET board_rank = $3 WHERE project_id = $1 AND id = $2",
+                )
+                .bind(project_id)
+                .bind(*id)
+                .bind(balanced_rank)
+                .execute(&mut *transaction)
+                .await?;
+                *existing_rank = balanced_rank;
+            }
+        }
+        rank = allocate_board_rank(&target_rows, target_index)?;
+    }
+    let board_rank = rank.ok_or(AppError::Internal("allocate Work Item board rank"))?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE work_items
+        SET status_id = $3, board_rank = $4, version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND version = $5
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(request.target_status_id)
+    .bind(board_rank)
+    .bind(request.expected_version)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Internal("locked Work Item move lost its version"));
+    }
+    let version = request
+        .expected_version
+        .checked_add(1)
+        .ok_or(AppError::Validation("expectedVersion"))?;
+    record_work_item_change(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        "work_item_updated",
+        "Work Item moved",
+        "work_item.moved",
+        serde_json::json!({
+            "previousStatusId": current.status_id,
+            "statusId": target_status.id,
+            "targetPosition": request.target_position,
+        }),
+        version,
+    )
+    .await?;
+    let item = current_work_item_view(&mut transaction, project_id, work_item_id, caps).await?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::OK, item)
+}
+
+fn allocate_board_rank(rows: &[(Uuid, i64)], index: usize) -> Result<Option<i64>, AppError> {
+    let previous = index
+        .checked_sub(1)
+        .and_then(|previous| rows.get(previous))
+        .map(|row| row.1);
+    let next = rows.get(index).map(|row| row.1);
+    match (previous, next) {
+        (None, None) => Ok(Some(BOARD_RANK_STEP)),
+        (Some(previous), None) => previous
+            .checked_add(BOARD_RANK_STEP)
+            .map(Some)
+            .ok_or(AppError::Internal("append Work Item board rank")),
+        (None, Some(next)) if next > 1 => Ok(Some(next / 2)),
+        (None, Some(_)) => Ok(None),
+        (Some(previous), Some(next)) if next - previous > 1 => {
+            Ok(Some(previous + (next - previous) / 2))
+        }
+        (Some(_), Some(_)) => Ok(None),
+    }
 }
 
 async fn create_work_item(

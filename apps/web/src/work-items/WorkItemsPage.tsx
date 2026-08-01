@@ -9,11 +9,13 @@ import { useRememberProjectLocation } from '../projects/useRememberProjectLocati
 import { AppShell } from '../shell/AppShell'
 import {
   useCreateWorkItem,
+  useMoveWorkItem,
+  useWorkItemBoard,
   useWorkItems,
   useWorkItemWorkflow,
 } from './hooks'
 import { workItemPriorities } from './constants'
-import type { WorkItemFilters, WorkItemPriority } from './types'
+import type { WorkItemCard, WorkItemFilters, WorkItemPriority, WorkItemStatus, WorkflowStatus } from './types'
 
 function filtersFromParameters(parameters: URLSearchParams): WorkItemFilters {
   const priority = parameters.get('priority')
@@ -47,7 +49,7 @@ function persistedFilters(filters: WorkItemFilters) {
 
 function parametersFromFilters(filters: Record<string, unknown>) {
   const parameters = new URLSearchParams()
-  for (const key of ['q', 'typeId', 'statusId', 'priority', 'archived']) {
+  for (const key of ['q', 'typeId', 'statusId', 'priority', 'archived', 'view']) {
     const value = filters[key]
     if (typeof value === 'string' && value) parameters.set(key, value)
     if (value === true) parameters.set(key, 'true')
@@ -60,6 +62,7 @@ export function WorkItemsPage() {
   const { projectId = '' } = useParams()
   const [parameters, setParameters] = useSearchParams()
   const [createOpen, setCreateOpen] = useState(false)
+  const view = parameters.get('view') === 'board' ? 'board' : 'list'
   const project = useProject(projectId)
   const workflow = useWorkItemWorkflow(projectId)
   const filters = useMemo(
@@ -67,6 +70,7 @@ export function WorkItemsPage() {
     [parameters],
   )
   const list = useWorkItems(projectId, filters)
+  const board = useWorkItemBoard(projectId, filters, view === 'board')
   const savedFilters = project.data?.navigation.filters
   const shouldRestore =
     parameters.size === 0 &&
@@ -90,7 +94,7 @@ export function WorkItemsPage() {
       !project.data.archivedAt &&
       project.data.capabilities.navigationWrite,
     project.data?.navigation,
-    persistedFilters(filters),
+    { ...persistedFilters(filters), view },
   )
 
   const setFilter = (key: string, value: string | boolean) => {
@@ -198,9 +202,14 @@ export function WorkItemsPage() {
           </label>
         </section>
 
-        {list.isPending ? <WorkItemsLoading compact /> : null}
-        {list.isError ? <WorkItemsError onRetry={() => void list.refetch()} /> : null}
-        {list.isSuccess && list.data.items.length === 0 ? (
+        <nav aria-label="Work Item view" className="work-item-view-switcher">
+          <button aria-pressed={view === 'list'} className="text-button" onClick={() => setFilter('view', '')} type="button">List</button>
+          <button aria-pressed={view === 'board'} className="text-button" onClick={() => setFilter('view', 'board')} type="button">Board</button>
+        </nav>
+
+        {view === 'list' && list.isPending ? <WorkItemsLoading compact /> : null}
+        {view === 'list' && list.isError ? <WorkItemsError onRetry={() => void list.refetch()} /> : null}
+        {view === 'list' && list.isSuccess && list.data.items.length === 0 ? (
           <div className="empty-state compact-empty-state">
             <span aria-hidden="true" className="empty-state-mark">◇</span>
             <h2>{hasFilters ? 'No matching Work Items' : 'No Work Items yet'}</h2>
@@ -211,7 +220,7 @@ export function WorkItemsPage() {
             </p>
           </div>
         ) : null}
-        {list.isSuccess && list.data.items.length > 0 ? (
+        {view === 'list' && list.isSuccess && list.data.items.length > 0 ? (
           <ul aria-label="Work Items" className="work-item-list">
             {list.data.items.map((item) => (
               <li key={item.id}>
@@ -236,7 +245,7 @@ export function WorkItemsPage() {
           </ul>
         ) : null}
 
-        {list.isSuccess && (filters.cursor || list.data.nextCursor) ? (
+        {view === 'list' && list.isSuccess && (filters.cursor || list.data.nextCursor) ? (
           <nav aria-label="Work Item pages" className="pagination-actions">
             <button
               className="secondary-button"
@@ -256,6 +265,16 @@ export function WorkItemsPage() {
             </button>
           </nav>
         ) : null}
+        {view === 'board' && board.isPending ? <WorkItemsLoading compact /> : null}
+        {view === 'board' && board.isError ? <WorkItemsError onRetry={() => void board.refetch()} /> : null}
+        {view === 'board' && board.isSuccess ? (
+          <WorkItemBoard
+            columns={board.data.columns}
+            disabled={Boolean(project.data.archivedAt)}
+            projectId={projectId}
+            statuses={workflow.data?.statuses ?? []}
+          />
+        ) : null}
       </div>
       {createOpen && workflow.data ? (
         <CreateWorkItemDialog
@@ -265,6 +284,69 @@ export function WorkItemsPage() {
         />
       ) : null}
     </AppShell>
+  )
+}
+
+function WorkItemBoard({
+  columns,
+  disabled,
+  projectId,
+  statuses,
+}: {
+  columns: Array<{ status: WorkItemStatus; items: WorkItemCard[]; hasMore: boolean }>
+  disabled: boolean
+  projectId: string
+  statuses: WorkflowStatus[]
+}) {
+  const move = useMoveWorkItem()
+  const [dragged, setDragged] = useState<WorkItemCard | null>(null)
+  const submitMove = (item: WorkItemCard, targetStatusId: string, targetPosition: number) => {
+    move.mutate({
+      projectId,
+      workItemId: item.id,
+      expectedVersion: item.version,
+      targetStatusId,
+      targetPosition,
+      idempotencyKey: crypto.randomUUID(),
+    })
+  }
+  return (
+    <section aria-label="Work Item board" className="work-item-board">
+      {columns.map((column) => (
+        <section
+          aria-label={`${column.status.name} column`}
+          className="work-item-board-column"
+          data-category={column.status.semanticCategory}
+          key={column.status.id}
+          onDragOver={(event) => { if (!disabled) event.preventDefault() }}
+          onDrop={(event) => {
+            event.preventDefault()
+            if (dragged && !disabled) submitMove(dragged, column.status.id, column.items.length + 1)
+            setDragged(null)
+          }}
+        >
+          <header><h2>{column.status.name}</h2><span>{column.items.length}{column.hasMore ? '+' : ''}</span></header>
+          <ol>
+            {column.items.map((item, index) => (
+              <li draggable={!disabled && !move.isPending} key={item.id} onDragEnd={() => setDragged(null)} onDragStart={() => setDragged(item)}>
+                <Link to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`}><span className="work-item-key">{item.key}</span><strong>{item.title}</strong></Link>
+                <span className="board-card-meta">{item.itemType.name} · {item.assignee?.displayName ?? 'Unassigned'}</span>
+                {!disabled ? (
+                  <div className="board-card-actions">
+                    <button aria-label={`Move ${item.key} up`} className="text-button" disabled={move.isPending || index === 0} onClick={() => submitMove(item, column.status.id, index)} type="button">↑</button>
+                    <button aria-label={`Move ${item.key} down`} className="text-button" disabled={move.isPending || index === column.items.length - 1} onClick={() => submitMove(item, column.status.id, index + 2)} type="button">↓</button>
+                    <label><span className="visually-hidden">Move {item.key} to status</span><select aria-label={`Move ${item.key} to status`} disabled={move.isPending} onChange={(event) => { if (event.target.value !== column.status.id) submitMove(item, event.target.value, 1) }} value={column.status.id}>{statuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}</select></label>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+          {column.items.length === 0 ? <p>Drop or move an item here.</p> : null}
+          {column.hasMore ? <p>More items are available in the filtered list.</p> : null}
+        </section>
+      ))}
+      {move.isError ? <p className="form-error-summary board-error" role="alert">The board changed before the move completed. It has been refreshed; try the move again.</p> : null}
+    </section>
   )
 }
 
