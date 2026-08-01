@@ -2,16 +2,36 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M3 satisfied; M4 authorized v0.14
+**Status:** M4 implementation complete; acceptance pending; M5 entry backlog v0.15
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M3 are complete. M4 is authorized by the task-level criteria below; every later milestone remains subject to the same entry gate.
+**Implementation authorization:** Milestones M0 through M3 are complete. M4 is implemented and remains subject to its exact-commit acceptance gate. M5 is elaborated but is not authorized until M4 is accepted; every later milestone remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.15 — M5 GitHub delivery entry backlog
+
+- elaborated every M5 task with acceptance criteria, dependencies, expected
+  tests, and explicit exclusions without authorizing implementation before M4
+  acceptance
+- fixed a host-owned GitHub App boundary: private key and webhook secret stay
+  outside PostgreSQL and the repository, while short-lived installation tokens
+  exist only for one child API or Git operation
+- fixed verified, deduplicated webhook receipt plus durable at-least-once jobs
+  and outbox/refetch convergence as the GitHub state synchronization contract
+- required an explicit human publish action, a clean branch with commits ahead
+  of its recorded base, backend-owned credential injection, and uncertain-push
+  reconciliation; M5 never stages or commits arbitrary dirty worktree content
+- fixed Project-scoped pull-request, check, review, and explicit Work Item link
+  projections while retaining detailed code review on GitHub
+- fixed visible, configurable pull-request automation that never reopens closed
+  work or bypasses a Project's allowed workflow transitions
+- retained dirty worktrees, provider secret isolation, repository trust, and
+  reversible cleanup as hard M5 boundaries
 
 ### v0.14 — M4 Work Items entry
 
@@ -5107,19 +5127,347 @@ Item automation, and model-selected repositories.
 
 ### M5-001 GitHub App setup
 
+Promote the retained development GitHub App proof into a host-owned,
+Project-scoped integration boundary without exposing credential material to the
+browser, provider, repository, or database.
+
+**Acceptance criteria**
+
+- load the GitHub App ID, private-key file path, webhook-secret file path, API
+  base URL, and pinned REST version from typed server configuration; secret
+  files must be absolute, regular, owner-restricted, and outside repository and
+  release roots
+- persist installation identity, GitHub account identity, selected repository
+  access, enabled/revoked state, bounded last-success/failure category, and
+  optimistic version; never persist the App private key, webhook secret,
+  installation token, JWT, or arbitrary GitHub response bodies
+- create one active Project-scoped Integration Actor for GitHub attribution and
+  reuse it idempotently; the Actor grants no browser login and no Worker or
+  Project-management authority
+- expose an owner/admin status-only API and settings projection showing App
+  identity, installation health, selected repositories, permissions, and last
+  synchronization without returning host paths or credential fragments
+- fail closed when the installation does not include the exact registered
+  GitHub repository ID, omits the required metadata/contents/pull-request/check
+  set, or grants undocumented elevated access beyond the optional Actions-read
+  fallback
+- retain GitHub repository/App creation, installation, permission changes, and
+  browser authorization as explicit operator actions outside ordinary product
+  APIs
+
+**Dependencies:** accepted M0 GitHub compatibility note and development App,
+M1 Actor/Project policy, M3 Repository identity, typed secret configuration,
+and the host-local deployment boundary.
+
+**Expected tests:** missing/unsafe secret files, configuration redaction,
+installation/repository scope, permission projection, revoke/restore state,
+Integration Actor idempotency, owner/admin/viewer policy, cross-Project
+non-disclosure, and retained Red Hat credential-file permissions.
+
+**Exclusions:** GitHub App creation UI, personal access tokens, user OAuth,
+GitHub Enterprise Server, arbitrary Git hosts, organization-wide installation
+management, and storing encrypted App keys in PostgreSQL.
+
 ### M5-002 Webhook verification and idempotency
+
+Receive the minimal subscribed GitHub events on the isolated webhook listener
+and convert verified deliveries into durable retryable work.
+
+**Acceptance criteria**
+
+- serve only `POST /api/v1/integrations/github/webhook` on the port-3101
+  listener; ordinary browser/session routes remain on loopback port 3100 and
+  the webhook listener never accepts browser cookies as authentication
+- read a bounded raw request body, verify `X-Hub-Signature-256` in constant
+  time before JSON decoding, require bounded `X-GitHub-Delivery` and the exact
+  allowlisted event/action, and reject missing or ambiguous headers
+- validate installation, repository numeric ID, owner/name, and supported event
+  shape against durable registration before acknowledging the delivery
+- insert the delivery ID under a unique constraint with received event/action,
+  repository and installation IDs, payload checksum, processing state, and
+  timestamps; do not retain arbitrary raw payload or headers after extracting
+  the bounded allowlisted fields required by the job
+- enqueue one versioned processing job in the same transaction; an exact
+  duplicate returns success without a second job, state transition, activity,
+  notification, or outbox event, while a reused delivery ID with a different
+  checksum is rejected and audited
+- acknowledge verified durable receipt promptly, process outside the request,
+  and retain exhausted failures with a redacted category and operator retry
+  path
+
+**Dependencies:** M5-001 installation registration, existing request limits,
+jobs/outbox design, port-3101 systemd/runtime boundary, and M0 signature and
+duplicate-delivery fixtures.
+
+**Expected tests:** valid/invalid signatures, header/body/control bounds,
+unknown event/action, wrong installation/repository, exact duplicate,
+same-delivery checksum mismatch, concurrent duplicate receipt, transaction
+rollback, stale job lease recovery, poison payload isolation, and no secret or
+raw payload leakage in responses/logs/database.
+
+**Exclusions:** permanent public ingress, unauthenticated event replay,
+repository dispatch, workflow-job log ingestion, issue webhooks, and treating
+webhook order or completeness as authoritative without API reconciliation.
 
 ### M5-003 Installation-token Git authentication
 
+Create a reusable backend client that mints one narrowly scoped installation
+token for one child operation and then forgets it.
+
+**Acceptance criteria**
+
+- generate an RS256 App JWT with a bounded backdated issue time, expiration no
+  longer than ten minutes, exact App issuer, and clock-skew validation; parse
+  the configured PEM without logging errors that include key material
+- request an installation access token for the exact repository ID and only
+  the permissions required by the child API or Git operation, using REST API
+  version `2026-03-10` and GitHub's JSON media type
+- treat token bytes and expiry as opaque secret values, never assume a format
+  or fixed length, keep them out of Debug/Display/serialization, and zeroize or
+  drop the value immediately after the child operation
+- apply bounded connect/request/response limits, verify HTTPS GitHub hosts, map
+  provider errors into stable redacted categories, and never retry a mutation
+  blindly after an uncertain response
+- provide Git credentials through an owner-only ephemeral `GIT_ASKPASS`
+  callback and child-only sanitized environment; disable prompts, hooks,
+  inherited credential helpers, and unsafe repository/global configuration
+- ensure tokens, JWTs, private-key paths, browser/database/MCP secrets, and
+  unrelated environment keys are absent from Agent Run and provider children
+
+**Dependencies:** M5-001 configuration and installation state, M0 token flow
+fixtures, existing secret wrapper/process limits, and trusted Repository IDs.
+
+**Expected tests:** JWT claims, clock bounds, malformed key, opaque long token,
+repository/permission request scope, HTTP timeout/oversize/redaction, askpass
+mode and deletion, exact child environment, disabled helper/hook configuration,
+wrong remote host/repository, and child failure cleanup.
+
+**Exclusions:** durable token cache, PAT fallback, token delivery to Codex,
+SSH deploy keys, user impersonation, refresh tokens, and credentials embedded
+in clone URLs, arguments, Git config, logs, or database rows.
+
 ### M5-004 Push branch with installation credentials
+
+Publish an accepted managed workspace branch through an explicit authorized
+action without hiding local Git state or inventing a commit.
+
+**Acceptance criteria**
+
+- expose an idempotent publish command for an authorized terminal Agent Run or
+  its repository workspace; lock and inspect the exact database-owned mirror,
+  branch, worktree, recorded base, repository identity, and current commit
+- require no active run, a clean worktree, a valid owned branch, ancestry from
+  the recorded base, and at least one local commit ahead of base; if dirty or
+  commitless, preserve everything and return an actionable instruction to use
+  the Thread/Worker to commit intended changes
+- enqueue the external push as a durable job, release every database and
+  repository metadata lock before network I/O, and serialize only short shared
+  Git metadata mutations rather than unrelated repository execution
+- mint a child-only token through M5-003, push the exact local commit to the
+  exact expected remote branch with argument-array Git, and never use force,
+  force-with-lease, wildcard refspecs, or caller-provided remote URLs
+- resolve retries and uncertain outcomes by comparing the exact GitHub remote
+  ref commit with the intended local commit: equal is success, absent may retry,
+  and divergent is a visible conflict that is never overwritten
+- persist published commit/time and Actor-attributed activity/audit only after
+  the remote identity is proven; emit outbox invalidation and keep the local
+  workspace intact on every failure
+
+**Dependencies:** accepted M3 repository workspace/worktree ownership, M5-003
+credential client, durable jobs, terminal Agent Runs, and short repository
+metadata locks.
+
+**Expected tests:** authorization, active/dirty/clean/commitless/divergent Git
+states, branch/remote sanitation, no-force command arrays, no lock during child
+execution, successful push, exact replay, concurrent publish, uncertain success
+reconciliation, token/askpass cleanup, outbox/audit attribution, and live push
+to the retained private spike repository.
+
+**Exclusions:** backend staging or committing arbitrary dirty files, force
+push, branch deletion, tags/releases, arbitrary refspecs/remotes, pushing from
+an unmanaged worktree, and granting network credentials to the provider.
 
 ### M5-005 Pull request model and linking
 
+Create and project the minimal durable GitHub pull request artifact, with
+explicit links taking precedence over bounded heuristics.
+
+**Acceptance criteria**
+
+- add Project-scoped pull-request records keyed by GitHub repository and pull
+  request numeric IDs, with immutable node/URL/head/base identity, bounded
+  title, author login, draft/state/merge fields, synchronization timestamps,
+  and optimistic version
+- add same-Project many-to-many links to Work Items, application Threads,
+  repository workspaces, Agent Runs, and commits where their identities are
+  known; clients never supply Project or repository ownership columns
+- expose an idempotent create/link action after M5-004 proves the branch is
+  published; create through the installation API with bounded title/body/base,
+  exact head branch, and no hidden fork or maintainer-modification assumptions
+- resolve an uncertain create by querying the exact repository/head/base tuple
+  before retrying; one workspace branch cannot silently create duplicate open
+  pull requests
+- link in precedence order: explicit authenticated action, recorded Agent Run
+  artifact, exact Work Item key in branch, then exact key marker in body;
+  heuristic matches never cross a Project/repository and remain visible and
+  removable
+- render linked pull-request summary and GitHub link on Work Item and Thread
+  views; detailed diff, comments, review submission, merge, and close remain on
+  GitHub
+
+**Dependencies:** M4 Work Item/Thread/Repository links, M5-004 published branch,
+GitHub API client, artifacts model, and Project-scoped policy/outbox.
+
+**Expected tests:** schema foreign keys/uniqueness, explicit and heuristic link
+precedence, false-positive/cross-Project rejection, create replay and uncertain
+outcome, duplicate-open-PR prevention, hostile title/login escaping, archived
+links, outbox/realtime refetch, and real private-spike PR creation.
+
+**Exclusions:** in-app code diff or review submission, merge/close controls,
+fork pull requests, stacked PRs, issue linkage, release notes, and copying full
+GitHub bodies/comments into Agent Workspace.
+
 ### M5-006 Checks and review state
+
+Maintain a bounded GitHub-owned status projection sufficient to answer whether
+linked code is ready for human review or verification.
+
+**Acceptance criteria**
+
+- process pull-request, review, push, check-suite, and check-run deliveries into
+  versioned synchronization jobs, then fetch canonical current state when an
+  event is partial, duplicated, out of order, or ambiguous
+- store bounded check-run identity/name/status/conclusion/details URL and latest
+  timestamps plus summarized review decision/requested-reviewer state; do not
+  ingest logs, annotations, diffs, review bodies, email addresses, or arbitrary
+  webhook JSON
+- compute one deterministic pull-request projection for draft/open/closed/
+  merged state, checks pending/success/failure, review pending/approved/changes
+  requested, and mergeability unknown/blocked/ready without claiming stronger
+  certainty than GitHub supplies
+- make stale/unknown state explicit, record last successful sync and a redacted
+  failure category, and provide authorized manual refresh through an
+  idempotent rate-limited job command
+- render the summary, significant changes, and direct GitHub link on linked
+  Work Items and Threads with accessible text/icons; realtime is invalidation
+  and every reconnect or missed delivery converges through HTTP refetch
+- attribute GitHub-originated activity to the Integration Actor and preserve
+  immutable external event time separately from local receipt time
+
+**Dependencies:** M5-002 jobs/webhooks, M5-005 pull-request identity/links,
+Checks read permission, optional Actions read only if documented as necessary,
+and existing realtime/outbox convergence.
+
+**Expected tests:** event-order permutations, duplicate/missed webhooks, API
+reconciliation, check/review state reduction, stale/unknown projection,
+hostile external strings, payload/row bounds, refresh authorization/rate limit,
+realtime reconnect/refetch, and live check-state read on the spike PR.
+
+**Exclusions:** workflow logs, annotation browsing, required-check policy
+editor, review comments, requested-review notifications beyond the initial
+summary, merge queue, deployment status, and GitHub Actions control.
 
 ### M5-007 Work Item automation from pull request state
 
+Apply only explicit Project-owned workflow rules and make every resulting
+transition visible and reversible by ordinary authorized work.
+
+**Acceptance criteria**
+
+- store optimistic Project GitHub automation settings with pull-request-open
+  transition disabled by default and linked-pull-request-merge transition to
+  semantic `verification` enabled by default; owner/admin can disable either
+  rule without changing workflow definitions
+- evaluate automation only after canonical M5-006 state is committed and only
+  for explicitly linked code Work Items; heuristic-only links require human
+  confirmation before status automation
+- move an eligible open item to the configured semantic category only when one
+  unambiguous enabled status and an allowed transition exist; otherwise leave
+  state unchanged with a bounded visible skip reason
+- never reopen semantic `completed` or `canceled` items, never mark work Done,
+  never infer completion from an Agent Run, and never bypass optimistic locking
+  or custom Project workflow transitions
+- make the transition idempotent per pull-request state/version and record
+  Integration Actor activity containing previous/new status and the linked PR,
+  plus audit and outbox entries in the same transaction
+- concurrent human edits win or produce ordinary version-aware reevaluation;
+  automation never overwrites a status based on stale state
+
+**Dependencies:** M4 workflow/activity/versioning, M5-001 Integration Actor,
+M5-005 explicit links, and canonical M5-006 pull-request state.
+
+**Expected tests:** default/disabled settings, open/merge rules, heuristic-link
+hold, invalid/ambiguous transition skip, Done/Canceled preservation, duplicate
+and out-of-order delivery, concurrent human edit, Actor attribution, outbox,
+and browser-visible live merge-to-Verification evidence.
+
+**Exclusions:** automatic Done, reopening, model-decided status, arbitrary rule
+builder, label/assignee automation, GitHub-side mutation, scheduled automation,
+and Worker-completion automation.
+
 ### M5-008 Safe cleanup and repair
+
+Reconcile GitHub, database, Git, and filesystem state without deleting unique
+work or hiding integration failure.
+
+**Acceptance criteria**
+
+- add startup/periodic reconciliation for stale jobs, installation access,
+  registered repositories, published refs, open pull requests, checks/reviews,
+  and worktree/branch ownership; every external check is bounded and retryable
+- expose owner/admin integration diagnostics and retry actions using stable
+  failure categories, last attempt/success times, and exact affected resource
+  IDs without raw provider responses, secrets, host paths, or repository data
+- mark revoked installations and removed repository access unavailable, stop
+  minting tokens immediately, and preserve all local mirrors, branches,
+  worktrees, runs, links, and activity for recovery
+- allow automatic worktree cleanup only after no active run owns it, Git status
+  is clean, its pull request is merged/closed or the workspace is explicitly
+  abandoned, and the configured retention window elapsed
+- re-inspect immediately before removal, hold only the short repository lock,
+  remove through the owned Git worktree command, prune/repair metadata, and
+  record success; dirty, missing, foreign, divergent, or uncertain state is
+  preserved for explicit operator repair
+- branch deletion, repository/App deletion, and destructive dirty-worktree
+  cleanup always remain separately authorized actions and are not M5 exit
+  automation
+
+**Dependencies:** accepted M3 recovery/Git ownership, M5 durable jobs and state,
+M5-004/005 published branch and PR lifecycle, and configured retention policy.
+
+**Expected tests:** stale leases, revoked access, missing remote ref, divergent
+branch, merged/closed/open PR, active run, clean/dirty/missing/foreign worktree,
+retention boundary, concurrent re-dirty race, idempotent prune/repair, audit and
+operator retry, restart convergence, and retained dirty-tree census on Red Hat.
+
+**Exclusions:** deleting the retained GitHub App or spike repository, automatic
+dirty cleanup/reset, force push, remote branch deletion, repository garbage
+collection that can discard unique objects, permanent public tunnel, and full
+disaster-recovery/backup policy (M8).
+
+### M5 exit criteria
+
+- the private development GitHub App is configured through owner-restricted
+  host files, installed only on the retained spike repository, and exposes no
+  secret material through logs, PostgreSQL, browser DTOs, or provider children
+- a real browser action publishes one clean managed branch with a short-lived
+  installation token, creates and explicitly links one pull request, and
+  renders canonical PR/check/review state on its Thread and Work Item
+- a signed webhook delivered through the bounded temporary tunnel is verified,
+  deduplicated, processed through a durable job, and converges after a duplicate
+  and one intentionally missed/out-of-order refresh case
+- merging the explicitly linked PR moves an eligible Work Item to Verification
+  exactly once with Integration Actor activity; disabled, closed, ambiguous,
+  and invalid-transition cases remain unchanged and visible
+- controlled restart recovers stale webhook/GitHub jobs and reconciles remote
+  state without manual database edits, duplicate PRs/activity, leaked tokens,
+  force push, lost commits, or changed dirty worktrees
+- the tunnel is stopped immediately after delivery proof; the disposable PR is
+  closed or merged and its test branch is deleted only through an explicit
+  accepted cleanup step, while the private spike repository and App remain
+- PostgreSQL, job/idempotency, Git, HTTP, webhook, provider-environment,
+  frontend accessibility, Red Hat, and browser tests pass against one exact
+  green commit, and the M6 backlog is elaborated before M6 begins
 
 
 ## Milestone M6: Local Codex and MCP
