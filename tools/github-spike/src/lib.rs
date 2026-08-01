@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     fs::OpenOptions,
     io::Write,
     os::unix::fs::OpenOptionsExt,
@@ -71,6 +71,24 @@ pub struct WebhookConfig {
     pub url: String,
     pub content_type: String,
     pub insecure_ssl: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct InstallationScope {
+    pub id: u64,
+    pub app_id: u64,
+    pub account: InstallationAccount,
+    pub target_type: String,
+    pub repository_selection: String,
+    pub permissions: BTreeMap<String, String>,
+    pub events: Vec<String>,
+    pub suspended_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct InstallationAccount {
+    pub id: u64,
+    pub login: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +206,24 @@ impl GitHubAppClient {
             secret: SecretString::from(response.token),
             expires_at: response.expires_at,
         })
+    }
+
+    pub async fn installation_scope(&self) -> Result<InstallationScope, GitHubSpikeError> {
+        if self.installation_id == 0 {
+            return Err(GitHubSpikeError::InvalidConfig);
+        }
+        let jwt = self.app_jwt()?;
+        let response = self
+            .http
+            .get(format!(
+                "{}/app/installations/{}",
+                self.api_root, self.installation_id
+            ))
+            .headers(github_headers(jwt.expose_secret())?)
+            .send()
+            .await
+            .map_err(GitHubSpikeError::Http)?;
+        decode_api_response(response).await
     }
 
     pub async fn update_webhook_config(
