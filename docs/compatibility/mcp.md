@@ -1,55 +1,98 @@
 # MCP compatibility
 
-## Pinned development contract
+## Production contract
 
-- SDK: official Rust SDK `rmcp` `3.0.1`
-- Transport: Streamable HTTP at `/api/v1/mcp`
-- Listener: application loopback listener reached through SSH forwarding
-- Authentication: high-entropy bearer token from
-  `AGENT_WORKSPACE_MCP_BEARER_TOKEN`
-- Request body ceiling: 1 MiB
-- Session mode: legacy sessions enabled so Codex 0.146.0 can negotiate its
-  supported protocol; JSON responses are preferred for request-response tools
+- Server SDK: official Rust SDK `rmcp` `3.0.1`
+- Verified client: `codex-cli 0.146.0`
+- Negotiated protocol: MCP `2025-06-18`
+- Transport: Streamable HTTP at `http://127.0.0.1:3100/api/v1/mcp`
+- Request ceiling: 256 KiB
+- Session mode: legacy session compatibility with JSON request/response enabled
+- Network boundary: the ordinary loopback application listener, reached from
+  the Mac only through SSH forwarding
 
-The token is hashed before a constant-time comparison. It is never stored in
-the fake work-item records or emitted by the server. Missing and incorrect
-credentials return HTTP 401.
+The server rejects missing, duplicated, malformed, expired, revoked, or
+wrong-Project credentials with HTTP 401 and a standards-compatible Bearer
+challenge. The challenge points to protected-resource metadata, which in turn
+identifies the loopback authorization server. Browser cookies are never an MCP
+resource credential.
 
-## Tools and annotations
+Initialization instructions put immutable Project/Work Item identification,
+useful-update restraint, optimistic concurrency, pull-request linking, and
+permission limits inside their first 512 characters. Connecting, listing, or
+calling tools creates no application Conversation, Thread, Message, Agent Run,
+workspace, branch, or worktree.
 
-- `get_fake_work_item(id)` is read-only, non-destructive, idempotent, and
-  closed-world.
-- `update_fake_work_item(id, expected_version, status)` is a write,
-  non-destructive, idempotent, and closed-world operation.
+## Authentication
 
-The update response returns the current record and the fields that differ on an
-optimistic concurrency conflict. Repeating a successful update with the same
-expected version and status returns the current record with
-`idempotentRetry: true` and does not increment the version again.
+The development fallback is a 256-bit Project-scoped bearer credential bound
+to one active human Actor and explicit `read` or `read write` scopes. The host
+prints the token once, stores only a SHA-256 digest plus a safe prefix, and
+supports metadata listing, optimistic revocation, and atomic replacement.
+Live revocation is checked on every request. Codex receives the token only from
+the environment variable named by `bearer_token_env_var`.
 
-The in-memory store and its `demo-1` seed are explicitly development-only. M0
-does not define the version-one Work Item schema or create an Agent Workspace
-Thread for MCP calls.
+The team path is OAuth authorization code with PKCE `S256`. Agent Workspace
+publishes protected-resource and authorization-server metadata, dynamically
+registers only public clients with exact HTTP loopback redirects and explicit
+ports, and requires an authenticated browser session plus CSRF-protected
+consent. Consent selects one active Project and shows the named client and
+requested scopes. Codes are five-minute, single-use, and bound to the exact
+client, redirect URI, and PKCE challenge. Access tokens expire after one hour;
+refresh tokens expire after 30 days, rotate atomically, and revoke the complete
+grant family if an old refresh token is reused. Codes and all tokens are stored
+only as SHA-256 digests.
 
-## Verification record
+Bearer writes use `authentication_class=mcp_bearer`; OAuth writes use
+`authentication_class=mcp_oauth`. Both preserve the authenticated human Actor
+as the domain author and separately record `channel=mcp`, the bounded client
+name, request ID, and the corresponding credential or grant ID. Tokens,
+digests, authorization headers, codes, verifiers, arbitrary update text, and
+repository content are excluded from audit metadata.
 
-Automated tests cover token strength, missing-token rejection, authenticated
-initialization, read, update, conflict details, and idempotent retry.
+## Tools
 
-The live M0-006 sequence completed on July 31, 2026:
+Read-only, non-destructive, closed-world tools:
 
-- exact `codex-cli 0.146.0` ran from an additive project-local installation
-  with a separate `CODEX_HOME`
-- Codex reached the Red Hat loopback listener through SSH forwarding
-- the initialization request selected MCP protocol `2025-06-18`; `rmcp`
-  recognized that version and echoed it as the negotiated protocol
-- Codex called `get_fake_work_item`, then
-  `update_fake_work_item(expected_version=1, status=in_progress)`, then read
-  the record again
-- the initial record was version 1 in `ready`; the final record was version 2
-  in `in_progress`
-- the operation created no Agent Workspace Conversation or Thread
+- `project_get`
+- `project_instructions_get`
+- `work_item_get`
+- `work_item_search`
+- `work_item_context_get`
+- `repository_get`
+- `pull_request_get`
 
-The bearer token remained in an owner-only file and child process environment.
-It did not appear in terminal output, Codex output, or the redacted fixture at
-`tools/mcp-spike/fixtures/live-evidence.json`.
+Replay-safe write tools:
+
+- `work_item_set_status`
+- `work_item_post_update`
+- `work_item_update`
+- `work_item_create_subtask`
+- `work_item_link_pull_request`
+- `work_item_mark_blocked`
+- `work_item_mark_ready_for_review`
+
+Every non-commutative command requires `expectedVersion`; every command
+requires a stable `clientRequestId`. Exact completed-request replay succeeds
+without duplicate activity, audit success, relation, outbox event, or version
+advance. A stale version returns the current version, provable changed fields,
+and a stable retry category. Invalid transitions, permission changes, archive,
+missing external links, idempotency payload mismatch, and transient failure
+remain distinct outcomes. Tool annotations mark only append, subtask creation,
+and explicit PR linking as non-destructive; only PR linking is open-world.
+
+## Verification history
+
+The M0 development spike established the `2025-06-18` negotiation with Codex
+`0.146.0` on Red Hat and proved an authenticated read, optimistic update,
+conflict, and no-Thread behavior against a fake store. That store and its fake
+tools are not mounted by the application.
+
+M6 automated verification replaces that shortcut with the real PostgreSQL
+domain. It covers metadata, registration constraints, browser consent, PKCE,
+single-use codes, access and refresh expiry, rotation, refresh-reuse family
+revocation, bearer/OAuth parity, Project and Actor revalidation, every read and
+write category, conflict/replay behavior, audit attribution, secret
+redaction, Streamable HTTP initialization, and zero Conversation creation.
+Exact Red Hat and real local Codex evidence belongs in `docs/acceptance/m6.md`
+after the accepted green commit is deployed.
