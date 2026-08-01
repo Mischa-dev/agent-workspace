@@ -2,16 +2,33 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M5 accepted; M6 authorized; source of truth v0.23
+**Status:** M5 accepted; M6 in acceptance; M7 elaborated; source of truth v0.24
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M5 are complete. M6 is elaborated and authorized. Every later milestone remains subject to the same entry gate.
+**Implementation authorization:** Milestones M0 through M5 are complete. M6
+is authorized and in acceptance. M7 is elaborated but may begin only after M6
+is accepted; every later milestone remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.24 — M7 Teams entry backlog and identity decisions
+
+- elaborated every M7 task with acceptance criteria, dependencies, expected
+  tests, exclusions, and an exact two-user private-host exit gate
+- resolved O-003 through D-049: team-hosted Agent Runs remain invoker-owned and
+  may never consume another human's personal Execution Profile
+- resolved O-004 for version one through D-050: the private host retains
+  Argon2id local passwords and opaque browser sessions, with new accounts
+  created only through owner-issued, single-use invitation acceptance
+- defined digest-only invitation links, last-owner-safe membership management,
+  immediate cross-surface disable, an exhaustive centralized action matrix,
+  useful viewer restrictions, and per-Actor attention isolation
+- kept email delivery, public signup, custom roles, shared/service profiles,
+  passkeys, OIDC, and external agent members outside M7
 
 ### v0.23 — M6 Local Codex and MCP entry backlog
 
@@ -5975,19 +5992,284 @@ credentials reserved for M9.
 
 ## Milestone M7: Teams
 
+**Status:** Elaborated. Entry requires accepted M6 evidence against one exact
+green commit.
+
 ### M7-001 Invitation links
+
+Add the private-host account and Project invitation ceremony without requiring
+email delivery or granting authority to a bearer URL after it is consumed.
+
+**Acceptance criteria**
+
+- an Organization owner or admin may issue a single-Project invitation for
+  `admin`, `member`, or `viewer`; only an owner may invite an admin, and owner
+  transfer remains a separate explicit operation
+- generate at least 256 bits of randomness, show the invitation URL once,
+  store only a versioned digest and safe prefix, and record issuer, Project,
+  role, expiry, status, optimistic version, and bounded acceptance metadata
+- carry the one-time token only in a `#token=` fragment on the `/join` SPA URL,
+  then submit it in the bounded acceptance body; fragments never enter HTTP
+  request targets, access logs, referrers, server redirects, or canonical URLs
+- allow an authenticated existing human User to accept into the same
+  Organization, or allow a new human to choose a unique login name, display
+  name, handle, and version-one local password before one User/Actor and the
+  Organization/Project memberships are created atomically
+- use exact single-use semantics, a bounded expiry no longer than seven days,
+  revocation, constant-time digest comparison, generic invalid/expired/used
+  responses, CSRF on authenticated acceptance, and no redirect supplied by
+  the invitation URL
+- hash new passwords with the accepted Argon2id parameters under the existing
+  password-KDF concurrency bound; never persist or log the invitation token or
+  plaintext password, and rotate the new browser session after acceptance
+- make uncertain issue output recoverable through safe list plus optimistic
+  replacement/revocation, never through plaintext token recovery
+
+**Dependencies:** D-050 local-password decision, existing User/Actor/session
+model, Organization and Project memberships, M1 CSRF/rate limits/audit, M6
+one-time credential-output conventions, and canonical loopback application
+URLs.
+
+**Expected tests:** issue/list/replace/revoke/expire/use, token digest and
+redaction, concurrent double acceptance, existing/new User paths, duplicate
+login/handle, disabled issuer, changed inviter role, Project archive,
+cross-Organization rejection, password bounds/KDF saturation, session rotation,
+and hostile display values.
+
+**Exclusions:** outbound email, magic-link login, social login, OIDC, passkeys,
+public signup, bulk invitations, SCIM, guest links, and owner transfer through
+an invitation.
 
 ### M7-002 Member management
 
+Give owners and admins a bounded membership surface with last-owner and
+self-lockout protection.
+
+**Acceptance criteria**
+
+- list active and disabled human Project members with stable Actor identity,
+  role, handle, display name, version, inviter/acceptance provenance, and safe
+  Execution Profile readiness; never expose password, session, invite, OAuth,
+  MCP, provider, or GitHub credential state
+- owners may change `admin`, `member`, and `viewer` roles; admins may manage
+  members and viewers but not owners, other admins, or their own privilege
+- disable rather than delete memberships and preserve authorship, assignment,
+  conversation entries, activity, audit, runs, and references; allow an
+  authorized optimistic re-enable when the handle remains unique
+- prevent removal or demotion of the last enabled Organization or Project
+  owner, self-disable, stale-version overwrite, and any mutation of Worker,
+  Integration, System, or external-agent memberships through the human UI
+- membership disable immediately fails closed for new HTTP, realtime, MCP,
+  approval, GitHub publication, and hosted-run operations; revoke that
+  Actor/Project's MCP grants and stop admission of their Execution Profile,
+  while existing browser sessions may retain access to other authorized
+  Projects
+- record Actor-attributed audit and emit bounded Project invalidations for
+  every applied role/status change; exact idempotent replay is singular
+
+**Dependencies:** M7-001, centralized policy actions in M7-003, M6 credential
+grants, M3 execution admission, Actor attribution, idempotency, outbox, and
+realtime refetch.
+
+**Expected tests:** role matrix, last-owner races, self-management denial,
+disable/re-enable, handle collision, stale version, exact replay, cross-Project
+non-disclosure, active MCP revocation, run-admission failure, durable historical
+authorship, invalidation, and secret canaries.
+
+**Exclusions:** deleting Users or Actors, transferring ownership implicitly,
+Organization merge, custom roles, permission exceptions, group sync, billing
+seats, and external-agent onboarding.
+
 ### M7-003 Centralized role-to-action policy
+
+Complete the single authorization vocabulary before presenting the existing
+application to more than one human.
+
+**Acceptance criteria**
+
+- enumerate every version-one HTTP, WebSocket, MCP, GitHub, hosted-execution,
+  invitation, membership, Project, Conversation, Work Item, Repository, and
+  approval operation as a typed policy action against a typed scoped resource
+- define one exhaustive owner/admin/member/viewer/worker matrix: owners and
+  admins manage the Project; members collaborate and invoke their own eligible
+  Worker Profile; viewers read Project content and update only their own
+  navigation/read state; Worker authority remains exact delegated scope
+- require active Actor, User where human authentication is required,
+  Organization membership, Project membership, Project state, and resource
+  scope before role evaluation; denial does not reveal resource existence
+- replace route-local role string checks and frontend assumptions with calls to
+  the shared policy engine and server-returned capabilities; the frontend may
+  hide or disable controls but is never the enforcement boundary
+- keep MCP bearer/OAuth scopes, GitHub App permissions, Worker delegation, and
+  approval eligibility as additional intersections, never role bypasses
+- maintain an exhaustive test that fails when a new action or role lacks an
+  explicit decision and a route inventory test that maps every mutating entry
+  point to one action
+
+**Dependencies:** accepted M1 policy engine and common not-found behavior, all
+M2-M6 routes, M7 membership commands, and D-049 invoker-owned profiles.
+
+**Expected tests:** full role/action/resource matrix, disabled Actor/User/
+membership/Project, mismatched scopes, Worker delegation, approval separation
+of duty, MCP scope intersection, route inventory, non-disclosure, and frontend
+capability rendering.
+
+**Exclusions:** row-level database security as the primary policy engine,
+custom roles, policy scripting, per-field ACLs, public multi-tenancy, and
+provider-specific authorization.
 
 ### M7-004 Viewer restrictions
 
+Prove that `viewer` is a useful read role rather than an accidentally partial
+member role.
+
+**Acceptance criteria**
+
+- viewers may read authorized Projects, Channels, Threads, Messages, Work
+  Items, bounded activity, Repositories, and pull-request/check/review
+  projections, and may update only their own read/unseen and navigation state
+- viewers cannot send Messages, create or mutate Work Items, respond to
+  approvals, invoke or interrupt Workers, publish branches, create/refresh
+  pull requests, manage repositories, credentials, Projects, invitations, or
+  members, or obtain MCP write scope
+- realtime subscriptions reveal only authorized Project invalidations; role
+  downgrade takes effect on the next HTTP refetch and reconnect and cannot be
+  defeated by a stale client cache
+- every disabled action has an accessible explanation or is absent; deep links
+  and direct API/MCP calls receive the same non-disclosing denial
+
+**Dependencies:** M7-003 capabilities, current read projections, realtime
+invalidation/refetch, M6 scopes, and existing accessibility patterns.
+
+**Expected tests:** API/MCP/WebSocket role matrix, stale cache after downgrade,
+direct URL attempts, keyboard and screen-reader smoke tests, hostile output,
+and zero domain/audit-success/outbox writes from denied actions.
+
+**Exclusions:** anonymous sharing, comment-only roles, per-Channel privacy,
+redacted fields within otherwise authorized records, and public links.
+
 ### M7-005 Per-user Thread attention validation
+
+Validate the already Actor-scoped attention model with concurrent humans and
+role changes.
+
+**Acceptance criteria**
+
+- seen sequence, unseen count, mention state, blocker state, and Project
+  navigation remain Actor-specific; one human reading or navigating never
+  changes another human's state
+- durable conversation sequence remains shared while attention is derived per
+  Actor from ordered entries and bounded read-state records; realtime remains
+  at-least-once invalidation plus authorized HTTP refetch
+- an Actor cannot forge another Actor's read state, mark unseen content beyond
+  the current sequence, or learn attention state for another member
+- disabled members stop receiving invalidations; re-enable resumes from their
+  durable prior read position without rewinding shared Conversation state
+- viewer read-state updates remain permitted but never act as Message
+  authorship or Project activity
+
+**Dependencies:** accepted M2 attention colors/read state, M7-002 membership
+status, M7-003 policy, transactional conversation entries, and realtime.
+
+**Expected tests:** two simultaneous sessions, interleaved Messages, mention
+targeting, blocker/approval attention, mark-seen races, forged Actor IDs,
+downgrade/disable/re-enable, reconnect/refetch, and Project navigation
+isolation.
+
+**Exclusions:** notification email/push, presence dots, typing indicators,
+delivery receipts, per-device read state, and configurable attention colors.
 
 ### M7-006 Team Execution Profile policy
 
+Ship hosted execution to teams using invoker-owned profiles and never silently
+share a personal provider account.
+
+**Acceptance criteria**
+
+- every human-hosted run selects only an active, authenticated personal
+  Execution Profile owned by the requesting Actor in the same Project;
+  Project owners and admins cannot select, inspect, repair, or consume another
+  human's profile or `CODEX_HOME`
+- each human may register and complete account setup for their own isolated
+  profile through the existing loopback/SSH ceremony; safe readiness metadata
+  is visible to Project managers but provider account identity, credentials,
+  rate limits, history, and raw failures remain owner-only
+- a member without an eligible profile receives an actionable setup-required
+  response and no run, workspace, branch, worktree, provider session, or
+  approval is created; the system never falls back to another member's profile
+- run requester, profile owner, provider session, Actor authorship, approvals,
+  audit, recovery, and rate-limit observations remain tied to the same human;
+  membership disable or profile disable blocks new admission without deleting
+  a dirty or non-terminal worktree
+- Project-service profiles and pooled/shared personal accounts remain absent;
+  adding either later requires a new credential-ownership and cost-policy
+  decision rather than relaxing these invariants
+
+**Dependencies:** D-049, accepted M3 personal profiles/admission/recovery,
+M7-002 membership lifecycle, M7-003 Worker policy, provider isolation, and
+existing account setup UI.
+
+**Expected tests:** two owners with distinct profiles, owner/member/admin role
+changes, missing/unready/disabled/foreign profile, concurrent runs owned by
+different humans, provider environment isolation, recovery after membership
+change, dirty preservation, and safe manager projections.
+
+**Exclusions:** service accounts, shared or pooled Codex accounts, delegated
+provider login, profile transfer, automatic billing allocation, and remote
+execution workers.
+
 ### M7-007 Two-user end-to-end test
+
+Compose the milestone through two independent browser sessions and the private
+Red Hat runtime.
+
+**Acceptance criteria**
+
+- the existing owner issues one member invitation and the second human accepts
+  it through a separate browser profile, sets local credentials, signs in, and
+  appears once as their own human Actor
+- the member reads and contributes to one Channel/Thread, creates or updates a
+  Work Item, is mentioned by the owner, and observes independent attention;
+  all Messages, activity, audit, and assignments preserve the correct Actor
+- the member cannot use the owner's Execution Profile; without a personal
+  ready profile Worker invocation fails cleanly, and with a separately proven
+  profile it uses only that profile
+- an owner-to-viewer downgrade immediately removes write controls and direct
+  API/MCP write authority while preserving reads and personal seen state;
+  restoration to member resumes without manual database repair
+- invite replay, session isolation, logout, service restart, reconnect,
+  credential revocation, and membership disable remain deterministic against
+  the same exact deployed commit
+
+**Dependencies:** M7-001 through M7-006, separate browser storage, exact-commit
+Red Hat deployment, and the retained private Project.
+
+**Expected tests:** automated two-User PostgreSQL/HTTP/WebSocket/MCP suites plus
+one browser-driven acceptance recording safe IDs, versions, sequences, role
+changes, and run-admission outcome.
+
+**Exclusions:** third-party identity providers, public signup, email delivery,
+more than one Organization host, external agent members, and shared profiles.
+
+### M7 exit criteria
+
+- one exact green commit is deployed as an immutable Red Hat release and both
+  independent browser sessions complete the M7-007 acceptance without manual
+  database or filesystem repair
+- invitation plaintext appears only in its one-time issue response and the
+  recipient's temporary `/join#token=` fragment; it and all passwords, session
+  cookies, CSRF values, MCP/OAuth tokens, provider credentials, and profile
+  contents remain absent from the repository, HTTP request targets, logs,
+  referrers, durable projections, canonical URLs, realtime payloads, and other
+  users' responses
+- every mutating entry point is represented in the centralized action matrix;
+  exhaustive policy, non-disclosure, last-owner, viewer, two-user attention,
+  invoker-owned profile, restart, frontend accessibility, and Red Hat checks
+  pass against that commit
+- membership disable and role downgrade take effect for HTTP, WebSocket, MCP,
+  approval, GitHub, and hosted execution without service restart, while
+  historical Actor attribution and dirty worktrees are preserved
+- M8 is elaborated before it is authorized
 
 ## Milestone M8: Hardening
 
@@ -6648,11 +6930,42 @@ authorization code with PKCE S256, explicit consent, hashed bounded tokens,
 and refresh rotation. Neither path creates an application Thread, grants
 provider execution identity, or permits client-supplied authorship.
 
+## D-049: Team hosted execution remains invoker-owned
+
+**Status:** Accepted
+
+**Reason:** A human's Codex authentication, provider history, limits, and cost
+boundary are personal even when their work happens inside a shared Project.
+Every team-hosted Agent Run therefore uses only an active personal Execution
+Profile owned by its requesting human Actor. Owners and admins may see bounded
+readiness needed to diagnose admission but cannot use, inspect, reassign, or
+repair another member's profile. A missing or ineligible personal profile fails
+before any run or workspace state is created and never falls back to another
+account. Project-service profiles, pooled accounts, and profile transfer remain
+future designs requiring explicit credential ownership, billing, provider
+terms, approval, and recovery policy.
+
+## D-050: Version-one private-host authentication uses local passwords
+
+**Status:** Accepted
+
+**Reason:** Agent Workspace version one is one private host reached through the
+existing loopback/SSH boundary and has no selected identity provider or public
+signup surface. The accepted Argon2id local-password and opaque hashed-session
+model therefore remains the final version-one human login method. The first
+owner is bootstrapped host-locally; later humans set a password only while
+accepting a single-use, short-lived, owner-issued invitation. Password changes,
+authentication-epoch invalidation, rate limits, CSRF, session rotation, and
+owner-controlled membership disable stay in the application boundary. Passkeys
+and OIDC remain additive future options and must not be simulated through a
+weaker magic-link or shared-account mechanism.
+
 ---
 
 # 32. Open decisions
 
-These are intentionally unresolved and should be answered through prototypes or focused planning.
+These decisions are tracked until resolved through prototypes or focused
+planning. Resolved entries remain here so their original gate stays visible.
 
 ## O-001: Final product name
 
@@ -6668,13 +6981,19 @@ The technical alpha uses Thread-based execution. Prototype and specify inline ru
 
 ## O-003: Team Execution Profile policy
 
-Choose between invoker-owned and project service-owned execution before team-hosted agent work ships.
+**Status:** Resolved by D-049.
+
+Team-hosted execution is invoker-owned. Project service-owned profiles remain a
+future explicit design.
 
 **Decision required before:** M7 entry.
 
 ## O-004: Final application authentication methods
 
-Private development can use a bootstrap account. Team release needs a final decision among local passwords, passkeys, OIDC, or a combination.
+**Status:** Resolved for version one by D-050.
+
+The private host uses local Argon2id passwords and opaque browser sessions.
+Passkeys and OIDC are deferred additive options.
 
 **Decision required before:** M7 entry.
 
