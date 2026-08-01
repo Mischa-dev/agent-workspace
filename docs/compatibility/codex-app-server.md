@@ -110,9 +110,9 @@ twice; the conservative failure path preserves the worktree and audit row.
 Deterministic CI starts a fake JSONL App Server, proves initialize/initialized
 ordering, performs two sequential Thread/turn starts through the same process,
 confirms the neutral process directory and isolated `CODEX_HOME`, rejects a
-second profile at host capacity, and exercises coordinated shutdown. Live Red
-Hat process-reuse and restart evidence remains part of the open M3 acceptance
-gate.
+second profile at host capacity, and exercises coordinated shutdown. The live
+Red Hat process-reuse and restart evidence is recorded in the M3 application
+exercise below.
 
 ## M3 account adapter contract
 
@@ -196,3 +196,34 @@ The redacted machine-readable record is
 contract methods, correlation IDs, booleans, outcomes, and bounded event
 counts. Reasoning, prompts, command output, Message content, arbitrary
 repository content, and absolute operator paths are excluded.
+
+## M3 live application exercise
+
+The exact accepted M3 release reused one supervised App Server for a real
+browser-driven Thread. A completed turn emitted command lifecycle, approval,
+file-change, agent-message, and completion activity. Two command approvals were
+resolved through the durable application blocker flow before the known fixture
+file changed. The application persisted one consolidated Worker Message rather
+than token-delta rows.
+
+A second turn was active when systemd stopped the application process group.
+On startup, the supervisor resumed the same provider Thread and read the exact
+persisted provider Turn. The provider reported that the turn had been
+interrupted, so the application conservatively made the Agent Run terminal
+`interrupted`, idled the Provider Session, retained the exact branch/base and
+worktree, and exposed a safe retry instead of inventing continuation.
+
+The provider process environment contained only `CODEX_HOME`, `PWD`, `PATH`,
+`LANG`, and `LC_ALL`; the npm wrapper added only package-location metadata.
+Provider-started MCP children received no database, GitHub, browser-session,
+webhook, or application-secret environment keys. The inspected service logs,
+durable acceptance rows, and rendered browser output contained no credential
+patterns, runtime paths, or disallowed control characters.
+
+One pinned behavior remains explicit: asking the hosted model to call
+`request_user_input` in the current execution mode produced a normal agent
+message stating that the tool was unavailable, not an App Server
+`item/tool/requestUserInput` request. Command approval requests are live and
+fully supported. The adapter continues to accept and test the pinned
+user-input request shape, but M3 acceptance does not claim that every hosted
+model invocation can elect to emit that experimental request.
