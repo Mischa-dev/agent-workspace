@@ -145,6 +145,18 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
             .count(),
         1
     );
+    let status_id = |name: &str| {
+        workflow.2["statuses"]
+            .as_array()
+            .expect("workflow statuses array")
+            .iter()
+            .find(|status| status["name"] == name)
+            .and_then(|status| status["id"].as_str())
+            .map(str::to_owned)
+            .expect("named workflow status")
+    };
+    let ready_status_id = status_id("Ready");
+    let done_status_id = status_id("Done");
     assert_eq!(
         workflow.2["statuses"]
             .as_array()
@@ -192,6 +204,34 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     assert_eq!(created.2["version"], 1);
     assert!(created.2.get("createdByActorId").is_none());
 
+    let by_key = get_json(
+        &application,
+        &cookie,
+        &format!(
+            "/api/v1/projects/{}/work-items/by-key/AW-1",
+            seed.project_id
+        ),
+    )
+    .await;
+    assert_eq!(by_key.0, StatusCode::OK);
+    assert_eq!(by_key.2["id"], created.2["id"]);
+
+    let assignees = get_json(
+        &application,
+        &cookie,
+        &format!(
+            "/api/v1/projects/{}/work-item-assignees?q=M2",
+            seed.project_id
+        ),
+    )
+    .await;
+    assert_eq!(assignees.0, StatusCode::OK);
+    assert_eq!(
+        assignees.2["actors"].as_array().expect("assignees").len(),
+        1
+    );
+    assert!(assignees.2["actors"][0].get("email").is_none());
+
     let replay = post_json(
         &application,
         &cookie,
@@ -214,6 +254,73 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(mismatch.0, StatusCode::CONFLICT);
+
+    let forbidden_transition = patch_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-invalid-transition",
+        &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
+        json!({"expectedVersion": 1, "statusId": done_status_id}),
+    )
+    .await;
+    assert_eq!(forbidden_transition.0, StatusCode::CONFLICT);
+
+    let updated = patch_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-update-one",
+        &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
+        json!({
+            "expectedVersion": 1,
+            "title": "First Work Item updated",
+            "statusId": ready_status_id,
+            "priority": "urgent",
+            "assigneeActorId": null
+        }),
+    )
+    .await;
+    assert_eq!(updated.0, StatusCode::OK, "{}", updated.1);
+    assert_eq!(updated.2["version"], 2);
+    assert_eq!(updated.2["status"]["name"], "Ready");
+    assert_eq!(updated.2["priority"], "urgent");
+    assert!(updated.2["assignee"].is_null());
+
+    let update_replay = patch_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-update-one",
+        &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
+        json!({
+            "expectedVersion": 1,
+            "title": "First Work Item updated",
+            "statusId": ready_status_id,
+            "priority": "urgent",
+            "assigneeActorId": null
+        }),
+    )
+    .await;
+    assert_eq!(update_replay.0, StatusCode::OK);
+    assert_eq!(update_replay.2["version"], 2);
+
+    let stale_update = patch_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-stale-update",
+        &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
+        json!({"expectedVersion": 1, "title": "Lose this edit"}),
+    )
+    .await;
+    assert_eq!(stale_update.0, StatusCode::CONFLICT);
+    assert_eq!(stale_update.2["error"]["code"], "version_conflict");
+    assert_eq!(stale_update.2["error"]["details"]["currentVersion"], 2);
+    assert_eq!(
+        stale_update.2["error"]["details"]["current"]["title"],
+        "First Work Item updated"
+    );
 
     let worker_assignee = post_json(
         &application,
@@ -327,6 +434,60 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     assert_eq!(detail.0, StatusCode::OK);
     assert_eq!(detail.2["key"], "AW-1");
 
+    let archived = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-archive-one"),
+        &format!(
+            "{base}/{}/archive",
+            created.2["id"].as_str().expect("created ID")
+        ),
+        json!({"expectedVersion": 2}),
+    )
+    .await;
+    assert_eq!(archived.0, StatusCode::OK, "{}", archived.1);
+    assert_eq!(archived.2["version"], 3);
+    assert!(archived.2["archivedAt"].is_string());
+    let archived_list = get_json(&application, &cookie, &format!("{base}?archived=true")).await;
+    assert_eq!(archived_list.0, StatusCode::OK);
+    assert_eq!(
+        archived_list.2["items"]
+            .as_array()
+            .expect("archived Work Item list")
+            .len(),
+        1
+    );
+    let restored = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-restore-one"),
+        &format!(
+            "{base}/{}/restore",
+            created.2["id"].as_str().expect("created ID")
+        ),
+        json!({"expectedVersion": 3}),
+    )
+    .await;
+    assert_eq!(restored.0, StatusCode::OK, "{}", restored.1);
+    assert_eq!(restored.2["version"], 4);
+    assert!(restored.2["archivedAt"].is_null());
+    let no_op_restore = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-restore-no-op"),
+        &format!(
+            "{base}/{}/restore",
+            created.2["id"].as_str().expect("created ID")
+        ),
+        json!({"expectedVersion": 4}),
+    )
+    .await;
+    assert_eq!(no_op_restore.0, StatusCode::OK);
+    assert_eq!(no_op_restore.2["version"], 4);
+
     let activity_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM work_item_activity WHERE project_id = $1",
     )
@@ -334,7 +495,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 activity");
-    assert_eq!(activity_count, 3);
+    assert_eq!(activity_count, 6);
     let outbox_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND resource_kind = 'work_item' AND conversation_id IS NULL",
     )
@@ -342,7 +503,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 outbox events");
-    assert_eq!(outbox_count, 3);
+    assert_eq!(outbox_count, 6);
     let counter = sqlx::query_scalar::<_, i64>(
         "SELECT next_work_item_number FROM project_counters WHERE project_id = $1",
     )
@@ -489,6 +650,35 @@ async fn post_json(
         )
         .await
         .expect("M4 POST response");
+    response_json(response).await
+}
+
+async fn patch_json(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    idempotency_key: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("origin", "http://127.0.0.1:3100")
+                .header("x-csrf-token", csrf)
+                .header("idempotency-key", idempotency_key)
+                .body(Body::from(
+                    serde_json::to_vec(&body).expect("serialize M4 PATCH request"),
+                ))
+                .expect("build M4 PATCH request"),
+        )
+        .await
+        .expect("M4 PATCH response");
     response_json(response).await
 }
 
