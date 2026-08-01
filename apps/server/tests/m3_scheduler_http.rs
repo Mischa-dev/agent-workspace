@@ -318,6 +318,50 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
             .expect("canonical expected worktree")
     );
 
+    let question_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM agent_approvals WHERE agent_run_id = $1 AND status = 'pending'",
+    )
+    .bind(second_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read demo blocker for question response proof");
+    sqlx::query(
+        r#"
+        UPDATE agent_approvals
+           SET kind = 'question',
+               summary = 'What should the proof answer be?',
+               options = '[]'::jsonb
+         WHERE id = $1
+        "#,
+    )
+    .bind(question_id)
+    .execute(&pool)
+    .await
+    .expect("convert deterministic demo blocker to a question");
+    let question = respond_to_approval(
+        &application,
+        &cookie,
+        &csrf,
+        question_id,
+        "question-answer-proof",
+        json!({"answer": "Aurora"}),
+    )
+    .await;
+    assert_eq!(question.0, StatusCode::OK);
+    assert_eq!(question.2["kind"], "question");
+    assert_eq!(question.2["response"]["answer"], "Aurora");
+    let repeated_question = respond_to_approval(
+        &application,
+        &cookie,
+        &csrf,
+        question_id,
+        "question-answer-proof",
+        json!({"answer": "Aurora"}),
+    )
+    .await;
+    assert_eq!(repeated_question.0, StatusCode::OK);
+    wait_for_state(&pool, second_run_id, "completed").await;
+
     wait_for_claim_release(&pool, second_run_id).await;
     supervisors.shutdown_all().await;
     pool.close().await;
@@ -420,6 +464,37 @@ async fn interrupt(
             )
             .await
             .expect("scheduler interrupt response"),
+    )
+    .await
+}
+
+async fn respond_to_approval(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    approval_id: Uuid,
+    idempotency_key: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    response_json(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/agent-approvals/{approval_id}/respond"))
+                    .header("origin", ORIGIN)
+                    .header("cookie", cookie)
+                    .header("x-csrf-token", csrf)
+                    .header("idempotency-key", idempotency_key)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&body).expect("serialize blocker response"),
+                    ))
+                    .expect("build blocker response"),
+            )
+            .await
+            .expect("blocker response"),
     )
     .await
 }

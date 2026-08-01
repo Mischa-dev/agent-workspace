@@ -83,7 +83,7 @@ type Approval = {
   summary: string
   options: Array<{ id: string; label: string }>
   status: string
-  response: { decision?: string } | null
+  response: { decision?: string; answer?: string } | null
   createdAt: string
   capabilities: {
     respond: boolean
@@ -358,7 +358,10 @@ export function ThreadPage() {
     })
   }
 
-  const respond = (approvalId: string, decision: 'approve' | 'deny') => {
+  const respond = (
+    approvalId: string,
+    response: { decision: 'approve' | 'deny' } | { answer: string },
+  ) => {
     const approval = verifiedTimeline?.approvals.find(
       (candidate) => candidate.id === approvalId,
     )
@@ -369,13 +372,14 @@ export function ThreadPage() {
     ) {
       return
     }
-    void perform(`${approvalId}:${decision}`, () =>
+    const action = 'decision' in response ? response.decision : 'answer'
+    void perform(`${approvalId}:${action}`, () =>
       requestJson(
         `/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`,
         {
           method: 'POST',
-          idempotencyKey: `approval-${approvalId}-${decision}`,
-          json: { decision },
+          idempotencyKey: `approval-${approvalId}-${action}`,
+          json: response,
         },
       ),
     )
@@ -787,8 +791,13 @@ function ApprovalPrompt({
   approval: Approval
   busyAction: string | null
   canRespond: boolean
-  onRespond: (approvalId: string, decision: 'approve' | 'deny') => void
+  onRespond: (
+    approvalId: string,
+    response: { decision: 'approve' | 'deny' } | { answer: string },
+  ) => void
 }) {
+  const [answer, setAnswer] = useState('')
+  const answerAction = `${approval.id}:answer`
   return (
     <section aria-labelledby={`approval-${approval.id}`} className="approval-prompt">
       <div className="approval-symbol" aria-hidden="true">
@@ -801,12 +810,55 @@ function ApprovalPrompt({
             : 'Approval required'}
         </h2>
         <p>{approval.summary}</p>
-        {canRespond && (
+        {canRespond && approval.kind === 'question' && (
+          <form
+            className="approval-actions"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const value = answer.trim()
+              if (value) onRespond(approval.id, { answer: value })
+            }}
+          >
+            <label htmlFor={`approval-answer-${approval.id}`}>Your answer</label>
+            {approval.options.length > 0 && (
+              <div aria-label="Suggested answers" className="approval-actions">
+                {approval.options.map((option) => (
+                  <button
+                    className="secondary-button"
+                    disabled={Boolean(busyAction)}
+                    key={option.id}
+                    onClick={() => setAnswer(option.label)}
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea
+              disabled={Boolean(busyAction)}
+              id={`approval-answer-${approval.id}`}
+              maxLength={4000}
+              onChange={(event) => setAnswer(event.target.value)}
+              required
+              rows={3}
+              value={answer}
+            />
+            <button
+              className="primary-button"
+              disabled={Boolean(busyAction) || !answer.trim()}
+              type="submit"
+            >
+              {busyAction === answerAction ? 'Sending…' : 'Send answer'}
+            </button>
+          </form>
+        )}
+        {canRespond && approval.kind === 'approval' && (
           <div className="approval-actions">
             <button
               className="primary-button"
               disabled={Boolean(busyAction)}
-              onClick={() => onRespond(approval.id, 'approve')}
+              onClick={() => onRespond(approval.id, { decision: 'approve' })}
               type="button"
             >
               {busyAction === `${approval.id}:approve`
@@ -816,7 +868,7 @@ function ApprovalPrompt({
             <button
               className="secondary-button"
               disabled={Boolean(busyAction)}
-              onClick={() => onRespond(approval.id, 'deny')}
+              onClick={() => onRespond(approval.id, { decision: 'deny' })}
               type="button"
             >
               {busyAction === `${approval.id}:deny` ? 'Denying…' : 'Deny'}

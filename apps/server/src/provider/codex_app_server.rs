@@ -9,7 +9,9 @@ use std::{
 };
 
 use codex_bridge_spike::{BridgeConfig, BridgeError, CodexBridge};
+use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
     sync::{Mutex, Notify, OwnedMutexGuard},
@@ -111,19 +113,48 @@ pub struct ProviderRequest {
     id: Value,
     pub kind: ApprovalKind,
     question_ids: Vec<String>,
+    summary: String,
+    options: Vec<ProviderQuestionOption>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProviderQuestionOption {
+    id: String,
+    label: String,
+}
+
+#[derive(Debug)]
+pub struct ProviderItemEvent {
+    pub key: String,
+    pub kind: ItemKind,
+}
+
+#[derive(Debug)]
+pub enum ProviderAnswer {
+    Approve,
+    Deny,
+    Text(String),
 }
 
 impl ProviderRequest {
     pub fn durable_id(&self) -> String {
-        self.id.to_string()
+        bounded_provider_identity("request", &self.id)
+    }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    pub fn public_options(&self) -> Value {
+        serde_json::to_value(&self.options).unwrap_or_else(|_| json!([]))
     }
 }
 
 #[derive(Debug)]
 pub enum ProviderEvent {
     AgentMessageDelta(String),
-    ItemStarted(ItemKind),
-    ItemCompleted(ItemKind),
+    ItemStarted(ProviderItemEvent),
+    ItemCompleted(ProviderItemEvent),
     TurnCompleted { completed: bool },
     Request(ProviderRequest),
     Error,
@@ -690,8 +721,14 @@ impl ProfileLease {
                 .and_then(Value::as_str)
                 .map(|delta| ProviderEvent::AgentMessageDelta(delta.to_owned()))
                 .unwrap_or(ProviderEvent::Ignored),
-            "item/started" => ProviderEvent::ItemStarted(item_kind(&raw)),
-            "item/completed" => ProviderEvent::ItemCompleted(item_kind(&raw)),
+            "item/started" => ProviderEvent::ItemStarted(ProviderItemEvent {
+                key: provider_event_key(method, &raw),
+                kind: item_kind(&raw),
+            }),
+            "item/completed" => ProviderEvent::ItemCompleted(ProviderItemEvent {
+                key: provider_event_key(method, &raw),
+                kind: item_kind(&raw),
+            }),
             "turn/completed" => ProviderEvent::TurnCompleted {
                 completed: raw.pointer("/params/turn/status").and_then(Value::as_str)
                     == Some("completed"),
@@ -704,22 +741,27 @@ impl ProfileLease {
     pub async fn answer_request(
         &mut self,
         request: ProviderRequest,
-        approved: bool,
+        answer: ProviderAnswer,
     ) -> Result<(), SupervisorError> {
         let result = match request.kind {
             ApprovalKind::Approval => {
-                json!({"decision": if approved { "accept" } else { "decline" }})
+                let decision = match answer {
+                    ProviderAnswer::Approve => "accept",
+                    ProviderAnswer::Deny => "decline",
+                    ProviderAnswer::Text(_) => return Err(SupervisorError::InvalidAccountResponse),
+                };
+                json!({"decision": decision})
             }
             ApprovalKind::Question => {
+                let answer = match answer {
+                    ProviderAnswer::Approve => "approved".to_owned(),
+                    ProviderAnswer::Deny => "denied".to_owned(),
+                    ProviderAnswer::Text(answer) => bounded_provider_text(&answer, 4_000)?,
+                };
                 let answers = request
                     .question_ids
                     .into_iter()
-                    .map(|id| {
-                        (
-                            id,
-                            json!({"answers": [if approved { "approved" } else { "denied" }]}),
-                        )
-                    })
+                    .map(|id| (id, json!({"answers": [answer]})))
                     .collect::<serde_json::Map<_, _>>();
                 json!({"answers": answers})
             }
@@ -871,22 +913,102 @@ fn parse_provider_request(raw: Value) -> Result<ProviderRequest, SupervisorError
         | "item/permissions/requestApproval" => ApprovalKind::Approval,
         _ => ApprovalKind::Unsupported,
     };
+    let questions = raw.pointer("/params/questions").and_then(Value::as_array);
     let question_ids = if kind == ApprovalKind::Question {
-        raw.pointer("/params/questions")
-            .and_then(Value::as_array)
+        questions
             .into_iter()
             .flatten()
             .filter_map(|question| question.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
+            .filter_map(|id| bounded_provider_text(id, 128).ok())
+            .take(20)
             .collect()
     } else {
         Vec::new()
+    };
+    if kind == ApprovalKind::Question && question_ids.is_empty() {
+        return Err(SupervisorError::InvalidAccountResponse);
+    }
+    let summary = if kind == ApprovalKind::Question {
+        questions
+            .and_then(|questions| questions.first())
+            .and_then(|question| question.get("question"))
+            .and_then(Value::as_str)
+            .and_then(|summary| bounded_provider_text(summary, 2_000).ok())
+            .unwrap_or_else(|| "Codex needs an answer before it can continue.".to_owned())
+    } else {
+        "Codex needs permission before it can continue.".to_owned()
+    };
+    let options = if kind == ApprovalKind::Question {
+        questions
+            .into_iter()
+            .flatten()
+            .flat_map(|question| {
+                question
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|option| {
+                let label = option
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .and_then(|label| bounded_provider_text(label, 200).ok())?;
+                Some(ProviderQuestionOption {
+                    id: label.clone(),
+                    label,
+                })
+            })
+            .take(40)
+            .collect()
+    } else {
+        vec![
+            ProviderQuestionOption {
+                id: "approve".to_owned(),
+                label: "Allow once".to_owned(),
+            },
+            ProviderQuestionOption {
+                id: "deny".to_owned(),
+                label: "Deny".to_owned(),
+            },
+        ]
     };
     Ok(ProviderRequest {
         id,
         kind,
         question_ids,
+        summary,
+        options,
     })
+}
+
+fn provider_event_key(method: &str, raw: &Value) -> String {
+    let identity = [
+        "/params/item/id",
+        "/params/itemId",
+        "/params/turn/id",
+        "/params/turnId",
+    ]
+    .into_iter()
+    .find_map(|pointer| raw.pointer(pointer))
+    .map(Value::to_string)
+    .filter(|value| value.len() <= 512 && !value.chars().any(char::is_control));
+    match identity {
+        Some(identity) => format!("provider:{method}:{identity}"),
+        None => format!(
+            "provider:{method}:{}",
+            bounded_provider_identity("event", raw)
+        ),
+    }
+}
+
+fn bounded_provider_identity(namespace: &str, value: &Value) -> String {
+    let encoded = value.to_string();
+    if encoded.len() <= 512 && !encoded.chars().any(char::is_control) {
+        return encoded;
+    }
+    let digest = Sha256::digest(encoded.as_bytes());
+    format!("{namespace}:sha256:{digest:x}")
 }
 
 fn parse_login_start(response: Value, expected_type: &str) -> Result<LoginStart, SupervisorError> {
@@ -1038,9 +1160,10 @@ fn health_snapshot(state: &SupervisorState) -> ProfileHealth {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApprovalKind, ItemKind, ProviderEvent, SupervisorError, SupervisorRegistry,
-        SupervisorState, health_snapshot, item_kind, parse_login_start, parse_provider_request,
-        parse_rate_limit_window, record_failure, restart_backoff,
+        ApprovalKind, ItemKind, ProviderEvent, ProviderItemEvent, SupervisorError,
+        SupervisorRegistry, SupervisorState, health_snapshot, item_kind, parse_login_start,
+        parse_provider_request, parse_rate_limit_window, provider_event_key, record_failure,
+        restart_backoff,
     };
     use crate::config::AppConfig;
     use serde_json::json;
@@ -1075,11 +1198,17 @@ mod tests {
         let request = parse_provider_request(json!({
             "id": 17,
             "method": "item/tool/requestUserInput",
-            "params": {"questions": [{"id": "choice"}]}
+            "params": {"questions": [{
+                "id": "choice",
+                "question": "Which release track?",
+                "options": [{"label": "Stable"}, {"label": "Preview"}]
+            }]}
         }))
         .expect("provider request");
         assert_eq!(request.kind, ApprovalKind::Question);
         assert_eq!(request.question_ids, vec!["choice"]);
+        assert_eq!(request.summary(), "Which release track?");
+        assert_eq!(request.public_options()[0]["label"], "Stable");
 
         let unsupported = parse_provider_request(json!({
             "id": 18,
@@ -1100,6 +1229,27 @@ mod tests {
             event,
             ProviderEvent::TurnCompleted { completed: true }
         ));
+    }
+
+    #[test]
+    fn provider_event_identities_are_stable_and_bounded() {
+        let first = json!({
+            "method": "item/completed",
+            "params": {"item": {"id": "item-7", "type": "commandExecution"}}
+        });
+        assert_eq!(
+            provider_event_key("item/completed", &first),
+            "provider:item/completed:\"item-7\""
+        );
+        assert_eq!(
+            provider_event_key("item/completed", &first),
+            provider_event_key("item/completed", &first)
+        );
+
+        let oversized = json!({"params": {"opaque": "x".repeat(4096)}});
+        let key = provider_event_key("item/started", &oversized);
+        assert!(key.starts_with("provider:item/started:event:sha256:"));
+        assert!(key.len() < 160);
     }
 
     #[test]
@@ -1221,7 +1371,10 @@ done
             );
             assert!(matches!(
                 first.next_event().await.expect("first buffered event"),
-                ProviderEvent::ItemStarted(ItemKind::CommandExecution)
+                ProviderEvent::ItemStarted(ProviderItemEvent {
+                    kind: ItemKind::CommandExecution,
+                    ..
+                })
             ));
             assert_eq!(
                 first
@@ -1245,7 +1398,10 @@ done
             );
             assert!(matches!(
                 second.next_event().await.expect("second buffered event"),
-                ProviderEvent::ItemStarted(ItemKind::CommandExecution)
+                ProviderEvent::ItemStarted(ProviderItemEvent {
+                    kind: ItemKind::CommandExecution,
+                    ..
+                })
             ));
             assert_eq!(
                 second

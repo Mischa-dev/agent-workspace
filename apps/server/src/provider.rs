@@ -21,7 +21,7 @@ pub use codex_app_server::{
     AccountSummary, LoginCeremonyError, LoginCeremonySnapshot, LoginKind, LoginReservation,
     LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, SupervisorRegistry,
 };
-use codex_app_server::{ApprovalKind, ItemKind, ProfileLease, ProviderEvent};
+use codex_app_server::{ApprovalKind, ItemKind, ProfileLease, ProviderAnswer, ProviderEvent};
 
 #[derive(Debug)]
 pub struct StartedProviderRun {
@@ -340,37 +340,48 @@ async fn drive_turn(
                             }),
                         });
                     }
-                    ProviderEvent::ItemStarted(ItemKind::CommandExecution) => {
+                    ProviderEvent::ItemStarted(event)
+                        if event.kind == ItemKind::CommandExecution => {
                         persist_event(
                             &state,
                             project_id,
                             run_id,
                             conversation_id,
-                            "command_started",
-                            "Codex started a command in the isolated worktree.",
-                            json!({}),
+                            SignificantProviderEvent {
+                                key: &event.key,
+                                kind: "command_started",
+                                summary: "Codex started a command in the isolated worktree.",
+                                payload: json!({}),
+                            },
                         ).await?;
                     }
-                    ProviderEvent::ItemCompleted(ItemKind::CommandExecution) => {
+                    ProviderEvent::ItemCompleted(event)
+                        if event.kind == ItemKind::CommandExecution => {
                         persist_event(
                             &state,
                             project_id,
                             run_id,
                             conversation_id,
-                            "command_completed",
-                            "Codex completed a command in the isolated worktree.",
-                            json!({}),
+                            SignificantProviderEvent {
+                                key: &event.key,
+                                kind: "command_completed",
+                                summary: "Codex completed a command in the isolated worktree.",
+                                payload: json!({}),
+                            },
                         ).await?;
                     }
-                    ProviderEvent::ItemCompleted(ItemKind::FileChange) => {
+                    ProviderEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
                         persist_event(
                             &state,
                             project_id,
                             run_id,
                             conversation_id,
-                            "file_change",
-                            "Codex completed a file change in the isolated worktree.",
-                            json!({}),
+                            SignificantProviderEvent {
+                                key: &event.key,
+                                kind: "file_change",
+                                summary: "Codex completed a file change in the isolated worktree.",
+                                payload: json!({}),
+                            },
                         ).await?;
                     }
                     ProviderEvent::TurnCompleted { completed } => {
@@ -443,7 +454,7 @@ async fn handle_provider_request(
 ) -> Result<(), AppError> {
     if request.kind == ApprovalKind::Unsupported {
         provider
-            .answer_request(request, false)
+            .answer_request(request, ProviderAnswer::Deny)
             .await
             .map_err(|error| {
                 provider_error(run_id, "reject unsupported provider request", error)
@@ -455,15 +466,11 @@ async fn handle_provider_request(
         ApprovalKind::Approval => "approval",
         ApprovalKind::Unsupported => unreachable!("unsupported requests return above"),
     };
-    let approval_id = Uuid::now_v7();
     let provider_request_id = request.durable_id();
-    let summary = if kind == "question" {
-        "Codex needs an answer before it can continue."
-    } else {
-        "Codex needs permission before it can continue."
-    };
+    let summary = request.summary().to_owned();
+    let options = request.public_options();
     let mut transaction = state.pool.begin().await?;
-    sqlx::query(
+    let inserted_approval_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO agent_approvals (
             id, agent_run_id, requesting_actor_id, provider_request_id,
@@ -471,41 +478,59 @@ async fn handle_provider_request(
         )
         SELECT $1, $2, ar.requesting_actor_id, $3, $4, $5, $6
         FROM agent_runs ar WHERE ar.id = $2
+        ON CONFLICT (agent_run_id, provider_request_id) DO NOTHING
+        RETURNING id
         "#,
     )
-    .bind(approval_id)
+    .bind(Uuid::now_v7())
     .bind(run_id)
     .bind(&provider_request_id)
     .bind(kind)
-    .bind(summary)
-    .bind(json!([
-        {"id": "approve", "label": "Allow once"},
-        {"id": "deny", "label": "Deny"}
-    ]))
-    .execute(&mut *transaction)
+    .bind(&summary)
+    .bind(options)
+    .fetch_optional(&mut *transaction)
     .await?;
-    transition_run(&mut transaction, run_id, RunState::Blocked, None).await?;
-    let event_id = insert_event(
-        &mut transaction,
-        run_id,
-        if kind == "question" {
-            "question_requested"
-        } else {
-            "approval_requested"
-        },
-        summary,
-        json!({"approval_id": approval_id}),
-    )
-    .await?;
-    insert_entry(&mut transaction, conversation_id, event_id).await?;
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
+    let approval_id = match inserted_approval_id {
+        Some(approval_id) => {
+            transition_run(&mut transaction, run_id, RunState::Blocked, None).await?;
+            let event_id = insert_event(
+                &mut transaction,
+                run_id,
+                &format!("provider:{kind}:requested:{provider_request_id}"),
+                if kind == "question" {
+                    "question_requested"
+                } else {
+                    "approval_requested"
+                },
+                &summary,
+                json!({"approval_id": approval_id}),
+            )
+            .await?
+            .ok_or(AppError::Internal("new approval event was not inserted"))?;
+            insert_entry(&mut transaction, conversation_id, event_id).await?;
+            outbox::enqueue_agent_run_updated(
+                &mut transaction,
+                project_id,
+                conversation_id,
+                run_id,
+            )
+            .await?;
+            approval_id
+        }
+        None => sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM agent_approvals WHERE agent_run_id = $1 AND provider_request_id = $2",
+        )
+        .bind(run_id)
+        .bind(&provider_request_id)
+        .fetch_one(&mut *transaction)
+        .await?,
+    };
     transaction.commit().await?;
 
     loop {
         sleep(Duration::from_millis(300)).await;
         if state.supervisors.is_shutting_down() {
-            let _ = provider.answer_request(request, false).await;
+            let _ = provider.answer_request(request, ProviderAnswer::Deny).await;
             provider.shutdown_process().await;
             return Ok(());
         }
@@ -514,7 +539,7 @@ async fn handle_provider_request(
             .profile_is_stopping(provider.profile_id())
             .await
         {
-            let _ = provider.answer_request(request, false).await;
+            let _ = provider.answer_request(request, ProviderAnswer::Deny).await;
             provider.shutdown_process().await;
             fail_run(
                 state,
@@ -545,7 +570,7 @@ async fn handle_provider_request(
         .await?;
         if resolution.run_state == "interrupted" {
             provider
-                .answer_request(request, false)
+                .answer_request(request, ProviderAnswer::Deny)
                 .await
                 .map_err(|error| provider_error(run_id, "decline interrupted request", error))?;
             return Ok(());
@@ -553,16 +578,45 @@ async fn handle_provider_request(
         if resolution.status != "resolved" {
             continue;
         }
-        let approved = resolution
-            .response
-            .as_ref()
-            .and_then(|value| value.get("decision"))
-            .and_then(Value::as_str)
-            == Some("approve");
+        let claimed = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            UPDATE agent_approvals
+               SET provider_response_claimed_at = now()
+             WHERE id = $1
+               AND status = 'resolved'
+               AND provider_response_claimed_at IS NULL
+            RETURNING id
+            "#,
+        )
+        .bind(approval_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        if claimed.is_none() {
+            return Ok(());
+        }
+        let answer = match resolution.response.as_ref() {
+            Some(response) if kind == "question" => response
+                .get("answer")
+                .and_then(Value::as_str)
+                .map(|answer| ProviderAnswer::Text(answer.to_owned()))
+                .ok_or(AppError::Internal("resolved question omitted its answer"))?,
+            Some(response)
+                if response.get("decision").and_then(Value::as_str) == Some("approve") =>
+            {
+                ProviderAnswer::Approve
+            }
+            _ => ProviderAnswer::Deny,
+        };
         provider
-            .answer_request(request, approved)
+            .answer_request(request, answer)
             .await
             .map_err(|error| provider_error(run_id, "answer provider request", error))?;
+        sqlx::query(
+            "UPDATE agent_approvals SET provider_response_delivered_at = now() WHERE id = $1",
+        )
+        .bind(approval_id)
+        .execute(&state.pool)
+        .await?;
         return Ok(());
     }
 }
@@ -635,6 +689,7 @@ async fn complete_run(
                 content_version, content, plain_text, agent_run_id
             )
             VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+            ON CONFLICT (agent_run_id) WHERE agent_run_id IS NOT NULL DO NOTHING
             "#,
         )
         .bind(worker_message_id)
@@ -646,30 +701,44 @@ async fn complete_run(
         .bind(run_id)
         .execute(&mut *transaction)
         .await?;
-        let sequence = allocate_conversation_sequence(&mut transaction, conversation_id).await?;
-        sqlx::query(
-            r#"
-            INSERT INTO conversation_entries (
-                id, conversation_id, sequence, kind, message_id
+        let persisted_message_id =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM messages WHERE agent_run_id = $1")
+                .bind(run_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        let existing_entry = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM conversation_entries WHERE message_id = $1)",
+        )
+        .bind(persisted_message_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if !existing_entry {
+            let sequence =
+                allocate_conversation_sequence(&mut transaction, conversation_id).await?;
+            sqlx::query(
+                r#"
+                INSERT INTO conversation_entries (
+                    id, conversation_id, sequence, kind, message_id
+                )
+                VALUES ($1, $2, $3, 'message', $4)
+                "#,
             )
-            VALUES ($1, $2, $3, 'message', $4)
-            "#,
-        )
-        .bind(Uuid::now_v7())
-        .bind(conversation_id)
-        .bind(sequence)
-        .bind(worker_message_id)
-        .execute(&mut *transaction)
-        .await?;
-        outbox::enqueue_message_created(
-            &mut transaction,
-            project_id,
-            conversation_id,
-            worker_message_id,
-            sequence,
-            worker_actor_id,
-        )
-        .await?;
+            .bind(Uuid::now_v7())
+            .bind(conversation_id)
+            .bind(sequence)
+            .bind(persisted_message_id)
+            .execute(&mut *transaction)
+            .await?;
+            outbox::enqueue_message_created(
+                &mut transaction,
+                project_id,
+                conversation_id,
+                persisted_message_id,
+                sequence,
+                worker_actor_id,
+            )
+            .await?;
+        }
     }
     transition_run(&mut transaction, run_id, RunState::Completed, None).await?;
     sqlx::query(
@@ -687,16 +756,26 @@ async fn complete_run(
     let event_id = insert_event(
         &mut transaction,
         run_id,
+        "provider:run:completed",
         "run_completed",
         "The hosted Codex turn completed.",
         json!({}),
     )
     .await?;
-    insert_entry(&mut transaction, conversation_id, event_id).await?;
+    if let Some(event_id) = event_id {
+        insert_entry(&mut transaction, conversation_id, event_id).await?;
+    }
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
     Ok(())
+}
+
+struct SignificantProviderEvent<'a> {
+    key: &'a str,
+    kind: &'a str,
+    summary: &'a str,
+    payload: Value,
 }
 
 async fn persist_event(
@@ -704,15 +783,23 @@ async fn persist_event(
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
-    kind: &str,
-    summary: &str,
-    payload: Value,
+    event: SignificantProviderEvent<'_>,
 ) -> Result<(), AppError> {
     let mut transaction = state.pool.begin().await?;
-    let event_id = insert_event(&mut transaction, run_id, kind, summary, payload).await?;
-    insert_entry(&mut transaction, conversation_id, event_id).await?;
-    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
-        .await?;
+    if let Some(event_id) = insert_event(
+        &mut transaction,
+        run_id,
+        event.key,
+        event.kind,
+        event.summary,
+        event.payload,
+    )
+    .await?
+    {
+        insert_entry(&mut transaction, conversation_id, event_id).await?;
+        outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+            .await?;
+    }
     transaction.commit().await?;
     Ok(())
 }
@@ -720,28 +807,31 @@ async fn persist_event(
 async fn insert_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
+    event_key: &str,
     kind: &str,
     summary: &str,
     payload: Value,
-) -> Result<Uuid, AppError> {
+) -> Result<Option<Uuid>, AppError> {
     let event_id = Uuid::now_v7();
-    sqlx::query(
+    let inserted = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO agent_run_events (
             id, agent_run_id, event_key, kind, summary, payload
         )
         VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (agent_run_id, event_key) DO NOTHING
+        RETURNING id
         "#,
     )
     .bind(event_id)
     .bind(run_id)
-    .bind(format!("{kind}:{event_id}"))
+    .bind(event_key)
     .bind(kind)
     .bind(summary)
     .bind(payload)
-    .execute(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
-    Ok(event_id)
+    Ok(inserted)
 }
 
 async fn insert_entry(
@@ -798,8 +888,18 @@ async fn fail_run(
     .execute(&mut *transaction)
     .await?;
     idle_provider_session_for_terminal_run(&mut transaction, run_id).await?;
-    let event_id = insert_event(&mut transaction, run_id, "run_failed", reason, json!({})).await?;
-    insert_entry(&mut transaction, conversation_id, event_id).await?;
+    let event_id = insert_event(
+        &mut transaction,
+        run_id,
+        "provider:run:failed",
+        "run_failed",
+        reason,
+        json!({}),
+    )
+    .await?;
+    if let Some(event_id) = event_id {
+        insert_entry(&mut transaction, conversation_id, event_id).await?;
+    }
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;

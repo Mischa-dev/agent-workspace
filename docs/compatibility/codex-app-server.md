@@ -92,6 +92,21 @@ server requests admitted to the durable blocker flow. Every other provider
 request receives a bounded JSON-RPC `method not found` response and cannot be
 converted into an approval decision.
 
+Provider item notifications are reduced to an adapter-owned kind and bounded
+stable identity. The identity uses the provider item or turn identifier when
+present and a SHA-256 digest of the bounded JSONL notification otherwise. Only
+that normalized key reaches durable event persistence; raw payloads and method
+names do not reach Conversation or browser types. Approval and question request
+IDs are similarly bounded or digested before uniqueness checks.
+
+Question requests retain at most 20 bounded question identifiers and 40 safe
+choice labels. The first bounded question prompt becomes the public summary;
+arbitrary provider metadata is discarded. A typed browser answer is mapped to
+the pinned App Server `answers` object inside the adapter. Approval decisions
+remain the distinct `accept`/`decline` shape. Durable response claiming occurs
+before transport so a crash or ambiguous write cannot send a human decision
+twice; the conservative failure path preserves the worktree and audit row.
+
 Deterministic CI starts a fake JSONL App Server, proves initialize/initialized
 ordering, performs two sequential Thread/turn starts through the same process,
 confirms the neutral process directory and isolated `CODEX_HOME`, rejects a
