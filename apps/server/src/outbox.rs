@@ -31,6 +31,7 @@ pub enum OutboxResourceKind {
     Message,
     ReadState,
     AgentRun,
+    WorkItem,
 }
 
 impl OutboxResourceKind {
@@ -41,6 +42,7 @@ impl OutboxResourceKind {
             Self::Message => "message",
             Self::ReadState => "read_state",
             Self::AgentRun => "agent_run",
+            Self::WorkItem => "work_item",
         }
     }
 
@@ -51,6 +53,7 @@ impl OutboxResourceKind {
             "message" => Ok(Self::Message),
             "read_state" => Ok(Self::ReadState),
             "agent_run" => Ok(Self::AgentRun),
+            "work_item" => Ok(Self::WorkItem),
             _ => Err(OutboxEventError::MalformedMetadata),
         }
     }
@@ -98,6 +101,13 @@ pub struct AgentRunUpdatedPayload {
     pub state: Option<RunState>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemUpdatedPayload {
+    pub work_item_id: Uuid,
+    pub version: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -105,6 +115,7 @@ pub enum OutboxEventPayload {
     MessageCreated(MessageCreatedPayload),
     ReadStateUpdated(ReadStateUpdatedPayload),
     AgentRunUpdated(AgentRunUpdatedPayload),
+    WorkItemUpdated(WorkItemUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -115,16 +126,18 @@ impl OutboxEventPayload {
             Self::MessageCreated(_) => "conversation.message.created",
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
+            Self::WorkItemUpdated(_) => "work_item.updated",
         }
     }
 
-    pub fn conversation_id(&self) -> Uuid {
+    pub fn conversation_id(&self) -> Option<Uuid> {
         match self {
-            Self::ConversationCreated(payload) => payload.conversation_id,
-            Self::ConversationArchived(payload) => payload.conversation_id,
-            Self::MessageCreated(payload) => payload.conversation_id,
-            Self::ReadStateUpdated(payload) => payload.conversation_id,
-            Self::AgentRunUpdated(payload) => payload.conversation_id,
+            Self::ConversationCreated(payload) => Some(payload.conversation_id),
+            Self::ConversationArchived(payload) => Some(payload.conversation_id),
+            Self::MessageCreated(payload) => Some(payload.conversation_id),
+            Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
+            Self::AgentRunUpdated(payload) => Some(payload.conversation_id),
+            Self::WorkItemUpdated(_) => None,
         }
     }
 
@@ -146,6 +159,7 @@ impl OutboxEventPayload {
             Self::MessageCreated(_) => OutboxResourceKind::Message,
             Self::ReadStateUpdated(_) => OutboxResourceKind::ReadState,
             Self::AgentRunUpdated(_) => OutboxResourceKind::AgentRun,
+            Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
         }
     }
 
@@ -158,11 +172,12 @@ impl OutboxEventPayload {
             // already carries the Conversation, so the Actor is its resource ID.
             Self::ReadStateUpdated(payload) => payload.actor_id,
             Self::AgentRunUpdated(payload) => payload.agent_run_id,
+            Self::WorkItemUpdated(payload) => payload.work_item_id,
         }
     }
 
     fn validate(&self) -> Result<(), OutboxEventError> {
-        if self.conversation_id().is_nil() || self.resource_id().is_nil() {
+        if self.conversation_id().is_some_and(|id| id.is_nil()) || self.resource_id().is_nil() {
             return Err(OutboxEventError::MalformedPayload);
         }
         match self {
@@ -185,6 +200,11 @@ impl OutboxEventPayload {
             Self::AgentRunUpdated(payload) if payload.agent_run_id.is_nil() => {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::WorkItemUpdated(payload)
+                if payload.work_item_id.is_nil() || payload.version < 1 =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             _ => Ok(()),
         }
     }
@@ -197,6 +217,7 @@ impl OutboxEventPayload {
             Self::MessageCreated(payload) => serde_json::to_value(payload),
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
+            Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -219,6 +240,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.agent_run.updated" => Self::AgentRunUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "work_item.updated" => Self::WorkItemUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -280,7 +304,7 @@ pub struct OutboxEnvelope {
     pub version: i32,
     pub project_id: Uuid,
     #[serde(rename = "conversationId")]
-    pub conversation_id: Uuid,
+    pub conversation_id: Option<Uuid>,
     #[serde(skip)]
     pub(crate) recipient_actor_id: Option<Uuid>,
     #[serde(rename = "type")]
@@ -334,7 +358,7 @@ impl ClaimedOutboxEvent {
         }
         let resource_kind = OutboxResourceKind::parse(&self.resource_kind)?;
         let payload = OutboxEventPayload::from_json(&self.event_type, self.payload.clone())?;
-        if self.conversation_id != Some(payload.conversation_id())
+        if self.conversation_id != payload.conversation_id()
             || resource_kind != payload.resource_kind()
             || self.resource_id != payload.resource_id()
         {
@@ -687,7 +711,7 @@ mod tests {
         AgentRunUpdatedPayload, ClaimedOutboxEvent, ConversationCreatedPayload,
         MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS, MessageCreatedPayload, OUTBOX_SCHEMA_VERSION,
         OutboxConversationKind, OutboxEventError, OutboxEventPayload, OutboxFailureKind,
-        OutboxResourceKind, ReadStateUpdatedPayload, retry_delay,
+        OutboxResourceKind, ReadStateUpdatedPayload, WorkItemUpdatedPayload, retry_delay,
     };
     use std::time::Duration;
     use uuid::Uuid;
@@ -756,7 +780,7 @@ mod tests {
         });
 
         let envelope = claim.envelope().expect("validated read-state envelope");
-        assert_eq!(envelope.conversation_id, id(2));
+        assert_eq!(envelope.conversation_id, Some(id(2)));
         assert_eq!(envelope.recipient_actor_id, Some(id(4)));
         let wire = serde_json::to_value(envelope).expect("read-state wire envelope");
         assert_eq!(wire["conversationId"], id(2).to_string());
@@ -794,6 +818,16 @@ mod tests {
         assert_eq!(run.resource_kind(), OutboxResourceKind::AgentRun);
         assert_eq!(run.resource_id(), id(5));
         assert!(run.to_json().is_ok());
+
+        let work_item = OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
+            work_item_id: id(6),
+            version: 3,
+        });
+        assert_eq!(work_item.event_type(), "work_item.updated");
+        assert_eq!(work_item.resource_kind(), OutboxResourceKind::WorkItem);
+        assert_eq!(work_item.resource_id(), id(6));
+        assert_eq!(work_item.conversation_id(), None);
+        assert!(work_item.to_json().is_ok());
 
         let legacy_run = OutboxEventPayload::from_json(
             "conversation.agent_run.updated",

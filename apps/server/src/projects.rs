@@ -416,6 +416,7 @@ async fn create_project(
         .bind(project_id)
         .execute(&mut *transaction)
         .await?;
+    crate::work_items::ensure_default_workflow(&mut transaction, project_id).await?;
     sqlx::query(
         r#"
         INSERT INTO project_instructions (project_id, content)

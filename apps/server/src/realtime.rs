@@ -73,7 +73,7 @@ impl RealtimeDelivery {
 
     fn conversation_id(&self) -> Option<Uuid> {
         match self {
-            Self::Durable { envelope } => Some(envelope.conversation_id),
+            Self::Durable { envelope } => envelope.conversation_id,
             Self::Ephemeral(event) => event.conversation_id,
         }
     }
@@ -163,8 +163,7 @@ impl OutboxPublisher for RealtimeHub {
             .get("conversationId")
             .and_then(serde_json::Value::as_str)
             .and_then(|value| Uuid::parse_str(value).ok())
-            .filter(|value| !value.is_nil())
-            .ok_or(RealtimePublishError::InvalidMetadata)?;
+            .filter(|value| !value.is_nil());
         let payload_actor_id = envelope
             .payload
             .get("actorId")
@@ -176,16 +175,32 @@ impl OutboxPublisher for RealtimeHub {
         } else {
             envelope.recipient_actor_id.is_some()
         };
+        let supported_event_type = matches!(
+            envelope.event_type.as_str(),
+            "conversation.created"
+                | "conversation.archived"
+                | "conversation.message.created"
+                | "conversation.read_state.updated"
+                | "conversation.agent_run.updated"
+                | "work_item.updated"
+        );
+        let invalid_conversation_scope = if envelope.event_type == "work_item.updated" {
+            envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
+        } else {
+            envelope.conversation_id.is_none()
+                || payload_conversation_id != envelope.conversation_id
+        };
         if envelope.event_id.is_nil()
             || envelope.event_cursor < 1
             || envelope.version != OUTBOX_SCHEMA_VERSION
             || envelope.project_id.is_nil()
-            || envelope.conversation_id.is_nil()
-            || payload_conversation_id != envelope.conversation_id
+            || envelope.conversation_id.is_some_and(|id| id.is_nil())
+            || invalid_conversation_scope
             || envelope
                 .recipient_actor_id
                 .is_some_and(|actor_id| actor_id.is_nil())
             || invalid_actor_scope
+            || !supported_event_type
             || envelope.event_type.is_empty()
             || envelope.event_type.len() > 120
             || envelope.occurred_at.is_empty()
@@ -794,7 +809,7 @@ mod tests {
             event_cursor: 41,
             version: OUTBOX_SCHEMA_VERSION,
             project_id: Uuid::now_v7(),
-            conversation_id,
+            conversation_id: Some(conversation_id),
             recipient_actor_id: None,
             event_type: "conversation.message.created".to_owned(),
             occurred_at: "2026-07-31T15:00:00.000000Z".to_owned(),
@@ -829,7 +844,7 @@ mod tests {
             event_cursor: 1,
             version: OUTBOX_SCHEMA_VERSION,
             project_id: Uuid::now_v7(),
-            conversation_id,
+            conversation_id: Some(conversation_id),
             recipient_actor_id: None,
             event_type: "conversation.created".to_owned(),
             occurred_at: "2026-07-31T15:00:00Z".to_owned(),
@@ -845,6 +860,39 @@ mod tests {
     }
 
     #[test]
+    fn durable_project_scoped_work_item_event_has_no_conversation() {
+        let hub = RealtimeHub::new(2);
+        let mut receiver = hub.subscribe();
+        let work_item_id = Uuid::now_v7();
+        let envelope = OutboxEnvelope {
+            event_id: Uuid::now_v7(),
+            event_cursor: 2,
+            version: OUTBOX_SCHEMA_VERSION,
+            project_id: Uuid::now_v7(),
+            conversation_id: None,
+            recipient_actor_id: None,
+            event_type: "work_item.updated".to_owned(),
+            occurred_at: "2026-07-31T15:00:00Z".to_owned(),
+            payload: serde_json::json!({
+                "workItemId": work_item_id,
+                "version": 1,
+            }),
+        };
+
+        OutboxPublisher::publish(&hub, &envelope).expect("publish Work Item invalidation");
+        let delivery = receiver.try_recv().expect("Work Item delivery");
+        assert_eq!(delivery.conversation_id(), None);
+        let wire: serde_json::Value = serde_json::from_str(
+            &delivery
+                .to_wire_json()
+                .expect("bounded Work Item wire JSON"),
+        )
+        .expect("decode Work Item wire JSON");
+        assert!(wire["conversationId"].is_null());
+        assert_eq!(wire["payload"]["workItemId"], work_item_id.to_string());
+    }
+
+    #[test]
     fn durable_publication_rejects_missing_scope_and_oversized_frames() {
         let hub = RealtimeHub::new(1);
         let conversation_id = Uuid::now_v7();
@@ -853,7 +901,7 @@ mod tests {
             event_cursor: 1,
             version: OUTBOX_SCHEMA_VERSION,
             project_id: Uuid::now_v7(),
-            conversation_id,
+            conversation_id: Some(conversation_id),
             recipient_actor_id: None,
             event_type: "conversation.created".to_owned(),
             occurred_at: "2026-07-31T15:00:00Z".to_owned(),
@@ -864,11 +912,37 @@ mod tests {
             }),
         };
         let missing_scope = OutboxEnvelope {
-            conversation_id: Uuid::nil(),
+            conversation_id: Some(Uuid::nil()),
             ..base.clone()
         };
         assert_eq!(
             OutboxPublisher::publish(&hub, &missing_scope),
+            Err(RealtimePublishError::InvalidMetadata)
+        );
+        let absent_scope = OutboxEnvelope {
+            conversation_id: None,
+            payload: serde_json::json!({
+                "kind": "channel",
+                "version": 1
+            }),
+            ..base.clone()
+        };
+        assert_eq!(
+            OutboxPublisher::publish(&hub, &absent_scope),
+            Err(RealtimePublishError::InvalidMetadata)
+        );
+
+        let work_item_with_conversation = OutboxEnvelope {
+            conversation_id: Some(conversation_id),
+            event_type: "work_item.updated".to_owned(),
+            payload: serde_json::json!({
+                "workItemId": Uuid::now_v7(),
+                "version": 1
+            }),
+            ..base.clone()
+        };
+        assert_eq!(
+            OutboxPublisher::publish(&hub, &work_item_with_conversation),
             Err(RealtimePublishError::InvalidMetadata)
         );
 
@@ -895,7 +969,7 @@ mod tests {
             event_cursor: 1,
             version: OUTBOX_SCHEMA_VERSION,
             project_id: Uuid::now_v7(),
-            conversation_id,
+            conversation_id: Some(conversation_id),
             recipient_actor_id: Some(recipient),
             event_type: "conversation.read_state.updated".to_owned(),
             occurred_at: "2026-07-31T15:00:00Z".to_owned(),

@@ -139,6 +139,16 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .await?;
 
     sqlx::query(
+        "INSERT INTO project_counters (project_id) VALUES ($1) ON CONFLICT (project_id) DO NOTHING",
+    )
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await?;
+    if crate::work_items::schema_is_available(&mut transaction).await? {
+        crate::work_items::ensure_default_workflow(&mut transaction, project_id).await?;
+    }
+
+    sqlx::query(
         r#"
         INSERT INTO project_memberships (
             id, project_id, actor_id, role, display_name, handle

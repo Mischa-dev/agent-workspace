@@ -5,7 +5,7 @@ use std::sync::Arc;
 use agent_workspace_server::{
     AppState, bootstrap, config::AppConfig, migration_preflight, provider::SupervisorRegistry,
     rate_limit::RateLimiters, realtime::RealtimeHub, recovery, router, seed, shutdown_signal,
-    telemetry::init_tracing,
+    telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
@@ -47,6 +47,15 @@ async fn main() -> anyhow::Result<()> {
         .run(&pool)
         .await
         .context("apply database migrations")?;
+    let provisioned_workflows = work_items::provision_missing_default_workflows(&pool)
+        .await
+        .context("provision default Work Item workflows")?;
+    if provisioned_workflows > 0 {
+        tracing::info!(
+            provisioned_workflows,
+            "provisioned default Work Item workflows"
+        );
+    }
 
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
