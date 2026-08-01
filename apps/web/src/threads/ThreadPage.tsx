@@ -73,6 +73,7 @@ type Run = {
   updatedAt: string
   capabilities: {
     interrupt: boolean
+    retry: boolean
   }
 }
 
@@ -100,6 +101,7 @@ type Timeline = {
     version: number
   }
   activeRun: Run | null
+  latestTerminalRun: Run | null
   approvals: Approval[]
   capabilities: {
     workerInvoke: boolean
@@ -162,6 +164,34 @@ function normalizeTimeline(value: unknown): Timeline {
               activeRunRecord.capabilities,
               'interrupt',
             ),
+            retry: explicitCapability(activeRunRecord.capabilities, 'retry'),
+          },
+        } as Run)
+      : null
+  const latestTerminalRunRecord = asRecord(record.latestTerminalRun)
+  const latestTerminalRun =
+    typeof latestTerminalRunRecord.id === 'string'
+      ? ({
+          ...latestTerminalRunRecord,
+          providerTurnId:
+            typeof latestTerminalRunRecord.providerTurnId === 'string'
+              ? latestTerminalRunRecord.providerTurnId
+              : null,
+          branch:
+            typeof latestTerminalRunRecord.branch === 'string'
+              ? latestTerminalRunRecord.branch
+              : null,
+          baseCommit:
+            typeof latestTerminalRunRecord.baseCommit === 'string'
+              ? latestTerminalRunRecord.baseCommit
+              : null,
+          queuePosition: null,
+          capabilities: {
+            interrupt: false,
+            retry: explicitCapability(
+              latestTerminalRunRecord.capabilities,
+              'retry',
+            ),
           },
         } as Run)
       : null
@@ -185,6 +215,7 @@ function normalizeTimeline(value: unknown): Timeline {
   return {
     ...durable,
     activeRun,
+    latestTerminalRun,
     approvals,
     capabilities: {
       ...durable.capabilities,
@@ -239,6 +270,7 @@ export function ThreadPage() {
   const timeline = thread.timeline.data
   const verifiedTimeline = thread.routeMatches ? timeline : undefined
   const activeRun = verifiedTimeline?.activeRun ?? null
+  const latestTerminalRun = verifiedTimeline?.latestTerminalRun ?? null
   const [prompt, setPrompt] = useState('')
   const [startIdempotencyKey, setStartIdempotencyKey] = useState<string | null>(
     null,
@@ -393,6 +425,18 @@ export function ThreadPage() {
         `/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`,
         { method: 'POST', idempotencyKey: `interrupt-${runId}`, json: {} },
       ),
+    )
+  }
+
+  const retryLastRun = () => {
+    const runId = latestTerminalRun?.id
+    if (!runId || latestTerminalRun.capabilities.retry !== true || activeRun) return
+    void perform('retry', () =>
+      requestJson(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, {
+        method: 'POST',
+        idempotencyKey: `retry-${runId}`,
+        json: {},
+      }),
     )
   }
 
@@ -671,17 +715,29 @@ export function ThreadPage() {
                   : 'Interrupt run'}
               </button>
             ) : (
-              <button
-                className="primary-button"
-                disabled={
-                  !prompt.trim() ||
-                  !isSafeMessageText(prompt.trim()) ||
-                  busyAction === 'start'
-                }
-                type="submit"
-              >
-                {busyAction === 'start' ? 'Starting…' : 'Start run'}
-              </button>
+              <>
+                {latestTerminalRun?.capabilities.retry && (
+                  <button
+                    className="secondary-button"
+                    disabled={Boolean(busyAction)}
+                    onClick={retryLastRun}
+                    type="button"
+                  >
+                    {busyAction === 'retry' ? 'Retrying…' : 'Retry last run'}
+                  </button>
+                )}
+                <button
+                  className="primary-button"
+                  disabled={
+                    !prompt.trim() ||
+                    !isSafeMessageText(prompt.trim()) ||
+                    busyAction === 'start'
+                  }
+                  type="submit"
+                >
+                  {busyAction === 'start' ? 'Starting…' : 'Start run'}
+                </button>
+              </>
             )}
           </div>
           {actionError && (

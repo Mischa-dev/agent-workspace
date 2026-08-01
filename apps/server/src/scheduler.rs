@@ -20,6 +20,7 @@ const WORKTREE_START_FAILURE_REASON: &str =
     "Worktree creation failed; inspect the retained repository workspace.";
 const PROVIDER_START_FAILURE_REASON: &str =
     "Codex App Server could not start. The worktree was preserved.";
+const UNSAFE_RETRY_REASON: &str = "The previous worktree is dirty, missing, or no longer has its owned branch. It was preserved; start a new Thread or inspect it before retrying.";
 
 #[derive(Debug, FromRow)]
 struct ClaimedRun {
@@ -34,6 +35,7 @@ struct ClaimedRun {
     execution_profile_id: Uuid,
     requesting_actor_id: Uuid,
     prompt: String,
+    predecessor_run_id: Option<Uuid>,
     claim_id: Uuid,
 }
 
@@ -124,13 +126,15 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         execution_profile_id: Uuid,
         requesting_actor_id: Uuid,
         prompt: String,
+        predecessor_run_id: Option<Uuid>,
     }
     let candidate = sqlx::query_as::<_, Candidate>(
         r#"
         SELECT run.id AS run_id, run.project_id, run.conversation_id,
                run.repository_id, repository.mirror_path, repository.clone_url,
                repository.default_branch, project.project_key,
-               run.execution_profile_id, run.requesting_actor_id, run.prompt
+               run.execution_profile_id, run.requesting_actor_id, run.prompt,
+               run.predecessor_run_id
         FROM agent_runs run
         JOIN repositories repository
           ON repository.id = run.repository_id
@@ -192,6 +196,7 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         execution_profile_id: candidate.execution_profile_id,
         requesting_actor_id: candidate.requesting_actor_id,
         prompt: candidate.prompt,
+        predecessor_run_id: candidate.predecessor_run_id,
         claim_id,
     }))
 }
@@ -224,6 +229,62 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
             return Err(error);
         }
     };
+
+    if let Some(predecessor_run_id) = run.predecessor_run_id {
+        match reusable_retry_workspace(state, &run, predecessor_run_id, &mirror).await? {
+            Some((workspace_id, worktree_id, worktree)) => {
+                let mut transaction = state.pool.begin().await?;
+                let owned = sqlx::query_scalar::<_, bool>(
+                    r#"
+                    SELECT EXISTS (
+                        SELECT 1 FROM agent_runs
+                         WHERE id = $1 AND state = 'starting'
+                           AND scheduler_claim_id = $2
+                           AND repository_workspace_id IS NULL
+                    )
+                    "#,
+                )
+                .bind(run.run_id)
+                .bind(run.claim_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                if !owned {
+                    return Err(AppError::Conflict("agent_run", "scheduler claim was lost"));
+                }
+                sqlx::query(
+                    "UPDATE repository_workspaces SET state = 'active', updated_at = now() WHERE id = $1",
+                )
+                .bind(workspace_id)
+                .execute(&mut *transaction)
+                .await?;
+                sqlx::query(
+                    "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1",
+                )
+                .bind(worktree_id)
+                .execute(&mut *transaction)
+                .await?;
+                sqlx::query(
+                    "UPDATE agent_runs SET repository_workspace_id = $2, updated_at = now() WHERE id = $1",
+                )
+                .bind(run.run_id)
+                .bind(workspace_id)
+                .execute(&mut *transaction)
+                .await?;
+                transaction.commit().await?;
+
+                start_admitted_run(state, &run, worktree).await?;
+                clear_claim(state, run.run_id, run.claim_id).await?;
+                return Ok(());
+            }
+            None => {
+                fail_admission(state, &run, UNSAFE_RETRY_REASON, None).await?;
+                return Err(AppError::Conflict(
+                    "git_worktree",
+                    "previous worktree is not safe to reuse",
+                ));
+            }
+        }
+    }
 
     let workspace_id = Uuid::now_v7();
     let worktree_id = Uuid::now_v7();
@@ -319,8 +380,18 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     .execute(&state.pool)
     .await?;
 
+    start_admitted_run(state, &run, worktree).await?;
+    clear_claim(state, run.run_id, run.claim_id).await?;
+    Ok(())
+}
+
+async fn start_admitted_run(
+    state: &AppState,
+    run: &ClaimedRun,
+    worktree: std::path::PathBuf,
+) -> Result<(), AppError> {
     if state.config.demo_executor {
-        prepare_demo_blocker(state, &run).await?;
+        prepare_demo_blocker(state, run).await?;
     } else if let Err(error) = provider::start_run(
         state,
         run.project_id,
@@ -332,11 +403,73 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
     )
     .await
     {
-        fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;
+        fail_admission(state, run, PROVIDER_START_FAILURE_REASON, None).await?;
         return Err(error);
     }
-    clear_claim(state, run.run_id, run.claim_id).await?;
     Ok(())
+}
+
+async fn reusable_retry_workspace(
+    state: &AppState,
+    run: &ClaimedRun,
+    predecessor_run_id: Uuid,
+    mirror: &Path,
+) -> Result<Option<(Uuid, Uuid, std::path::PathBuf)>, AppError> {
+    let workspace = sqlx::query_as::<_, (Uuid, String, Uuid, String)>(
+        r#"
+        SELECT workspace.id, workspace.branch_name, worktree.id, worktree.path
+          FROM agent_runs predecessor
+          JOIN repository_workspaces workspace
+            ON workspace.id = predecessor.repository_workspace_id
+          JOIN git_worktrees worktree
+            ON worktree.repository_workspace_id = workspace.id
+         WHERE predecessor.id = $1
+           AND predecessor.project_id = $2
+           AND predecessor.conversation_id = $3
+           AND predecessor.repository_id = $4
+           AND predecessor.state IN ('completed', 'failed', 'canceled', 'interrupted')
+           AND workspace.state = 'retained'
+           AND worktree.state IN ('ready', 'dirty', 'missing', 'failed')
+        "#,
+    )
+    .bind(predecessor_run_id)
+    .bind(run.project_id)
+    .bind(run.conversation_id)
+    .bind(run.repository_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((workspace_id, branch, worktree_id, path)) = workspace else {
+        return Ok(None);
+    };
+    let mirror = mirror.to_path_buf();
+    let worktree = std::path::PathBuf::from(path);
+    let inspection_path = worktree.clone();
+    let inspection = tokio::task::spawn_blocking(move || {
+        git_runtime::inspect_worktree(&mirror, &inspection_path)
+    })
+    .await
+    .map_err(|_| AppError::Internal("join retry worktree inspection"))?;
+    let Ok(inspection) = inspection else {
+        sqlx::query(
+            "UPDATE git_worktrees SET state = 'missing', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1",
+        )
+        .bind(worktree_id)
+        .execute(&state.pool)
+        .await?;
+        return Ok(None);
+    };
+    if inspection.dirty || inspection.branch != branch {
+        sqlx::query(
+            "UPDATE git_worktrees SET state = $2, dirty = $3, last_inspected_at = now(), updated_at = now() WHERE id = $1",
+        )
+        .bind(worktree_id)
+        .bind(if inspection.dirty { "dirty" } else { "failed" })
+        .bind(inspection.dirty)
+        .execute(&state.pool)
+        .await?;
+        return Ok(None);
+    }
+    Ok(Some((workspace_id, worktree_id, worktree)))
 }
 
 async fn prepare_demo_blocker(state: &AppState, run: &ClaimedRun) -> Result<(), AppError> {

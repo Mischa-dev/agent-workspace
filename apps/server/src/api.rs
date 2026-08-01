@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/agent-runs/{id}/interrupt",
             post(interrupt_agent_run),
         )
+        .route("/api/v1/agent-runs/{id}/retry", post(retry_agent_run))
         .route(
             "/api/v1/agent-approvals/{id}/respond",
             post(respond_to_approval),
@@ -370,6 +371,174 @@ async fn start_agent_run(
     .await?;
     transaction.commit().await?;
 
+    crate::scheduler::kick(state.clone());
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn retry_agent_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(predecessor_run_id): ApiPath<Uuid>,
+    ApiJson(_request): ApiJson<EmptyCommand>,
+) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let conversation_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
+            .bind(predecessor_run_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound("agent_run"))?;
+    let conversation =
+        authorized_conversation(&state, &principal, conversation_id, Action::WorkerInvoke).await?;
+    if conversation.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+    if conversation.conversation_archived {
+        return Err(AppError::NotFound("conversation"));
+    }
+
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&EmptyCommand {})?;
+    let scope = idempotency::resource_bound_scope("agent_run", predecessor_run_id, "retry")?;
+    let mut transaction = state.pool.begin().await?;
+    guard_conversation_mutation(
+        &mut transaction,
+        &principal,
+        conversation_id,
+        conversation.project_id,
+        Action::WorkerInvoke,
+    )
+    .await?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let response: StartRunResponse = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(response)));
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let (repository_id, prompt, predecessor_state) = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+            SELECT repository_id, prompt, state
+              FROM agent_runs
+             WHERE id = $1 AND conversation_id = $2 AND project_id = $3
+             FOR UPDATE
+            "#,
+    )
+    .bind(predecessor_run_id)
+    .bind(conversation_id)
+    .bind(conversation.project_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("agent_run"))?;
+    if !matches!(
+        predecessor_state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "only a terminal Agent Run can be retried",
+        ));
+    }
+    if sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM agent_runs
+             WHERE conversation_id = $1
+               AND state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        )
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_one(&mut *transaction)
+    .await?
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "Thread already has an active run",
+        ));
+    }
+    let setup = select_run_setup(
+        &mut transaction,
+        conversation.project_id,
+        conversation_id,
+        principal.actor_id,
+        Some(repository_id),
+    )
+    .await?;
+    let run_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, predecessor_run_id,
+            state, prompt, authorization_snapshot
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9)
+        "#,
+    )
+    .bind(run_id)
+    .bind(conversation_id)
+    .bind(setup.execution_worker_id)
+    .bind(principal.actor_id)
+    .bind(setup.execution_profile_id)
+    .bind(repository_id)
+    .bind(predecessor_run_id)
+    .bind(prompt)
+    .bind(serde_json::json!({
+        "actor_id": principal.actor_id,
+        "project_id": conversation.project_id,
+        "scope": ["repository.read", "repository.write", "provider.turn"],
+        "retry_of": predecessor_run_id
+    }))
+    .execute(&mut *transaction)
+    .await?;
+    transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
+    let queue_position = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(*)
+          FROM agent_runs queued
+          JOIN agent_runs current ON current.id = $1
+         WHERE queued.state = 'queued'
+           AND (queued.created_at, queued.id) <= (current.created_at, current.id)
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        conversation.project_id,
+        conversation_id,
+        run_id,
+    )
+    .await?;
+    let response = StartRunResponse {
+        run_id,
+        state: RunState::Queued,
+        repository_id,
+        repository_workspace_id: None,
+        branch: None,
+        base_commit: None,
+        queue_position: Some(queue_position),
+    };
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::ACCEPTED,
+        &response,
+    )
+    .await?;
+    transaction.commit().await?;
     crate::scheduler::kick(state.clone());
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
@@ -988,7 +1157,8 @@ struct CommandReference {
     resource_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct EmptyCommand {}
 
 async fn respond_to_approval(
@@ -1677,7 +1847,10 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
     .ok_or(AppError::NotFound("agent_run"))?;
     Ok(RunView {
         run,
-        capabilities: RunCapabilities { interrupt: false },
+        capabilities: RunCapabilities {
+            interrupt: false,
+            retry: false,
+        },
     })
 }
 

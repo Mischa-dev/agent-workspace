@@ -203,6 +203,48 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
     assert_eq!(reentered_session_state, "idle");
     assert_eq!(recorded_previous_state, "recovering");
 
+    let queued_run_id = Uuid::now_v7();
+    let scheduler_claim_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, state, prompt,
+            authorization_snapshot, scheduler_claim_id, scheduler_claimed_at,
+            scheduler_lease_expires_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, 'queued', 'queued restart test',
+            '{}'::jsonb, $7, now(), now() + interval '30 seconds'
+        )
+        "#,
+    )
+    .bind(queued_run_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind(scheduler_claim_id)
+    .execute(&pool)
+    .await
+    .expect("insert queued run with an abandoned scheduler lease");
+    assert_eq!(
+        recovery::reconcile_non_terminal_runs(&state)
+            .await
+            .expect("release queued scheduler lease without recovering the run"),
+        0
+    );
+    let (queued_state, queued_claim) = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT state, scheduler_claim_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(queued_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read queued restart result");
+    assert_eq!(queued_state, "queued");
+    assert!(queued_claim.is_none());
+
     drop(state);
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
