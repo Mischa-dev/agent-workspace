@@ -132,6 +132,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let mut run_scheduler = tokio::spawn(agent_workspace_server::scheduler::run(
+        state.clone(),
+        shutdown_receiver.clone(),
+    ));
     let mut outbox_publisher =
         tokio::spawn(agent_workspace_server::realtime::run_outbox_publisher(
             pool,
@@ -161,20 +165,45 @@ async fn main() -> anyhow::Result<()> {
             let worker_result = outbox_publisher
                 .await
                 .context("join outbox publisher")?;
+            let scheduler_result = run_scheduler
+                .await
+                .context("join Agent Run scheduler")?;
             server_result.context("serve HTTP application")?;
-            worker_result.context("run outbox publisher")
+            worker_result.context("run outbox publisher")?;
+            scheduler_result.context("run Agent Run scheduler")
         }
         worker_result = &mut outbox_publisher => {
             let already_shutting_down = *shutdown_sender.borrow();
             let _ = shutdown_sender.send(true);
             server.await.context("serve HTTP application")?;
+            let scheduler_result = run_scheduler
+                .await
+                .context("join Agent Run scheduler")?;
             worker_result
                 .context("join outbox publisher")?
                 .context("run outbox publisher")?;
+            scheduler_result.context("run Agent Run scheduler")?;
             if already_shutting_down {
                 Ok(())
             } else {
                 bail!("outbox publisher stopped unexpectedly")
+            }
+        }
+        scheduler_result = &mut run_scheduler => {
+            let already_shutting_down = *shutdown_sender.borrow();
+            let _ = shutdown_sender.send(true);
+            server.await.context("serve HTTP application")?;
+            let worker_result = outbox_publisher
+                .await
+                .context("join outbox publisher")?;
+            scheduler_result
+                .context("join Agent Run scheduler")?
+                .context("run Agent Run scheduler")?;
+            worker_result.context("run outbox publisher")?;
+            if already_shutting_down {
+                Ok(())
+            } else {
+                bail!("Agent Run scheduler stopped unexpectedly")
             }
         }
     };

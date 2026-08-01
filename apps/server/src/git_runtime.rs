@@ -113,6 +113,22 @@ pub fn prepare_repository(
     Ok(PreparedRepository { base_commit })
 }
 
+pub fn inspect_prepared_repository(
+    data_root: &Path,
+    repository: &RegisteredRepository,
+) -> Result<PreparedRepository, AppError> {
+    let expected_mirror = expected_repository_mirror_path(data_root, repository.id)?;
+    if repository.mirror_path != expected_mirror {
+        return Err(AppError::Conflict(
+            "repository",
+            "stored mirror path does not match the runtime root",
+        ));
+    }
+    validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
+    let base_commit = resolve_base_commit(&repository.mirror_path, &repository.default_branch)?;
+    Ok(PreparedRepository { base_commit })
+}
+
 pub fn adopt_legacy_mirror(
     data_root: &Path,
     repository: &RegisteredRepository,

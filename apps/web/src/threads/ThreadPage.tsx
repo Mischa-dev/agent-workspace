@@ -64,6 +64,10 @@ type Run = {
   repositoryId: string
   repositoryWorkspaceId: string | null
   providerSessionId: string | null
+  providerTurnId: string | null
+  branch: string | null
+  baseCommit: string | null
+  queuePosition: number | null
   failureReason: string | null
   createdAt: string
   updatedAt: string
@@ -137,6 +141,22 @@ function normalizeTimeline(value: unknown): Timeline {
     typeof activeRunRecord.id === 'string'
       ? ({
           ...activeRunRecord,
+          providerTurnId:
+            typeof activeRunRecord.providerTurnId === 'string'
+              ? activeRunRecord.providerTurnId
+              : null,
+          branch:
+            typeof activeRunRecord.branch === 'string'
+              ? activeRunRecord.branch
+              : null,
+          baseCommit:
+            typeof activeRunRecord.baseCommit === 'string'
+              ? activeRunRecord.baseCommit
+              : null,
+          queuePosition:
+            typeof activeRunRecord.queuePosition === 'number'
+              ? activeRunRecord.queuePosition
+              : null,
           capabilities: {
             interrupt: explicitCapability(
               activeRunRecord.capabilities,
@@ -220,6 +240,9 @@ export function ThreadPage() {
   const verifiedTimeline = thread.routeMatches ? timeline : undefined
   const activeRun = verifiedTimeline?.activeRun ?? null
   const [prompt, setPrompt] = useState('')
+  const [startIdempotencyKey, setStartIdempotencyKey] = useState<string | null>(
+    null,
+  )
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [olderEntries, setOlderEntries] = useState<{
@@ -303,8 +326,10 @@ export function ThreadPage() {
       await action()
       setPrompt((current) => (key === 'start' ? '' : current))
       await thread.timeline.refetch()
+      return true
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : 'Action failed.')
+      return false
     } finally {
       setBusyAction(null)
     }
@@ -317,12 +342,20 @@ export function ThreadPage() {
     }
     const value = prompt.trim()
     if (!value || !isSafeMessageText(value)) return
+    const commandKey = startIdempotencyKey ?? crypto.randomUUID()
+    if (!startIdempotencyKey) setStartIdempotencyKey(commandKey)
     void perform('start', () =>
-      requestJson(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, {
-        method: 'POST',
-        json: { prompt: value },
-      }),
-    )
+      requestJson(
+        `/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`,
+        {
+          method: 'POST',
+          idempotencyKey: commandKey,
+          json: { prompt: value },
+        },
+      ),
+    ).then((succeeded) => {
+      if (succeeded) setStartIdempotencyKey(null)
+    })
   }
 
   const respond = (approvalId: string, decision: 'approve' | 'deny') => {
@@ -341,6 +374,7 @@ export function ThreadPage() {
         `/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`,
         {
           method: 'POST',
+          idempotencyKey: `approval-${approvalId}-${decision}`,
           json: { decision },
         },
       ),
@@ -353,7 +387,7 @@ export function ThreadPage() {
     void perform('interrupt', () =>
       requestJson(
         `/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`,
-        { method: 'POST', json: {} },
+        { method: 'POST', idempotencyKey: `interrupt-${runId}`, json: {} },
       ),
     )
   }
@@ -605,7 +639,10 @@ export function ThreadPage() {
           <textarea
             disabled={Boolean(activeRun) || busyAction === 'start'}
             id="agent-prompt"
-            onChange={(event) => setPrompt(event.target.value)}
+            onChange={(event) => {
+              setPrompt(event.target.value)
+              setStartIdempotencyKey(null)
+            }}
             placeholder={
               activeRun
                 ? 'This Thread already has an active run.'
@@ -669,6 +706,9 @@ function RunBadge({ run }: { run: Run | null }) {
     <span className="status-chip" data-state={run.state}>
       <span aria-hidden="true">{run.state === 'blocked' ? '!' : '●'}</span>
       {stateLabels[run.state]}
+      {run.state === 'queued' && run.queuePosition
+        ? ` · ${run.queuePosition} in queue`
+        : null}
     </span>
   )
 }
@@ -831,6 +871,14 @@ function ThreadContext({
         <div>
           <dt>Workspace</dt>
           <dd>{shortId(run?.repositoryWorkspaceId)}</dd>
+        </div>
+        <div>
+          <dt>Branch</dt>
+          <dd>{run?.branch ?? 'Allocated after admission'}</dd>
+        </div>
+        <div>
+          <dt>Base commit</dt>
+          <dd>{shortId(run?.baseCommit)}</dd>
         </div>
       </dl>
       <p className="context-note">

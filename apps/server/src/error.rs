@@ -7,6 +7,7 @@ use axum::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tracing::error;
+use uuid::Uuid;
 
 /// JSON request extractor that keeps every API rejection inside the public
 /// error-envelope contract. Axum's default rejection includes parser details
@@ -103,6 +104,10 @@ pub enum AppError {
     ProjectHasActiveRuns,
     #[error("the project is archived")]
     ProjectArchived,
+    #[error("a repository selection is required")]
+    RepositoryChoiceRequired { repository_ids: Vec<Uuid> },
+    #[error("the selected repository conflicts with the Thread binding")]
+    RepositoryBindingConflict,
     #[error("request rate limit exceeded; retry after {retry_after_seconds} seconds")]
     RateLimited { retry_after_seconds: u64 },
     #[error("development authentication is unavailable")]
@@ -134,6 +139,8 @@ impl AppError {
             Self::ProjectKeyConflict => "project_key_conflict",
             Self::ProjectHasActiveRuns => "project_has_active_runs",
             Self::ProjectArchived => "project_archived",
+            Self::RepositoryChoiceRequired { .. } => "repository_choice_required",
+            Self::RepositoryBindingConflict => "repository_binding_conflict",
             Self::RateLimited { .. } => "rate_limited",
             Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
             Self::Internal(_) => "internal",
@@ -155,10 +162,20 @@ struct ErrorBody {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ErrorDetails {
-    resource: &'static str,
-    current_version: i64,
+#[serde(untagged, rename_all = "camelCase")]
+enum ErrorDetails {
+    Version {
+        resource: &'static str,
+        #[serde(rename = "currentVersion")]
+        current_version: i64,
+    },
+    RepositoryChoice {
+        #[serde(rename = "repositoryIds")]
+        repository_ids: Vec<Uuid>,
+    },
+    Action {
+        action: &'static str,
+    },
 }
 
 impl IntoResponse for AppError {
@@ -167,9 +184,17 @@ impl IntoResponse for AppError {
             Self::VersionConflict {
                 resource,
                 current_version,
-            } => Some(ErrorDetails {
+            } => Some(ErrorDetails::Version {
                 resource,
                 current_version: *current_version,
+            }),
+            Self::RepositoryChoiceRequired { repository_ids } => {
+                Some(ErrorDetails::RepositoryChoice {
+                    repository_ids: repository_ids.clone(),
+                })
+            }
+            Self::RepositoryBindingConflict => Some(ErrorDetails::Action {
+                action: "start_new_thread",
             }),
             _ => None,
         };
@@ -250,6 +275,18 @@ impl IntoResponse for AppError {
                 StatusCode::CONFLICT,
                 "project_archived",
                 "The Project is archived.",
+                None,
+            ),
+            Self::RepositoryChoiceRequired { .. } => (
+                StatusCode::CONFLICT,
+                "repository_choice_required",
+                "Choose a trusted repository before starting this run.",
+                None,
+            ),
+            Self::RepositoryBindingConflict => (
+                StatusCode::CONFLICT,
+                "repository_binding_conflict",
+                "This Thread is already bound to another repository. Start a new Thread.",
                 None,
             ),
             Self::RateLimited {

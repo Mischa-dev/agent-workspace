@@ -413,13 +413,17 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     assert_eq!(thread_seen.status(), StatusCode::OK);
 
     let run_uri = format!("/api/v1/threads/{thread_id}/agent-runs");
-    for rejected_prompt in ["unsafe\u{0000}prompt".to_owned(), "🙂".repeat(20_001)] {
+    for (index, rejected_prompt) in ["unsafe\u{0000}prompt".to_owned(), "🙂".repeat(20_001)]
+        .into_iter()
+        .enumerate()
+    {
+        let idempotency_key = format!("invalid-run-prompt-{index}");
         let response = app
             .clone()
             .oneshot(request(
                 "POST",
                 &run_uri,
-                &write_headers(&cookie, &csrf, None),
+                &write_headers(&cookie, &csrf, Some(&idempotency_key)),
                 json!({"prompt": rejected_prompt}),
             ))
             .await
@@ -431,7 +435,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .oneshot(request(
             "POST",
             &run_uri,
-            &write_headers(&cookie, &csrf, None),
+            &write_headers(&cookie, &csrf, Some("spoofed-run-author")),
             json!({
                 "prompt": "valid prompt",
                 "authorActorId": worker_actor_id
@@ -445,7 +449,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .oneshot(request(
             "POST",
             &run_uri,
-            &write_headers(&cookie, &csrf, None),
+            &write_headers(&cookie, &csrf, Some("exact-run-prompt-boundary")),
             json!({"prompt": "🙂".repeat(20_000)}),
         ))
         .await
@@ -489,7 +493,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .oneshot(request(
             "POST",
             &format!("/api/v1/threads/{thread_id}/archive"),
-            &write_headers(&cookie, &csrf, None),
+            &write_headers(&cookie, &csrf, Some("archived-parent-run")),
             json!({"expectedVersion": 1}),
         ))
         .await
@@ -680,7 +684,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .oneshot(request(
             "POST",
             &format!("/api/v1/threads/{preserved_child_id}/agent-runs"),
-            &write_headers(&cookie, &csrf, None),
+            &write_headers(&cookie, &csrf, Some("archived-parent-run")),
             json!({"prompt": "must remain read-only"}),
         ))
         .await
