@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use crate::{AppState, error::AppError};
 
+mod oauth;
 mod reads;
 mod writes;
 
@@ -45,6 +46,8 @@ const SERVER_INSTRUCTIONS: &str = "Identify the Project and Work Item by immutab
 #[derive(Clone, Debug)]
 pub struct McpPrincipal {
     pub credential_id: Uuid,
+    pub mcp_credential_id: Option<Uuid>,
+    pub oauth_grant_id: Option<Uuid>,
     pub actor_id: Uuid,
     pub project_id: Uuid,
     pub client_name: String,
@@ -526,6 +529,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .layer(middleware::from_fn_with_state(state, authenticate_mcp))
 }
 
+pub fn oauth_router() -> Router<AppState> {
+    oauth::router()
+}
+
 async fn authenticate_mcp(
     State(state): State<AppState>,
     mut request: Request<Body>,
@@ -536,7 +543,7 @@ async fn authenticate_mcp(
             request.extensions_mut().insert(principal);
             next.run(request).await
         }
-        Ok(None) => unauthorized_response(),
+        Ok(None) => unauthorized_response(&state),
         Err(error) => {
             tracing::error!(error = %error, "MCP credential lookup failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
@@ -544,14 +551,15 @@ async fn authenticate_mcp(
     }
 }
 
-fn unauthorized_response() -> Response {
+fn unauthorized_response(state: &AppState) -> Response {
     let mut response = StatusCode::UNAUTHORIZED.into_response();
-    response.headers_mut().insert(
-        WWW_AUTHENTICATE,
-        HeaderValue::from_static(
-            "Bearer resource_metadata=\"/.well-known/oauth-protected-resource/api/v1/mcp\"",
-        ),
+    let challenge = format!(
+        "Bearer resource_metadata=\"http://{}/.well-known/oauth-protected-resource/api/v1/mcp\"",
+        state.config.server_addr
     );
+    if let Ok(value) = HeaderValue::from_str(&challenge) {
+        response.headers_mut().insert(WWW_AUTHENTICATE, value);
+    }
     response
 }
 
@@ -562,6 +570,9 @@ async fn resolve_bearer_principal(
     let Some(token) = exact_bearer_token(headers) else {
         return Ok(None);
     };
+    if token.starts_with("aw_oauth_") {
+        return oauth::resolve_access_token(state, token).await;
+    }
     let Some(prefix) = token.get(..TOKEN_PREFIX_LENGTH) else {
         return Ok(None);
     };
@@ -617,6 +628,8 @@ async fn resolve_bearer_principal(
 
     Ok(Some(McpPrincipal {
         credential_id: row.credential_id,
+        mcp_credential_id: Some(row.credential_id),
+        oauth_grant_id: None,
         actor_id: row.actor_id,
         project_id: row.project_id,
         client_name: row.client_name,
