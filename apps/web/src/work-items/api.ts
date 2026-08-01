@@ -154,6 +154,11 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         draft: boolean(pullRequest.draft),
         source: string(pullRequest.source),
         confirmed: boolean(pullRequest.confirmed),
+        checksState: string(pullRequest.checksState),
+        reviewState: string(pullRequest.reviewState),
+        mergeabilityState: string(pullRequest.mergeabilityState),
+        syncState: string(pullRequest.syncState),
+        syncFailureCategory: nullableString(pullRequest.syncFailureCategory),
       }
     }),
     capabilities: {

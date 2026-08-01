@@ -71,6 +71,33 @@ later attempts query for the result but never issue another create blindly.
 Canonical records retain bounded identity and status fields only, while diffs,
 comments, reviews, merge, and close remain on GitHub.
 
+## Checks and review reconciliation boundary
+
+Pull-request, review, check-suite, and check-run webhooks are treated as
+bounded invalidation hints. A leased durable job resolves the registered pull
+request by exact repository plus pull-request number, falling back to the exact
+head commit only when the delivery does not contain a pull-request number. It
+then requests a fresh repository-scoped installation token with Metadata,
+Contents, Pull requests, and Checks read permission and fetches the canonical
+pull request, up to 100 check runs, and up to 100 reviews.
+
+The durable projection stores bounded check identity, name, status,
+conclusion, HTTPS details URL, timestamps, latest review state per login, and
+up to 50 requested reviewer logins. It does not retain logs, annotations,
+review bodies, comments, diffs, email addresses, or arbitrary provider JSON.
+Checks reduce to `unknown`, `pending`, `success`, or `failure`; reviews reduce
+to `unknown`, `pending`, `approved`, or `changes_requested`; mergeability is
+`unknown`, `blocked`, or `ready`. A missing GitHub mergeability answer remains
+unknown and a failed check, changes request, draft, closed, or merged pull
+request cannot be projected ready.
+
+Canonical state, the delivery result, Integration Actor audit containing the
+separate external update time, and linked Thread/Work Item invalidations commit
+together. Manual refresh uses an authenticated, CSRF-protected, idempotent
+Project command. Unresolved delivery hints and external failures retry with
+bounded leases/backoff, become visibly exhausted, and never expose response
+bodies or credentials.
+
 ## Webhook boundary
 
 The listener binds separately on `127.0.0.1:3101`. It verifies:

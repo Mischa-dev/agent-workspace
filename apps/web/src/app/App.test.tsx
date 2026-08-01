@@ -1432,6 +1432,77 @@ describe('M1 authenticated shell', () => {
     })
   })
 
+  it('renders canonical GitHub state and queues an explicit pull request refresh', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const pullRequestId = '019fbc00-0000-7000-8000-000000000099'
+    const terminalTimeline = {
+      ...timeline,
+      activeRun: null,
+      latestTerminalRun: {
+        ...timeline.activeRun,
+        state: 'completed',
+        pullRequestId,
+        pullRequestNumber: 7,
+        pullRequestUrl:
+          'https://github.com/Mischa-dev/agent-workspace-m0-spike/pull/7',
+        pullRequestTitle: 'Canonical review state',
+        pullRequestState: 'open',
+        pullRequestDraft: false,
+        pullRequestChecksState: 'success',
+        pullRequestReviewState: 'approved',
+        pullRequestMergeabilityState: 'ready',
+        pullRequestSyncState: 'fresh',
+        pullRequestSyncFailureCategory: null,
+        capabilities: {
+          interrupt: false,
+          retry: false,
+          publish: false,
+          createPullRequest: false,
+          refreshPullRequest: true,
+        },
+      },
+      approvals: [],
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(terminalTimeline)
+      }
+      if (
+        path.includes(
+          `/projects/${projectAId}/pull-requests/${pullRequestId}/refresh`,
+        )
+      ) {
+        return jsonResponse({ jobId: 'refresh-1', state: 'queued' }, 202)
+      }
+      return standardImplementation?.(input, init) ?? Promise.reject()
+    })
+    render(<App />)
+
+    expect(await screen.findByText(/checks success/i)).toHaveTextContent(
+      'checks success · review approved · mergeability ready',
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh GitHub state' }),
+    )
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([path]) =>
+        String(path).includes(
+          `/projects/${projectAId}/pull-requests/${pullRequestId}/refresh`,
+        ),
+      )
+      expect(request?.[1]?.method).toBe('POST')
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({})
+    })
+  })
+
   it('does not remember an active child while browsing archived-parent history', async () => {
     const archivedChildId = '019fb600-0000-7000-8000-000000000014'
     window.history.replaceState(

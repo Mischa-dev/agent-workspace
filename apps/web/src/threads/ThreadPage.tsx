@@ -77,10 +77,16 @@ type Run = {
   pullRequestRequestState: string | null
   pullRequestFailureCategory: string | null
   pullRequestNumber: number | null
+  pullRequestId: string | null
   pullRequestUrl: string | null
   pullRequestTitle: string | null
   pullRequestState: string | null
   pullRequestDraft: boolean | null
+  pullRequestChecksState: string | null
+  pullRequestReviewState: string | null
+  pullRequestMergeabilityState: string | null
+  pullRequestSyncState: string | null
+  pullRequestSyncFailureCategory: string | null
   queuePosition: number | null
   failureReason: string | null
   failureAcknowledged: boolean
@@ -91,6 +97,7 @@ type Run = {
     retry: boolean
     publish: boolean
     createPullRequest: boolean
+    refreshPullRequest: boolean
   }
 }
 
@@ -188,10 +195,16 @@ function normalizeTimeline(value: unknown): Timeline {
           pullRequestRequestState: null,
           pullRequestFailureCategory: null,
           pullRequestNumber: null,
+          pullRequestId: null,
           pullRequestUrl: null,
           pullRequestTitle: null,
           pullRequestState: null,
           pullRequestDraft: null,
+          pullRequestChecksState: null,
+          pullRequestReviewState: null,
+          pullRequestMergeabilityState: null,
+          pullRequestSyncState: null,
+          pullRequestSyncFailureCategory: null,
           queuePosition:
             typeof activeRunRecord.queuePosition === 'number'
               ? activeRunRecord.queuePosition
@@ -205,6 +218,7 @@ function normalizeTimeline(value: unknown): Timeline {
             retry: explicitCapability(activeRunRecord.capabilities, 'retry'),
             publish: false,
             createPullRequest: false,
+            refreshPullRequest: false,
           },
         } as Run)
       : null
@@ -250,6 +264,10 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof latestTerminalRunRecord.pullRequestNumber === 'number'
               ? latestTerminalRunRecord.pullRequestNumber
               : null,
+          pullRequestId:
+            typeof latestTerminalRunRecord.pullRequestId === 'string'
+              ? latestTerminalRunRecord.pullRequestId
+              : null,
           pullRequestUrl:
             typeof latestTerminalRunRecord.pullRequestUrl === 'string'
               ? latestTerminalRunRecord.pullRequestUrl
@@ -265,6 +283,28 @@ function normalizeTimeline(value: unknown): Timeline {
           pullRequestDraft:
             typeof latestTerminalRunRecord.pullRequestDraft === 'boolean'
               ? latestTerminalRunRecord.pullRequestDraft
+              : null,
+          pullRequestChecksState:
+            typeof latestTerminalRunRecord.pullRequestChecksState === 'string'
+              ? latestTerminalRunRecord.pullRequestChecksState
+              : null,
+          pullRequestReviewState:
+            typeof latestTerminalRunRecord.pullRequestReviewState === 'string'
+              ? latestTerminalRunRecord.pullRequestReviewState
+              : null,
+          pullRequestMergeabilityState:
+            typeof latestTerminalRunRecord.pullRequestMergeabilityState ===
+            'string'
+              ? latestTerminalRunRecord.pullRequestMergeabilityState
+              : null,
+          pullRequestSyncState:
+            typeof latestTerminalRunRecord.pullRequestSyncState === 'string'
+              ? latestTerminalRunRecord.pullRequestSyncState
+              : null,
+          pullRequestSyncFailureCategory:
+            typeof latestTerminalRunRecord.pullRequestSyncFailureCategory ===
+            'string'
+              ? latestTerminalRunRecord.pullRequestSyncFailureCategory
               : null,
           queuePosition: null,
           failureAcknowledged:
@@ -282,6 +322,10 @@ function normalizeTimeline(value: unknown): Timeline {
             createPullRequest: explicitCapability(
               latestTerminalRunRecord.capabilities,
               'createPullRequest',
+            ),
+            refreshPullRequest: explicitCapability(
+              latestTerminalRunRecord.capabilities,
+              'refreshPullRequest',
             ),
           },
         } as Run)
@@ -611,6 +655,26 @@ export function ThreadPage() {
     ).then((succeeded) => {
       if (succeeded) setPullRequestIdempotencyKey(null)
     })
+  }
+
+  const refreshPullRequest = () => {
+    const pullRequestId = latestTerminalRun?.pullRequestId
+    if (
+      !pullRequestId ||
+      latestTerminalRun.capabilities.refreshPullRequest !== true
+    ) {
+      return
+    }
+    void perform('pull-request-refresh', () =>
+      requestJson(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`,
+        {
+          method: 'POST',
+          idempotencyKey: crypto.randomUUID(),
+          json: {},
+        },
+      ),
+    )
   }
 
   const acknowledgeFailure = () => {
@@ -1014,8 +1078,36 @@ export function ThreadPage() {
                 </a>{' '}
                 · {latestTerminalRun.pullRequestDraft ? 'draft ' : ''}
                 {latestTerminalRun.pullRequestState}
+                {' · checks '}
+                {latestTerminalRun.pullRequestChecksState ?? 'unknown'}
+                {' · review '}
+                {latestTerminalRun.pullRequestReviewState ?? 'unknown'}
+                {' · mergeability '}
+                {latestTerminalRun.pullRequestMergeabilityState ?? 'unknown'}
               </p>
             )}
+          {latestTerminalRun?.pullRequestId &&
+            latestTerminalRun.capabilities.refreshPullRequest && (
+              <button
+                className="secondary-button"
+                disabled={Boolean(busyAction)}
+                onClick={refreshPullRequest}
+                type="button"
+              >
+                {busyAction === 'pull-request-refresh'
+                  ? 'Refreshing GitHub state…'
+                  : 'Refresh GitHub state'}
+              </button>
+            )}
+          {latestTerminalRun?.pullRequestSyncState === 'failed' && (
+            <p className="action-error" role="status">
+              GitHub status needs attention:{' '}
+              {(latestTerminalRun.pullRequestSyncFailureCategory ?? 'sync_failed').replaceAll(
+                '_',
+                ' ',
+              )}.
+            </p>
+          )}
           {latestTerminalRun?.pullRequestRequestState &&
             !latestTerminalRun.pullRequestUrl && (
               <p className="compact-note">

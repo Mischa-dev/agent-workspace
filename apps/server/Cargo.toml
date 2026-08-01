@@ -11,6 +11,7 @@ argon2 = "0.5.3"
 axum = { version = "0.8.7", features = ["json", "ws"] }
 base64 = "0.22.1"
 codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }
+chrono = "0.4.45"
 dotenvy = "0.15.7"
 fs2 = "0.4.3"
 hex = "0.4.3"
@@ -31,6 +32,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
   "postgres",
   "runtime-tokio-rustls",
   "uuid",
+  "chrono",
 ] }
 subtle = "2.6.1"
 thiserror = "2.0.17"
