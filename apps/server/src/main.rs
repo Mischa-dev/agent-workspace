@@ -153,6 +153,8 @@ async fn main() -> anyhow::Result<()> {
         state.clone(),
         shutdown_receiver.clone(),
     ));
+    let mut github_job_worker =
+        tokio::spawn(github::run_jobs(state.clone(), shutdown_receiver.clone()));
     let mut outbox_publisher =
         tokio::spawn(agent_workspace_server::realtime::run_outbox_publisher(
             pool,
@@ -188,9 +190,13 @@ async fn main() -> anyhow::Result<()> {
             let scheduler_result = run_scheduler
                 .await
                 .context("join Agent Run scheduler")?;
+            let github_result = github_job_worker
+                .await
+                .context("join GitHub job worker")?;
             server_result.context("serve HTTP application")?;
             worker_result.context("run outbox publisher")?;
-            scheduler_result.context("run Agent Run scheduler")
+            scheduler_result.context("run Agent Run scheduler")?;
+            github_result.context("run GitHub job worker")
         }
         worker_result = &mut outbox_publisher => {
             let already_shutting_down = *shutdown_sender.borrow();
@@ -199,10 +205,14 @@ async fn main() -> anyhow::Result<()> {
             let scheduler_result = run_scheduler
                 .await
                 .context("join Agent Run scheduler")?;
+            let github_result = github_job_worker
+                .await
+                .context("join GitHub job worker")?;
             worker_result
                 .context("join outbox publisher")?
                 .context("run outbox publisher")?;
             scheduler_result.context("run Agent Run scheduler")?;
+            github_result.context("run GitHub job worker")?;
             if already_shutting_down {
                 Ok(())
             } else {
@@ -216,14 +226,39 @@ async fn main() -> anyhow::Result<()> {
             let worker_result = outbox_publisher
                 .await
                 .context("join outbox publisher")?;
+            let github_result = github_job_worker
+                .await
+                .context("join GitHub job worker")?;
             scheduler_result
                 .context("join Agent Run scheduler")?
                 .context("run Agent Run scheduler")?;
             worker_result.context("run outbox publisher")?;
+            github_result.context("run GitHub job worker")?;
             if already_shutting_down {
                 Ok(())
             } else {
                 bail!("Agent Run scheduler stopped unexpectedly")
+            }
+        }
+        github_result = &mut github_job_worker => {
+            let already_shutting_down = *shutdown_sender.borrow();
+            let _ = shutdown_sender.send(true);
+            server.await.context("serve HTTP application")?;
+            let worker_result = outbox_publisher
+                .await
+                .context("join outbox publisher")?;
+            let scheduler_result = run_scheduler
+                .await
+                .context("join Agent Run scheduler")?;
+            github_result
+                .context("join GitHub job worker")?
+                .context("run GitHub job worker")?;
+            worker_result.context("run outbox publisher")?;
+            scheduler_result.context("run Agent Run scheduler")?;
+            if already_shutting_down {
+                Ok(())
+            } else {
+                bail!("GitHub job worker stopped unexpectedly")
             }
         }
     };

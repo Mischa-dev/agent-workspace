@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
 use subtle::ConstantTimeEq;
+use tokio::sync::watch;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -32,7 +33,8 @@ use crate::{
     config::{GITHUB_API_VERSION, GitHubConfig},
     error::{ApiJson, ApiPath, AppError},
     git_runtime::{
-        expected_repository_mirror_path, inspect_publishable_worktree, managed_worktree_path,
+        PublishPush, expected_repository_mirror_path, inspect_publishable_worktree,
+        managed_worktree_path, push_publishable_commit,
     },
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
@@ -45,6 +47,7 @@ use crate::{
 
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
 const MAX_GITHUB_RESPONSE_BYTES: usize = 1024 * 1024;
+const GITHUB_JOB_LEASE: Duration = Duration::from_secs(30);
 const REQUIRED_EVENTS: [&str; 5] = [
     "push",
     "pull_request",
@@ -82,6 +85,34 @@ pub fn webhook_router(state: AppState) -> Router {
         .route("/api/v1/integrations/github/webhook", post(receive_webhook))
         .layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES))
         .with_state(state)
+}
+
+pub fn kick_jobs(state: AppState) {
+    tokio::spawn(async move {
+        if let Err(error) = drain_jobs(&state).await {
+            tracing::error!(
+                error_category = error.log_category(),
+                "GitHub job worker kick failed"
+            );
+        }
+    });
+}
+
+pub async fn run_jobs(
+    state: AppState,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), AppError> {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => drain_jobs(&state).await?,
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -203,6 +234,30 @@ struct PublishCandidate {
     base_commit: String,
 }
 
+#[derive(Debug, FromRow)]
+struct ClaimedPublishJob {
+    job_id: Uuid,
+    project_id: Uuid,
+    repository_id: Uuid,
+    repository_workspace_id: Uuid,
+    agent_run_id: Uuid,
+    requesting_actor_id: Uuid,
+    intended_commit: String,
+    attempts: i32,
+    max_attempts: i32,
+    claim_id: Uuid,
+    conversation_id: Uuid,
+    installation_id: i64,
+    github_repository_id: i64,
+    owner: String,
+    repository_name: String,
+    clone_url: String,
+    mirror_path: String,
+    worktree_path: String,
+    branch_name: String,
+    base_commit: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SyncInstallationRequest {
@@ -239,6 +294,29 @@ struct InstallationToken {
     _expires_at: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InstallationTokenScope {
+    VerifyInstallation,
+    ContentsWrite,
+}
+
+impl InstallationTokenScope {
+    fn permissions(self) -> Value {
+        match self {
+            Self::VerifyInstallation => json!({
+                "metadata": "read",
+                "contents": "write",
+                "pull_requests": "write",
+                "checks": "read"
+            }),
+            Self::ContentsWrite => json!({
+                "metadata": "read",
+                "contents": "write"
+            }),
+        }
+    }
+}
+
 impl InstallationToken {
     fn expose(&self) -> &str {
         self.secret.expose_secret()
@@ -260,6 +338,16 @@ struct InstallationRepositories {
 struct GitHubRepository {
     id: u64,
     full_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitReference {
+    object: GitReferenceObject,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitReferenceObject {
+    sha: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -341,6 +429,7 @@ impl GitHubClient {
         &self,
         installation_id: u64,
         repository_ids: &[u64],
+        scope: InstallationTokenScope,
     ) -> Result<InstallationToken, GitHubError> {
         let jwt = self.app_jwt()?;
         let response = self
@@ -352,12 +441,7 @@ impl GitHubClient {
             .headers(github_headers(jwt.expose_secret())?)
             .json(&json!({
                 "repository_ids": repository_ids,
-                "permissions": {
-                    "metadata": "read",
-                    "contents": "write",
-                    "pull_requests": "write",
-                    "checks": "read"
-                }
+                "permissions": scope.permissions()
             }))
             .send()
             .await
@@ -391,6 +475,42 @@ impl GitHubClient {
             return Err(GitHubError::Response);
         }
         Ok(response.repositories)
+    }
+
+    async fn branch_commit(
+        &self,
+        token: &InstallationToken,
+        owner: &str,
+        repository: &str,
+        branch: &str,
+    ) -> Result<Option<String>, GitHubError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.api_base_url).map_err(|_| GitHubError::Response)?;
+        url.path_segments_mut()
+            .map_err(|_| GitHubError::Response)?
+            .extend(["repos", owner, repository, "git", "ref"])
+            .push(&format!("heads/{branch}"));
+        let response = self
+            .http
+            .get(url)
+            .headers(github_headers(token.expose())?)
+            .send()
+            .await
+            .map_err(|_| GitHubError::Http)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let reference: GitReference = decode_response(response).await?;
+        if reference.object.sha.len() != 40
+            || !reference
+                .object
+                .sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(GitHubError::Response);
+        }
+        Ok(Some(reference.object.sha))
     }
 }
 
@@ -532,7 +652,11 @@ async fn sync_installation(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let token = client
-        .installation_token(request.installation_id, &github_repository_ids)
+        .installation_token(
+            request.installation_id,
+            &github_repository_ids,
+            InstallationTokenScope::VerifyInstallation,
+        )
         .await
         .map_err(map_github_error)?;
     let accessible = client
@@ -893,7 +1017,377 @@ async fn publish_agent_run(
     .await?;
     complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
     transaction.commit().await?;
+    kick_jobs(state);
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
+}
+
+async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
+    while let Some(job) = claim_publish_job(state).await? {
+        let job_id = job.job_id;
+        if let Err(error) = process_publish_job(state, &job).await {
+            tracing::error!(
+                %job_id,
+                error_category = error.log_category(),
+                "GitHub publication job processing failed"
+            );
+            fail_publish_job(state, &job, "job_processing_failed", false).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = 'stale_lease', next_attempt_at = now(),
+            updated_at = now()
+        WHERE state = 'running' AND lease_expires_at <= now()
+        "#,
+    )
+    .execute(&mut *transaction)
+    .await?;
+    let claim_id = Uuid::now_v7();
+    let job = sqlx::query_as::<_, ClaimedPublishJob>(
+        r#"
+        SELECT job.id AS job_id, job.project_id, job.repository_id,
+               job.repository_workspace_id, job.agent_run_id,
+               job.requesting_actor_id, job.intended_commit,
+               job.attempts + 1 AS attempts, job.max_attempts,
+               $1::uuid AS claim_id, run.conversation_id,
+               installation.installation_id, repository.github_repository_id,
+               repository.owner, repository.name AS repository_name,
+               repository.clone_url, repository.mirror_path,
+               worktree.path AS worktree_path, workspace.branch_name,
+               workspace.base_commit
+        FROM github_jobs job
+        JOIN github_installations installation
+          ON installation.project_id = job.project_id
+         AND installation.id = job.github_installation_id
+         AND installation.enabled
+         AND installation.state = 'available'
+        JOIN github_installation_repositories access
+          ON access.project_id = job.project_id
+         AND access.github_installation_id = installation.id
+         AND access.repository_id = job.repository_id
+         AND access.access_state = 'selected'
+        JOIN repositories repository
+          ON repository.project_id = job.project_id
+         AND repository.id = job.repository_id
+         AND repository.github_repository_id = access.github_repository_id
+         AND repository.enabled
+         AND repository.trusted
+         AND repository.archived_at IS NULL
+        JOIN repository_workspaces workspace
+          ON workspace.project_id = job.project_id
+         AND workspace.id = job.repository_workspace_id
+         AND workspace.repository_id = job.repository_id
+         AND workspace.state IN ('active', 'retained')
+        JOIN git_worktrees worktree
+          ON worktree.repository_workspace_id = workspace.id
+         AND worktree.state IN ('ready', 'dirty')
+        JOIN agent_runs run
+          ON run.project_id = job.project_id
+         AND run.id = job.agent_run_id
+         AND run.repository_workspace_id = workspace.id
+         AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
+        WHERE job.kind = 'workspace_publish'
+          AND job.state IN ('queued', 'failed')
+          AND job.next_attempt_at <= now()
+          AND job.attempts < job.max_attempts
+          AND NOT EXISTS (
+              SELECT 1 FROM agent_runs active
+              WHERE active.repository_workspace_id = workspace.id
+                AND active.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+          )
+        ORDER BY job.next_attempt_at, job.created_at, job.id
+        FOR UPDATE OF job SKIP LOCKED
+        LIMIT 1
+        "#,
+    )
+    .bind(claim_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(job) = job else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let lease_seconds = i64::try_from(GITHUB_JOB_LEASE.as_secs()).unwrap_or(30);
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'running', attempts = attempts + 1,
+            lease_owner = $2,
+            lease_expires_at = now() + make_interval(secs => $3),
+            failure_category = NULL, updated_at = now()
+        WHERE id = $1 AND state IN ('queued', 'failed')
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(claim_id)
+    .bind(lease_seconds as f64)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "claim_lost"));
+    }
+    transaction.commit().await?;
+    Ok(Some(job))
+}
+
+async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Result<(), AppError> {
+    let Some(config) = state.config.github.as_ref() else {
+        return fail_publish_job(state, job, "github_not_configured", true).await;
+    };
+    let installation_id = match u64::try_from(job.installation_id) {
+        Ok(value) => value,
+        Err(_) => return fail_publish_job(state, job, "installation_identity_invalid", true).await,
+    };
+    let github_repository_id = match u64::try_from(job.github_repository_id) {
+        Ok(value) => value,
+        Err(_) => return fail_publish_job(state, job, "repository_identity_invalid", true).await,
+    };
+    let expected_clone_url = format!(
+        "https://github.com/{}/{}.git",
+        job.owner, job.repository_name
+    );
+    if job.clone_url != expected_clone_url {
+        return fail_publish_job(state, job, "repository_identity_invalid", true).await;
+    }
+    let expected_mirror =
+        expected_repository_mirror_path(&state.config.data_root, job.repository_id)?;
+    let expected_worktree = managed_worktree_path(
+        &state.config.data_root,
+        job.repository_id,
+        job.repository_workspace_id,
+    )?;
+    if Path::new(&job.mirror_path) != expected_mirror
+        || Path::new(&job.worktree_path) != expected_worktree
+    {
+        return fail_publish_job(state, job, "runtime_path_mismatch", true).await;
+    }
+    let mirror = expected_mirror.clone();
+    let worktree = expected_worktree.clone();
+    let branch = job.branch_name.clone();
+    let base = job.base_commit.clone();
+    let inspection = tokio::task::spawn_blocking(move || {
+        inspect_publishable_worktree(&mirror, &worktree, &branch, &base)
+    })
+    .await
+    .map_err(|_| AppError::Internal("join Git publication reinspection"))?;
+    match inspection {
+        Ok(inspection) if inspection.head_commit == job.intended_commit => {}
+        Ok(_) | Err(_) => {
+            return fail_publish_job(state, job, "workspace_changed", true).await;
+        }
+    }
+
+    let client = GitHubClient::new(config).map_err(map_github_error)?;
+    let token = match client
+        .installation_token(
+            installation_id,
+            &[github_repository_id],
+            InstallationTokenScope::ContentsWrite,
+        )
+        .await
+    {
+        Ok(token) => token,
+        Err(GitHubError::Scope) => {
+            return fail_publish_job(state, job, "github_scope_incompatible", true).await;
+        }
+        Err(_) => {
+            return fail_publish_job(state, job, "github_token_unavailable", false).await;
+        }
+    };
+    match client
+        .branch_commit(&token, &job.owner, &job.repository_name, &job.branch_name)
+        .await
+    {
+        Ok(Some(commit)) if commit == job.intended_commit => {
+            drop(token);
+            return complete_publish_job(state, job).await;
+        }
+        Ok(Some(_)) => {
+            drop(token);
+            return fail_publish_job(state, job, "remote_branch_diverged", true).await;
+        }
+        Ok(None) => {}
+        Err(_) => {
+            drop(token);
+            return fail_publish_job(state, job, "remote_ref_unavailable", false).await;
+        }
+    }
+
+    let data_root = state.config.data_root.clone();
+    let mirror = expected_mirror;
+    let worktree = expected_worktree;
+    let branch = job.branch_name.clone();
+    let base = job.base_commit.clone();
+    let intended = job.intended_commit.clone();
+    let remote_url = job.clone_url.clone();
+    let push_token = token.secret.clone();
+    let push = tokio::task::spawn_blocking(move || {
+        push_publishable_commit(PublishPush {
+            data_root: &data_root,
+            mirror: &mirror,
+            worktree: &worktree,
+            expected_branch: &branch,
+            base_commit: &base,
+            intended_commit: &intended,
+            remote_url: &remote_url,
+            token: &push_token,
+        })
+    })
+    .await
+    .map_err(|_| AppError::Internal("join credentialed Git push"))?;
+    let remote = client
+        .branch_commit(&token, &job.owner, &job.repository_name, &job.branch_name)
+        .await;
+    drop(token);
+    match remote {
+        Ok(Some(commit)) if commit == job.intended_commit => complete_publish_job(state, job).await,
+        Ok(Some(_)) => fail_publish_job(state, job, "remote_branch_diverged", true).await,
+        Ok(None) if push.is_err() => fail_publish_job(state, job, "git_push_failed", false).await,
+        Ok(None) => fail_publish_job(state, job, "remote_ref_unconfirmed", false).await,
+        Err(_) => fail_publish_job(state, job, "remote_ref_unavailable", false).await,
+    }
+}
+
+async fn complete_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Result<(), AppError> {
+    let mut transaction = state.pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'completed', lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = NULL, completed_at = now(), updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(job.claim_id)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "lease_lost"));
+    }
+    sqlx::query(
+        r#"
+        UPDATE repository_workspaces
+        SET published_commit = $3, published_at = now(),
+            published_by_actor_id = $4, publish_last_attempt_at = now(),
+            publish_failure_category = NULL,
+            publish_version = publish_version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.repository_workspace_id)
+    .bind(&job.intended_commit)
+    .bind(job.requesting_actor_id)
+    .execute(&mut *transaction)
+    .await?;
+    insert_publish_job_audit(&mut transaction, job, "succeeded", None).await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        job.project_id,
+        job.conversation_id,
+        job.agent_run_id,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn fail_publish_job(
+    state: &AppState,
+    job: &ClaimedPublishJob,
+    category: &'static str,
+    terminal: bool,
+) -> Result<(), AppError> {
+    let exhausted = terminal || job.attempts >= job.max_attempts;
+    let next_state = if exhausted { "exhausted" } else { "failed" };
+    let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
+    let mut transaction = state.pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = $3, lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = $4,
+            next_attempt_at = now() + make_interval(secs => $5),
+            updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(job.claim_id)
+    .bind(next_state)
+    .bind(category)
+    .bind(backoff_seconds as f64)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "lease_lost"));
+    }
+    sqlx::query(
+        r#"
+        UPDATE repository_workspaces
+        SET publish_last_attempt_at = now(), publish_failure_category = $3,
+            publish_version = publish_version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.repository_workspace_id)
+    .bind(category)
+    .execute(&mut *transaction)
+    .await?;
+    insert_publish_job_audit(&mut transaction, job, "failed", Some(category)).await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        job.project_id,
+        job.conversation_id,
+        job.agent_run_id,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn insert_publish_job_audit(
+    transaction: &mut Transaction<'_, Postgres>,
+    job: &ClaimedPublishJob,
+    outcome: &'static str,
+    failure_category: Option<&'static str>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, authentication_class,
+            action, target_kind, target_id, outcome, metadata
+        ) VALUES (
+            $1, $2, $3, 'github_job', 'github.workspace_publish',
+            'github_job', $4, $5,
+            jsonb_build_object(
+                'agent_run_id', $6::uuid,
+                'repository_workspace_id', $7::uuid,
+                'failure_category', $8::text
+            )
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(job.requesting_actor_id)
+    .bind(job.project_id)
+    .bind(job.job_id)
+    .bind(outcome)
+    .bind(job.agent_run_id)
+    .bind(job.repository_workspace_id)
+    .bind(failure_category)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, FromRow)]
