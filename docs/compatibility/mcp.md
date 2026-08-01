@@ -94,5 +94,29 @@ single-use codes, access and refresh expiry, rotation, refresh-reuse family
 revocation, bearer/OAuth parity, Project and Actor revalidation, every read and
 write category, conflict/replay behavior, audit attribution, secret
 redaction, Streamable HTTP initialization, and zero Conversation creation.
-Exact Red Hat and real local Codex evidence belongs in `docs/acceptance/m6.md`
-after the accepted green commit is deployed.
+
+Exact Red Hat and real local Codex acceptance is recorded in
+`docs/acceptance/m6.md`. The live `0.146.0` compatibility findings are:
+
+- Codex sends the same protected resource in the authorization request and in
+  the token request. Agent Workspace accepts only an identical duplicate and
+  rejects an absent/mismatched binding where the protocol requires it.
+- Codex refreshes before MCP initialization when its local OAuth `expires_at`
+  metadata is due. Expiring only the server-side access-token row does not
+  cause `0.146.0` to refresh after a resource 401 during the same startup.
+- The macOS Keychain service is `Codex MCP Credentials`; the account key for
+  the accepted server was `agent_workspace|bc870134026a181b`. Changing that
+  record non-interactively correctly requires macOS user authorization. The
+  supported file store uses an owner-only `.credentials.json` and was used for
+  the controlled refresh-rotation proof without exposing its contents.
+- `codex mcp logout agent_workspace` removes the local credential but does not
+  call the advertised revocation endpoint in `0.146.0`. Operators must revoke
+  the grant at Agent Workspace before or together with local logout. The live
+  acceptance called `/oauth/revoke`, observed family-wide revocation, removed
+  the local file, and then proved required MCP startup fails closed.
+- Chrome automation could not follow its top-level OAuth form POST or loopback
+  callback navigation because the browser extension blocked those navigations.
+  The same real Chrome tab submitted the exact CSRF-protected same-origin form,
+  validated the returned 303 callback origin/path/state/code, and dispatched
+  that callback to the waiting local Codex listener. This is an automation
+  transport quirk, not an application OAuth relaxation.
