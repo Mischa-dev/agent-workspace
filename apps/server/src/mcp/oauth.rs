@@ -1,6 +1,6 @@
 use axum::{
     Form, Json, Router,
-    extract::{Query, State},
+    extract::{RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -201,6 +201,17 @@ async fn register_client(
 }
 
 #[derive(Clone, Deserialize)]
+struct AuthorizeRequestFields {
+    response_type: String,
+    client_id: String,
+    redirect_uri: String,
+    scope: Option<String>,
+    state: String,
+    code_challenge: String,
+    code_challenge_method: String,
+}
+
+#[derive(Clone, Debug)]
 struct AuthorizeRequest {
     response_type: String,
     client_id: String,
@@ -210,6 +221,43 @@ struct AuthorizeRequest {
     code_challenge: String,
     code_challenge_method: String,
     resource: Option<String>,
+}
+
+fn parse_authorize_query(raw_query: Option<String>) -> Result<AuthorizeRequest, OAuthError> {
+    let raw_query = raw_query.ok_or_else(|| OAuthError::invalid_request("missing query"))?;
+    let mut fields = Vec::new();
+    let mut resource = None;
+
+    for (name, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
+        if name == "resource" {
+            match resource.as_deref() {
+                Some(existing) if existing != value => {
+                    return Err(OAuthError::invalid_request(
+                        "conflicting resource parameters are not allowed",
+                    ));
+                }
+                Some(_) => {}
+                None => resource = Some(value.into_owned()),
+            }
+        } else {
+            fields.push((name.into_owned(), value.into_owned()));
+        }
+    }
+
+    let encoded = serde_urlencoded::to_string(fields)
+        .map_err(|_| OAuthError::invalid_request("invalid authorization query"))?;
+    let fields: AuthorizeRequestFields = serde_urlencoded::from_str(&encoded)
+        .map_err(|_| OAuthError::invalid_request("invalid authorization query"))?;
+    Ok(AuthorizeRequest {
+        response_type: fields.response_type,
+        client_id: fields.client_id,
+        redirect_uri: fields.redirect_uri,
+        scope: fields.scope,
+        state: fields.state,
+        code_challenge: fields.code_challenge,
+        code_challenge_method: fields.code_challenge_method,
+        resource,
+    })
 }
 
 #[derive(FromRow)]
@@ -230,8 +278,9 @@ async fn authorize(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     headers: HeaderMap,
-    Query(request): Query<AuthorizeRequest>,
+    RawQuery(raw_query): RawQuery,
 ) -> Result<Html<String>, OAuthError> {
+    let request = parse_authorize_query(raw_query)?;
     let (client, scopes) = validate_authorize_request(&state, &request).await?;
     let projects = project_choices(&state, principal.actor_id).await?;
     if projects.is_empty() {
@@ -1025,6 +1074,37 @@ impl IntoResponse for OAuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authorize_query(resources: &[&str]) -> String {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer
+            .append_pair("response_type", "code")
+            .append_pair("client_id", "019fbebf-120b-7540-a3fd-1248fb69dd2a")
+            .append_pair("redirect_uri", "http://127.0.0.1:61169/callback")
+            .append_pair("scope", "read write")
+            .append_pair("state", "state")
+            .append_pair("code_challenge", &"a".repeat(43))
+            .append_pair("code_challenge_method", "S256");
+        for resource in resources {
+            serializer.append_pair("resource", resource);
+        }
+        serializer.finish()
+    }
+
+    #[test]
+    fn authorize_query_canonicalizes_only_identical_resource_duplicates() {
+        let expected = "http://127.0.0.1:3100/api/v1/mcp";
+        let request = parse_authorize_query(Some(authorize_query(&[expected, expected])))
+            .expect("identical resource parameters");
+        assert_eq!(request.resource.as_deref(), Some(expected));
+
+        let error = parse_authorize_query(Some(authorize_query(&[
+            expected,
+            "http://127.0.0.1:3100/api/v1/other",
+        ])))
+        .expect_err("conflicting resource parameters must fail");
+        assert_eq!(error.error, "invalid_request");
+    }
 
     #[test]
     fn redirects_are_exact_public_loopback_uris() {
