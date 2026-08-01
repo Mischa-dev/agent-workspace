@@ -19,6 +19,7 @@ import {
   setWorkItemThreadLink,
   updateWorkItem,
   updateAcceptanceCriterion,
+  workWithWorker,
 } from './api'
 import type { WorkItemFilters } from './types'
 
@@ -168,4 +169,21 @@ export function useSetWorkItemRepositoryLink() {
 
 export function useSetWorkItemPrimaryRepository() {
   return useWorkItemChildMutation(setWorkItemPrimaryRepository)
+}
+
+export function useWorkWithWorker() {
+  const queryClient = useQueryClient()
+  const invalidate = useInvalidateWorkItems()
+  return useMutation({
+    mutationFn: workWithWorker,
+    onSuccess: (_response, input) => {
+      void invalidate(input.projectId)
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workItem(input.projectId, input.workItemId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationSidebarRoot(input.projectId),
+      })
+    },
+  })
 }

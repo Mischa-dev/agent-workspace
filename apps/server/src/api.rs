@@ -140,28 +140,28 @@ struct ConversationRow {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StartRunRequest {
-    prompt: String,
-    repository_id: Option<Uuid>,
+pub(crate) struct StartRunRequest {
+    pub(crate) prompt: String,
+    pub(crate) repository_id: Option<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
-struct RunSetup {
-    repository_id: Uuid,
+pub(crate) struct RunSetup {
+    pub(crate) repository_id: Uuid,
     execution_worker_id: Uuid,
     execution_profile_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StartRunResponse {
-    run_id: Uuid,
-    state: RunState,
-    repository_id: Uuid,
-    repository_workspace_id: Option<Uuid>,
-    branch: Option<String>,
-    base_commit: Option<String>,
-    queue_position: Option<i64>,
+pub(crate) struct StartRunResponse {
+    pub(crate) run_id: Uuid,
+    pub(crate) state: RunState,
+    pub(crate) repository_id: Uuid,
+    pub(crate) repository_workspace_id: Option<Uuid>,
+    pub(crate) branch: Option<String>,
+    pub(crate) base_commit: Option<String>,
+    pub(crate) queue_position: Option<i64>,
 }
 
 #[cfg(any())]
@@ -171,7 +171,7 @@ const WORKTREE_START_FAILURE_REASON: &str =
 const PROVIDER_START_FAILURE_REASON: &str =
     "Codex App Server could not start. The worktree was preserved.";
 
-async fn start_agent_run(
+pub(crate) async fn start_agent_run(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,
@@ -678,7 +678,7 @@ async fn acknowledge_run_failure(
     Ok(Json(EmptyCommand {}))
 }
 
-async fn select_run_setup(
+pub(crate) async fn select_run_setup(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     conversation_id: Uuid,

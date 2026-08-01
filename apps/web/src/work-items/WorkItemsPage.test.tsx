@@ -23,22 +23,20 @@ import {
   useWorkItems,
   useWorkItemWorkflow,
   useWorkItemTimeline,
+  useWorkWithWorker,
 } from './hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
 import { ApiError } from '../api/errors'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
+import { useProjectConversationSidebar } from '../conversations/hooks'
 
 vi.mock('../auth/session', () => ({
   useAuthenticatedSession: () => ({ user: { displayName: 'Mischa' } }),
 }))
 vi.mock('../projects/hooks', () => ({ useProject: vi.fn() }))
 vi.mock('../conversations/hooks', () => ({
-  useProjectConversationSidebar: () => ({
-    data: { channels: [] },
-    isPending: false,
-    isError: false,
-  }),
+  useProjectConversationSidebar: vi.fn(),
 }))
 vi.mock('../repositories/api', () => ({
   listRepositories: () => Promise.resolve({ repositories: [], canManage: false }),
@@ -64,6 +62,7 @@ vi.mock('./hooks', () => ({
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
   useWorkItemTimeline: vi.fn(),
+  useWorkWithWorker: vi.fn(),
 }))
 vi.mock('../shell/AppShell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
@@ -129,6 +128,11 @@ const workItem = {
 }
 
 beforeEach(() => {
+  vi.mocked(useProjectConversationSidebar).mockReturnValue({
+    data: { channels: [] },
+    isPending: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useProjectConversationSidebar>)
   vi.mocked(useProject).mockReturnValue({
     data: project,
     isPending: false,
@@ -223,6 +227,11 @@ beforeEach(() => {
     isError: false,
     isSuccess: true,
   } as unknown as ReturnType<typeof useWorkItemTimeline>)
+  vi.mocked(useWorkWithWorker).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useWorkWithWorker>)
 })
 
 afterEach(() => {
@@ -309,6 +318,54 @@ describe('Work Items list', () => {
 })
 
 describe('Work Item detail', () => {
+  it('starts a linked Worker Thread with explicit user instructions', () => {
+    vi.mocked(useProjectConversationSidebar).mockReturnValue({
+      data: {
+        channels: [{ id: 'channel-a', name: 'Implementation', archivedAt: null, threads: [] }],
+      },
+      isPending: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useProjectConversationSidebar>)
+    const mutate = vi.fn((_input, options) => {
+      options.onSuccess({
+        threadId: 'thread-a',
+        run: { runId: 'run-a', state: 'queued', repositoryId: 'repository-a' },
+      })
+    })
+    vi.mocked(useWorkWithWorker).mockReturnValue({
+      mutate,
+      isPending: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useWorkWithWorker>)
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/work-items/${workItemId}`]}>
+          <Routes>
+            <Route element={<WorkItemDetailPage />} path="/projects/:projectId/work-items/:workItemId" />
+            <Route element={<p>Worker Thread opened</p>} path="/projects/:projectId/threads/:threadId" />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'channel-a' } })
+    fireEvent.change(screen.getByLabelText('Instructions'), {
+      target: { value: 'Implement one verified change.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Thread and start' }))
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: 'channel-a',
+        expectedVersion: 1,
+        prompt: 'Implement one verified change.',
+        repositoryId: undefined,
+      }),
+      expect.any(Object),
+    )
+    expect(screen.getByText('Worker Thread opened')).toBeVisible()
+  })
+
   it('preserves the draft and exposes the authoritative resource on conflict', () => {
     const current = { ...workItem, title: 'Title from another editor', version: 2 }
     const mutate = vi.fn((_input, options) => {

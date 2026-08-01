@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
@@ -29,6 +29,7 @@ import {
   useWorkItem,
   useWorkItemWorkflow,
   useWorkItemTimeline,
+  useWorkWithWorker,
 } from './hooks'
 import type { WorkItem, WorkItemPriority } from './types'
 
@@ -284,6 +285,8 @@ function WorkItemEditor({
         }}
       />
 
+      <WorkWithWorker disabled={disabled} item={base} />
+
       <WorkItemLinks
         disabled={disabled}
         item={base}
@@ -307,6 +310,90 @@ function WorkItemEditor({
         </section>
       ) : null}
     </>
+  )
+}
+
+function WorkWithWorker({ disabled, item }: { disabled: boolean; item: WorkItem }) {
+  const navigate = useNavigate()
+  const conversations = useProjectConversationSidebar(item.projectId)
+  const repositories = useQuery({
+    queryKey: ['projects', item.projectId, 'repositories', 'worker-picker'],
+    queryFn: () => listRepositories(item.projectId),
+    enabled: Boolean(item.projectId),
+  })
+  const mutation = useWorkWithWorker()
+  const [channelId, setChannelId] = useState('')
+  const [repositoryId, setRepositoryId] = useState('')
+  const [prompt, setPrompt] = useState('')
+  const channels = (conversations.data?.channels ?? []).filter((channel) => !channel.archivedAt)
+  const availableRepositories = (repositories.data?.repositories ?? []).filter(
+    (repository) =>
+      repository.enabled &&
+      repository.trusted &&
+      repository.preparationState === 'ready' &&
+      !repository.archivedAt,
+  )
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!channelId || !prompt.trim() || mutation.isPending) return
+    mutation.mutate(
+      {
+        projectId: item.projectId,
+        workItemId: item.id,
+        expectedVersion: item.version,
+        channelId,
+        prompt: prompt.trim(),
+        repositoryId: repositoryId || undefined,
+        idempotencyKey: crypto.randomUUID(),
+      },
+      {
+        onSuccess: (response) => {
+          navigate(
+            `/projects/${encodeURIComponent(item.projectId)}/threads/${encodeURIComponent(response.threadId)}`,
+          )
+        },
+      },
+    )
+  }
+
+  if (disabled) return null
+  return (
+    <section className="work-item-section worker-launch" aria-labelledby="work-with-worker-heading">
+      <header>
+        <div>
+          <h2 id="work-with-worker-heading">Work with Worker</h2>
+          <p>Create a linked Thread and start an isolated run with this Work Item as durable context.</p>
+        </div>
+      </header>
+      <form className="worker-launch-form" onSubmit={submit}>
+        <div className="field-grid">
+          <label className="field">
+            <span>Channel</span>
+            <select onChange={(event) => setChannelId(event.target.value)} required value={channelId}>
+              <option value="">Select Channel</option>
+              {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>Repository</span>
+            <select onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}>
+              <option value="">Automatic selection</option>
+              {availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.owner}/{repository.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <label className="field">
+          <span>Instructions</span>
+          <textarea maxLength={18000} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the focused change or investigation for the Worker." required rows={4} value={prompt} />
+        </label>
+        {mutation.isError ? <p className="form-error-summary" role="alert">{mutation.error.message}</p> : null}
+        <div className="form-actions">
+          <span className="save-state">Only the immutable Work Item ID, key, and these instructions are sent.</span>
+          <button className="primary-button" disabled={!channelId || !prompt.trim() || mutation.isPending} type="submit">{mutation.isPending ? 'Starting…' : 'Create Thread and start'}</button>
+        </div>
+      </form>
+    </section>
   )
 }
 

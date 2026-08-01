@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
     AppState,
-    bootstrap::{BootstrapCommand, bootstrap_admin},
+    bootstrap::{BootstrapCommand, bootstrap_admin, bootstrap_development_member},
     config::AppConfig,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 const LOGIN_NAME: &str = "m4-work-item-owner";
 const PASSWORD: &str = "correct horse battery staple";
+const COLLABORATOR_LOGIN_NAME: &str = "m4-work-item-collaborator";
 
 #[tokio::test]
 async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed() {
@@ -83,6 +84,20 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await
     .expect("bootstrap M4 Work Item owner");
+    bootstrap_development_member(
+        &pool,
+        BootstrapCommand {
+            login_name: COLLABORATOR_LOGIN_NAME.to_owned(),
+            display_name: "M4 Work Item Collaborator".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.collaborator_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap M4 Work Item collaborator");
 
     let supervisors = SupervisorRegistry::new(&config).expect("M4 supervisor registry");
     let application = router(AppState {
@@ -108,6 +123,8 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
 
     let cookie = login(&application).await;
     let csrf = csrf_from_cookie(&cookie);
+    let collaborator_cookie = login_as(&application, COLLABORATOR_LOGIN_NAME).await;
+    let collaborator_csrf = csrf_from_cookie(&collaborator_cookie);
     let navigation_uri = format!("/api/v1/projects/{}/navigation", seed.project_id);
     let current_navigation = get_json(&application, &cookie, &navigation_uri).await;
     assert_eq!(current_navigation.0, StatusCode::OK);
@@ -291,8 +308,8 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
 
     let updated = patch_json(
         &application,
-        &cookie,
-        &csrf,
+        &collaborator_cookie,
+        &collaborator_csrf,
         "m4-update-one",
         &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
         json!({
@@ -309,11 +326,30 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     assert_eq!(updated.2["status"]["name"], "Ready");
     assert_eq!(updated.2["priority"], "urgent");
     assert!(updated.2["assignee"].is_null());
+    let update_activity = get_json(
+        &application,
+        &cookie,
+        &format!(
+            "{base}/{}/timeline?limit=10",
+            created.2["id"].as_str().expect("created ID")
+        ),
+    )
+    .await;
+    assert!(
+        update_activity.2["entries"]
+            .as_array()
+            .expect("Work Item timeline entries")
+            .iter()
+            .any(|entry| {
+                entry["activity"]["kind"] == "work_item_updated"
+                    && entry["activity"]["actor"]["id"] == seed.collaborator_actor_id.to_string()
+            })
+    );
 
     let update_replay = patch_json(
         &application,
-        &cookie,
-        &csrf,
+        &collaborator_cookie,
+        &collaborator_csrf,
         "m4-update-one",
         &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
         json!({
@@ -627,6 +663,11 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .execute(&pool)
     .await
     .expect("make seeded repository ready for Work Item linking");
+    sqlx::query("UPDATE execution_profiles SET account_state = 'authenticated' WHERE id = $1")
+        .bind(seed.execution_profile_id)
+        .execute(&pool)
+        .await
+        .expect("authenticate the seeded Execution Profile for Work with Worker");
     let linked_thread = post_json(
         &application,
         &cookie,
@@ -839,6 +880,71 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         created.2["id"]
     );
 
+    let worker_uri = format!(
+        "{base}/{}/work-with-worker",
+        created.2["id"].as_str().expect("created ID")
+    );
+    let worker_request = json!({
+        "expectedVersion": 15,
+        "channelId": seed.channel_id,
+        "prompt": "Implement the smallest verified change."
+    });
+    let worker = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-work-with-worker"),
+        &worker_uri,
+        worker_request.clone(),
+    )
+    .await;
+    assert_eq!(worker.0, StatusCode::ACCEPTED, "{}", worker.1);
+    assert_eq!(worker.2["run"]["state"], "queued");
+    assert_eq!(
+        worker.2["run"]["repositoryId"],
+        seed.repository_id.to_string()
+    );
+    let worker_thread_id = worker.2["threadId"].as_str().expect("worker Thread ID");
+    let worker_run_id = worker.2["run"]["runId"].as_str().expect("worker run ID");
+    let worker_replay = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-work-with-worker"),
+        &worker_uri,
+        worker_request,
+    )
+    .await;
+    assert_eq!(worker_replay.0, StatusCode::ACCEPTED);
+    assert_eq!(worker_replay.2["threadId"], worker_thread_id);
+    assert_eq!(worker_replay.2["run"]["runId"], worker_run_id);
+    let worker_prompt = sqlx::query_scalar::<_, String>(
+        "SELECT prompt FROM agent_runs WHERE project_id = $1 AND id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(Uuid::parse_str(worker_run_id).expect("worker run UUID"))
+    .fetch_one(&pool)
+    .await
+    .expect("read bounded worker prompt");
+    assert!(worker_prompt.contains(created.2["id"].as_str().expect("Work Item ID")));
+    assert!(worker_prompt.contains(created.2["key"].as_str().expect("Work Item key")));
+    assert!(worker_prompt.ends_with("Implement the smallest verified change."));
+    assert!(!worker_prompt.contains("Please review"));
+    let after_worker = get_json(
+        &application,
+        &cookie,
+        &format!("{base}/{}", created.2["id"].as_str().expect("created ID")),
+    )
+    .await;
+    assert_eq!(after_worker.2["version"], 16);
+    assert!(
+        after_worker.2["linkedThreads"]
+            .as_array()
+            .expect("linked Threads")
+            .iter()
+            .any(|thread| thread["id"] == worker_thread_id)
+    );
+
     let comment_uri = format!(
         "{base}/{}/comments",
         created.2["id"].as_str().expect("created ID")
@@ -863,7 +969,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(comment.0, StatusCode::CREATED, "{}", comment.1);
-    assert_eq!(comment.2["sequence"], 16);
+    assert_eq!(comment.2["sequence"], 17);
     assert_eq!(
         comment.2["comment"]["mentionedActors"][0]["id"],
         seed.human_actor_id.to_string()
@@ -948,7 +1054,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .await;
     assert_eq!(timeline.0, StatusCode::OK, "{}", timeline.1);
     assert_eq!(timeline.2["entries"][0]["kind"], "comment");
-    assert_eq!(timeline.2["entries"][0]["sequence"], 16);
+    assert_eq!(timeline.2["entries"][0]["sequence"], 17);
     assert!(timeline.2["nextCursor"].is_string());
 
     let activity_count = sqlx::query_scalar::<_, i64>(
@@ -958,7 +1064,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 activity");
-    assert_eq!(activity_count, 17);
+    assert_eq!(activity_count, 18);
     let outbox_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND resource_kind = 'work_item' AND conversation_id IS NULL",
     )
@@ -966,7 +1072,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 outbox events");
-    assert_eq!(outbox_count, 18);
+    assert_eq!(outbox_count, 19);
     let counter = sqlx::query_scalar::<_, i64>(
         "SELECT next_work_item_number FROM project_counters WHERE project_id = $1",
     )
@@ -1017,6 +1123,10 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
 }
 
 async fn login(application: &axum::Router) -> String {
+    login_as(application, LOGIN_NAME).await
+}
+
+async fn login_as(application: &axum::Router, login_name: &str) -> String {
     let response = application
         .clone()
         .oneshot(
@@ -1027,7 +1137,7 @@ async fn login(application: &axum::Router) -> String {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&json!({
-                        "loginName": LOGIN_NAME,
+                        "loginName": login_name,
                         "password": PASSWORD
                     }))
                     .expect("serialize M4 login request"),

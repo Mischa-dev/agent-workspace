@@ -13,6 +13,7 @@ import type {
   WorkItemPriority,
   WorkItemTimelineEntry,
   WorkItemWorkflow,
+  WorkWithWorkerResponse,
 } from './types'
 
 type WireRecord = Record<string, unknown>
@@ -215,6 +216,31 @@ export async function setWorkItemPrimaryRepository(input: {
   return normalizeWorkItem(await requestJson<unknown>(path, {
     method: 'POST', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion },
   }))
+}
+
+export async function workWithWorker(input: {
+  projectId: string
+  workItemId: string
+  expectedVersion: number
+  channelId: string
+  prompt: string
+  repositoryId?: string
+  idempotencyKey: string
+}): Promise<WorkWithWorkerResponse> {
+  const { projectId, workItemId, idempotencyKey, ...json } = input
+  const payload = record(await requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/work-with-worker`,
+    { method: 'POST', idempotencyKey, json },
+  ))
+  const run = record(payload.run)
+  return {
+    threadId: string(payload.threadId),
+    run: {
+      runId: string(run.runId),
+      state: string(run.state),
+      repositoryId: string(run.repositoryId),
+    },
+  }
 }
 
 export async function listWorkItems(
