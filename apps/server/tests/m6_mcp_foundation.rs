@@ -626,6 +626,16 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert!(consent_html.contains("Authorize codex-m6-oauth"));
     assert!(consent_html.contains("read write"));
     assert!(!consent_html.contains(OAUTH_PASSWORD));
+    let consent_form_start = consent_html.find("<form").expect("OAuth consent form");
+    let consent_form_end = consent_html
+        .find("</form>")
+        .expect("OAuth consent form close");
+    let consent_form = &consent_html[consent_form_start..consent_form_end];
+    assert!(
+        consent_form.contains("name=project_id"),
+        "the Project selector must be submitted by the consent form"
+    );
+    assert!(consent_form.contains("name=decision"));
 
     let conflicting_authorize_uri = authorize_url.path().to_owned()
         + "?"
