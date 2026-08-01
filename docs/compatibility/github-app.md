@@ -98,6 +98,17 @@ Project command. Unresolved delivery hints and external failures retry with
 bounded leases/backoff, become visibly exhausted, and never expose response
 bodies or credentials.
 
+During the August 1, 2026 M5 acceptance run, GitHub's pull-request REST
+response retained `merged_at` but returned a null `merge_commit_sha` after the
+merged head branch was deleted. The signed `pull_request.closed` delivery for
+the same pull request retained the actual merge commit. Agent Workspace keeps
+that bounded fallback only when the signed event is exactly
+`pull_request.closed` and `pull_request.merged` is true. Open, synchronize,
+review, check-suite, and check-run deliveries never supply a merge fallback,
+so a delayed event cannot promote GitHub's temporary test-merge SHA into the
+canonical record. A mismatch between non-null REST and signed merged-close
+identities remains a conflict.
+
 ## Work Item automation boundary
 
 Automation consumes only the canonical pull-request state committed by the
@@ -130,6 +141,11 @@ The listener binds separately on `127.0.0.1:3101`. It verifies:
 - exact `repository.full_name`
 - durable, installation-scoped duplicate delivery IDs with payload-checksum
   mismatch rejection
+
+An identical signed redelivery may requeue a failed or exhausted job. Job
+identity and its original bounded payload remain immutable; newly recognized
+bounded fields are stored on the already checksum-verified delivery record and
+are available only to that recovery attempt.
 
 The Cloudflare Quick Tunnel exposes only this listener and is stopped
 immediately after the signed delivery proof.

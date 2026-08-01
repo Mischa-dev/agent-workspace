@@ -4637,7 +4637,6 @@ fn bounded_job_payload(
             ("head_sha", "/pull_request/head/sha"),
             ("head_ref", "/pull_request/head/ref"),
             ("base_ref", "/pull_request/base/ref"),
-            ("merge_commit_sha", "/pull_request/merge_commit_sha"),
         ]
         .as_slice(),
         "check_suite" => [
@@ -4668,6 +4667,22 @@ fn bounded_job_payload(
             };
             payload.insert((*name).to_owned(), bounded);
         }
+    }
+    if event == "pull_request"
+        && action == Some("closed")
+        && value
+            .pointer("/pull_request/merged")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && let Some(merge_commit_sha) = value
+            .pointer("/pull_request/merge_commit_sha")
+            .and_then(Value::as_str)
+            .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        payload.insert(
+            "merge_commit_sha".to_owned(),
+            Value::String(merge_commit_sha.to_owned()),
+        );
     }
     Ok(Value::Object(payload))
 }
@@ -4797,6 +4812,7 @@ mod tests {
                         "ref": "codex/run-aw-acceptance"
                     },
                     "base": { "ref": "main" },
+                    "merged": true,
                     "merge_commit_sha": merge_sha,
                     "body": "must not be retained"
                 },
@@ -4808,6 +4824,34 @@ mod tests {
         assert_eq!(payload["merge_commit_sha"], merge_sha);
         assert!(payload.get("body").is_none());
         assert!(payload.get("installation").is_none());
+
+        let stale_open_payload = bounded_job_payload(
+            "pull_request",
+            Some("synchronize"),
+            &json!({
+                "pull_request": {
+                    "number": 3,
+                    "merged": false,
+                    "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+            }),
+        )
+        .expect("bounded synchronize payload");
+        assert!(stale_open_payload.get("merge_commit_sha").is_none());
+
+        let review_payload = bounded_job_payload(
+            "pull_request_review",
+            Some("submitted"),
+            &json!({
+                "pull_request": {
+                    "number": 3,
+                    "merged": true,
+                    "merge_commit_sha": merge_sha
+                }
+            }),
+        )
+        .expect("bounded review payload");
+        assert!(review_payload.get("merge_commit_sha").is_none());
     }
 
     #[test]
