@@ -2,16 +2,37 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 accepted; M5 authorized; source of truth v0.21
+**Status:** M5 accepted; M6 authorized; source of truth v0.22
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M4 are complete. M5 is elaborated and authorized. Every later milestone remains subject to the same entry gate.
+**Implementation authorization:** Milestones M0 through M5 are complete. M6 is elaborated and authorized. Every later milestone remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.22 — M5 acceptance and M6 authorization
+
+- accepted M5 against exact green commit
+  `3b57de5a3034cd4f3f11b27d3708feab6692a060`, GitHub CI run
+  `30706542794`, and its immutable Red Hat release
+- recorded the browser-driven exact-commit publication, pull-request creation,
+  canonical checks/review projection, merge, branch cleanup, and explicitly
+  linked Work Item transition from Review to Verification
+- recorded signed webhook verification, checksum-bound redelivery recovery,
+  exact duplicate idempotency, durable job restart recovery, and ordinary
+  refetch convergence without duplicate domain activity
+- recorded the live REST merge-projection compatibility finding and bounded
+  signed/canonical fallback in Decision D-047, plus the corrected M4 Work Item
+  schema reference, canonical Thread route, and scoped Project-list cache
+  updates that required no architectural change
+- confirmed the temporary tunnel and webhook were deactivated after proof,
+  retained worktrees and host boundaries were preserved, and credentials did
+  not enter logs, database projections, browser responses, or provider state
+- declared the M5 exit criteria satisfied and authorized the elaborated M6
+  Local Codex and MCP backlog
 
 ### v0.21 — Signed webhook redelivery recovery
 
