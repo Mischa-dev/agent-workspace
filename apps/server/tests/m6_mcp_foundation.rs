@@ -64,6 +64,38 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     ]))
     .expect("M6 configuration");
     let seed = dev_seed(&pool, &config).await.expect("seed M6 fixture");
+    let work_item_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO work_items (
+            id, project_id, number, title, description, type_id, status_id,
+            priority, created_by_actor_id, board_rank
+        )
+        SELECT
+            $1, $2, 1, 'M6 read contract', 'Bounded MCP context', type.id,
+            status.id, 'high', $3, 1024
+        FROM work_item_types type
+        CROSS JOIN work_item_statuses status
+        WHERE type.project_id = $2 AND type.is_default
+          AND status.project_id = $2 AND status.is_default
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("insert M6 Work Item fixture");
+    sqlx::query(
+        "INSERT INTO work_item_repository_links (project_id, work_item_id, repository_id, role, created_by_actor_id) VALUES ($1, $2, $3, 'primary', $4)",
+    )
+    .bind(seed.project_id)
+    .bind(work_item_id)
+    .bind(seed.repository_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("link M6 Repository fixture");
     let issued = mcp::issue_credential(
         &pool,
         IssueCredentialCommand {
@@ -166,6 +198,13 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_get"))
         .expect("project_get tool");
     assert_eq!(
+        tools
+            .pointer("/result/tools")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(7)
+    );
+    assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),
         Some(&json!(true))
     );
@@ -200,6 +239,56 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         project.pointer("/result/structuredContent/project/id"),
         Some(&json!(seed.project_id.to_string()))
     );
+
+    for (id, name, arguments, expected_outcome) in [
+        (4, "project_instructions_get", json!({}), "found"),
+        (5, "work_item_get", json!({"identifier":"AW-1"}), "found"),
+        (
+            6,
+            "work_item_search",
+            json!({"query":"read contract","limit":10}),
+            "found",
+        ),
+        (
+            7,
+            "work_item_context_get",
+            json!({"identifier":work_item_id.to_string()}),
+            "found",
+        ),
+        (
+            8,
+            "repository_get",
+            json!({"repositoryId":seed.repository_id.to_string()}),
+            "found",
+        ),
+        (
+            9,
+            "pull_request_get",
+            json!({"identifier":Uuid::now_v7().to_string()}),
+            "not_found",
+        ),
+    ] {
+        let result = protocol_json(
+            mcp_request(
+                &application,
+                Some(&token),
+                Some(&session_id),
+                &json!({
+                    "jsonrpc":"2.0",
+                    "id":id,
+                    "method":"tools/call",
+                    "params":{"name":name,"arguments":arguments}
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            result.pointer("/result/structuredContent/outcome"),
+            Some(&json!(expected_outcome)),
+            "unexpected outcome for {name}: {result}"
+        );
+    }
 
     let before_conversations = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversations")
         .fetch_one(&pool)

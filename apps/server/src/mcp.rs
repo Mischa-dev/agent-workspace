@@ -29,6 +29,8 @@ use uuid::Uuid;
 
 use crate::{AppState, error::AppError};
 
+mod reads;
+
 pub const MCP_PATH: &str = "/api/v1/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const TOKEN_BYTES: usize = 32;
@@ -177,7 +179,10 @@ impl McpServer {
                     name: row.name,
                     version: row.version,
                     role: row.role,
-                    canonical_url: format!("/projects/{}", row.id),
+                    canonical_url: format!(
+                        "http://{}/projects/{}",
+                        self.state.config.server_addr, row.id
+                    ),
                 },
             }),
             Ok(None) => Json(ProjectGetResult::NotFound {
@@ -190,6 +195,144 @@ impl McpServer {
                 })
             }
         }
+    }
+
+    #[tool(
+        description = "Read bounded Project guidance for local development work",
+        annotations(
+            title = "Get Project instructions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_instructions_get(
+        &self,
+        Parameters(_arguments): Parameters<reads::ProjectInstructionsArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<reads::ReadResult<reads::ProjectInstructionsProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(reads::ReadResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(reads::project_instructions_get(&self.state, principal).await)
+    }
+
+    #[tool(
+        description = "Read one bounded Work Item by immutable ID, canonical URL, or Project-scoped key",
+        annotations(
+            title = "Get Work Item",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_get(
+        &self,
+        Parameters(arguments): Parameters<reads::WorkItemGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<reads::ReadResult<reads::WorkItemProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(reads::ReadResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(reads::work_item_get(&self.state, principal, &arguments.identifier).await)
+    }
+
+    #[tool(
+        description = "Search bounded Work Item summaries deterministically inside the authenticated Project",
+        annotations(
+            title = "Search Work Items",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_search(
+        &self,
+        Parameters(arguments): Parameters<reads::WorkItemSearchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<reads::ReadResult<reads::WorkItemSearchProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(reads::ReadResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(reads::work_item_search(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Compose bounded Project guidance and current Work Item context with source versions",
+        annotations(
+            title = "Get Work Item context",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_context_get(
+        &self,
+        Parameters(arguments): Parameters<reads::WorkItemGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<reads::ReadResult<reads::WorkItemContextProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(reads::ReadResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(reads::work_item_context_get(&self.state, principal, &arguments.identifier).await)
+    }
+
+    #[tool(
+        description = "Read bounded trusted Repository metadata without host paths or repository content",
+        annotations(
+            title = "Get Repository",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn repository_get(
+        &self,
+        Parameters(arguments): Parameters<reads::RepositoryGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<reads::ReadResult<reads::RepositoryProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(reads::ReadResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(reads::repository_get(&self.state, principal, &arguments.repository_id).await)
+    }
+
+    #[tool(
+        description = "Read the bounded canonical pull-request projection by immutable ID or GitHub URL",
+        annotations(
+            title = "Get pull request",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn pull_request_get(
+        &self,
+        Parameters(arguments): Parameters<reads::PullRequestGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<reads::ReadResult<reads::PullRequestProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(reads::ReadResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(reads::pull_request_get(&self.state, principal, &arguments.identifier).await)
     }
 }
 
