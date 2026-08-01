@@ -2,18 +2,37 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M5 accepted; M6 in acceptance; M7 elaborated; source of truth v0.24
+**Status:** M6 accepted; M7 authorized; source of truth v0.25
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M5 are complete. M6
-is authorized and in acceptance. M7 is elaborated but may begin only after M6
-is accepted; every later milestone remains subject to the same entry gate.
+**Implementation authorization:** Milestones M0 through M6 are complete. M7 is
+elaborated and authorized; every later milestone remains subject to the same
+entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.25 — M6 acceptance and M7 authorization
+
+- accepted M6 against exact green commit
+  `d825c3ca267ce7ea2831b396feddedbf9c9b2793`, GitHub CI run
+  `30717278481`, and its immutable Red Hat release
+- recorded real Codex `0.146.0` bearer and OAuth MCP calls, optimistic replay,
+  read/write approval, refresh-token rotation, grant-family revocation,
+  fail-closed expiry/revocation, and zero application Thread or run creation
+- recorded the browser-driven, prefilled, unsent `codex://new` handoff for the
+  trusted spike repository with no secret or local runtime path in its payload
+- corrected Codex's duplicate OAuth resource compatibility and the rendered
+  consent-form boundary, and recorded the client's local-expiry refresh and
+  local-only logout behavior in Decision D-051
+- confirmed controlled restart, reconciliation, listener isolation, credential
+  cleanup, migration checksums, and structured-log redaction on the accepted
+  Red Hat release
+- declared the M6 exit criteria satisfied and authorized the elaborated M7
+  Teams backlog
 
 ### v0.24 — M7 Teams entry backlog and identity decisions
 
@@ -5620,6 +5639,10 @@ disaster-recovery/backup policy (M8).
 
 ## Milestone M6: Local Codex and MCP
 
+**Status:** Accepted against commit
+`d825c3ca267ce7ea2831b396feddedbf9c9b2793`; evidence is recorded in
+`docs/acceptance/m6.md`.
+
 ### M6-001 MCP Streamable HTTP endpoint
 
 Promote the proven M0 spike into the application process as one bounded,
@@ -5992,8 +6015,8 @@ credentials reserved for M9.
 
 ## Milestone M7: Teams
 
-**Status:** Elaborated. Entry requires accepted M6 evidence against one exact
-green commit.
+**Status:** Elaborated and authorized by accepted M6 evidence against exact
+green commit `d825c3ca267ce7ea2831b396feddedbf9c9b2793`.
 
 ### M7-001 Invitation links
 
@@ -6959,6 +6982,22 @@ authentication-epoch invalidation, rate limits, CSRF, session rotation, and
 owner-controlled membership disable stay in the application boundary. Passkeys
 and OIDC remain additive future options and must not be simulated through a
 weaker magic-link or shared-account mechanism.
+
+## D-051: OAuth grant revocation remains server-owned and explicit
+
+**Status:** Accepted
+
+**Reason:** Codex `0.146.0` refreshes an MCP OAuth grant when its own local
+expiry metadata is due, but `codex mcp logout` removes only the local
+credential and does not call the advertised revocation endpoint. Local
+credential deletion therefore cannot be treated as proof that server access
+ended. Agent Workspace owns grant status and must expose and document explicit
+family-wide revocation; operators revoke the grant before or together with
+local logout, and membership disable also revokes affected grants. A required
+MCP connection then fails closed. This compatibility boundary avoids relying
+on one client version's cleanup behavior while preserving standards-based
+refresh rotation, token-reuse compromise handling, and future clients that do
+invoke revocation themselves.
 
 ---
 
