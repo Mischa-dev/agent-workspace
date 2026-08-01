@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 accepted; M5 authorized; source of truth v0.17
+**Status:** M4 accepted; M5 authorized; source of truth v0.18
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
@@ -12,6 +12,18 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.18 — Durable pull-request creation and explicit links
+
+- fixed pull-request creation as a durable Project-scoped request tied to one
+  exact published Repository Workspace, Agent Run, head commit, head branch,
+  and base branch
+- required query-before-create reconciliation and prohibited blind mutation
+  retries after an uncertain GitHub response
+- made Thread/Run links automatic recorded artifacts while Work Item links are
+  explicit and confirmed; bounded branch/body heuristics remain unconfirmed
+- kept GitHub as the destination for diffs, review bodies, comments, merge,
+  close, and detailed review interaction
 
 ### v0.17 — GitHub installation subscription compatibility
 
@@ -6111,6 +6123,20 @@ consumed subscriptions, permits `repository` only as a documented retained
 compatibility value, and continues to reject `repository` deliveries at the
 isolated webhook listener. This preserves fail-closed ingestion without
 misclassifying automatic webhook types as missing App subscriptions.
+
+## D-044: Pull-request creation is durable and never blindly retried
+
+**Status:** Accepted
+
+**Reason:** Creating a pull request is an external mutation whose timeout or
+transport failure does not prove that GitHub rejected it. Agent Workspace
+records one immutable request for the exact published head/base tuple, queries
+for an existing open pull request before creation, and records that a mutation
+was attempted before sending it. A later attempt queries the same tuple but
+does not issue another create blindly. One canonical pull-request record then
+links automatically to its Thread, Agent Run, Repository Workspace, and exact
+commit; only explicit Work Item links are immediately confirmed. This prevents
+duplicate PRs and keeps heuristic association visible and reversible.
 
 ---
 

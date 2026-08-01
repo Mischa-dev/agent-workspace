@@ -475,6 +475,76 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     assert_eq!(durable_publish.2, seed.human_actor_id);
     assert_eq!(durable_publish.3, intended_commit);
 
+    sqlx::query(
+        r#"
+        UPDATE repository_workspaces
+        SET published_commit = $3, published_at = now(),
+            published_by_actor_id = $4, publish_version = publish_version + 1
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(workspace_id)
+    .bind(&intended_commit)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("record exact published commit for pull-request request");
+    let pull_request_uri = format!(
+        "/api/v1/projects/{}/agent-runs/{run_id}/pull-request",
+        seed.project_id
+    );
+    let pull_request = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&pull_request_uri)
+                .header("origin", "http://127.0.0.1:3100")
+                .header(header::COOKIE, &owner_cookie)
+                .header("x-csrf-token", &csrf)
+                .header("idempotency-key", "m5-explicit-pull-request")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "title": "M5 exact publication",
+                        "body": "Created from the exact managed commit.",
+                        "workItemIds": []
+                    }))
+                    .expect("serialize pull-request command"),
+                ))
+                .expect("build M5 pull-request request"),
+        )
+        .await
+        .expect("M5 pull-request response");
+    let pull_request = response_json(pull_request).await;
+    assert_eq!(pull_request.0, StatusCode::ACCEPTED);
+    assert_eq!(pull_request.1["agentRunId"], run_id.to_string());
+    assert_eq!(
+        pull_request.1["repositoryWorkspaceId"],
+        workspace_id.to_string()
+    );
+    assert_eq!(pull_request.1["headRef"], branch);
+    assert_eq!(pull_request.1["headSha"], intended_commit);
+    assert_eq!(pull_request.1["baseRef"], "main");
+    let durable_pull_request = sqlx::query_as::<_, (Uuid, Uuid, String, String, String)>(
+        r#"
+        SELECT request.agent_run_id, request.repository_workspace_id,
+               request.head_ref, request.head_sha, request.base_ref
+        FROM github_pull_request_requests request
+        JOIN github_jobs job ON job.pull_request_request_id = request.id
+        WHERE job.kind = 'pull_request_create'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("durable pull-request creation job");
+    assert_eq!(durable_pull_request.0, run_id);
+    assert_eq!(durable_pull_request.1, workspace_id);
+    assert_eq!(durable_pull_request.2, branch);
+    assert_eq!(durable_pull_request.3, intended_commit);
+    assert_eq!(durable_pull_request.4, "main");
+
     supervisors.shutdown_all().await;
     pool.close().await;
     administrative_pool
