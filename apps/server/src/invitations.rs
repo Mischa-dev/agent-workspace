@@ -50,8 +50,9 @@ struct RevokeInvitationRequest {
 struct InvitationAccess {
     organization_id: Uuid,
     project_archived: bool,
-    membership_role: String,
-    membership_enabled: bool,
+    organization_role: String,
+    organization_membership_enabled: bool,
+    project_membership_enabled: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -214,23 +215,29 @@ async fn revoke_invitation(
         version: i64,
         organization_id: Uuid,
         project_archived: bool,
-        membership_role: String,
-        membership_enabled: bool,
+        organization_role: String,
+        organization_membership_enabled: bool,
+        project_membership_enabled: bool,
     }
     let row = sqlx::query_as::<_, RevokeRow>(
         r#"
         SELECT invitation.project_id, invitation.role, invitation.status,
                invitation.version, project.organization_id,
                project.archived_at IS NOT NULL AS project_archived,
-               membership.role AS membership_role,
-               membership.enabled AS membership_enabled
+               organization_membership.role AS organization_role,
+               organization_membership.enabled AS organization_membership_enabled,
+               project_membership.enabled AS project_membership_enabled
         FROM project_invitations invitation
         JOIN projects project ON project.id = invitation.project_id
-        JOIN project_memberships membership
-          ON membership.project_id = invitation.project_id
-         AND membership.actor_id = $2
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+        JOIN project_memberships project_membership
+          ON project_membership.project_id = invitation.project_id
+         AND project_membership.actor_id = $2
         WHERE invitation.id = $1
-        FOR UPDATE OF invitation, project, membership
+        FOR UPDATE OF invitation, project, organization_membership,
+                      project_membership
         "#,
     )
     .bind(invitation_id)
@@ -241,8 +248,9 @@ async fn revoke_invitation(
     let access = InvitationAccess {
         organization_id: row.organization_id,
         project_archived: row.project_archived,
-        membership_role: row.membership_role,
-        membership_enabled: row.membership_enabled,
+        organization_role: row.organization_role,
+        organization_membership_enabled: row.organization_membership_enabled,
+        project_membership_enabled: row.project_membership_enabled,
     };
     authorize_manage(&access, Some(&row.role))?;
     if row.status == "revoked" {
@@ -298,11 +306,16 @@ async fn invitation_access(
         r#"
         SELECT project.organization_id,
                project.archived_at IS NOT NULL AS project_archived,
-               membership.role AS membership_role,
-               membership.enabled AS membership_enabled
+               organization_membership.role AS organization_role,
+               organization_membership.enabled AS organization_membership_enabled,
+               project_membership.enabled AS project_membership_enabled
         FROM projects project
-        JOIN project_memberships membership
-          ON membership.project_id = project.id AND membership.actor_id = $2
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+        JOIN project_memberships project_membership
+          ON project_membership.project_id = project.id
+         AND project_membership.actor_id = $2
         WHERE project.id = $1
         "#,
     )
@@ -322,13 +335,18 @@ async fn lock_invitation_access(
         r#"
         SELECT project.organization_id,
                project.archived_at IS NOT NULL AS project_archived,
-               membership.role AS membership_role,
-               membership.enabled AS membership_enabled
+               organization_membership.role AS organization_role,
+               organization_membership.enabled AS organization_membership_enabled,
+               project_membership.enabled AS project_membership_enabled
         FROM projects project
-        JOIN project_memberships membership
-          ON membership.project_id = project.id AND membership.actor_id = $2
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+        JOIN project_memberships project_membership
+          ON project_membership.project_id = project.id
+         AND project_membership.actor_id = $2
         WHERE project.id = $1
-        FOR SHARE OF project, membership
+        FOR SHARE OF project, organization_membership, project_membership
         "#,
     )
     .bind(project_id)
@@ -341,12 +359,15 @@ fn authorize_manage(
     access: &InvitationAccess,
     invitation_role: Option<&str>,
 ) -> Result<(), AppError> {
-    if access.project_archived || !access.membership_enabled {
+    if access.project_archived
+        || !access.organization_membership_enabled
+        || !access.project_membership_enabled
+    {
         return Err(AppError::NotFound("project"));
     }
-    let manager = matches!(access.membership_role.as_str(), "owner" | "admin");
+    let manager = matches!(access.organization_role.as_str(), "owner" | "admin");
     let admin_invite_requires_owner =
-        invitation_role == Some("admin") && access.membership_role != "owner";
+        invitation_role == Some("admin") && access.organization_role != "owner";
     if !manager || admin_invite_requires_owner {
         return Err(AppError::Forbidden);
     }
@@ -450,7 +471,11 @@ impl From<InvitationRow> for InvitationView {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_invitation_token, validate_invitation_role};
+    use uuid::Uuid;
+
+    use super::{
+        InvitationAccess, authorize_manage, generate_invitation_token, validate_invitation_role,
+    };
 
     #[test]
     fn invitation_tokens_are_high_entropy_and_only_roles_are_allowed() {
@@ -464,5 +489,34 @@ mod tests {
         assert!(validate_invitation_role("viewer").is_ok());
         assert!(validate_invitation_role("owner").is_err());
         assert!(validate_invitation_role("worker").is_err());
+    }
+
+    #[test]
+    fn organization_role_owns_invitation_authority() {
+        let mut access = InvitationAccess {
+            organization_id: Uuid::now_v7(),
+            project_archived: false,
+            organization_role: "owner".to_owned(),
+            organization_membership_enabled: true,
+            project_membership_enabled: true,
+        };
+        assert!(authorize_manage(&access, Some("admin")).is_ok());
+
+        access.organization_role = "admin".to_owned();
+        assert!(authorize_manage(&access, Some("member")).is_ok());
+        assert!(authorize_manage(&access, Some("admin")).is_err());
+
+        access.organization_role = "member".to_owned();
+        assert!(authorize_manage(&access, Some("viewer")).is_err());
+
+        access.organization_role = "owner".to_owned();
+        access.organization_membership_enabled = false;
+        assert!(authorize_manage(&access, Some("viewer")).is_err());
+        access.organization_membership_enabled = true;
+        access.project_membership_enabled = false;
+        assert!(authorize_manage(&access, Some("viewer")).is_err());
+        access.project_membership_enabled = true;
+        access.project_archived = true;
+        assert!(authorize_manage(&access, Some("viewer")).is_err());
     }
 }
