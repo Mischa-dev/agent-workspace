@@ -32,6 +32,13 @@ type NavigationMutationContext = {
 
 const projectMutationQueues = new Map<string, Promise<void>>()
 
+function isProjectListQueryKey(queryKey: readonly unknown[]) {
+  return (
+    queryKey[0] === 'projects' &&
+    (queryKey[1] === 'rail' || queryKey[1] === 'search')
+  )
+}
+
 function enqueueProjectMutation<T>(
   projectId: string,
   task: () => Promise<T>,
@@ -90,7 +97,7 @@ function cachedNavigation(
     queryClient.getQueryData<Project>(queryKeys.project(projectId))?.navigation,
   )
   for (const [, list] of queryClient.getQueriesData<ProjectListResponse>({
-    queryKey: ['projects'],
+    predicate: (query) => isProjectListQueryKey(query.queryKey),
   })) {
     current = newerNavigation(
       current,
@@ -133,7 +140,7 @@ function installNavigation(
     },
   )
   queryClient.setQueriesData<ProjectListResponse>(
-    { queryKey: ['projects'] },
+    { predicate: (query) => isProjectListQueryKey(query.queryKey) },
     (current) => {
       if (!current) return current
       return {
@@ -153,7 +160,7 @@ function installNavigation(
     },
   )
   void queryClient.invalidateQueries({
-    queryKey: ['projects'],
+    predicate: (query) => isProjectListQueryKey(query.queryKey),
     refetchType: 'none',
   })
 }
@@ -165,10 +172,15 @@ async function prepareNavigation(
   const generation = currentQueryScopeGeneration()
   const activeProjectListQueries = queryClient
     .getQueryCache()
-    .findAll({ queryKey: ['projects'], type: 'active' })
+    .findAll({
+      predicate: (query) => isProjectListQueryKey(query.queryKey),
+      type: 'active',
+    })
     .map((query) => query.queryKey)
   await Promise.all([
-    queryClient.cancelQueries({ queryKey: ['projects'] }),
+    queryClient.cancelQueries({
+      predicate: (query) => isProjectListQueryKey(query.queryKey),
+    }),
     queryClient.cancelQueries({
       queryKey: queryKeys.project(context.projectId),
       exact: true,

@@ -61,9 +61,19 @@ describe('serialized Project navigation queue', () => {
   it('rebases route, pin, and switch intents in one versioned sequence', async () => {
     const queryClient = new QueryClient()
     let current = navigation(1)
+    const repositoryPickerKey = [
+      'projects',
+      projectId,
+      'repositories',
+      'worker-picker',
+    ] as const
+    const repositoryPicker = {
+      repositories: [{ id: 'repository-a', name: 'Repository A' }],
+    }
     queryClient.setQueryData(['projects', 'search', 'project'], {
       projects: [projectWire(current)],
     })
+    queryClient.setQueryData(repositoryPickerKey, repositoryPicker)
     const writes: Array<{
       kind: 'route' | 'pin' | 'switch'
       body: Record<string, unknown>
@@ -170,6 +180,9 @@ describe('serialized Project navigation queue', () => {
       pinned: true,
       version: 4,
     })
+    expect(queryClient.getQueryData(repositoryPickerKey)).toEqual(
+      repositoryPicker,
+    )
   })
 
   it('retries one conflict, rejects terminal failure, then runs the next intent', async () => {
