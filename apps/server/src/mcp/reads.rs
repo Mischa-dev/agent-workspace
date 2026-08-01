@@ -5,6 +5,10 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::McpPrincipal;
+use crate::policy::{
+    Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+    authorize,
+};
 
 const MAX_INSTRUCTIONS_CHARACTERS: usize = 20_000;
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
@@ -526,27 +530,54 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
     if !principal.can_read() {
         return false;
     }
-    sqlx::query_scalar::<_, bool>(
+    let role = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM project_memberships pm
-            JOIN projects p ON p.id = pm.project_id
-            JOIN actors a ON a.id = pm.actor_id
-            WHERE pm.project_id = $1
-              AND pm.actor_id = $2
-              AND pm.enabled
-              AND p.archived_at IS NULL
-              AND a.kind = 'human'
-              AND a.status = 'active'
-        )
+        SELECT pm.role
+        FROM project_memberships pm
+        JOIN projects p ON p.id = pm.project_id
+        JOIN actors a ON a.id = pm.actor_id
+        WHERE pm.project_id = $1
+          AND pm.actor_id = $2
+          AND pm.enabled
+          AND p.archived_at IS NULL
+          AND a.kind = 'human'
+          AND a.status = 'active'
         "#,
     )
     .bind(principal.project_id)
     .bind(principal.actor_id)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await
-    .unwrap_or(false)
+    .ok()
+    .flatten();
+    let Some(role) = role.and_then(|role| parse_membership_role(&role)) else {
+        return false;
+    };
+    matches!(
+        authorize(
+            &Subject::new(
+                principal.actor_id,
+                ActorKind::Human,
+                true,
+                Some(Membership::project(principal.project_id, role, true)),
+                None,
+            ),
+            Action::McpRead,
+            Resource::Project(ProjectScope::project(principal.project_id)),
+        ),
+        Decision::Allow
+    )
+}
+
+fn parse_membership_role(role: &str) -> Option<MembershipRole> {
+    match role {
+        "owner" => Some(MembershipRole::Owner),
+        "admin" => Some(MembershipRole::Admin),
+        "member" => Some(MembershipRole::Member),
+        "viewer" => Some(MembershipRole::Viewer),
+        "worker" => Some(MembershipRole::Worker),
+        _ => None,
+    }
 }
 
 async fn load_instructions(

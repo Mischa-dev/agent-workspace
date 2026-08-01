@@ -27,7 +27,14 @@ use subtle::ConstantTimeEq;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{AppState, error::AppError};
+use crate::{
+    AppState,
+    error::AppError,
+    policy::{
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        authorize,
+    },
+};
 
 mod oauth;
 mod reads;
@@ -175,19 +182,31 @@ impl McpServer {
         .await;
 
         match row {
-            Ok(Some(row)) => Json(ProjectGetResult::Found {
-                project: ProjectProjection {
-                    id: row.id.to_string(),
-                    organization_id: row.organization_id.to_string(),
-                    key: row.project_key,
-                    name: row.name,
-                    version: row.version,
-                    role: row.role,
-                    canonical_url: format!(
-                        "http://{}/projects/{}",
-                        self.state.config.server_addr, row.id
-                    ),
-                },
+            Ok(Some(row))
+                if mcp_policy_allows(
+                    principal.actor_id,
+                    principal.project_id,
+                    &row.role,
+                    Action::McpRead,
+                ) =>
+            {
+                Json(ProjectGetResult::Found {
+                    project: ProjectProjection {
+                        id: row.id.to_string(),
+                        organization_id: row.organization_id.to_string(),
+                        key: row.project_key,
+                        name: row.name,
+                        version: row.version,
+                        role: row.role,
+                        canonical_url: format!(
+                            "http://{}/projects/{}",
+                            self.state.config.server_addr, row.id
+                        ),
+                    },
+                })
+            }
+            Ok(Some(_)) => Json(ProjectGetResult::NotFound {
+                retry_category: "do_not_retry".to_owned(),
             }),
             Ok(None) => Json(ProjectGetResult::NotFound {
                 retry_category: "do_not_retry".to_owned(),
@@ -927,30 +946,59 @@ async fn validate_issue_command(
     {
         return Err(AppError::Invalid("mcp_scopes"));
     }
-    let eligible = sqlx::query_scalar::<_, bool>(
+    let role = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM project_memberships pm
-            JOIN projects p ON p.id = pm.project_id
-            JOIN actors a ON a.id = pm.actor_id
-            WHERE pm.project_id = $1
-              AND pm.actor_id = $2
-              AND pm.enabled
-              AND p.archived_at IS NULL
-              AND a.kind = 'human'
-              AND a.status = 'active'
-        )
+        SELECT pm.role
+        FROM project_memberships pm
+        JOIN projects p ON p.id = pm.project_id
+        JOIN actors a ON a.id = pm.actor_id
+        WHERE pm.project_id = $1
+          AND pm.actor_id = $2
+          AND pm.enabled
+          AND p.archived_at IS NULL
+          AND a.kind = 'human'
+          AND a.status = 'active'
         "#,
     )
     .bind(command.project_id)
     .bind(command.actor_id)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    if !eligible {
+    let action = if command.scopes.iter().any(|scope| scope == "write") {
+        Action::McpWrite
+    } else {
+        Action::McpRead
+    };
+    if !role
+        .is_some_and(|role| mcp_policy_allows(command.actor_id, command.project_id, &role, action))
+    {
         return Err(AppError::NotFound("project_membership"));
     }
     Ok(())
+}
+
+fn mcp_policy_allows(actor_id: Uuid, project_id: Uuid, role: &str, action: Action) -> bool {
+    let role = match role {
+        "owner" => MembershipRole::Owner,
+        "admin" => MembershipRole::Admin,
+        "member" => MembershipRole::Member,
+        "viewer" => MembershipRole::Viewer,
+        _ => return false,
+    };
+    matches!(
+        authorize(
+            &Subject::new(
+                actor_id,
+                ActorKind::Human,
+                true,
+                Some(Membership::project(project_id, role, true)),
+                None,
+            ),
+            action,
+            Resource::Project(ProjectScope::project(project_id)),
+        ),
+        Decision::Allow
+    )
 }
 
 fn generate_token() -> (String, String, [u8; 32]) {

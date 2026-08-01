@@ -520,6 +520,119 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         mcp_audits, 8,
         "exact replay and conflicts create no success audit"
     );
+    let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM outbox_events)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count effects before Viewer denial");
+
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("downgrade MCP Actor to Viewer");
+    let viewer_project = protocol_json(
+        mcp_request(
+            &application,
+            Some(&token),
+            Some(&session_id),
+            &json!({
+                "jsonrpc":"2.0",
+                "id":30,
+                "method":"tools/call",
+                "params":{
+                    "name":"project_get",
+                    "arguments":{"projectId":seed.project_id.to_string()}
+                }
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        viewer_project.pointer("/result/structuredContent/outcome"),
+        Some(&json!("found")),
+        "a Viewer retains MCP read authority after an immediate role downgrade"
+    );
+    let denied_viewer_write = call_tool(
+        &application,
+        &token,
+        &session_id,
+        31,
+        "work_item_post_update",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "update":"This Viewer write must never be persisted.",
+            "clientRequestId":"m7-viewer-denied-1"
+        }),
+    )
+    .await;
+    assert_eq!(
+        denied_viewer_write.pointer("/outcome"),
+        Some(&json!("permission_denied"))
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE request_id = 'm7-viewer-denied-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count denied Viewer audit rows"),
+        0,
+        "denied Viewer writes produce no success audit"
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM outbox_events)",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count effects after Viewer denial"),
+        viewer_denial_effects_before,
+        "denied Viewer writes create no domain activity or outbox event"
+    );
+    let viewer_write_credential = mcp::issue_credential(
+        &pool,
+        IssueCredentialCommand {
+            project_id: seed.project_id,
+            actor_id: seed.human_actor_id,
+            client_name: "m7-viewer-write-denied".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await;
+    assert!(
+        viewer_write_credential.is_err(),
+        "a Viewer cannot obtain a new MCP write credential"
+    );
+    let viewer_read_credential = mcp::issue_credential(
+        &pool,
+        IssueCredentialCommand {
+            project_id: seed.project_id,
+            actor_id: seed.human_actor_id,
+            client_name: "m7-viewer-read".to_owned(),
+            scopes: vec!["read".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue Viewer read credential");
+    mcp::revoke_credential(&pool, viewer_read_credential.credential_id, 1)
+        .await
+        .expect("revoke Viewer read credential");
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'owner' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("restore MCP Actor role");
 
     let before_conversations = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversations")
         .fetch_one(&pool)

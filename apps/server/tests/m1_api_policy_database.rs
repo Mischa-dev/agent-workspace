@@ -172,8 +172,8 @@ async fn durable_m0_routes_require_a_session_and_exact_project_membership() {
         .expect("Viewer Project switch response");
     assert_eq!(
         viewer_switch.status(),
-        StatusCode::FORBIDDEN,
-        "Project switching advances navigation state and requires NavigationWrite"
+        StatusCode::OK,
+        "a Viewer may update only their own navigation state"
     );
 
     sqlx::query(

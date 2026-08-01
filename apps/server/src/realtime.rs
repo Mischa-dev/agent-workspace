@@ -484,7 +484,11 @@ fn realtime_policy_allows(
         |conversation_id| ProjectScope::thread(project_id, conversation_id),
     );
     Ok(matches!(
-        authorize(&subject, Action::ProjectView, Resource::Project(scope)),
+        authorize(
+            &subject,
+            Action::RealtimeSubscribe,
+            Resource::Project(scope),
+        ),
         Decision::Allow
     ))
 }
@@ -743,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn realtime_delivery_uses_project_view_policy_for_each_event() {
+    fn realtime_delivery_uses_subscription_policy_for_each_event() {
         let event = RealtimeEvent {
             event_id: Uuid::now_v7(),
             kind: "message.delta",

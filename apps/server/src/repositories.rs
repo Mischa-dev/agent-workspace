@@ -132,7 +132,7 @@ async fn list_repositories(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectView,
+        Action::RepositoryView,
     )
     .await?;
     let rows = sqlx::query_as::<_, RepositoryRow>(
@@ -179,7 +179,7 @@ async fn register_repository(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::RepositoryManage,
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -286,7 +286,7 @@ async fn prepare_registered_repository(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::RepositoryManage,
     )
     .await?;
     let reservation = match idempotency::reserve(
@@ -366,7 +366,7 @@ async fn archive_repository(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::RepositoryManage,
     )
     .await?;
     let reservation = match idempotency::reserve(

@@ -36,6 +36,12 @@ pub enum Action {
     InvitationManage,
     MembershipView,
     MembershipManage,
+    RealtimeSubscribe,
+    McpRead,
+    McpWrite,
+    CredentialManage,
+    ExecutionProfileView,
+    ExecutionProfileManage,
     NavigationRead,
     NavigationWrite,
     WorkerInvoke,
@@ -50,19 +56,28 @@ pub enum Action {
     WorkItemView,
     WorkItemCreate,
     WorkItemEdit,
+    RepositoryView,
+    RepositoryManage,
     RepositoryPublish,
+    GithubIntegrationManage,
     PullRequestCreate,
     PullRequestRefresh,
 }
 
 impl Action {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 32] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
         Self::InvitationManage,
         Self::MembershipView,
         Self::MembershipManage,
+        Self::RealtimeSubscribe,
+        Self::McpRead,
+        Self::McpWrite,
+        Self::CredentialManage,
+        Self::ExecutionProfileView,
+        Self::ExecutionProfileManage,
         Self::NavigationRead,
         Self::NavigationWrite,
         Self::WorkerInvoke,
@@ -77,7 +92,10 @@ impl Action {
         Self::WorkItemView,
         Self::WorkItemCreate,
         Self::WorkItemEdit,
+        Self::RepositoryView,
+        Self::RepositoryManage,
         Self::RepositoryPublish,
+        Self::GithubIntegrationManage,
         Self::PullRequestCreate,
         Self::PullRequestRefresh,
     ];
@@ -349,6 +367,12 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::InvitationManage
             | Action::MembershipView
             | Action::MembershipManage
+            | Action::RealtimeSubscribe
+            | Action::McpRead
+            | Action::McpWrite
+            | Action::CredentialManage
+            | Action::ExecutionProfileView
+            | Action::ExecutionProfileManage
             | Action::NavigationRead
             | Action::NavigationWrite
             | Action::WorkerInvoke
@@ -362,7 +386,10 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::WorkItemView
             | Action::WorkItemCreate
             | Action::WorkItemEdit
+            | Action::RepositoryView
+            | Action::RepositoryManage
             | Action::RepositoryPublish
+            | Action::GithubIntegrationManage
             | Action::PullRequestCreate
             | Action::PullRequestRefresh,
             Resource::Project(scope),
@@ -420,6 +447,11 @@ const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
         MembershipRole::Member => matches!(
             action,
             Action::ProjectView
+                | Action::RealtimeSubscribe
+                | Action::McpRead
+                | Action::McpWrite
+                | Action::ExecutionProfileView
+                | Action::ExecutionProfileManage
                 | Action::NavigationRead
                 | Action::NavigationWrite
                 | Action::WorkerInvoke
@@ -434,6 +466,7 @@ const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
                 | Action::WorkItemView
                 | Action::WorkItemCreate
                 | Action::WorkItemEdit
+                | Action::RepositoryView
                 | Action::RepositoryPublish
                 | Action::PullRequestCreate
                 | Action::PullRequestRefresh
@@ -442,9 +475,13 @@ const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
             matches!(
                 action,
                 Action::ProjectView
+                    | Action::RealtimeSubscribe
+                    | Action::McpRead
                     | Action::NavigationRead
+                    | Action::NavigationWrite
                     | Action::ReadStateUpdate
                     | Action::WorkItemView
+                    | Action::RepositoryView
             )
         }
         MembershipRole::Worker => false,
@@ -579,6 +616,11 @@ mod tests {
                     MembershipRole::Member => matches!(
                         action,
                         Action::ProjectView
+                            | Action::RealtimeSubscribe
+                            | Action::McpRead
+                            | Action::McpWrite
+                            | Action::ExecutionProfileView
+                            | Action::ExecutionProfileManage
                             | Action::NavigationRead
                             | Action::NavigationWrite
                             | Action::WorkerInvoke
@@ -596,14 +638,19 @@ mod tests {
                             | Action::WorkItemView
                             | Action::WorkItemCreate
                             | Action::WorkItemEdit
+                            | Action::RepositoryView
                     ),
                     MembershipRole::Viewer => {
                         matches!(
                             action,
                             Action::ProjectView
+                                | Action::RealtimeSubscribe
+                                | Action::McpRead
                                 | Action::NavigationRead
+                                | Action::NavigationWrite
                                 | Action::ReadStateUpdate
                                 | Action::WorkItemView
+                                | Action::RepositoryView
                         )
                     }
                     MembershipRole::Worker => matches!(
