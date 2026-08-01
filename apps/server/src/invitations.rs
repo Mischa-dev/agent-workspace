@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/project-invitations/{invitation_id}/revoke",
             post(revoke_invitation),
         )
+        .route(
+            "/api/v1/project-invitations/{invitation_id}/replace",
+            post(replace_invitation),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +48,13 @@ struct IssueInvitationRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RevokeInvitationRequest {
     expected_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReplaceInvitationRequest {
+    expected_version: i64,
+    expires_in_hours: i32,
 }
 
 #[derive(Debug, FromRow)]
@@ -70,6 +81,19 @@ struct InvitationRow {
     accepted_at: Option<String>,
     revoked_at: Option<String>,
     created_at: String,
+}
+
+#[derive(Debug, FromRow)]
+struct InvitationMutationRow {
+    project_id: Uuid,
+    role: String,
+    status: String,
+    version: i64,
+    organization_id: Uuid,
+    project_archived: bool,
+    organization_role: String,
+    organization_membership_enabled: bool,
+    project_membership_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,44 +231,9 @@ async fn revoke_invitation(
         return Err(AppError::Validation("invitation version"));
     }
     let mut transaction = state.pool.begin().await?;
-    #[derive(FromRow)]
-    struct RevokeRow {
-        project_id: Uuid,
-        role: String,
-        status: String,
-        version: i64,
-        organization_id: Uuid,
-        project_archived: bool,
-        organization_role: String,
-        organization_membership_enabled: bool,
-        project_membership_enabled: bool,
-    }
-    let row = sqlx::query_as::<_, RevokeRow>(
-        r#"
-        SELECT invitation.project_id, invitation.role, invitation.status,
-               invitation.version, project.organization_id,
-               project.archived_at IS NOT NULL AS project_archived,
-               organization_membership.role AS organization_role,
-               organization_membership.enabled AS organization_membership_enabled,
-               project_membership.enabled AS project_membership_enabled
-        FROM project_invitations invitation
-        JOIN projects project ON project.id = invitation.project_id
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = $2
-        JOIN project_memberships project_membership
-          ON project_membership.project_id = invitation.project_id
-         AND project_membership.actor_id = $2
-        WHERE invitation.id = $1
-        FOR UPDATE OF invitation, project, organization_membership,
-                      project_membership
-        "#,
-    )
-    .bind(invitation_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("project_invitation"))?;
+    let row = lock_invitation_for_mutation(&mut transaction, principal.actor_id, invitation_id)
+        .await?
+        .ok_or(AppError::NotFound("project_invitation"))?;
     let access = InvitationAccess {
         organization_id: row.organization_id,
         project_archived: row.project_archived,
@@ -295,6 +284,138 @@ async fn revoke_invitation(
     Ok(Json(
         fetch_invitation(&state, row.project_id, invitation_id).await?,
     ))
+}
+
+async fn replace_invitation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(invitation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ReplaceInvitationRequest>,
+) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if request.expected_version < 1 {
+        return Err(AppError::Validation("invitation version"));
+    }
+    if !(1..=MAX_EXPIRY_HOURS).contains(&request.expires_in_hours) {
+        return Err(AppError::Validation("invitation expiry"));
+    }
+
+    let (token, token_prefix, token_digest) = generate_invitation_token();
+    let replacement_id = Uuid::now_v7();
+    let mut transaction = state.pool.begin().await?;
+    let row = lock_invitation_for_mutation(&mut transaction, principal.actor_id, invitation_id)
+        .await?
+        .ok_or(AppError::NotFound("project_invitation"))?;
+    let access = InvitationAccess {
+        organization_id: row.organization_id,
+        project_archived: row.project_archived,
+        organization_role: row.organization_role,
+        organization_membership_enabled: row.organization_membership_enabled,
+        project_membership_enabled: row.project_membership_enabled,
+    };
+    authorize_manage(&access, Some(&row.role))?;
+    if row.status != "active" {
+        return Err(AppError::Conflict(
+            "project_invitation",
+            "invitation is no longer active",
+        ));
+    }
+    if row.version != request.expected_version {
+        return Err(AppError::VersionConflict {
+            resource: "project_invitation",
+            current_version: row.version,
+        });
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO project_invitations (
+            id, organization_id, project_id, role, token_prefix, token_digest,
+            issued_by_actor_id, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7,
+                  now() + make_interval(hours => $8))
+        "#,
+    )
+    .bind(replacement_id)
+    .bind(row.organization_id)
+    .bind(row.project_id)
+    .bind(&row.role)
+    .bind(&token_prefix)
+    .bind(token_digest.to_vec())
+    .bind(principal.actor_id)
+    .bind(request.expires_in_hours)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE project_invitations
+        SET status = 'replaced', revoked_at = now(),
+            replaced_by_invitation_id = $2, version = version + 1,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(invitation_id)
+    .bind(replacement_id)
+    .execute(&mut *transaction)
+    .await?;
+    insert_audit(
+        &mut transaction,
+        &principal,
+        row.project_id,
+        invitation_id,
+        "project.invitation.replace",
+        serde_json::json!({
+            "replacementInvitationId": replacement_id,
+            "role": row.role,
+            "expiresInHours": request.expires_in_hours,
+        }),
+    )
+    .await?;
+    transaction.commit().await?;
+
+    let invitation = fetch_invitation(&state, row.project_id, replacement_id).await?;
+    let origin = format!("http://{}", state.config.server_addr);
+    Ok((
+        StatusCode::CREATED,
+        Json(IssuedInvitation {
+            invitation,
+            invitation_url: format!("{origin}/join#token={token}"),
+        }),
+    ))
+}
+
+async fn lock_invitation_for_mutation(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    invitation_id: Uuid,
+) -> Result<Option<InvitationMutationRow>, AppError> {
+    Ok(sqlx::query_as::<_, InvitationMutationRow>(
+        r#"
+        SELECT invitation.project_id, invitation.role, invitation.status,
+               invitation.version, project.organization_id,
+               project.archived_at IS NOT NULL AS project_archived,
+               organization_membership.role AS organization_role,
+               organization_membership.enabled AS organization_membership_enabled,
+               project_membership.enabled AS project_membership_enabled
+        FROM project_invitations invitation
+        JOIN projects project ON project.id = invitation.project_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+        JOIN project_memberships project_membership
+          ON project_membership.project_id = invitation.project_id
+         AND project_membership.actor_id = $2
+        WHERE invitation.id = $1
+        FOR UPDATE OF invitation, project, organization_membership,
+                      project_membership
+        "#,
+    )
+    .bind(invitation_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
 }
 
 async fn invitation_access(

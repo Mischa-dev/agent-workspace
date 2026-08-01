@@ -221,6 +221,78 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .await
         .expect("admin member invitation response");
     assert_eq!(admin_member.status(), StatusCode::CREATED);
+    let admin_member = response_json(admin_member).await;
+    let admin_member_id = admin_member["id"]
+        .as_str()
+        .expect("admin member invitation ID")
+        .parse::<Uuid>()
+        .expect("admin member invitation UUID");
+    let admin_member_token = admin_member["invitationUrl"]
+        .as_str()
+        .expect("admin member invitation URL")
+        .split_once("#token=")
+        .expect("admin member token fragment")
+        .1
+        .to_owned();
+
+    let replace_uri = format!("/api/v1/project-invitations/{admin_member_id}/replace");
+    let replacement_response = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            &replace_uri,
+            &write_headers(&admin_cookie, &admin_csrf),
+            json!({"expectedVersion":1,"expiresInHours":48}),
+        ))
+        .await
+        .expect("replace invitation response");
+    assert_eq!(replacement_response.status(), StatusCode::CREATED);
+    let replacement = response_json(replacement_response).await;
+    let replacement_id = replacement["id"]
+        .as_str()
+        .expect("replacement invitation ID")
+        .parse::<Uuid>()
+        .expect("replacement invitation UUID");
+    let replacement_token = replacement["invitationUrl"]
+        .as_str()
+        .expect("replacement invitation URL")
+        .split_once("#token=")
+        .expect("replacement token fragment")
+        .1;
+    assert_ne!(replacement_token, admin_member_token);
+    assert_eq!(replacement["role"], "member");
+    let replacement_shape = sqlx::query_as::<_, (String, i64, Option<Uuid>)>(
+        "SELECT status, version, replaced_by_invitation_id FROM project_invitations WHERE id = $1",
+    )
+    .bind(admin_member_id)
+    .fetch_one(&pool)
+    .await
+    .expect("replaced invitation shape");
+    assert_eq!(
+        replacement_shape,
+        ("replaced".to_owned(), 2, Some(replacement_id))
+    );
+    let replayed_replace = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            &replace_uri,
+            &write_headers(&admin_cookie, &admin_csrf),
+            json!({"expectedVersion":1,"expiresInHours":48}),
+        ))
+        .await
+        .expect("replayed replace response");
+    assert_eq!(replayed_replace.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM project_invitations WHERE project_id = $1 AND role = 'member'",
+        )
+        .bind(seed.project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("member invitation count"),
+        2
+    );
 
     let admin_admin = application
         .clone()
