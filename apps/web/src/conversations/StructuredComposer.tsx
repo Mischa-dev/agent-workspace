@@ -1,6 +1,7 @@
 import { FormEvent, useRef, useState } from 'react'
 
 import { MentionPicker } from './MentionPicker'
+import { WorkItemPicker } from './WorkItemPicker'
 import {
   buildMessageContent,
   composerScalarValues,
@@ -8,28 +9,40 @@ import {
   MAX_MESSAGE_SCALAR_VALUES,
   type ComposerSubmission,
 } from './composerModel'
-import type { ConversationActor } from './types'
+import type { ConversationActor, ConversationWorkItemReference } from './types'
 
 type StructuredComposerProps = {
   disabled?: boolean
+  label?: string
   onSubmit: (submission: ComposerSubmission) => Promise<void>
+  placeholder?: string
   searchActors: (query: string) => Promise<ConversationActor[]>
+  searchWorkItems?: (query: string) => Promise<ConversationWorkItemReference[]>
+  submitLabel?: string
 }
 
 export function StructuredComposer({
   disabled = false,
+  label = 'Message',
   onSubmit,
+  placeholder = 'Write a Message…',
   searchActors,
+  searchWorkItems,
+  submitLabel = 'Send Message',
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const mentionButtonRef = useRef<HTMLButtonElement>(null)
+  const workItemButtonRef = useRef<HTMLButtonElement>(null)
   const idempotencyKeyRef = useRef(createIdempotencyKey())
   const searchGenerationRef = useRef(0)
   const [text, setText] = useState('')
   const [mentions, setMentions] = useState<ConversationActor[]>([])
+  const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [workItemPickerOpen, setWorkItemPickerOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ConversationActor[]>([])
+  const [workItemResults, setWorkItemResults] = useState<ConversationWorkItemReference[]>([])
   const [searchBusy, setSearchBusy] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [submitBusy, setSubmitBusy] = useState(false)
@@ -56,14 +69,39 @@ export function StructuredComposer({
       })
   }
 
+  const runWorkItemSearch = (nextQuery: string) => {
+    if (!searchWorkItems) return
+    const generation = ++searchGenerationRef.current
+    setSearchBusy(true)
+    setSearchError(null)
+    void searchWorkItems(nextQuery.trim())
+      .then((items) => { if (searchGenerationRef.current === generation) setWorkItemResults(items) })
+      .catch((reason: unknown) => {
+        if (searchGenerationRef.current === generation) setSearchError(reason instanceof Error ? reason.message : 'Could not search Work Items.')
+      })
+      .finally(() => { if (searchGenerationRef.current === generation) setSearchBusy(false) })
+  }
+
   const openMentionPicker = () => {
+    setWorkItemPickerOpen(false)
     setPickerOpen(true)
     runMentionSearch(query)
+  }
+
+  const openWorkItemPicker = () => {
+    setPickerOpen(false)
+    setWorkItemPickerOpen(true)
+    runWorkItemSearch(query)
   }
 
   const closeMentionPicker = () => {
     searchGenerationRef.current += 1
     setPickerOpen(false)
+  }
+
+  const closeWorkItemPicker = () => {
+    searchGenerationRef.current += 1
+    setWorkItemPickerOpen(false)
   }
 
   const changeMentionQuery = (nextQuery: string) => {
@@ -73,7 +111,7 @@ export function StructuredComposer({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const content = buildMessageContent(text, mentions)
+    const content = buildMessageContent(text, mentions, workItems)
     if (
       !content ||
       composerScalarValues(text, mentions) > MAX_MESSAGE_SCALAR_VALUES ||
@@ -92,6 +130,7 @@ export function StructuredComposer({
       .then(() => {
         setText('')
         setMentions([])
+        setWorkItems([])
         idempotencyKeyRef.current = createIdempotencyKey()
         queueMicrotask(() => textareaRef.current?.focus())
       })
@@ -112,17 +151,22 @@ export function StructuredComposer({
     setQuery('')
   }
 
-  const scalarValues = composerScalarValues(text, mentions)
+  const addWorkItem = (item: ConversationWorkItemReference) => {
+    setWorkItems((current) => current.some((candidate) => candidate.id === item.id) ? current : [...current, item].slice(0, 32))
+    setQuery('')
+  }
+
+  const scalarValues = composerScalarValues(text, mentions, workItems)
   const overLimit = scalarValues > MAX_MESSAGE_SCALAR_VALUES
-  const content = overLimit ? null : buildMessageContent(text, mentions)
+  const content = overLimit ? null : buildMessageContent(text, mentions, workItems)
   return (
     <form className="structured-composer" onSubmit={submit}>
-      <label htmlFor="conversation-message">Message</label>
+      <label htmlFor="conversation-message">{label}</label>
       <textarea
         disabled={disabled || submitBusy}
         id="conversation-message"
         onChange={(event) => setText(event.target.value)}
-        placeholder="Write a Message…"
+        placeholder={placeholder}
         ref={textareaRef}
         rows={3}
         value={text}
@@ -148,6 +192,13 @@ export function StructuredComposer({
           ))}
         </ul>
       ) : null}
+      {workItems.length > 0 ? (
+        <ul aria-label="Selected Work Item references" className="selected-mentions">
+          {workItems.map((item) => (
+            <li key={item.id}><span>{item.key}</span><button aria-label={`Remove ${item.key}`} disabled={submitBusy} onClick={() => setWorkItems((current) => current.filter((candidate) => candidate.id !== item.id))} type="button">×</button></li>
+          ))}
+        </ul>
+      ) : null}
       <div className="composer-actions">
         <button
           aria-expanded={pickerOpen}
@@ -158,6 +209,7 @@ export function StructuredComposer({
         >
           Mention Actor
         </button>
+        {searchWorkItems ? <button aria-expanded={workItemPickerOpen} disabled={disabled || submitBusy || workItems.length >= 32} onClick={openWorkItemPicker} ref={workItemButtonRef} type="button">Reference Work Item</button> : null}
         <span
           aria-live="polite"
           className={overLimit ? 'character-count over-limit' : 'character-count'}
@@ -165,7 +217,7 @@ export function StructuredComposer({
           {scalarValues.toLocaleString()} / 20,000 Unicode characters
         </span>
         <button disabled={!content || disabled || submitBusy} type="submit">
-          {submitBusy ? 'Sending…' : 'Send Message'}
+          {submitBusy ? 'Sending…' : submitLabel}
         </button>
       </div>
       {overLimit ? (
@@ -188,6 +240,9 @@ export function StructuredComposer({
           onSelect={addMention}
           returnFocusRef={mentionButtonRef}
         />
+      ) : null}
+      {workItemPickerOpen ? (
+        <WorkItemPicker busy={searchBusy} error={searchError} items={workItemResults} onClose={closeWorkItemPicker} onQueryChange={(nextQuery) => { setQuery(nextQuery); runWorkItemSearch(nextQuery) }} onSelect={addWorkItem} returnFocusRef={workItemButtonRef} />
       ) : null}
     </form>
   )

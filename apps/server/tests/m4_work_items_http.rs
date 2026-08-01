@@ -178,6 +178,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
             .expect("named workflow status")
     };
     let ready_status_id = status_id("Ready");
+    let in_progress_status_id = status_id("In Progress");
     let done_status_id = status_id("Done");
     assert_eq!(
         workflow.2["statuses"]
@@ -804,6 +805,40 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         "primary"
     );
 
+    let board = get_json(&application, &cookie, &format!("{base}/board?limit=10")).await;
+    assert_eq!(board.0, StatusCode::OK, "{}", board.1);
+    assert_eq!(board.2["columns"].as_array().map(Vec::len), Some(7));
+    let moved = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-board-move"),
+        &format!(
+            "{base}/{}/move",
+            created.2["id"].as_str().expect("created ID")
+        ),
+        json!({
+            "expectedVersion": 14,
+            "targetStatusId": in_progress_status_id,
+            "targetPosition": 1
+        }),
+    )
+    .await;
+    assert_eq!(moved.0, StatusCode::OK, "{}", moved.1);
+    assert_eq!(moved.2["version"], 15);
+    assert_eq!(moved.2["status"]["name"], "In Progress");
+    let moved_board = get_json(
+        &application,
+        &cookie,
+        &format!("{base}/board?statusId={in_progress_status_id}&limit=10"),
+    )
+    .await;
+    assert_eq!(moved_board.0, StatusCode::OK, "{}", moved_board.1);
+    assert_eq!(
+        moved_board.2["columns"][0]["items"][0]["id"],
+        created.2["id"]
+    );
+
     let comment_uri = format!(
         "{base}/{}/comments",
         created.2["id"].as_str().expect("created ID")
@@ -828,7 +863,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(comment.0, StatusCode::CREATED, "{}", comment.1);
-    assert_eq!(comment.2["sequence"], 15);
+    assert_eq!(comment.2["sequence"], 16);
     assert_eq!(
         comment.2["comment"]["mentionedActors"][0]["id"],
         seed.human_actor_id.to_string()
@@ -913,7 +948,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .await;
     assert_eq!(timeline.0, StatusCode::OK, "{}", timeline.1);
     assert_eq!(timeline.2["entries"][0]["kind"], "comment");
-    assert_eq!(timeline.2["entries"][0]["sequence"], 15);
+    assert_eq!(timeline.2["entries"][0]["sequence"], 16);
     assert!(timeline.2["nextCursor"].is_string());
 
     let activity_count = sqlx::query_scalar::<_, i64>(
@@ -923,7 +958,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 activity");
-    assert_eq!(activity_count, 16);
+    assert_eq!(activity_count, 17);
     let outbox_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND resource_kind = 'work_item' AND conversation_id IS NULL",
     )
@@ -931,7 +966,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 outbox events");
-    assert_eq!(outbox_count, 17);
+    assert_eq!(outbox_count, 18);
     let counter = sqlx::query_scalar::<_, i64>(
         "SELECT next_work_item_number FROM project_counters WHERE project_id = $1",
     )

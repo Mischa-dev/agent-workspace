@@ -25,6 +25,7 @@ import {
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useConversationRealtime } from '../realtime/realtimeContext'
+import { searchWorkItemReferences } from '../work-items/api'
 import { AppShell } from '../shell/AppShell'
 import {
   archiveConversation,
@@ -370,6 +371,7 @@ export function ChannelPage() {
           searchActors={async (query) =>
             (await searchMentionableActors(projectId, query)).actors
           }
+          searchWorkItems={(query) => searchWorkItemReferences(projectId, query)}
         />
       ) : null}
     </AppShell>

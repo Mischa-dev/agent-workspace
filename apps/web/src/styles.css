@@ -1481,6 +1481,111 @@ p {
   background: var(--panel);
 }
 
+.work-item-view-switcher {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.work-item-view-switcher button[aria-pressed='true'] {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
+.work-item-board {
+  display: grid;
+  grid-auto-columns: minmax(250px, 1fr);
+  grid-auto-flow: column;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+}
+
+.work-item-board-column {
+  min-height: 280px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-top: 2px solid var(--status-accent, var(--line-strong));
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.work-item-board-column > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.work-item-board-column h2,
+.work-item-board-column p {
+  margin: 0;
+}
+
+.work-item-board-column h2 {
+  font-size: 0.8rem;
+}
+
+.work-item-board-column > header span,
+.work-item-board-column > p,
+.board-card-meta {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.work-item-board-column ol {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.work-item-board-column li {
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--panel-raised);
+}
+
+.work-item-board-column li[draggable='true'] {
+  cursor: grab;
+}
+
+.work-item-board-column li > a,
+.work-item-board-column li > a span,
+.work-item-board-column li > a strong,
+.board-card-meta {
+  display: block;
+}
+
+.work-item-board-column li > a strong {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.board-card-meta {
+  margin-top: 7px;
+}
+
+.board-card-actions {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 3px;
+  margin-top: 8px;
+}
+
+.board-card-actions select {
+  width: 100%;
+}
+
+.board-error {
+  position: sticky;
+  left: 0;
+}
+
 .work-item-key,
 .work-item-type,
 .work-item-owner,

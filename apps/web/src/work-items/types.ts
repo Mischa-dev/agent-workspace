@@ -130,6 +130,14 @@ export type WorkItemListResponse = {
   nextCursor: string | null
 }
 
+export type WorkItemBoardResponse = {
+  columns: Array<{
+    status: WorkItemStatus
+    items: WorkItemCard[]
+    hasMore: boolean
+  }>
+}
+
 export type WorkItemPatch = {
   expectedVersion: number
   title?: string
@@ -153,7 +161,11 @@ export type WorkItemTimelineEntry = {
   comment: {
     id: string
     author: AssignableActor
+    content: MessageContentV1
     plainText: string
+    mentionedActors: AssignableActor[]
+    referencedWorkItems: ConversationWorkItemReference[]
     createdAt: string
   } | null
 }
+import type { ConversationWorkItemReference, MessageContentV1 } from '../conversations/types'

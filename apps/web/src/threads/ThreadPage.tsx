@@ -48,6 +48,7 @@ import type {
 } from '../conversations/types'
 import { useConversationRealtime } from '../realtime/realtimeContext'
 import { useSetWorkItemThreadLink } from '../work-items/hooks'
+import { searchWorkItemReferences } from '../work-items/api'
 
 type RunState =
   | 'created'
@@ -733,6 +734,7 @@ export function ThreadPage() {
           searchActors={async (query) =>
             (await searchMentionableActors(projectId, query)).actors
           }
+          searchWorkItems={(query) => searchWorkItemReferences(projectId, query)}
         />
       ) : null}
 
