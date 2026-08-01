@@ -303,7 +303,7 @@ async fn authorize(
         format!("<fieldset><legend>Choose one Project</legend>{choices}</fieldset>")
     };
     let html = format!(
-        "<!doctype html><html><head><meta charset=utf-8><title>Authorize Codex</title></head><body><main><h1>Authorize {}</h1><p>This local Codex client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {}.</p>{}<form method=post action=/oauth/authorize>{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
+        "<!doctype html><html><head><meta charset=utf-8><title>Authorize Codex</title></head><body><main><h1>Authorize {}</h1><p>This local Codex client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {}.</p><form method=post action=/oauth/authorize>{}{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
         escape_html(&client.client_name),
         escape_html(&scope),
         escape_html(&principal.display_name),
