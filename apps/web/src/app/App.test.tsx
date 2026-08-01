@@ -1155,6 +1155,69 @@ describe('M1 authenticated shell', () => {
     })
   })
 
+  it('submits a bounded provider question answer instead of an approval decision', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const questionTimeline = {
+      ...timeline,
+      entries: timeline.entries.map((entry) =>
+        entry.workerEvent?.kind === 'approval_requested'
+          ? {
+              ...entry,
+              workerEvent: {
+                ...entry.workerEvent,
+                kind: 'question_requested',
+                summary: 'The Worker needs a release name.',
+              },
+            }
+          : entry,
+      ),
+      approvals: [
+        {
+          ...timeline.approvals[0],
+          kind: 'question' as const,
+          summary: 'What should the release be called?',
+          options: [],
+        },
+      ],
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(questionTimeline)
+      }
+      if (path.includes('/agent-approvals/approval-1/respond')) {
+        return jsonResponse({
+          ...questionTimeline.approvals[0],
+          status: 'resolved',
+        })
+      }
+      return standardImplementation?.(input, init) ?? Promise.reject()
+    })
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Worker question' }),
+    ).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Your answer'), {
+      target: { value: 'Aurora' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([path]) =>
+        String(path).includes('/agent-approvals/approval-1/respond'),
+      )
+      expect(request).toBeDefined()
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({ answer: 'Aurora' })
+    })
+    expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
+  })
+
   it('does not remember an active child while browsing archived-parent history', async () => {
     const archivedChildId = '019fb600-0000-7000-8000-000000000014'
     window.history.replaceState(

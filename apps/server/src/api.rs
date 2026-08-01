@@ -977,8 +977,10 @@ async fn persist_run_start_failure(
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ApprovalResponse {
-    decision: String,
+    decision: Option<String>,
+    answer: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -997,9 +999,6 @@ async fn respond_to_approval(
     ApiJson(response): ApiJson<ApprovalResponse>,
 ) -> Result<Json<ApprovalView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if !matches!(response.decision.as_str(), "approve" | "deny") {
-        return Err(AppError::Invalid("unknown approval decision"));
-    }
     let request_hash = RequestHash::for_value(&response)?;
 
     #[derive(FromRow)]
@@ -1011,6 +1010,7 @@ async fn respond_to_approval(
         requesting_actor_id: Uuid,
         eligible_role: String,
         human_required: bool,
+        kind: String,
         membership_role: String,
         membership_enabled: bool,
         status: String,
@@ -1029,6 +1029,7 @@ async fn respond_to_approval(
             aa.requesting_actor_id,
             aa.eligible_role,
             aa.human_required,
+            aa.kind,
             pm.role AS membership_role,
             pm.enabled AS membership_enabled,
             aa.status,
@@ -1074,6 +1075,44 @@ async fn respond_to_approval(
         },
     )?;
 
+    let (response_json, approved) = match context.kind.as_str() {
+        "approval" => {
+            if response.answer.is_some()
+                || !matches!(response.decision.as_deref(), Some("approve" | "deny"))
+            {
+                return Err(AppError::Invalid("unknown approval decision"));
+            }
+            let decision = response
+                .decision
+                .as_deref()
+                .ok_or(AppError::Invalid("approval decision is required"))?;
+            (
+                serde_json::json!({"decision": decision}),
+                decision == "approve",
+            )
+        }
+        "question" => {
+            if response.decision.is_some() {
+                return Err(AppError::Invalid(
+                    "question answer cannot include a decision",
+                ));
+            }
+            let answer = response
+                .answer
+                .as_deref()
+                .map(str::trim)
+                .filter(|answer| {
+                    (1..=4_000).contains(&answer.chars().count())
+                        && !answer.chars().any(|character| {
+                            character.is_control() && character != '\n' && character != '\t'
+                        })
+                })
+                .ok_or(AppError::Invalid("question answer is invalid"))?;
+            (serde_json::json!({"answer": answer}), true)
+        }
+        _ => return Err(AppError::Internal("unknown approval kind")),
+    };
+
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = idempotency::resource_bound_scope("approval", approval_id, "respond")?;
     let reservation = match idempotency::reserve(
@@ -1100,7 +1139,6 @@ async fn respond_to_approval(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
-    let response_json = serde_json::json!({"decision": response.decision});
     if context.status == "resolved" {
         if context.responded_by_actor_id == Some(principal.actor_id)
             && context.current_response == Some(response_json)
@@ -1143,18 +1181,26 @@ async fn respond_to_approval(
     let resolved_event = insert_significant_event(
         &mut transaction,
         context.run_id,
-        "approval_resolved",
-        "The approval was resolved.",
+        if context.kind == "question" {
+            "question_resolved"
+        } else {
+            "approval_resolved"
+        },
+        if context.kind == "question" {
+            "The question was answered."
+        } else {
+            "The approval was resolved."
+        },
         serde_json::json!({
             "approval_id": approval_id,
-            "decision": response.decision,
+            "resolution": if context.kind == "question" { "answered" } else if approved { "approved" } else { "denied" },
             "responded_by_actor_id": principal.actor_id
         }),
     )
     .await?;
     insert_event_entry(&mut transaction, context.conversation_id, resolved_event).await?;
 
-    if response.decision == "approve" {
+    if approved {
         transition_run(&mut transaction, context.run_id, RunState::Working, None).await?;
     } else {
         transition_run(
@@ -1194,7 +1240,7 @@ async fn respond_to_approval(
     )
     .await?;
     transaction.commit().await?;
-    if response.decision == "approve" && state.config.demo_executor {
+    if approved && state.config.demo_executor {
         let background_state = state.clone();
         tokio::spawn(async move {
             if let Err(error) =

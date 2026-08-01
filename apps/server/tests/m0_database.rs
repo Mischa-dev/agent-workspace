@@ -165,6 +165,63 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
             .await
             .expect("read canceled approval");
     assert_eq!(approval_status, "canceled");
+
+    sqlx::query(
+        r#"
+        INSERT INTO messages (
+            id, project_id, conversation_id, author_actor_id,
+            content_version, content, plain_text, agent_run_id
+        )
+        VALUES (
+            $1, $2, $3, $4, 1,
+            '{"version":1,"nodes":[{"type":"text","text":"worker result"}]}'::jsonb,
+            'worker result', $5
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(first.project_id)
+    .bind(first.thread_id)
+    .bind(first.worker_actor_id)
+    .bind(terminal_run_id)
+    .execute(&pool)
+    .await
+    .expect("insert consolidated Worker Message");
+    let duplicate_worker_message = sqlx::query(
+        r#"
+        INSERT INTO messages (
+            id, project_id, conversation_id, author_actor_id,
+            content_version, content, plain_text, agent_run_id
+        )
+        VALUES (
+            $1, $2, $3, $4, 1,
+            '{"version":1,"nodes":[{"type":"text","text":"duplicate"}]}'::jsonb,
+            'duplicate', $5
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(first.project_id)
+    .bind(first.thread_id)
+    .bind(first.worker_actor_id)
+    .bind(terminal_run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate_worker_message.is_err(),
+        "provider replay cannot create a second Worker Message for one Agent Run"
+    );
+
+    let invalid_delivery = sqlx::query(
+        "UPDATE agent_approvals SET provider_response_delivered_at = now() WHERE id = $1",
+    )
+    .bind(approval_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_delivery.is_err(),
+        "a delivered provider response must have a durable claim"
+    );
 }
 
 async fn insert_active_run(
