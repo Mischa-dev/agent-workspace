@@ -43,7 +43,30 @@ export type WorkItem = {
   createdAt: string
   updatedAt: string
   acceptanceCriteria: AcceptanceCriterion[]
+  linkedThreads: LinkedThread[]
+  linkedRepositories: LinkedRepository[]
   capabilities: WorkItemCapabilities
+}
+
+export type LinkedThread = {
+  id: string
+  name: string
+  parentChannelId: string
+  parentChannelName: string
+  archivedAt: string | null
+  newestRunState: string | null
+  href: string
+}
+
+export type LinkedRepository = {
+  id: string
+  owner: string
+  name: string
+  role: 'primary' | 'related'
+  preparationState: string
+  available: boolean
+  archivedAt: string | null
+  href: string
 }
 
 export type AcceptanceCriterion = {
@@ -59,7 +82,11 @@ export type AcceptanceCriterion = {
 
 export type WorkItemCard = Omit<
   WorkItem,
-  'description' | 'createdAt' | 'acceptanceCriteria'
+  | 'description'
+  | 'createdAt'
+  | 'acceptanceCriteria'
+  | 'linkedThreads'
+  | 'linkedRepositories'
 >
 
 export type WorkflowType = WorkItemType & {

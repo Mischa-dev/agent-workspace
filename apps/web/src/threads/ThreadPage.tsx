@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Link,
   Navigate,
   useNavigate,
   useParams,
@@ -43,8 +44,10 @@ import {
 import type {
   ConversationTimelineEntry,
   ConversationTimelinePage,
+  ConversationWorkItemReference,
 } from '../conversations/types'
 import { useConversationRealtime } from '../realtime/realtimeContext'
+import { useSetWorkItemThreadLink } from '../work-items/hooks'
 
 type RunState =
   | 'created'
@@ -94,6 +97,7 @@ type Approval = {
 
 type Timeline = {
   conversation: ConversationTimelinePage['conversation']
+  linkedWorkItems: ConversationWorkItemReference[]
   entries: ConversationTimelineEntry[]
   nextCursor: string | null
   highestSequence: number
@@ -270,6 +274,7 @@ export function ThreadPage() {
   const queryClient = useQueryClient()
   const project = useProject(projectId)
   const thread = useThread(projectId, threadId, includeArchived)
+  const workItemLink = useSetWorkItemThreadLink()
   const realtime = useConversationRealtime(threadId)
   const timeline = thread.timeline.data
   const verifiedTimeline = thread.routeMatches ? timeline : undefined
@@ -574,6 +579,14 @@ export function ThreadPage() {
       projectName={project.data.name}
       run={activeRun}
       threadId={threadId}
+      workItems={verifiedTimeline.linkedWorkItems}
+      onUnlink={verifiedTimeline.capabilities.sendMessage ? (workItemId) => {
+        workItemLink.mutate(
+          { projectId, workItemId, threadId, linked: false, idempotencyKey: crypto.randomUUID() },
+          { onSuccess: () => void thread.timeline.refetch() },
+        )
+      } : undefined}
+      unlinking={workItemLink.isPending}
     />
   ) : undefined
   const showComposer = Boolean(
@@ -1007,10 +1020,16 @@ function ThreadContext({
   projectName,
   run,
   threadId,
+  workItems,
+  onUnlink,
+  unlinking,
 }: {
   projectName: string
   run: Run | null
   threadId: string
+  workItems: ConversationWorkItemReference[]
+  onUnlink?: (workItemId: string) => void
+  unlinking: boolean
 }) {
   return (
     <aside aria-label="Execution context" className="context-drawer">
@@ -1046,6 +1065,23 @@ function ThreadContext({
           <dd>{shortId(run?.baseCommit)}</dd>
         </div>
       </dl>
+      <div className="thread-linked-work-items">
+        <h3>Linked Work Items</h3>
+        {workItems.length ? (
+          <ul>
+            {workItems.map((item) => (
+              <li key={item.id}>
+                <div>
+                  <Link to={item.href}>{item.key}</Link>
+                  <span>{item.title}</span>
+                  {item.archivedAt ? <small>Archived</small> : null}
+                </div>
+                {onUnlink ? <button className="text-button" disabled={unlinking} onClick={() => onUnlink(item.id)} type="button">Unlink</button> : null}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="compact-note">No linked Work Items.</p>}
+      </div>
       <p className="context-note">
         Authentication and authorship are resolved from the server-side session.
       </p>

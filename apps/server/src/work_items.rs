@@ -125,6 +125,19 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
             axum::routing::post(create_work_item_comment),
         )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
+            axum::routing::post(link_work_item_thread).delete(unlink_work_item_thread),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
+            axum::routing::post(link_work_item_repository)
+                .delete(unlink_work_item_repository),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
+            axum::routing::post(set_primary_work_item_repository),
+        )
 }
 
 /// Reports whether the M4 workflow schema is present in the transaction's
@@ -193,6 +206,8 @@ struct WorkItemRow {
     created_at: String,
     updated_at: String,
     acceptance_criteria: serde_json::Value,
+    linked_threads: serde_json::Value,
+    linked_repositories: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,8 +289,46 @@ pub struct WorkItemView {
     created_at: String,
     updated_at: String,
     acceptance_criteria: Vec<AcceptanceCriterionView>,
+    linked_threads: Vec<LinkedThreadView>,
+    linked_repositories: Vec<LinkedRepositoryView>,
     capabilities: WorkItemCapabilities,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkedThreadView {
+    id: Uuid,
+    name: String,
+    parent_channel_id: Uuid,
+    parent_channel_name: String,
+    archived_at: Option<String>,
+    newest_run_state: Option<String>,
+    href: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkedRepositoryView {
+    id: Uuid,
+    owner: String,
+    name: String,
+    role: String,
+    preparation_state: String,
+    available: bool,
+    archived_at: Option<String>,
+    href: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkRepositoryRequest {
+    expected_version: i64,
+    role: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyLinkRequest {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -826,7 +879,9 @@ async fn list_work_items(
             item.version, item.archived_at::text AS archived_at,
             item.created_at::text AS created_at,
             item.updated_at::text AS updated_at,
-            '[]'::jsonb AS acceptance_criteria
+            '[]'::jsonb AS acceptance_criteria,
+            '[]'::jsonb AS linked_threads,
+            '[]'::jsonb AS linked_repositories
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_types item_type
@@ -1349,6 +1404,358 @@ async fn set_work_item_archived(
         .await?
         .ok_or(AppError::Internal("archived Work Item is unavailable"))?;
     let item = work_item_view(row, capabilities)?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::OK, item)
+}
+
+async fn link_work_item_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, conversation_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<EmptyLinkRequest>,
+) -> Result<Response, AppError> {
+    change_work_item_thread_link(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        conversation_id,
+        request,
+        true,
+    )
+    .await
+}
+
+async fn unlink_work_item_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, conversation_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<EmptyLinkRequest>,
+) -> Result<Response, AppError> {
+    change_work_item_thread_link(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        conversation_id,
+        request,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn change_work_item_thread_link(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    conversation_id: Uuid,
+    request: EmptyLinkRequest,
+    linked: bool,
+) -> Result<Response, AppError> {
+    require_authenticated_write(state, headers, principal)?;
+    let key = IdempotencyKey::from_headers(headers)?;
+    let scope = resource_bound_scope(
+        "work_items",
+        work_item_id,
+        if linked {
+            "thread_link"
+        } else {
+            "thread_unlink"
+        },
+    )?;
+    let request_hash = RequestHash::for_value(&(conversation_id, request))?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let thread_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
+    ).bind(project_id).bind(conversation_id).fetch_one(&mut *transaction).await?;
+    if !thread_exists {
+        return Err(AppError::NotFound("conversation"));
+    }
+    let changed = if linked {
+        sqlx::query(r#"
+            INSERT INTO work_item_conversation_links (project_id, work_item_id, conversation_id, created_by_actor_id)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (work_item_id, conversation_id) DO NOTHING
+        "#).bind(project_id).bind(work_item_id).bind(conversation_id).bind(principal.actor_id)
+            .execute(&mut *transaction).await?.rows_affected() == 1
+    } else {
+        sqlx::query("DELETE FROM work_item_conversation_links WHERE project_id = $1 AND work_item_id = $2 AND conversation_id = $3")
+            .bind(project_id).bind(work_item_id).bind(conversation_id)
+            .execute(&mut *transaction).await?.rows_affected() == 1
+    };
+    if changed {
+        let version =
+            advance_work_item_version(&mut transaction, project_id, work_item_id, current.version)
+                .await?;
+        let (kind, summary, audit_action) = if linked {
+            ("thread_linked", "Thread linked", "work_item.thread_linked")
+        } else {
+            (
+                "thread_unlinked",
+                "Thread unlinked",
+                "work_item.thread_unlinked",
+            )
+        };
+        record_work_item_change(
+            &mut transaction,
+            headers,
+            principal,
+            project_id,
+            work_item_id,
+            kind,
+            summary,
+            audit_action,
+            serde_json::json!({"conversationId": conversation_id}),
+            version,
+        )
+        .await?;
+    }
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        capabilities(&membership)?,
+    )
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::OK, item)
+}
+
+async fn link_work_item_repository(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, repository_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<LinkRepositoryRequest>,
+) -> Result<Response, AppError> {
+    if !matches!(request.role.as_str(), "primary" | "related") {
+        return Err(AppError::Validation("repository role"));
+    }
+    change_work_item_repository_link(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        repository_id,
+        request.expected_version,
+        Some(request.role),
+        "repository_link",
+    )
+    .await
+}
+
+async fn unlink_work_item_repository(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, repository_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<WorkItemVersionRequest>,
+) -> Result<Response, AppError> {
+    change_work_item_repository_link(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        repository_id,
+        request.expected_version,
+        None,
+        "repository_unlink",
+    )
+    .await
+}
+
+async fn set_primary_work_item_repository(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, repository_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<WorkItemVersionRequest>,
+) -> Result<Response, AppError> {
+    change_work_item_repository_link(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        repository_id,
+        request.expected_version,
+        Some("primary".to_owned()),
+        "repository_primary",
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn change_work_item_repository_link(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    repository_id: Uuid,
+    expected_version: i64,
+    desired_role: Option<String>,
+    action: &'static str,
+) -> Result<Response, AppError> {
+    require_authenticated_write(state, headers, principal)?;
+    let key = IdempotencyKey::from_headers(headers)?;
+    let scope = resource_bound_scope("work_items", work_item_id, action)?;
+    let request_hash = RequestHash::for_value(&(repository_id, expected_version, &desired_role))?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let caps = capabilities(&membership)?;
+    if current.version != expected_version {
+        return work_item_version_conflict_response(work_item_view(current, caps)?);
+    }
+    let repository = sqlx::query_as::<_, (bool, bool, String, Option<String>)>(
+        r#"
+        SELECT enabled, trusted, preparation_state, archived_at::text
+        FROM repositories WHERE project_id = $1 AND id = $2
+    "#,
+    )
+    .bind(project_id)
+    .bind(repository_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("repository"))?;
+    if desired_role.as_deref() == Some("primary")
+        && (!repository.0 || !repository.1 || repository.2 != "ready" || repository.3.is_some())
+    {
+        return Err(AppError::Conflict(
+            "repository",
+            "the primary repository must be enabled, trusted, ready, and active",
+        ));
+    }
+    let existing_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3",
+    ).bind(project_id).bind(work_item_id).bind(repository_id).fetch_optional(&mut *transaction).await?;
+    let changed = match desired_role.as_deref() {
+        None => sqlx::query("DELETE FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3")
+            .bind(project_id).bind(work_item_id).bind(repository_id)
+            .execute(&mut *transaction).await?.rows_affected() == 1,
+        Some(role) if existing_role.as_deref() == Some(role) => false,
+        Some(role) => {
+            if role == "primary" {
+                sqlx::query("UPDATE work_item_repository_links SET role = 'related', updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND role = 'primary'")
+                    .bind(project_id).bind(work_item_id).execute(&mut *transaction).await?;
+            }
+            sqlx::query(r#"
+                INSERT INTO work_item_repository_links (project_id, work_item_id, repository_id, role, created_by_actor_id)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (work_item_id, repository_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()
+            "#).bind(project_id).bind(work_item_id).bind(repository_id).bind(role).bind(principal.actor_id)
+                .execute(&mut *transaction).await?;
+            true
+        }
+    };
+    if changed {
+        let version =
+            advance_work_item_version(&mut transaction, project_id, work_item_id, expected_version)
+                .await?;
+        let (kind, summary, audit_action) = match desired_role.as_deref() {
+            None => (
+                "repository_unlinked",
+                "Repository unlinked",
+                "work_item.repository_unlinked",
+            ),
+            Some("primary") if existing_role.is_some() => (
+                "repository_primary_changed",
+                "Primary repository changed",
+                "work_item.repository_primary_changed",
+            ),
+            _ => (
+                "repository_linked",
+                "Repository linked",
+                "work_item.repository_linked",
+            ),
+        };
+        record_work_item_change(
+            &mut transaction,
+            headers,
+            principal,
+            project_id,
+            work_item_id,
+            kind,
+            summary,
+            audit_action,
+            serde_json::json!({"repositoryId": repository_id, "role": desired_role}),
+            version,
+        )
+        .await?;
+    }
+    let item = current_work_item_view(&mut transaction, project_id, work_item_id, caps).await?;
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
     work_item_response(StatusCode::OK, item)
@@ -2744,7 +3151,55 @@ const WORK_ITEM_SELECT: &str = r#"
               ON completed_actor.id = criterion.completed_by_actor_id
             WHERE criterion.project_id = item.project_id
               AND criterion.work_item_id = item.id
-        ), '[]'::jsonb) AS acceptance_criteria
+        ), '[]'::jsonb) AS acceptance_criteria,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', thread.id,
+                    'name', thread.name,
+                    'parentChannelId', channel.id,
+                    'parentChannelName', channel.name,
+                    'archivedAt', thread.archived_at::text,
+                    'newestRunState', newest_run.state,
+                    'href', '/projects/' || item.project_id || '/channels/' || channel.id || '/threads/' || thread.id
+                ) ORDER BY link.created_at, thread.id
+            )
+            FROM work_item_conversation_links link
+            JOIN conversations thread
+              ON thread.project_id = link.project_id AND thread.id = link.conversation_id
+            JOIN conversations channel
+              ON channel.project_id = thread.project_id AND channel.id = thread.parent_channel_id
+            LEFT JOIN LATERAL (
+                SELECT run.state
+                FROM agent_runs run
+                WHERE run.project_id = thread.project_id
+                  AND run.conversation_id = thread.id
+                ORDER BY run.created_at DESC, run.id DESC
+                LIMIT 1
+            ) newest_run ON true
+            WHERE link.project_id = item.project_id AND link.work_item_id = item.id
+        ), '[]'::jsonb) AS linked_threads,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', repository.id,
+                    'owner', repository.owner,
+                    'name', repository.name,
+                    'role', link.role,
+                    'preparationState', repository.preparation_state,
+                    'available', repository.enabled AND repository.trusted
+                        AND repository.archived_at IS NULL
+                        AND repository.preparation_state = 'ready',
+                    'archivedAt', repository.archived_at::text,
+                    'href', '/projects/' || item.project_id || '/settings'
+                ) ORDER BY CASE link.role WHEN 'primary' THEN 0 ELSE 1 END,
+                         repository.owner, repository.name, repository.id
+            )
+            FROM work_item_repository_links link
+            JOIN repositories repository
+              ON repository.project_id = link.project_id AND repository.id = link.repository_id
+            WHERE link.project_id = item.project_id AND link.work_item_id = item.id
+        ), '[]'::jsonb) AS linked_repositories
     FROM work_items item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_types item_type
@@ -2785,6 +3240,10 @@ fn work_item_view(
     };
     let acceptance_criteria = serde_json::from_value(row.acceptance_criteria)
         .map_err(|_| AppError::Internal("invalid Work Item criteria projection"))?;
+    let linked_threads = serde_json::from_value(row.linked_threads)
+        .map_err(|_| AppError::Internal("invalid linked Thread projection"))?;
+    let linked_repositories = serde_json::from_value(row.linked_repositories)
+        .map_err(|_| AppError::Internal("invalid linked Repository projection"))?;
     Ok(WorkItemView {
         id: row.id,
         project_id: row.project_id,
@@ -2808,6 +3267,8 @@ fn work_item_view(
         created_at: row.created_at,
         updated_at: row.updated_at,
         acceptance_criteria,
+        linked_threads,
+        linked_repositories,
         capabilities,
     })
 }

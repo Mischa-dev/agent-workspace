@@ -1,11 +1,14 @@
 import { FormEvent, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjectConversationSidebar } from '../conversations/hooks'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
+import { listRepositories } from '../repositories/api'
 import { AppShell } from '../shell/AppShell'
 import { normalizeWorkItem } from './api'
 import { workItemPriorities } from './constants'
@@ -15,6 +18,9 @@ import {
   useCreateWorkItemComment,
   useRemoveAcceptanceCriterion,
   useSetWorkItemArchived,
+  useSetWorkItemPrimaryRepository,
+  useSetWorkItemRepositoryLink,
+  useSetWorkItemThreadLink,
   useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
@@ -275,6 +281,16 @@ function WorkItemEditor({
         }}
       />
 
+      <WorkItemLinks
+        disabled={disabled}
+        item={base}
+        onItemChange={(current) => {
+          setBase(current)
+          setDraft(draftFromItem(current))
+          setConflict(null)
+        }}
+      />
+
       <WorkItemCollaboration disabled={disabled} item={base} />
 
       {base.capabilities.archive && !projectArchived ? (
@@ -448,6 +464,85 @@ function AcceptanceCriteria({
   )
 }
 
+function WorkItemLinks({
+  disabled,
+  item,
+  onItemChange,
+}: {
+  disabled: boolean
+  item: WorkItem
+  onItemChange: (item: WorkItem) => void
+}) {
+  const conversations = useProjectConversationSidebar(item.projectId)
+  const repositories = useQuery({
+    queryKey: ['projects', item.projectId, 'repositories', 'work-item-picker'],
+    queryFn: () => listRepositories(item.projectId),
+    enabled: Boolean(item.projectId),
+  })
+  const threadMutation = useSetWorkItemThreadLink()
+  const repositoryMutation = useSetWorkItemRepositoryLink()
+  const primaryMutation = useSetWorkItemPrimaryRepository()
+  const [threadId, setThreadId] = useState('')
+  const [repositoryId, setRepositoryId] = useState('')
+  const [repositoryRole, setRepositoryRole] = useState<'primary' | 'related'>('related')
+  const availableThreads = (conversations.data?.channels ?? []).flatMap((channel) =>
+    channel.threads
+      .filter((thread) => !thread.archivedAt && !item.linkedThreads.some((link) => link.id === thread.id))
+      .map((thread) => ({ ...thread, channelName: channel.name })),
+  )
+  const availableRepositories = (repositories.data?.repositories ?? []).filter(
+    (repository) => !repository.archivedAt && !item.linkedRepositories.some((link) => link.id === repository.id),
+  )
+  const busy = threadMutation.isPending || repositoryMutation.isPending || primaryMutation.isPending
+
+  return (
+    <section className="work-item-section" aria-labelledby="links-heading">
+      <header><div><h2 id="links-heading">Links</h2><p>Discussion and code context remain independent, durable records.</p></div></header>
+      <div className="work-item-link-columns">
+        <div>
+          <h3>Threads</h3>
+          {item.linkedThreads.length ? (
+            <ul className="linked-record-list">
+              {item.linkedThreads.map((thread) => (
+                <li key={thread.id}>
+                  <div><Link to={thread.href}>{thread.name}</Link><small>{thread.parentChannelName}{thread.newestRunState ? ` · ${thread.newestRunState}` : ''}{thread.archivedAt ? ' · archived' : ''}</small></div>
+                  {!disabled ? <button className="text-button" disabled={busy} onClick={() => threadMutation.mutate({ projectId: item.projectId, workItemId: item.id, threadId: thread.id, linked: false, idempotencyKey: crypto.randomUUID() }, { onSuccess: onItemChange })} type="button">Unlink</button> : null}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="compact-note">No linked Threads.</p>}
+          {!disabled ? (
+            <form className="link-picker" onSubmit={(event) => { event.preventDefault(); if (!threadId) return; threadMutation.mutate({ projectId: item.projectId, workItemId: item.id, threadId, linked: true, idempotencyKey: crypto.randomUUID() }, { onSuccess: (current) => { setThreadId(''); onItemChange(current) } }) }}>
+              <label htmlFor={`thread-link-${item.id}`}>Link an active Thread</label>
+              <div><select id={`thread-link-${item.id}`} onChange={(event) => setThreadId(event.target.value)} value={threadId}><option value="">Select Thread</option>{availableThreads.map((thread) => <option key={thread.id} value={thread.id}>{thread.channelName} / {thread.name}</option>)}</select><button className="secondary-button" disabled={!threadId || busy} type="submit">Link</button></div>
+            </form>
+          ) : null}
+        </div>
+        <div>
+          <h3>Repositories</h3>
+          {item.linkedRepositories.length ? (
+            <ul className="linked-record-list">
+              {item.linkedRepositories.map((repository) => (
+                <li key={repository.id}>
+                  <div><Link to={repository.href}>{repository.owner}/{repository.name}</Link><small>{repository.role}{repository.available ? '' : ` · ${repository.preparationState}`}{repository.archivedAt ? ' · archived' : ''}</small></div>
+                  {!disabled ? <div className="linked-record-actions">{repository.role !== 'primary' && repository.available ? <button className="text-button" disabled={busy} onClick={() => primaryMutation.mutate({ projectId: item.projectId, workItemId: item.id, repositoryId: repository.id, expectedVersion: item.version, idempotencyKey: crypto.randomUUID() }, { onSuccess: onItemChange })} type="button">Make primary</button> : null}<button className="text-button" disabled={busy} onClick={() => repositoryMutation.mutate({ projectId: item.projectId, workItemId: item.id, repositoryId: repository.id, expectedVersion: item.version, idempotencyKey: crypto.randomUUID() }, { onSuccess: onItemChange })} type="button">Unlink</button></div> : null}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="compact-note">No linked repositories.</p>}
+          {!disabled ? (
+            <form className="link-picker" onSubmit={(event) => { event.preventDefault(); if (!repositoryId) return; repositoryMutation.mutate({ projectId: item.projectId, workItemId: item.id, repositoryId, expectedVersion: item.version, role: repositoryRole, idempotencyKey: crypto.randomUUID() }, { onSuccess: (current) => { setRepositoryId(''); onItemChange(current) } }) }}>
+              <label htmlFor={`repository-link-${item.id}`}>Link a repository</label>
+              <div><select id={`repository-link-${item.id}`} onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}><option value="">Select repository</option>{availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.owner}/{repository.name}</option>)}</select><select aria-label="Repository role" onChange={(event) => setRepositoryRole(event.target.value as 'primary' | 'related')} value={repositoryRole}><option value="related">Related</option><option value="primary">Primary</option></select><button className="secondary-button" disabled={!repositoryId || busy} type="submit">Link</button></div>
+            </form>
+          ) : null}
+        </div>
+      </div>
+      {threadMutation.isError || repositoryMutation.isError || primaryMutation.isError ? <p className="form-error-summary" role="alert">The links changed before this action completed. Reload the Work Item and try again.</p> : null}
+    </section>
+  )
+}
+
 function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: WorkItem }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
   const createComment = useCreateWorkItemComment()
@@ -503,7 +598,7 @@ function WorkItemContext({ item }: { item: WorkItem }) {
         <div><dt>Assignee</dt><dd>{item.assignee?.displayName ?? 'Unassigned'}</dd></div>
         <div><dt>Version</dt><dd>{item.version}</dd></div>
       </dl>
-      <p className="context-note">Acceptance criteria, linked Threads, repositories, comments, and activity join this canonical detail in the next M4 slices.</p>
+      <p className="context-note">{item.linkedThreads.length} linked {item.linkedThreads.length === 1 ? 'Thread' : 'Threads'} · {item.linkedRepositories.length} linked {item.linkedRepositories.length === 1 ? 'repository' : 'repositories'}.</p>
     </aside>
   )
 }

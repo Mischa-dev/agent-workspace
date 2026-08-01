@@ -105,6 +105,36 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         updatedAt: string(criterion.updatedAt),
       }
     }),
+    linkedThreads: (Array.isArray(item.linkedThreads) ? item.linkedThreads : []).map(
+      (value) => {
+        const thread = record(value)
+        return {
+          id: string(thread.id),
+          name: string(thread.name),
+          parentChannelId: string(thread.parentChannelId),
+          parentChannelName: string(thread.parentChannelName),
+          archivedAt: nullableString(thread.archivedAt),
+          newestRunState: nullableString(thread.newestRunState),
+          href: string(thread.href),
+        }
+      },
+    ),
+    linkedRepositories: (Array.isArray(item.linkedRepositories)
+      ? item.linkedRepositories
+      : []
+    ).map((value) => {
+      const repository = record(value)
+      return {
+        id: string(repository.id),
+        owner: string(repository.owner),
+        name: string(repository.name),
+        role: repository.role === 'primary' ? 'primary' : 'related',
+        preparationState: string(repository.preparationState),
+        available: boolean(repository.available),
+        archivedAt: nullableString(repository.archivedAt),
+        href: string(repository.href),
+      }
+    }),
     capabilities: {
       view: boolean(capabilities.view),
       edit: boolean(capabilities.edit),
@@ -130,6 +160,57 @@ function normalizeCard(value: unknown): WorkItemCard {
     updatedAt: item.updatedAt,
     capabilities: item.capabilities,
   }
+}
+
+function workItemLinkPath(
+  projectId: string,
+  workItemId: string,
+  collection: 'threads' | 'repositories',
+  targetId: string,
+) {
+  return `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/${collection}/${encodeURIComponent(targetId)}`
+}
+
+export async function setWorkItemThreadLink(input: {
+  projectId: string
+  workItemId: string
+  threadId: string
+  linked: boolean
+  idempotencyKey: string
+}) {
+  return normalizeWorkItem(await requestJson<unknown>(
+    workItemLinkPath(input.projectId, input.workItemId, 'threads', input.threadId),
+    { method: input.linked ? 'POST' : 'DELETE', idempotencyKey: input.idempotencyKey, json: {} },
+  ))
+}
+
+export async function setWorkItemRepositoryLink(input: {
+  projectId: string
+  workItemId: string
+  repositoryId: string
+  expectedVersion: number
+  role?: 'primary' | 'related'
+  idempotencyKey: string
+}) {
+  const path = workItemLinkPath(input.projectId, input.workItemId, 'repositories', input.repositoryId)
+  return normalizeWorkItem(await requestJson<unknown>(path, {
+    method: input.role ? 'POST' : 'DELETE',
+    idempotencyKey: input.idempotencyKey,
+    json: input.role ? { expectedVersion: input.expectedVersion, role: input.role } : { expectedVersion: input.expectedVersion },
+  }))
+}
+
+export async function setWorkItemPrimaryRepository(input: {
+  projectId: string
+  workItemId: string
+  repositoryId: string
+  expectedVersion: number
+  idempotencyKey: string
+}) {
+  const path = `${workItemLinkPath(input.projectId, input.workItemId, 'repositories', input.repositoryId)}/primary`
+  return normalizeWorkItem(await requestJson<unknown>(path, {
+    method: 'POST', idempotencyKey: input.idempotencyKey, json: { expectedVersion: input.expectedVersion },
+  }))
 }
 
 export async function listWorkItems(

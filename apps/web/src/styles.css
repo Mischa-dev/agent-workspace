@@ -1031,6 +1031,47 @@ p {
   line-height: 1.55;
 }
 
+.thread-linked-work-items {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.thread-linked-work-items h3 {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.thread-linked-work-items ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-linked-work-items li,
+.thread-linked-work-items span,
+.thread-linked-work-items small {
+  display: block;
+}
+
+.thread-linked-work-items li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.thread-linked-work-items span,
+.thread-linked-work-items small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
 .timeline-skeleton {
   display: grid;
   gap: 14px;
@@ -1709,6 +1750,78 @@ p {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   margin-top: 16px;
+}
+
+.work-item-link-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.work-item-link-columns h3 {
+  margin: 0 0 9px;
+  font-size: 0.78rem;
+}
+
+.linked-record-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.linked-record-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--panel-raised);
+}
+
+.linked-record-list a,
+.linked-record-list small {
+  display: block;
+}
+
+.linked-record-list small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.linked-record-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.link-picker {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.link-picker > div {
+  display: flex;
+  gap: 6px;
+}
+
+.link-picker select {
+  min-width: 0;
+  flex: 1;
+}
+
+@media (max-width: 720px) {
+  .work-item-link-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .link-picker > div {
+    flex-wrap: wrap;
+  }
 }
 
 .inline-create-form input,

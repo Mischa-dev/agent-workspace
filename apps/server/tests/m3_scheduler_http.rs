@@ -270,6 +270,94 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     assert!(explicit.2["repositoryWorkspaceId"].is_null());
     let explicit_run_id = uuid_field(&explicit.2, "runId");
 
+    let linked_thread_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, kind, parent_channel_id, name) VALUES ($1, $2, 'thread', $3, 'Linked Work Item repository proof')",
+    )
+    .bind(linked_thread_id)
+    .bind(seed.project_id)
+    .bind(seed.channel_id)
+    .execute(&pool)
+    .await
+    .expect("insert Work Item-linked Thread");
+    let linked_work_item_id = Uuid::now_v7();
+    let linked_work_item_number = sqlx::query_scalar::<_, i64>(
+        "UPDATE project_counters SET next_work_item_number = next_work_item_number + 1 WHERE project_id = $1 RETURNING next_work_item_number - 1",
+    )
+    .bind(seed.project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("allocate linked Work Item number");
+    let (default_type_id, default_status_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT work_type.id, status.id
+        FROM work_item_types work_type
+        CROSS JOIN work_item_statuses status
+        WHERE work_type.project_id = $1 AND work_type.is_default AND work_type.enabled
+          AND status.project_id = $1 AND status.is_default AND status.enabled
+        "#,
+    )
+    .bind(seed.project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read default Work Item workflow");
+    sqlx::query(
+        r#"
+        INSERT INTO work_items (
+            id, project_id, number, title, type_id, status_id,
+            created_by_actor_id, board_rank
+        ) VALUES ($1, $2, $3, 'Repository precedence proof', $4, $5, $6, 1024)
+        "#,
+    )
+    .bind(linked_work_item_id)
+    .bind(seed.project_id)
+    .bind(linked_work_item_number)
+    .bind(default_type_id)
+    .bind(default_status_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("insert repository precedence Work Item");
+    sqlx::query(
+        "INSERT INTO work_item_conversation_links (project_id, work_item_id, conversation_id, created_by_actor_id) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(seed.project_id)
+    .bind(linked_work_item_id)
+    .bind(linked_thread_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("link repository precedence Thread");
+    sqlx::query(
+        "INSERT INTO work_item_repository_links (project_id, work_item_id, repository_id, role, created_by_actor_id) VALUES ($1, $2, $3, 'primary', $4)",
+    )
+    .bind(seed.project_id)
+    .bind(linked_work_item_id)
+    .bind(seed.repository_id)
+    .bind(seed.human_actor_id)
+    .execute(&pool)
+    .await
+    .expect("link primary repository fixture");
+    let implicit = start_run(
+        &application,
+        &cookie,
+        &csrf,
+        linked_thread_id,
+        "repository-choice-work-item-primary",
+        "use the linked Work Item primary repository",
+    )
+    .await;
+    assert_eq!(implicit.0, StatusCode::ACCEPTED, "{}", implicit.1);
+    assert_eq!(implicit.2["repositoryId"], seed.repository_id.to_string());
+    let implicit_run_id = uuid_field(&implicit.2, "runId");
+    sqlx::query(
+        "UPDATE agent_runs SET state = 'interrupted', finished_at = now(), updated_at = now() WHERE id = $1 AND state = 'queued'",
+    )
+    .bind(implicit_run_id)
+    .execute(&pool)
+    .await
+    .expect("retire implicit repository selection fixture");
+
     sqlx::query(
         r#"
         UPDATE agent_runs

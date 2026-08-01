@@ -196,6 +196,11 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       archivedAt: nullableString(conversation.archivedAt),
       version: Math.max(1, integer(conversation.version, 1)),
     },
+    linkedWorkItems: Array.isArray(root.linkedWorkItems)
+      ? root.linkedWorkItems
+          .map(normalizeWorkItemReference)
+          .filter((item): item is ConversationWorkItemReference => item !== null)
+      : [],
     entries,
     nextCursor: nullableString(root.nextCursor),
     highestSequence: Math.max(0, integer(root.highestSequence)),

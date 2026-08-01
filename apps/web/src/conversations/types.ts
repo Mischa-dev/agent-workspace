@@ -78,6 +78,7 @@ export type ConversationTimelinePage = {
     archivedAt: string | null
     version: number
   }
+  linkedWorkItems: ConversationWorkItemReference[]
   entries: ConversationTimelineEntry[]
   nextCursor: string | null
   highestSequence: number

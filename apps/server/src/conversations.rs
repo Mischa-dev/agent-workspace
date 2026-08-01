@@ -297,6 +297,7 @@ struct ChannelListCapabilities {
 #[serde(rename_all = "camelCase")]
 struct TimelineResponse {
     conversation: ConversationView,
+    linked_work_items: Vec<ConversationWorkItemReferenceView>,
     entries: Vec<TimelineEntryView>,
     next_cursor: Option<String>,
     highest_sequence: i64,
@@ -1285,11 +1286,43 @@ async fn conversation_timeline(
         .map(timeline_entry_view)
         .collect::<Result<Vec<_>, _>>()?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
+    let linked_work_items = if conversation.kind == "thread" {
+        let value = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT COALESCE(jsonb_agg(
+                jsonb_build_object(
+                    'id', item.id,
+                    'key', project.project_key || '-' || item.number::text,
+                    'title', item.title,
+                    'statusCategory', status.semantic_category,
+                    'archivedAt', item.archived_at::text,
+                    'href', '/projects/' || item.project_id::text || '/work-items/' || item.id::text
+                ) ORDER BY item.number, item.id
+            ), '[]'::jsonb)
+            FROM work_item_conversation_links link
+            JOIN work_items item
+              ON item.project_id = link.project_id AND item.id = link.work_item_id
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            WHERE link.project_id = $1 AND link.conversation_id = $2
+            "#,
+        )
+        .bind(conversation.project_id)
+        .bind(conversation.id)
+        .fetch_one(&state.pool)
+        .await?;
+        serde_json::from_value(value)
+            .map_err(|_| AppError::Internal("invalid linked Work Item projection"))?
+    } else {
+        Vec::new()
+    };
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
     Ok(Json(TimelineResponse {
         conversation: ConversationView::from(&conversation),
+        linked_work_items,
         entries,
         next_cursor,
         highest_sequence: conversation.next_entry_sequence - 1,
