@@ -162,7 +162,7 @@ async fn register_client(
         r#"DELETE FROM mcp_oauth_clients client
            WHERE client.created_at < now() - interval '1 day'
              AND NOT EXISTS (SELECT 1 FROM mcp_oauth_authorization_codes code WHERE code.client_id = client.id)
-             AND NOT EXISTS (SELECT 1 FROM mcp_oauth_grants grant WHERE grant.client_id = client.id)"#,
+             AND NOT EXISTS (SELECT 1 FROM mcp_oauth_grants grant_row WHERE grant_row.client_id = client.id)"#,
     )
     .execute(&mut *transaction)
     .await
@@ -544,20 +544,20 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
     let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
     let row = sqlx::query_as::<_, RefreshRow>(
         r#"
-        SELECT token.id, token.grant_id, grant.client_id, grant.scopes,
+        SELECT token.id, token.grant_id, grant_row.client_id, grant_row.scopes,
                token.token_digest, token.used_at, token.revoked_at
         FROM mcp_oauth_refresh_tokens token
-        JOIN mcp_oauth_grants grant ON grant.id = token.grant_id
-        JOIN mcp_oauth_clients client ON client.id = grant.client_id
-        JOIN projects project ON project.id = grant.project_id
-        JOIN actors actor ON actor.id = grant.actor_id
+        JOIN mcp_oauth_grants grant_row ON grant_row.id = token.grant_id
+        JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
+        JOIN projects project ON project.id = grant_row.project_id
+        JOIN actors actor ON actor.id = grant_row.actor_id
         JOIN project_memberships membership
-          ON membership.project_id = grant.project_id AND membership.actor_id = grant.actor_id
+          ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
         WHERE token.token_prefix = $1 AND token.expires_at > now()
-          AND grant.revoked_at IS NULL
+          AND grant_row.revoked_at IS NULL
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
-        FOR UPDATE OF token, grant
+        FOR UPDATE OF token, grant_row
     "#,
     )
     .bind(prefix)
@@ -640,10 +640,10 @@ async fn revoke(
     let digest = Sha256::digest(request.token.as_bytes()).to_vec();
     let grant_id = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT grant.id FROM mcp_oauth_grants grant
-        LEFT JOIN mcp_oauth_access_tokens access ON access.grant_id = grant.id
-        LEFT JOIN mcp_oauth_refresh_tokens refresh ON refresh.grant_id = grant.id
-        WHERE grant.client_id = $1 AND (access.token_digest = $2 OR refresh.token_digest = $2)
+        SELECT grant_row.id FROM mcp_oauth_grants grant_row
+        LEFT JOIN mcp_oauth_access_tokens access ON access.grant_id = grant_row.id
+        LEFT JOIN mcp_oauth_refresh_tokens refresh ON refresh.grant_id = grant_row.id
+        WHERE grant_row.client_id = $1 AND (access.token_digest = $2 OR refresh.token_digest = $2)
         LIMIT 1
     "#,
     )
@@ -694,17 +694,17 @@ pub async fn resolve_access_token(
     };
     let rows = sqlx::query_as::<_, AccessRow>(
         r#"
-        SELECT access.id AS token_id, grant.id AS grant_id, grant.actor_id,
-               grant.project_id, client.client_name, grant.scopes, access.token_digest
+        SELECT access.id AS token_id, grant_row.id AS grant_id, grant_row.actor_id,
+               grant_row.project_id, client.client_name, grant_row.scopes, access.token_digest
         FROM mcp_oauth_access_tokens access
-        JOIN mcp_oauth_grants grant ON grant.id = access.grant_id
-        JOIN mcp_oauth_clients client ON client.id = grant.client_id
-        JOIN projects project ON project.id = grant.project_id
-        JOIN actors actor ON actor.id = grant.actor_id
+        JOIN mcp_oauth_grants grant_row ON grant_row.id = access.grant_id
+        JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
+        JOIN projects project ON project.id = grant_row.project_id
+        JOIN actors actor ON actor.id = grant_row.actor_id
         JOIN project_memberships membership
-          ON membership.project_id = grant.project_id AND membership.actor_id = grant.actor_id
+          ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
         WHERE access.token_prefix = $1 AND access.revoked_at IS NULL
-          AND access.expires_at > now() AND grant.revoked_at IS NULL
+          AND access.expires_at > now() AND grant_row.revoked_at IS NULL
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
     "#,
@@ -992,7 +992,14 @@ impl OAuthError {
 }
 
 impl From<AppError> for OAuthError {
-    fn from(_: AppError) -> Self {
+    fn from(error: AppError) -> Self {
+        let (database_code, database_constraint) = error.database_log_fields();
+        tracing::error!(
+            category = error.log_category(),
+            database_code,
+            database_constraint,
+            "OAuth operation failed"
+        );
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",

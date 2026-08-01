@@ -29,7 +29,7 @@ const OAUTH_PASSWORD: &str = "correct horse battery staple";
 async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_env_filter("agent_workspace=debug")
+        .with_env_filter("agent_workspace_server=debug")
         .try_init();
     let Some((database_url, administrative_pool)) = integration_pool().await else {
         return;
@@ -580,7 +580,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     let client_id = registration["client_id"]
         .as_str()
-        .expect("OAuth client ID")
+        .unwrap_or_else(|| panic!("OAuth client ID: {registration}"))
         .to_owned();
     assert!(registration.get("client_secret").is_none());
 
