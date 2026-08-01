@@ -565,6 +565,7 @@ mod tests {
                             | Action::NavigationRead
                             | Action::NavigationWrite
                             | Action::WorkerInvoke
+                            | Action::RepositoryPublish
                             | Action::RunInterrupt
                             | Action::ApprovalRespond
                             | Action::ChannelCreate

@@ -1041,7 +1041,11 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
     sqlx::query(
         r#"
         UPDATE github_jobs
-        SET state = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+        SET state = CASE
+                WHEN attempts >= max_attempts THEN 'exhausted'
+                ELSE 'failed'
+            END,
+            lease_owner = NULL, lease_expires_at = NULL,
             failure_category = 'stale_lease', next_attempt_at = now(),
             updated_at = now()
         WHERE state = 'running' AND lease_expires_at <= now()

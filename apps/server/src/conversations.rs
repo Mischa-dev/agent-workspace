@@ -319,6 +319,9 @@ pub(crate) struct RunRow {
     pub(crate) provider_turn_id: Option<String>,
     pub(crate) branch: Option<String>,
     pub(crate) base_commit: Option<String>,
+    pub(crate) published_commit: Option<String>,
+    pub(crate) published_at: Option<String>,
+    pub(crate) publish_failure_category: Option<String>,
     pub(crate) queue_position: Option<i64>,
     pub(crate) failure_reason: Option<String>,
     pub(crate) created_at: String,
@@ -338,6 +341,7 @@ pub(crate) struct RunView {
 pub(crate) struct RunCapabilities {
     pub(crate) interrupt: bool,
     pub(crate) retry: bool,
+    pub(crate) publish: bool,
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -2491,6 +2495,9 @@ async fn fetch_run_projection(
             run.provider_session_id, run.provider_turn_id,
             workspace.branch_name AS branch,
             workspace.base_commit,
+            workspace.published_commit,
+            workspace.published_at::text AS published_at,
+            workspace.publish_failure_category,
             CASE WHEN run.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
@@ -2518,6 +2525,9 @@ async fn fetch_run_projection(
             run.provider_session_id, run.provider_turn_id,
             workspace.branch_name AS branch,
             workspace.base_commit,
+            workspace.published_commit,
+            workspace.published_at::text AS published_at,
+            workspace.publish_failure_category,
             NULL::bigint AS queue_position,
             run.failure_reason,
             run.created_at::text AS created_at,
@@ -2600,6 +2610,7 @@ async fn fetch_run_projection(
             capabilities: RunCapabilities {
                 interrupt,
                 retry: false,
+                publish: false,
             },
         }
     });
@@ -2619,12 +2630,30 @@ async fn fetch_run_projection(
                 ),
             )
             .unwrap_or(false);
+        let publish = active_run.is_none()
+            && run.repository_workspace_id.is_some()
+            && state.config.github.is_some()
+            && policy_allows(
+                principal,
+                &conversation.membership_role,
+                conversation.membership_enabled,
+                conversation.project_id,
+                Action::RepositoryPublish,
+                ProjectScope::run(
+                    conversation.project_id,
+                    conversation.id,
+                    run.id,
+                    run.repository_id,
+                ),
+            )
+            .unwrap_or(false);
         RunView {
             run,
             failure_acknowledged: latest_failure_acknowledged,
             capabilities: RunCapabilities {
                 interrupt: false,
                 retry,
+                publish,
             },
         }
     });

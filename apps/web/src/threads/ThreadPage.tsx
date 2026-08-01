@@ -71,6 +71,9 @@ type Run = {
   providerTurnId: string | null
   branch: string | null
   baseCommit: string | null
+  publishedCommit: string | null
+  publishedAt: string | null
+  publishFailureCategory: string | null
   queuePosition: number | null
   failureReason: string | null
   failureAcknowledged: boolean
@@ -79,6 +82,7 @@ type Run = {
   capabilities: {
     interrupt: boolean
     retry: boolean
+    publish: boolean
   }
 }
 
@@ -161,6 +165,18 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof activeRunRecord.baseCommit === 'string'
               ? activeRunRecord.baseCommit
               : null,
+          publishedCommit:
+            typeof activeRunRecord.publishedCommit === 'string'
+              ? activeRunRecord.publishedCommit
+              : null,
+          publishedAt:
+            typeof activeRunRecord.publishedAt === 'string'
+              ? activeRunRecord.publishedAt
+              : null,
+          publishFailureCategory:
+            typeof activeRunRecord.publishFailureCategory === 'string'
+              ? activeRunRecord.publishFailureCategory
+              : null,
           queuePosition:
             typeof activeRunRecord.queuePosition === 'number'
               ? activeRunRecord.queuePosition
@@ -172,6 +188,7 @@ function normalizeTimeline(value: unknown): Timeline {
               'interrupt',
             ),
             retry: explicitCapability(activeRunRecord.capabilities, 'retry'),
+            publish: false,
           },
         } as Run)
       : null
@@ -192,6 +209,18 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof latestTerminalRunRecord.baseCommit === 'string'
               ? latestTerminalRunRecord.baseCommit
               : null,
+          publishedCommit:
+            typeof latestTerminalRunRecord.publishedCommit === 'string'
+              ? latestTerminalRunRecord.publishedCommit
+              : null,
+          publishedAt:
+            typeof latestTerminalRunRecord.publishedAt === 'string'
+              ? latestTerminalRunRecord.publishedAt
+              : null,
+          publishFailureCategory:
+            typeof latestTerminalRunRecord.publishFailureCategory === 'string'
+              ? latestTerminalRunRecord.publishFailureCategory
+              : null,
           queuePosition: null,
           failureAcknowledged:
             latestTerminalRunRecord.failureAcknowledged === true,
@@ -200,6 +229,10 @@ function normalizeTimeline(value: unknown): Timeline {
             retry: explicitCapability(
               latestTerminalRunRecord.capabilities,
               'retry',
+            ),
+            publish: explicitCapability(
+              latestTerminalRunRecord.capabilities,
+              'publish',
             ),
           },
         } as Run)
@@ -285,6 +318,9 @@ export function ThreadPage() {
   const [startIdempotencyKey, setStartIdempotencyKey] = useState<string | null>(
     null,
   )
+  const [publishIdempotencyKey, setPublishIdempotencyKey] = useState<
+    string | null
+  >(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [acknowledgedRunId, setAcknowledgedRunId] = useState<string | null>(null)
@@ -462,6 +498,32 @@ export function ThreadPage() {
         json: {},
       }),
     )
+  }
+
+  const publishLastRun = () => {
+    const runId = latestTerminalRun?.id
+    if (
+      !runId ||
+      !latestTerminalRun.repositoryWorkspaceId ||
+      latestTerminalRun.capabilities.publish !== true ||
+      activeRun
+    ) {
+      return
+    }
+    const commandKey = publishIdempotencyKey ?? crypto.randomUUID()
+    if (!publishIdempotencyKey) setPublishIdempotencyKey(commandKey)
+    void perform('publish', () =>
+      requestJson(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`,
+        {
+          method: 'POST',
+          idempotencyKey: commandKey,
+          json: {},
+        },
+      ),
+    ).then((succeeded) => {
+      if (succeeded) setPublishIdempotencyKey(null)
+    })
   }
 
   const acknowledgeFailure = () => {
@@ -773,6 +835,19 @@ export function ThreadPage() {
               </button>
             ) : (
               <>
+                {latestTerminalRun?.capabilities.publish &&
+                  latestTerminalRun.repositoryWorkspaceId && (
+                    <button
+                      className="secondary-button"
+                      disabled={Boolean(busyAction)}
+                      onClick={publishLastRun}
+                      type="button"
+                    >
+                      {busyAction === 'publish'
+                        ? 'Queueing publish…'
+                        : 'Publish branch'}
+                    </button>
+                  )}
                 {latestTerminalRun?.capabilities.retry && (
                   <button
                     className="secondary-button"
@@ -811,6 +886,21 @@ export function ThreadPage() {
               </>
             )}
           </div>
+          {latestTerminalRun?.publishedCommit && (
+            <p className="compact-note">
+              Published commit{' '}
+              <code>{latestTerminalRun.publishedCommit.slice(0, 12)}</code>
+              {latestTerminalRun.publishedAt
+                ? ` at ${new Date(latestTerminalRun.publishedAt).toLocaleString()}`
+                : ''}
+            </p>
+          )}
+          {latestTerminalRun?.publishFailureCategory && (
+            <p className="action-error" role="status">
+              Publish needs attention:{' '}
+              {latestTerminalRun.publishFailureCategory.replaceAll('_', ' ')}.
+            </p>
+          )}
           {actionError && (
             <p className="action-error" role="alert">
               {actionError}
