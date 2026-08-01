@@ -21,7 +21,10 @@ use crate::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
     message_content::{MessageContent, MessageContentError, MessageNode},
-    outbox::{OutboxEventPayload, WorkItemUpdatedPayload, enqueue_typed},
+    outbox::{
+        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload,
+        WorkItemUpdatedPayload, enqueue_typed,
+    },
     policy::{
         Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
         authorize,
@@ -95,6 +98,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
             axum::routing::post(move_work_item),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
+            axum::routing::post(work_with_worker),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
@@ -529,6 +536,30 @@ struct WorkItemCapabilities {
     view: bool,
     edit: bool,
     archive: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkWithWorkerRequest {
+    expected_version: i64,
+    channel_id: Uuid,
+    prompt: String,
+    repository_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkWithWorkerResponse {
+    thread_id: Uuid,
+    run: crate::api::StartRunResponse,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkerInvocationRow {
+    conversation_id: Uuid,
+    repository_id: Uuid,
+    request_hash: Vec<u8>,
+    response_body: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1578,6 +1609,278 @@ async fn link_work_item_thread(
         true,
     )
     .await
+}
+
+async fn work_with_worker(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(mut request): ApiJson<WorkWithWorkerRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    request.prompt = normalize_worker_prompt(&request.prompt)?;
+    if request.expected_version < 1 {
+        return Err(AppError::Validation("expectedVersion"));
+    }
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkerInvoke,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "{}:work_item_worker_invocation:{}:{}",
+            principal.actor_id,
+            work_item_id,
+            idempotency_key.as_str()
+        ))
+        .execute(&mut *transaction)
+        .await?;
+    let existing = sqlx::query_as::<_, WorkerInvocationRow>(
+        r#"
+        SELECT conversation_id, repository_id, request_hash, response_body
+        FROM work_item_worker_invocations
+        WHERE requesting_actor_id = $1 AND work_item_id = $2 AND idempotency_key = $3
+        FOR UPDATE
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(work_item_id)
+    .bind(idempotency_key.as_str())
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let (thread_id, repository_id, work_item_key) = if let Some(existing) = existing {
+        if existing.request_hash.as_slice() != request_hash.as_bytes() {
+            return Err(AppError::Conflict("idempotency_key", "payload mismatch"));
+        }
+        if let Some(response_body) = existing.response_body {
+            let response: WorkWithWorkerResponse = serde_json::from_value(response_body)
+                .map_err(|_| AppError::Internal("decode Work with Worker response"))?;
+            transaction.commit().await?;
+            return Ok((StatusCode::ACCEPTED, Json(response)).into_response());
+        }
+        let key = sqlx::query_scalar::<_, String>(
+            "SELECT project.project_key || '-' || item.number::text FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = $2",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+        transaction.commit().await?;
+        (existing.conversation_id, existing.repository_id, key)
+    } else {
+        let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+            .await?
+            .ok_or(AppError::NotFound("work_item"))?;
+        if current.version != request.expected_version {
+            let current = work_item_view(current, capabilities(&membership)?)?;
+            return work_item_version_conflict_response(current);
+        }
+        if current.archived_at.is_some() {
+            return Err(AppError::Conflict("work_item", "archived"));
+        }
+        let channel_exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM conversations
+                WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND archived_at IS NULL
+            )
+            "#,
+        )
+        .bind(project_id)
+        .bind(request.channel_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if !channel_exists {
+            return Err(AppError::NotFound("channel"));
+        }
+
+        let thread_id = Uuid::now_v7();
+        let work_item_key = format!("{}-{}", current.project_key, current.number);
+        let thread_name = worker_thread_name(&work_item_key, &current.title, thread_id);
+        sqlx::query(
+            r#"
+            INSERT INTO conversations (id, project_id, kind, parent_channel_id, name)
+            VALUES ($1, $2, 'thread', $3, $4)
+            "#,
+        )
+        .bind(thread_id)
+        .bind(project_id)
+        .bind(request.channel_id)
+        .bind(&thread_name)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_read_states (
+                project_id, conversation_id, actor_id, highest_seen_sequence
+            ) VALUES ($1, $2, $3, 0)
+            "#,
+        )
+        .bind(project_id)
+        .bind(thread_id)
+        .bind(principal.actor_id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_conversation_links (
+                project_id, work_item_id, conversation_id, created_by_actor_id
+            ) VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(thread_id)
+        .bind(principal.actor_id)
+        .execute(&mut *transaction)
+        .await?;
+
+        let setup = crate::api::select_run_setup(
+            &mut transaction,
+            project_id,
+            thread_id,
+            principal.actor_id,
+            request.repository_id,
+        )
+        .await?;
+        let version =
+            advance_work_item_version(&mut transaction, project_id, work_item_id, current.version)
+                .await?;
+        enqueue_typed(
+            &mut transaction,
+            project_id,
+            OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
+                conversation_id: thread_id,
+                kind: OutboxConversationKind::Thread,
+                version: 1,
+            }),
+        )
+        .await?;
+        record_work_item_change(
+            &mut transaction,
+            &headers,
+            &principal,
+            project_id,
+            work_item_id,
+            "worker_invoked",
+            "Work with Worker started",
+            "work_item.worker_invoked",
+            serde_json::json!({
+                "conversationId": thread_id,
+                "repositoryId": setup.repository_id,
+            }),
+            version,
+        )
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_worker_invocations (
+                id, project_id, work_item_id, conversation_id, requesting_actor_id,
+                idempotency_key, request_hash, repository_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(thread_id)
+        .bind(principal.actor_id)
+        .bind(idempotency_key.as_str())
+        .bind(request_hash.as_bytes().as_slice())
+        .bind(setup.repository_id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        (thread_id, setup.repository_id, work_item_key)
+    };
+
+    let provider_prompt = format!(
+        "Work Item {work_item_key} ({work_item_id}).\n\nUser instructions:\n{}",
+        request.prompt
+    );
+    let (_, Json(run)) = crate::api::start_agent_run(
+        State(state.clone()),
+        headers,
+        principal.clone(),
+        ApiPath(thread_id),
+        ApiJson(crate::api::StartRunRequest {
+            prompt: provider_prompt,
+            repository_id: Some(repository_id),
+        }),
+    )
+    .await?;
+    let response = WorkWithWorkerResponse { thread_id, run };
+    let response_body = serde_json::to_value(&response)
+        .map_err(|_| AppError::Internal("serialize Work with Worker response"))?;
+    let mut transaction = state.pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE work_item_worker_invocations
+        SET agent_run_id = $4, response_body = $5, updated_at = now()
+        WHERE requesting_actor_id = $1 AND work_item_id = $2 AND idempotency_key = $3
+          AND request_hash = $6
+          AND (agent_run_id IS NULL OR agent_run_id = $4)
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(work_item_id)
+    .bind(idempotency_key.as_str())
+    .bind(response.run.run_id)
+    .bind(response_body)
+    .bind(request_hash.as_bytes().as_slice())
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict(
+            "work_item_worker_invocation",
+            "completion raced with a different run",
+        ));
+    }
+    transaction.commit().await?;
+    Ok((StatusCode::ACCEPTED, Json(response)).into_response())
+}
+
+fn normalize_worker_prompt(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 18_000
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(AppError::Validation("worker prompt"));
+    }
+    Ok(value.to_owned())
+}
+
+fn worker_thread_name(key: &str, title: &str, thread_id: Uuid) -> String {
+    let suffix = &thread_id.simple().to_string()[24..];
+    let prefix = format!("{key}: ");
+    let suffix = format!(" [{suffix}]");
+    let available = 120usize.saturating_sub(prefix.chars().count() + suffix.chars().count());
+    let title = title.chars().take(available).collect::<String>();
+    format!("{prefix}{title}{suffix}")
 }
 
 async fn unlink_work_item_thread(
@@ -4017,7 +4320,8 @@ fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
 mod tests {
     use super::{
         MAX_DESCRIPTION_CHARACTERS, UpdateWorkItemRequest, decode_cursor, encode_cursor,
-        normalize_description, normalize_title, validate_priority, validate_readable_key,
+        normalize_description, normalize_title, normalize_worker_prompt, validate_priority,
+        validate_readable_key, worker_thread_name,
     };
     use uuid::Uuid;
 
@@ -4064,5 +4368,19 @@ mod tests {
         }))
         .expect("decode cleared assignee patch");
         assert_eq!(cleared.assignee_actor_id, Some(None));
+    }
+
+    #[test]
+    fn worker_prompt_and_thread_name_are_bounded() {
+        assert_eq!(
+            normalize_worker_prompt("  make the change  ").expect("valid Worker prompt"),
+            "make the change"
+        );
+        assert!(normalize_worker_prompt("\u{1b}").is_err());
+        assert!(normalize_worker_prompt(&"a".repeat(18_001)).is_err());
+
+        let name = worker_thread_name("AW-42", &"界".repeat(200), Uuid::now_v7());
+        assert!(name.chars().count() <= 120);
+        assert!(name.starts_with("AW-42: "));
     }
 }

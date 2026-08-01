@@ -1857,6 +1857,16 @@ p {
   margin-top: 16px;
 }
 
+.worker-launch-form {
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+
 .work-item-link-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

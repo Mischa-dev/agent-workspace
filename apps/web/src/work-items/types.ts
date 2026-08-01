@@ -168,4 +168,13 @@ export type WorkItemTimelineEntry = {
     createdAt: string
   } | null
 }
+
+export type WorkWithWorkerResponse = {
+  threadId: string
+  run: {
+    runId: string
+    state: string
+    repositoryId: string
+  }
+}
 import type { ConversationWorkItemReference, MessageContentV1 } from '../conversations/types'
