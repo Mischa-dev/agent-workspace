@@ -45,6 +45,7 @@ export type WorkItem = {
   acceptanceCriteria: AcceptanceCriterion[]
   linkedThreads: LinkedThread[]
   linkedRepositories: LinkedRepository[]
+  linkedPullRequests: LinkedPullRequest[]
   capabilities: WorkItemCapabilities
 }
 
@@ -69,6 +70,17 @@ export type LinkedRepository = {
   href: string
 }
 
+export type LinkedPullRequest = {
+  id: string
+  number: number
+  title: string
+  url: string
+  state: string
+  draft: boolean
+  source: string
+  confirmed: boolean
+}
+
 export type AcceptanceCriterion = {
   id: string
   text: string
@@ -87,6 +99,7 @@ export type WorkItemCard = Omit<
   | 'acceptanceCriteria'
   | 'linkedThreads'
   | 'linkedRepositories'
+  | 'linkedPullRequests'
 >
 
 export type WorkflowType = WorkItemType & {

@@ -140,6 +140,22 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         href: string(repository.href),
       }
     }),
+    linkedPullRequests: (Array.isArray(item.linkedPullRequests)
+      ? item.linkedPullRequests
+      : []
+    ).map((value) => {
+      const pullRequest = record(value)
+      return {
+        id: string(pullRequest.id),
+        number: number(pullRequest.number),
+        title: string(pullRequest.title),
+        url: string(pullRequest.url),
+        state: string(pullRequest.state),
+        draft: boolean(pullRequest.draft),
+        source: string(pullRequest.source),
+        confirmed: boolean(pullRequest.confirmed),
+      }
+    }),
     capabilities: {
       view: boolean(capabilities.view),
       edit: boolean(capabilities.edit),
