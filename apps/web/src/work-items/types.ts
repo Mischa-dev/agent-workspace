@@ -63,8 +63,10 @@ export type LinkedRepository = {
   id: string
   owner: string
   name: string
+  cloneUrl: string
   role: 'primary' | 'related'
   preparationState: string
+  trusted: boolean
   available: boolean
   archivedAt: string | null
   href: string

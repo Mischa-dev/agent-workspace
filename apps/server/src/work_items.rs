@@ -329,8 +329,10 @@ struct LinkedRepositoryView {
     id: Uuid,
     owner: String,
     name: String,
+    clone_url: String,
     role: String,
     preparation_state: String,
+    trusted: bool,
     available: bool,
     archived_at: Option<String>,
     href: String,
@@ -3842,8 +3844,10 @@ const WORK_ITEM_SELECT: &str = r#"
                     'id', repository.id,
                     'owner', repository.owner,
                     'name', repository.name,
+                    'cloneUrl', repository.clone_url,
                     'role', link.role,
                     'preparationState', repository.preparation_state,
+                    'trusted', repository.trusted,
                     'available', repository.enabled AND repository.trusted
                         AND repository.archived_at IS NULL
                         AND repository.preparation_state = 'ready',

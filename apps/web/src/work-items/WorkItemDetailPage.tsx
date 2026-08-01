@@ -14,6 +14,7 @@ import { useRememberProjectLocation } from '../projects/useRememberProjectLocati
 import { listRepositories } from '../repositories/api'
 import { AppShell } from '../shell/AppShell'
 import { normalizeWorkItem, searchWorkItemReferences } from './api'
+import { buildOpenInCodexLink } from './codexDeepLink'
 import { workItemPriorities } from './constants'
 import {
   useAssignableActors,
@@ -204,6 +205,8 @@ function WorkItemEditor({
         {base.archivedAt ? <span className="archive-badge">Archived</span> : null}
       </header>
 
+      <OpenInCodex item={base} projectArchived={projectArchived} />
+
       {conflict ? (
         <section className="conflict-banner" role="alert">
           <div>
@@ -310,6 +313,30 @@ function WorkItemEditor({
         </section>
       ) : null}
     </>
+  )
+}
+
+function OpenInCodex({ item, projectArchived }: { item: WorkItem; projectArchived: boolean }) {
+  const result = projectArchived
+    ? { href: null, reason: 'Restore this Project before opening a Work Item in Codex.' }
+    : buildOpenInCodexLink(item, window.location.origin)
+  const reasonId = `open-in-codex-reason-${item.id}`
+
+  return (
+    <section className="work-item-section codex-launch" aria-labelledby={`open-in-codex-heading-${item.id}`}>
+      <div>
+        <h2 id={`open-in-codex-heading-${item.id}`}>Local Codex</h2>
+        <p>Open a prefilled, unsent local task for this Work Item. This does not create a Thread or run.</p>
+      </div>
+      {result.href ? (
+        <a className="secondary-button" href={result.href}>Open in Codex</a>
+      ) : (
+        <div>
+          <button aria-describedby={reasonId} className="secondary-button" disabled type="button">Open in Codex</button>
+          <p className="compact-note" id={reasonId}>{result.reason}</p>
+        </div>
+      )}
+    </section>
   )
 }
 

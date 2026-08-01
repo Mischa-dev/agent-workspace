@@ -755,6 +755,14 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         primary_repository.2["linkedRepositories"][0]["role"],
         "primary"
     );
+    assert_eq!(
+        primary_repository.2["linkedRepositories"][0]["cloneUrl"],
+        "https://github.com/Mischa-dev/agent-workspace-m0-spike.git"
+    );
+    assert_eq!(
+        primary_repository.2["linkedRepositories"][0]["trusted"],
+        true
+    );
 
     let second_repository_id = Uuid::now_v7();
     sqlx::query(
