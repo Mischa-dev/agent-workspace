@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -30,6 +31,13 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     config::{GITHUB_API_VERSION, GitHubConfig},
     error::{ApiJson, ApiPath, AppError},
+    git_runtime::{
+        expected_repository_mirror_path, inspect_publishable_worktree, managed_worktree_path,
+    },
+    idempotency::{
+        IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
+    },
+    outbox,
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
@@ -62,6 +70,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/integrations/github/sync",
             post(sync_installation),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
+            post(publish_agent_run),
         )
 }
 
@@ -165,6 +177,30 @@ struct InstallationRepositoryView {
 #[serde(rename_all = "camelCase")]
 struct GitHubCapabilities {
     manage: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct PublishJobView {
+    job_id: Uuid,
+    agent_run_id: Uuid,
+    repository_workspace_id: Uuid,
+    intended_commit: String,
+    state: String,
+    failure_category: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct PublishCandidate {
+    agent_run_id: Uuid,
+    conversation_id: Uuid,
+    repository_id: Uuid,
+    repository_workspace_id: Uuid,
+    run_state: String,
+    mirror_path: String,
+    worktree_path: String,
+    branch_name: String,
+    base_commit: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -605,6 +641,259 @@ async fn sync_installation(
             manage: role_allows_manage(role),
         },
     }))
+}
+
+async fn publish_agent_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if state.config.github.is_none() {
+        return Err(AppError::Conflict("github_integration", "not_configured"));
+    }
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("agent_runs", run_id, "publish")?;
+    let request_hash = RequestHash::for_value(&json!({ "agentRunId": run_id }))?;
+    let mut transaction = state.pool.begin().await?;
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::RepositoryPublish,
+    )
+    .await?;
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let view: PublishJobView = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(view)).into_response());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let candidate = sqlx::query_as::<_, PublishCandidate>(
+        r#"
+        SELECT run.id AS agent_run_id, run.conversation_id,
+               run.repository_id, workspace.id AS repository_workspace_id,
+               run.state AS run_state, repository.mirror_path,
+               worktree.path AS worktree_path, workspace.branch_name,
+               workspace.base_commit
+        FROM agent_runs run
+        JOIN repositories repository
+          ON repository.project_id = run.project_id
+         AND repository.id = run.repository_id
+        JOIN repository_workspaces workspace
+          ON workspace.project_id = run.project_id
+         AND workspace.id = run.repository_workspace_id
+         AND workspace.repository_id = run.repository_id
+         AND workspace.conversation_id = run.conversation_id
+        JOIN git_worktrees worktree
+          ON worktree.repository_workspace_id = workspace.id
+         AND worktree.state IN ('ready', 'dirty')
+        WHERE run.project_id = $1
+          AND run.id = $2
+          AND repository.enabled
+          AND repository.trusted
+          AND repository.archived_at IS NULL
+          AND workspace.state IN ('active', 'retained')
+        FOR SHARE OF run, repository, workspace, worktree
+        "#,
+    )
+    .bind(project_id)
+    .bind(run_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("agent_run"))?;
+    if !matches!(
+        candidate.run_state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        return Err(AppError::Conflict("agent_run", "not_terminal"));
+    }
+    let workspace_active = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM agent_runs active
+            WHERE active.repository_workspace_id = $1
+              AND active.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        )
+        "#,
+    )
+    .bind(candidate.repository_workspace_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if workspace_active {
+        return Err(AppError::Conflict("repository_workspace", "active_run"));
+    }
+    let github_installation_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT installation.id
+        FROM github_installations installation
+        JOIN github_installation_repositories access
+          ON access.project_id = installation.project_id
+         AND access.github_installation_id = installation.id
+        JOIN repositories repository
+          ON repository.project_id = access.project_id
+         AND repository.id = access.repository_id
+         AND repository.github_repository_id = access.github_repository_id
+        WHERE installation.project_id = $1
+          AND access.repository_id = $2
+          AND installation.enabled
+          AND installation.state = 'available'
+          AND access.access_state = 'selected'
+        FOR SHARE OF installation, access, repository
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidate.repository_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::Conflict(
+        "github_installation",
+        "repository_unavailable",
+    ))?;
+    let expected_mirror =
+        expected_repository_mirror_path(&state.config.data_root, candidate.repository_id)?;
+    let expected_worktree = managed_worktree_path(
+        &state.config.data_root,
+        candidate.repository_id,
+        candidate.repository_workspace_id,
+    )?;
+    if Path::new(&candidate.mirror_path) != expected_mirror
+        || Path::new(&candidate.worktree_path) != expected_worktree
+    {
+        return Err(AppError::Conflict(
+            "repository_workspace",
+            "stored runtime path mismatch",
+        ));
+    }
+    let branch_name = candidate.branch_name.clone();
+    let base_commit = candidate.base_commit.clone();
+    let inspection = tokio::task::spawn_blocking(move || {
+        inspect_publishable_worktree(
+            &expected_mirror,
+            &expected_worktree,
+            &branch_name,
+            &base_commit,
+        )
+    })
+    .await
+    .map_err(|_| AppError::Internal("join Git publication inspection"))??;
+    sqlx::query(
+        "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE repository_workspace_id = $1",
+    )
+    .bind(candidate.repository_workspace_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    if let Some(existing) = sqlx::query_as::<_, PublishJobView>(
+        r#"
+        SELECT id AS job_id, agent_run_id, repository_workspace_id,
+               intended_commit, state, failure_category
+        FROM github_jobs
+        WHERE project_id = $1
+          AND repository_workspace_id = $2
+          AND intended_commit = $3
+          AND kind = 'workspace_publish'
+          AND state IN ('queued', 'running', 'failed', 'completed')
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR SHARE
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidate.repository_workspace_id)
+    .bind(&inspection.head_commit)
+    .fetch_optional(&mut *transaction)
+    .await?
+    {
+        let status = if existing.state == "completed" {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        };
+        complete(&mut transaction, &reservation, status, &existing).await?;
+        transaction.commit().await?;
+        return Ok((status, Json(existing)).into_response());
+    }
+
+    let job_id = Uuid::now_v7();
+    let view = PublishJobView {
+        job_id,
+        agent_run_id: candidate.agent_run_id,
+        repository_workspace_id: candidate.repository_workspace_id,
+        intended_commit: inspection.head_commit,
+        state: "queued".to_owned(),
+        failure_category: None,
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO github_jobs (
+            id, project_id, github_installation_id, repository_id,
+            kind, payload, repository_workspace_id, agent_run_id,
+            requesting_actor_id, intended_commit
+        ) VALUES (
+            $1, $2, $3, $4, 'workspace_publish', '{}'::jsonb,
+            $5, $6, $7, $8
+        )
+        "#,
+    )
+    .bind(job_id)
+    .bind(project_id)
+    .bind(github_installation_id)
+    .bind(candidate.repository_id)
+    .bind(candidate.repository_workspace_id)
+    .bind(candidate.agent_run_id)
+    .bind(principal.actor_id)
+    .bind(&view.intended_commit)
+    .execute(&mut *transaction)
+    .await?;
+    let request_id = headers
+        .get(crate::REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 128);
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, session_id, authentication_class,
+            action, target_kind, target_id, outcome, request_id, metadata
+        ) VALUES (
+            $1, $2, $3, $4, 'password_session',
+            'github.workspace_publish_queued', 'github_job', $5,
+            'succeeded', $6,
+            jsonb_build_object('agent_run_id', $7::uuid, 'repository_workspace_id', $8::uuid)
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(principal.actor_id)
+    .bind(project_id)
+    .bind(principal.session_id)
+    .bind(job_id)
+    .bind(request_id)
+    .bind(candidate.agent_run_id)
+    .bind(candidate.repository_workspace_id)
+    .execute(&mut *transaction)
+    .await?;
+    outbox::enqueue_agent_run_updated(
+        &mut transaction,
+        project_id,
+        candidate.conversation_id,
+        candidate.agent_run_id,
+    )
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
+    transaction.commit().await?;
+    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, FromRow)]

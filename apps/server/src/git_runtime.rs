@@ -38,6 +38,12 @@ pub struct WorktreeInspection {
     pub branch: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishInspection {
+    pub branch: String,
+    pub head_commit: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepositoryPreparationMode {
     RefreshOrClone,
@@ -306,6 +312,65 @@ pub fn inspect_worktree(mirror: &Path, worktree: &Path) -> Result<WorktreeInspec
     })
 }
 
+pub fn inspect_publishable_worktree(
+    mirror: &Path,
+    worktree: &Path,
+    expected_branch: &str,
+    base_commit: &str,
+) -> Result<PublishInspection, AppError> {
+    validate_branch(expected_branch)?;
+    validate_commit(base_commit)?;
+    let inspection = inspect_worktree(mirror, worktree)?;
+    if inspection.dirty {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "dirty worktree is retained; commit intended changes through the Thread before publishing",
+        ));
+    }
+    if inspection.branch != expected_branch {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "worktree branch does not match its durable workspace",
+        ));
+    }
+    let head = run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("rev-parse"),
+        OsString::from("--verify"),
+        OsString::from("HEAD^{commit}"),
+    ])?;
+    let head_commit = String::from_utf8(head.stdout)
+        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .trim()
+        .to_owned();
+    validate_commit(&head_commit)?;
+    if head_commit == base_commit {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "workspace has no commit ahead of its recorded base",
+        ));
+    }
+    run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("merge-base"),
+        OsString::from("--is-ancestor"),
+        OsString::from(base_commit),
+        OsString::from(&head_commit),
+    ])
+    .map_err(|_| {
+        AppError::Conflict(
+            "git_worktree",
+            "workspace HEAD is not descended from its recorded base",
+        )
+    })?;
+    Ok(PublishInspection {
+        branch: inspection.branch,
+        head_commit,
+    })
+}
+
 pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppError> {
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
@@ -434,6 +499,13 @@ fn validate_branch(value: &str) -> Result<(), AppError> {
     validate_ref(value)
 }
 
+fn validate_commit(value: &str) -> Result<(), AppError> {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AppError::Invalid("unsafe Git commit"));
+    }
+    Ok(())
+}
+
 fn repository_lock(repository_root: &Path) -> Result<RepositoryLock, AppError> {
     if !repository_root.is_absolute() || !repository_root.is_dir() {
         return Err(AppError::Invalid("unsafe repository root"));
@@ -560,9 +632,10 @@ impl Drop for RepositoryLock {
 mod tests {
     use super::{
         RegisteredRepository, RepositoryPreparationMode, create_worktree,
-        expected_repository_mirror_path, inspect_worktree, managed_worktree_path,
-        prepare_repository, remove_clean_worktree, repair_and_prune_worktrees, unique_run_branch,
-        validate_branch, validate_ref, worktree_is_dirty,
+        expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
+        managed_worktree_path, prepare_repository, remove_clean_worktree,
+        repair_and_prune_worktrees, unique_run_branch, validate_branch, validate_ref,
+        worktree_is_dirty,
     };
     use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, thread};
     use uuid::Uuid;
@@ -679,6 +752,37 @@ mod tests {
             assert!(!inspection.dirty);
             assert_eq!(&inspection.branch, branch);
         }
+
+        let no_commit = inspect_publishable_worktree(
+            &mirror,
+            &created[1].0,
+            &created[1].1,
+            &first_preparation.base_commit,
+        );
+        assert!(no_commit.is_err());
+        fs::write(created[1].0.join("published.txt"), "publish\n").expect("write publish fixture");
+        git(&created[1].0, ["add", "published.txt"]);
+        git(
+            &created[1].0,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "publish fixture",
+            ],
+        );
+        let publishable = inspect_publishable_worktree(
+            &mirror,
+            &created[1].0,
+            &created[1].1,
+            &first_preparation.base_commit,
+        )
+        .expect("inspect publishable worktree");
+        assert_eq!(publishable.branch, created[1].1);
+        assert_ne!(publishable.head_commit, first_preparation.base_commit);
 
         fs::write(created[0].0.join("dirty.txt"), "retain\n").expect("dirty worktree");
         assert!(remove_clean_worktree(&mirror, &created[0].0).is_err());
