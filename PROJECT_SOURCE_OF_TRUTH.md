@@ -5743,13 +5743,18 @@ without mirroring the generic HTTP surface or accepting authorship from Codex.
   idempotency, policy, audit, outbox, and realtime command layers in one
   transaction; no MCP-only mutation path may diverge from browser behavior
 - resolve authorship, requester identity, Project, and membership exclusively
-  from the authenticated credential; reject or ignore no client-supplied Actor,
-  User, membership, audit channel, or Project ownership field
+  from the authenticated credential; reject every client-supplied Actor, User,
+  membership, audit channel, requester, authorship, ownership, or Project field
 - return the updated bounded projection, its new version, changed fields,
   activity/result IDs, and whether the request was an idempotent replay
-- mark writes `readOnlyHint=false`; use `destructiveHint=false` only for the
-  additive/reversible M6 commands and `openWorldHint=true` only for the command
-  that links an externally hosted pull request
+- mark writes `readOnlyHint=false`; set `destructiveHint=false` only for the
+  append-only `work_item_post_update`, additive `work_item_create_subtask`, and
+  explicit-link `work_item_link_pull_request` commands; set
+  `destructiveHint=true` for `work_item_update`, `work_item_set_status`,
+  `work_item_mark_blocked`, and `work_item_mark_ready_for_review` because they
+  replace canonical content or status even when a later command can reverse
+  the effect; use `openWorldHint=true` only for the command that links an
+  externally hosted pull request
 
 **Dependencies:** M4 domain commands and idempotency, M5 canonical explicit
 pull-request linking, M6-002 write scopes, and M6-003 identity conventions.
