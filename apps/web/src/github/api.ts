@@ -46,3 +46,13 @@ export function getGitHubStatus(projectId: string) {
     `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github`,
   )
 }
+
+export function syncGitHubInstallation(
+  projectId: string,
+  input: { installationId: number; repositoryIds: string[] },
+) {
+  return requestJson<GitHubStatus>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/sync`,
+    { method: 'POST', json: input },
+  )
+}

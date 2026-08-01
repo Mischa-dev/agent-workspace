@@ -19,7 +19,13 @@ CREATE TABLE github_installations (
     pull_requests_permission TEXT NOT NULL CHECK (pull_requests_permission = 'write'),
     checks_permission TEXT NOT NULL CHECK (checks_permission = 'read'),
     actions_permission TEXT CHECK (actions_permission IS NULL OR actions_permission = 'read'),
-    subscribed_events TEXT[] NOT NULL,
+    subscribed_events TEXT[] NOT NULL CHECK (
+        cardinality(subscribed_events) BETWEEN 7 AND 8
+        AND subscribed_events <@ ARRAY[
+            'installation', 'installation_repositories', 'installation_target',
+            'push', 'pull_request', 'pull_request_review', 'check_suite', 'check_run'
+        ]::TEXT[]
+    ),
     state TEXT NOT NULL CHECK (
         state IN ('available', 'unavailable', 'revoked', 'misconfigured')
     ),
@@ -198,4 +204,3 @@ CREATE TRIGGER github_installations_immutable_identity
 BEFORE UPDATE ON github_installations
 FOR EACH ROW
 EXECUTE FUNCTION enforce_github_installation_identity();
-

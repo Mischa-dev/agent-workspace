@@ -1,11 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getGitHubStatus } from './api'
+import { listRepositories } from '../repositories/api'
+import { getGitHubStatus, syncGitHubInstallation } from './api'
 import { GitHubIntegrationSettings } from './GitHubIntegrationSettings'
 
-vi.mock('./api', () => ({ getGitHubStatus: vi.fn() }))
+vi.mock('../repositories/api', () => ({ listRepositories: vi.fn() }))
+vi.mock('./api', () => ({
+  getGitHubStatus: vi.fn(),
+  syncGitHubInstallation: vi.fn(),
+}))
 
 describe('GitHubIntegrationSettings', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -71,6 +76,58 @@ describe('GitHubIntegrationSettings', () => {
     renderSettings()
     expect(await screen.findByText('Not configured')).toBeVisible()
     expect(screen.getByText(/host operator must install/i)).toBeVisible()
+  })
+
+  it('verifies a configured installation against explicitly selected repositories', async () => {
+    const projectId = '019fbc80-0000-7000-8000-000000000003'
+    const repositoryId = '019fbc80-0000-7000-8000-000000000002'
+    vi.mocked(getGitHubStatus).mockResolvedValue({
+      configured: true,
+      apiVersion: '2026-03-10',
+      installation: null,
+      capabilities: { manage: true },
+    })
+    vi.mocked(listRepositories).mockResolvedValue({
+      repositories: [
+        {
+          id: repositoryId,
+          githubRepositoryId: 123456,
+          owner: 'Mischa-dev',
+          name: 'agent-workspace-m0-spike',
+          cloneUrl: 'https://github.com/Mischa-dev/agent-workspace-m0-spike.git',
+          defaultBranch: 'main',
+          enabled: true,
+          trusted: true,
+          version: 1,
+          preparationState: 'ready',
+          preparationFailureCategory: null,
+          archivedAt: null,
+          capabilities: { manage: true },
+        },
+      ],
+      canManage: true,
+    })
+    vi.mocked(syncGitHubInstallation).mockResolvedValue({
+      configured: true,
+      apiVersion: '2026-03-10',
+      installation: null,
+      capabilities: { manage: true },
+    })
+
+    renderSettings()
+
+    fireEvent.change(await screen.findByLabelText('GitHub installation ID'), {
+      target: { value: '150232852' },
+    })
+    fireEvent.click(screen.getByLabelText('Mischa-dev/agent-workspace-m0-spike'))
+    fireEvent.click(screen.getByRole('button', { name: 'Verify installation' }))
+
+    await waitFor(() => {
+      expect(syncGitHubInstallation).toHaveBeenCalledWith(projectId, {
+        installationId: 150232852,
+        repositoryIds: [repositoryId],
+      })
+    })
   })
 })
 

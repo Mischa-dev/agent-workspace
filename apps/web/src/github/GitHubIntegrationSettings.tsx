@@ -1,11 +1,16 @@
-import { useQuery } from '@tanstack/react-query'
+import { FormEvent, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import { getGitHubStatus } from './api'
+import { listRepositories } from '../repositories/api'
+import { getGitHubStatus, syncGitHubInstallation } from './api'
 
 export function GitHubIntegrationSettings({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient()
+  const queryKey = queryKeys.githubIntegration(projectId)
   const status = useQuery({
-    queryKey: queryKeys.githubIntegration(projectId),
+    queryKey,
     queryFn: () => getGitHubStatus(projectId),
   })
 
@@ -26,15 +31,7 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
   }
   const installation = status.data.installation
   if (!installation) {
-    return (
-      <div className="integration-empty-state">
-        <span className="status-chip" data-state="pending">Host ready</span>
-        <p>
-          GitHub App credentials are available, but this Project has no verified
-          installation yet.
-        </p>
-      </div>
-    )
+    return <GitHubInstallationSetup onVerified={(current) => queryClient.setQueryData(queryKey, current)} projectId={projectId} />
   }
 
   return (
@@ -103,6 +100,132 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
         Credential files, installation tokens, and host paths never appear in
         this browser projection.
       </p>
+      <GitHubReverify
+        installationId={installation.installationId}
+        onVerified={(current) => queryClient.setQueryData(queryKey, current)}
+        projectId={projectId}
+        repositoryIds={installation.repositories.map((repository) => repository.id)}
+      />
     </div>
   )
+}
+
+function GitHubInstallationSetup({
+  onVerified,
+  projectId,
+}: {
+  onVerified: (status: Awaited<ReturnType<typeof getGitHubStatus>>) => void
+  projectId: string
+}) {
+  const repositories = useQuery({
+    queryKey: queryKeys.repositories(projectId),
+    queryFn: () => listRepositories(projectId),
+  })
+  const [installationId, setInstallationId] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const verify = useMutation({
+    mutationFn: () => syncGitHubInstallation(projectId, {
+      installationId: Number(installationId),
+      repositoryIds: selected,
+    }),
+    onSuccess: onVerified,
+    onError: (reason) => setError(integrationError(reason)),
+  })
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError(null)
+    verify.mutate()
+  }
+  const available = repositories.data?.repositories.filter(
+    (repository) => repository.enabled && repository.trusted && !repository.archivedAt,
+  ) ?? []
+
+  return (
+    <div className="integration-empty-state">
+      <span className="status-chip" data-state="pending">Host ready</span>
+      <p>
+        GitHub App credentials are available, but this Project has no verified
+        installation yet. Enter the public installation ID and select only the
+        registered repositories it may access.
+      </p>
+      {repositories.isPending && <p>Loading registered repositories…</p>}
+      {repositories.isError && <p role="alert">Registered repositories could not be loaded.</p>}
+      {repositories.isSuccess && (
+        <form onSubmit={submit}>
+          <div className="field">
+            <label htmlFor="github-installation-id">GitHub installation ID</label>
+            <input
+              id="github-installation-id"
+              inputMode="numeric"
+              onChange={(event) => setInstallationId(event.target.value)}
+              value={installationId}
+            />
+          </div>
+          <fieldset>
+            <legend>Selected repositories</legend>
+            {available.map((repository) => (
+              <label key={repository.id}>
+                <input
+                  checked={selected.includes(repository.id)}
+                  onChange={(event) => setSelected((current) => event.target.checked
+                    ? [...current, repository.id]
+                    : current.filter((id) => id !== repository.id))}
+                  type="checkbox"
+                />
+                {repository.owner}/{repository.name}
+              </label>
+            ))}
+          </fieldset>
+          {error && <p role="alert">{error}</p>}
+          <button
+            disabled={Number(installationId) <= 0 || selected.length === 0 || verify.isPending}
+            type="submit"
+          >
+            {verify.isPending ? 'Verifying…' : 'Verify installation'}
+          </button>
+        </form>
+      )}
+    </div>
+  )
+}
+
+function GitHubReverify({
+  installationId,
+  onVerified,
+  projectId,
+  repositoryIds,
+}: {
+  installationId: number
+  onVerified: (status: Awaited<ReturnType<typeof getGitHubStatus>>) => void
+  projectId: string
+  repositoryIds: string[]
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const verify = useMutation({
+    mutationFn: () => syncGitHubInstallation(projectId, { installationId, repositoryIds }),
+    onSuccess: onVerified,
+    onError: (reason) => setError(integrationError(reason)),
+  })
+  return (
+    <div className="repository-actions">
+      {error && <p role="alert">{error}</p>}
+      <button
+        disabled={repositoryIds.length === 0 || verify.isPending}
+        onClick={() => {
+          setError(null)
+          verify.mutate()
+        }}
+        type="button"
+      >
+        {verify.isPending ? 'Verifying…' : 'Reverify installation'}
+      </button>
+    </div>
+  )
+}
+
+function integrationError(reason: unknown) {
+  return isApiError(reason)
+    ? reason.message
+    : 'The GitHub installation could not be verified.'
 }

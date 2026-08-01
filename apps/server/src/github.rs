@@ -569,6 +569,31 @@ async fn sync_installation(
         .execute(&mut *transaction)
         .await?;
     }
+    let request_id = headers
+        .get(crate::REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 128);
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, session_id, authentication_class,
+            action, target_kind, target_id, outcome, request_id, metadata
+        ) VALUES (
+            $1, $2, $3, $4, 'password_session',
+            'github.installation_sync', 'github_installation', $5,
+            'succeeded', $6, jsonb_build_object('repository_count', $7::integer)
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(principal.actor_id)
+    .bind(project_id)
+    .bind(principal.session_id)
+    .bind(installation_id)
+    .bind(request_id)
+    .bind(i32::try_from(repositories.len()).map_err(|_| AppError::Internal("repository count"))?)
+    .execute(&mut *transaction)
+    .await?;
     let installation_row = load_installation(&mut transaction, project_id)
         .await?
         .ok_or(AppError::Internal("persisted GitHub installation"))?;
@@ -658,7 +683,9 @@ fn validate_installation(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    if !REQUIRED_EVENTS.iter().all(|event| events.contains(event))
+    if installation.events.len() != events.len()
+        || events.len() > PERMITTED_EVENTS.len()
+        || !REQUIRED_EVENTS.iter().all(|event| events.contains(event))
         || !events.iter().all(|event| PERMITTED_EVENTS.contains(event))
     {
         return Err(GitHubError::Scope);
@@ -1393,6 +1420,9 @@ mod tests {
             .insert("issues".to_owned(), "write".to_owned());
         assert!(validate_installation(&config, &installation).is_err());
         installation.permissions.remove("issues");
+        installation.events.push("push".to_owned());
+        assert!(validate_installation(&config, &installation).is_err());
+        installation.events.pop();
         installation.repository_selection = "all".to_owned();
         assert!(validate_installation(&config, &installation).is_err());
     }
