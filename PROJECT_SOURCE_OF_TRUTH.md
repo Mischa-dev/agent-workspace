@@ -5230,6 +5230,24 @@ Worker whose dependencies are unavailable. Unknown legacy paths or ambiguous
 ownership fail closed for explicit operator repair; startup never guesses,
 moves credentials, or rewrites an applied migration.
 
+## D-039: Retained private mirrors activate through verified offline import
+
+**Status:** Accepted
+
+**Reason:** M3 owns repository isolation and worktree execution but does not
+yet own GitHub App credential minting, which remains M5. The retained M0 spike
+repository is private, and the validation host intentionally stores no GitHub
+credential. Startup therefore copies its already verified legacy mirror into
+the canonical UUID-scoped location and records the immutable legacy path.
+Only that recorded imported-mirror case may activate without a network fetch:
+the preparation command must find the canonical mirror, verify its exact
+credential-free origin, and resolve the configured default branch. Missing,
+mismatched, or invalid imported state fails closed and is never cloned or
+repaired by guessing. Newly registered repositories continue to clone or
+perform a pruned remote update, while short-lived authenticated fetch and push
+remain M5 responsibilities. No GitHub credential enters the M3 service,
+provider environment, repository configuration, database, or logs.
+
 ---
 
 # 32. Open decisions

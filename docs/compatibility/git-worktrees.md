@@ -50,6 +50,15 @@ pruned remote update, and resolves the exact default-branch commit. Failure is
 persisted only as `git_prepare_failed`; raw Git diagnostics and paths never
 enter browser DTOs.
 
+The one retained M0 private mirror is a bounded exception to the remote-update
+step. Startup copies its already verified refs into the canonical UUID-scoped
+location and records `legacy_mirror_path`. The authorized preparation command
+then verifies that imported mirror's exact origin and resolves its default
+branch without attempting a credential-free network fetch. It fails closed if
+the imported mirror is missing or mismatched. Newly registered repositories
+still clone or perform a pruned update, and short-lived authenticated fetch is
+owned by M5; no GitHub credential is persisted on the M3 host.
+
 New worktrees use
 `worktrees/<repository-id>/<repository-workspace-id>`. The logical workspace
 owns the immutable branch and base commit, while Git inspection verifies that
@@ -93,6 +102,9 @@ session, Origin/CSRF, role policy, trust acknowledgement, pending registration,
 idempotent replay, duplicate and unsafe identity rejection, authorized
 activation, safe failure state, archive/replay, and path redaction. A separate
 upgrade test proves that both canonical and legacy mirrors exist after `0011`.
+The Git runtime unit suite also proves that the retained-import mode activates
+an existing private mirror without network credentials and refuses to clone a
+missing imported mirror.
 The scheduler integration test additionally holds one development run in the
 only host slot, proves a second run remains queued without a workspace or Git
 row, expires its synthetic lease, releases capacity, and verifies the admitted

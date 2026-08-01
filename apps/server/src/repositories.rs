@@ -15,8 +15,8 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     git_runtime::{
-        RegisteredRepository, expected_repository_mirror_path, prepare_repository,
-        validate_registered_ref,
+        RegisteredRepository, RepositoryPreparationMode, expected_repository_mirror_path,
+        prepare_repository, validate_registered_ref,
     },
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
@@ -56,6 +56,7 @@ struct RepositoryRow {
     clone_url: String,
     default_branch: String,
     mirror_path: String,
+    legacy_mirror_path: Option<String>,
     enabled: bool,
     trusted: bool,
     version: i64,
@@ -137,7 +138,7 @@ async fn list_repositories(
     let rows = sqlx::query_as::<_, RepositoryRow>(
         r#"
         SELECT id, github_repository_id, owner, name, clone_url,
-               default_branch, mirror_path, enabled, trusted, version,
+               default_branch, mirror_path, legacy_mirror_path, enabled, trusted, version,
                preparation_state, preparation_failure_category,
                archived_at::text AS archived_at
         FROM repositories
@@ -325,10 +326,16 @@ async fn prepare_registered_repository(
         default_branch: row.default_branch,
         mirror_path: PathBuf::from(row.mirror_path),
     };
+    let preparation_mode = if row.legacy_mirror_path.is_some() {
+        RepositoryPreparationMode::VerifyImportedMirror
+    } else {
+        RepositoryPreparationMode::RefreshOrClone
+    };
     let data_root = state.config.data_root.clone();
-    let preparation =
-        tokio::task::spawn_blocking(move || prepare_repository(data_root.as_path(), &registered))
-            .await;
+    let preparation = tokio::task::spawn_blocking(move || {
+        prepare_repository(data_root.as_path(), &registered, preparation_mode)
+    })
+    .await;
     let prepared = matches!(preparation, Ok(Ok(_)));
     if !prepared {
         tracing::warn!(%project_id, %repository_id, "repository preparation failed");
@@ -453,7 +460,7 @@ async fn fetch_repository(
     Ok(sqlx::query_as::<_, RepositoryRow>(
         r#"
         SELECT id, github_repository_id, owner, name, clone_url,
-               default_branch, mirror_path, enabled, trusted, version,
+               default_branch, mirror_path, legacy_mirror_path, enabled, trusted, version,
                preparation_state, preparation_failure_category,
                archived_at::text AS archived_at
         FROM repositories
