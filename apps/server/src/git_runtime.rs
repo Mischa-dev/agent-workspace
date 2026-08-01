@@ -38,6 +38,12 @@ pub struct WorktreeInspection {
     pub branch: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepositoryPreparationMode {
+    RefreshOrClone,
+    VerifyImportedMirror,
+}
+
 pub fn expected_repository_mirror_path(
     data_root: &Path,
     repository_id: Uuid,
@@ -72,6 +78,7 @@ pub fn managed_worktree_path(
 pub fn prepare_repository(
     data_root: &Path,
     repository: &RegisteredRepository,
+    mode: RepositoryPreparationMode,
 ) -> Result<PreparedRepository, AppError> {
     let data_root = absolute_runtime_path(data_root)?;
     let repository_root = prepare_private_profile_directory(
@@ -89,6 +96,11 @@ pub fn prepare_repository(
     let _lock = repository_lock(&repository_root)?;
     if repository.mirror_path.exists() {
         validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
+    } else if mode == RepositoryPreparationMode::VerifyImportedMirror {
+        return Err(AppError::Conflict(
+            "repository",
+            "imported mirror is not available",
+        ));
     } else {
         run_git([
             OsString::from("clone"),
@@ -101,14 +113,16 @@ pub fn prepare_repository(
         ])?;
         validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
     }
-    run_git([
-        OsString::from("--git-dir"),
-        repository.mirror_path.as_os_str().to_owned(),
-        OsString::from("remote"),
-        OsString::from("update"),
-        OsString::from("--prune"),
-        OsString::from("origin"),
-    ])?;
+    if mode == RepositoryPreparationMode::RefreshOrClone {
+        run_git([
+            OsString::from("--git-dir"),
+            repository.mirror_path.as_os_str().to_owned(),
+            OsString::from("remote"),
+            OsString::from("update"),
+            OsString::from("--prune"),
+            OsString::from("origin"),
+        ])?;
+    }
     let base_commit = resolve_base_commit(&repository.mirror_path, &repository.default_branch)?;
     Ok(PreparedRepository { base_commit })
 }
@@ -545,10 +559,10 @@ impl Drop for RepositoryLock {
 #[cfg(test)]
 mod tests {
     use super::{
-        RegisteredRepository, create_worktree, expected_repository_mirror_path, inspect_worktree,
-        managed_worktree_path, prepare_repository, remove_clean_worktree,
-        repair_and_prune_worktrees, unique_run_branch, validate_branch, validate_ref,
-        worktree_is_dirty,
+        RegisteredRepository, RepositoryPreparationMode, create_worktree,
+        expected_repository_mirror_path, inspect_worktree, managed_worktree_path,
+        prepare_repository, remove_clean_worktree, repair_and_prune_worktrees, unique_run_branch,
+        validate_branch, validate_ref, worktree_is_dirty,
     };
     use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, thread};
     use uuid::Uuid;
@@ -617,10 +631,18 @@ mod tests {
             default_branch: "main".to_owned(),
             mirror_path: mirror.clone(),
         };
-        let first_preparation =
-            prepare_repository(&data_root, &repository).expect("prepare canonical mirror");
-        let second_preparation =
-            prepare_repository(&data_root, &repository).expect("reuse canonical mirror");
+        let first_preparation = prepare_repository(
+            &data_root,
+            &repository,
+            RepositoryPreparationMode::RefreshOrClone,
+        )
+        .expect("prepare canonical mirror");
+        let second_preparation = prepare_repository(
+            &data_root,
+            &repository,
+            RepositoryPreparationMode::RefreshOrClone,
+        )
+        .expect("reuse canonical mirror");
         assert_eq!(first_preparation, second_preparation);
         assert_eq!(
             fs::metadata(mirror.parent().expect("repository root"))
@@ -665,6 +687,88 @@ mod tests {
         remove_clean_worktree(&mirror, &created[0].0).expect("remove clean worktree");
         assert!(!created[0].0.exists());
         repair_and_prune_worktrees(&mirror, Some(&created[1].0)).expect("repair and prune");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verifies_an_imported_private_mirror_without_network_credentials() {
+        let temporary = tempfile::tempdir().expect("temporary Git runtime root");
+        let data_root = temporary.path().join("data");
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).expect("create source repository");
+        git(&source, ["init", "-b", "main"]);
+        fs::write(source.join("known.txt"), "known\n").expect("write known file");
+        git(&source, ["add", "known.txt"]);
+        git(
+            &source,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+        );
+
+        let repository_id = Uuid::now_v7();
+        let mirror = expected_repository_mirror_path(&data_root, repository_id)
+            .expect("expected mirror path");
+        git(
+            temporary.path(),
+            [
+                "clone",
+                "--mirror",
+                "--no-local",
+                source.to_str().expect("source path"),
+                mirror.to_str().expect("mirror path"),
+            ],
+        );
+        let clone_url = "https://github.com/Mischa-dev/private-fixture.git";
+        git(
+            temporary.path(),
+            [
+                "--git-dir",
+                mirror.to_str().expect("mirror path"),
+                "remote",
+                "set-url",
+                "origin",
+                clone_url,
+            ],
+        );
+        let repository = RegisteredRepository {
+            id: repository_id,
+            clone_url: clone_url.to_owned(),
+            default_branch: "main".to_owned(),
+            mirror_path: mirror,
+        };
+
+        let prepared = prepare_repository(
+            &data_root,
+            &repository,
+            RepositoryPreparationMode::VerifyImportedMirror,
+        )
+        .expect("verify imported mirror without fetching");
+        assert_eq!(prepared.base_commit.len(), 40);
+
+        let missing_id = Uuid::now_v7();
+        let missing = RegisteredRepository {
+            id: missing_id,
+            clone_url: clone_url.to_owned(),
+            default_branch: "main".to_owned(),
+            mirror_path: expected_repository_mirror_path(&data_root, missing_id)
+                .expect("missing mirror path"),
+        };
+        assert!(
+            prepare_repository(
+                &data_root,
+                &missing,
+                RepositoryPreparationMode::VerifyImportedMirror,
+            )
+            .is_err(),
+            "verification mode must not clone a missing private mirror"
+        );
     }
 
     #[cfg(unix)]
