@@ -256,6 +256,10 @@ struct ClaimedPublishJob {
     worktree_path: String,
     branch_name: String,
     base_commit: String,
+    installation_available: bool,
+    repository_available: bool,
+    workspace_available: bool,
+    run_terminal: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1065,38 +1069,42 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
                repository.owner, repository.name AS repository_name,
                repository.clone_url, repository.mirror_path,
                worktree.path AS worktree_path, workspace.branch_name,
-               workspace.base_commit
+               workspace.base_commit,
+               COALESCE(installation.enabled
+                   AND installation.state = 'available'
+                   AND access.access_state = 'selected'
+                   AND access.github_repository_id = repository.github_repository_id,
+                   false) AS installation_available,
+               repository.enabled
+                   AND repository.trusted
+                   AND repository.archived_at IS NULL
+                   AS repository_available,
+               workspace.state IN ('active', 'retained')
+                   AND worktree.state IN ('ready', 'dirty')
+                   AS workspace_available,
+               run.state IN ('completed', 'failed', 'canceled', 'interrupted')
+                   AS run_terminal
         FROM github_jobs job
         JOIN github_installations installation
           ON installation.project_id = job.project_id
          AND installation.id = job.github_installation_id
-         AND installation.enabled
-         AND installation.state = 'available'
-        JOIN github_installation_repositories access
+        LEFT JOIN github_installation_repositories access
           ON access.project_id = job.project_id
          AND access.github_installation_id = installation.id
          AND access.repository_id = job.repository_id
-         AND access.access_state = 'selected'
         JOIN repositories repository
           ON repository.project_id = job.project_id
          AND repository.id = job.repository_id
-         AND repository.github_repository_id = access.github_repository_id
-         AND repository.enabled
-         AND repository.trusted
-         AND repository.archived_at IS NULL
         JOIN repository_workspaces workspace
           ON workspace.project_id = job.project_id
          AND workspace.id = job.repository_workspace_id
          AND workspace.repository_id = job.repository_id
-         AND workspace.state IN ('active', 'retained')
         JOIN git_worktrees worktree
           ON worktree.repository_workspace_id = workspace.id
-         AND worktree.state IN ('ready', 'dirty')
         JOIN agent_runs run
           ON run.project_id = job.project_id
          AND run.id = job.agent_run_id
          AND run.repository_workspace_id = workspace.id
-         AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
         WHERE job.kind = 'workspace_publish'
           AND job.state IN ('queued', 'failed')
           AND job.next_attempt_at <= now()
@@ -1142,6 +1150,12 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
 }
 
 async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Result<(), AppError> {
+    if !job.installation_available || !job.repository_available {
+        return fail_publish_job(state, job, "publication_scope_unavailable", true).await;
+    }
+    if !job.workspace_available || !job.run_terminal {
+        return fail_publish_job(state, job, "workspace_unavailable", true).await;
+    }
     let Some(config) = state.config.github.as_ref() else {
         return fail_publish_job(state, job, "github_not_configured", true).await;
     };
