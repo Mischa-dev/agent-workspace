@@ -29,6 +29,9 @@ sudo install -d -m 0755 "${release_root}/bin" "${release_root}/web"
 sudo install -m 0755 \
   target/release/agent-workspace-server \
   "${release_root}/bin/agent-workspace-server"
+sudo install -m 0755 \
+  deploy/redhat/agent-workspace-service-command \
+  "${release_root}/bin/agent-workspace-service-command"
 sudo cp -R apps/web/dist/. "${release_root}/web/"
 sudo chown -R root:root "${release_root}"
 
