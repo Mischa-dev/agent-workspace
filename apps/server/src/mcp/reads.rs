@@ -103,6 +103,8 @@ pub struct WorkItemProjection {
     pub assignee: Option<AssigneeProjection>,
     pub version: i64,
     pub archived: bool,
+    pub parent_work_item_id: Option<String>,
+    pub blocked: Option<BlockedProjection>,
     pub acceptance_criteria: Vec<AcceptanceCriterionProjection>,
     pub linked_repositories: Vec<LinkedRepositoryProjection>,
     pub linked_pull_requests: Vec<PullRequestProjection>,
@@ -180,6 +182,14 @@ pub struct AcceptanceCriterionProjection {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct BlockedProjection {
+    pub reason: String,
+    pub blocked_at: String,
+    pub blocked_by_actor_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositoryProjection {
     pub id: String,
     pub project_id: String,
@@ -243,6 +253,10 @@ struct WorkItemRow {
     assignee_handle: Option<String>,
     version: i64,
     archived: bool,
+    parent_work_item_id: Option<Uuid>,
+    blocked_reason: Option<String>,
+    blocked_at: Option<String>,
+    blocked_by_actor_id: Option<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
@@ -778,6 +792,17 @@ fn work_item_projection(
         assignee,
         version: row.version,
         archived: row.archived,
+        parent_work_item_id: row.parent_work_item_id.map(|id| id.to_string()),
+        blocked: match (row.blocked_reason, row.blocked_at, row.blocked_by_actor_id) {
+            (Some(reason), Some(blocked_at), Some(blocked_by_actor_id)) => {
+                Some(BlockedProjection {
+                    reason,
+                    blocked_at,
+                    blocked_by_actor_id: blocked_by_actor_id.to_string(),
+                })
+            }
+            _ => None,
+        },
         acceptance_criteria,
         linked_repositories: linked_repositories
             .into_iter()
@@ -930,7 +955,11 @@ const WORK_ITEM_BY_ID_SELECT: &str = r#"
         assignee.display_name AS assignee_display_name,
         assignee.handle AS assignee_handle,
         wi.version,
-        wi.archived_at IS NOT NULL AS archived
+        wi.archived_at IS NOT NULL AS archived,
+        wi.parent_work_item_id,
+        wi.blocked_reason,
+        wi.blocked_at::text AS blocked_at,
+        wi.blocked_by_actor_id
     FROM work_items wi
     JOIN projects p ON p.id = wi.project_id
     JOIN work_item_types item_type
@@ -960,7 +989,11 @@ const WORK_ITEM_SELECT: &str = r#"
         assignee.display_name AS assignee_display_name,
         assignee.handle AS assignee_handle,
         wi.version,
-        wi.archived_at IS NOT NULL AS archived
+        wi.archived_at IS NOT NULL AS archived,
+        wi.parent_work_item_id,
+        wi.blocked_reason,
+        wi.blocked_at::text AS blocked_at,
+        wi.blocked_by_actor_id
     FROM work_items wi
     JOIN projects p ON p.id = wi.project_id
     JOIN work_item_types item_type

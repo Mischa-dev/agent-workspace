@@ -30,6 +30,7 @@ use uuid::Uuid;
 use crate::{AppState, error::AppError};
 
 mod reads;
+mod writes;
 
 pub const MCP_PATH: &str = "/api/v1/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -333,6 +334,167 @@ impl McpServer {
             });
         };
         Json(reads::pull_request_get(&self.state, principal, &arguments.identifier).await)
+    }
+
+    #[tool(
+        description = "Move a Work Item through its Project-owned workflow using its current version",
+        annotations(
+            title = "Set Work Item status",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_set_status(
+        &self,
+        Parameters(arguments): Parameters<writes::SetStatusArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::set_status(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Append one useful bounded update to a Work Item without replacing canonical fields",
+        annotations(
+            title = "Post Work Item update",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_post_update(
+        &self,
+        Parameters(arguments): Parameters<writes::PostUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::post_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Replace bounded canonical Work Item fields with optimistic concurrency",
+        annotations(
+            title = "Update Work Item",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_update(
+        &self,
+        Parameters(arguments): Parameters<writes::UpdateWorkItemArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::update_work_item(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create one additive subtask under an immutable parent Work Item",
+        annotations(
+            title = "Create Work Item subtask",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_create_subtask(
+        &self,
+        Parameters(arguments): Parameters<writes::CreateSubtaskArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::create_subtask(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Explicitly link one existing canonical GitHub pull request to a Work Item",
+        annotations(
+            title = "Link pull request to Work Item",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn work_item_link_pull_request(
+        &self,
+        Parameters(arguments): Parameters<writes::LinkPullRequestArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::link_pull_request(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Mark a Work Item blocked with a bounded actionable reason",
+        annotations(
+            title = "Mark Work Item blocked",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_mark_blocked(
+        &self,
+        Parameters(arguments): Parameters<writes::MarkBlockedArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::mark_blocked(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Clear a blocker and move a Work Item through an allowed Review transition",
+        annotations(
+            title = "Mark Work Item ready for review",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_mark_ready_for_review(
+        &self,
+        Parameters(arguments): Parameters<writes::MarkReadyForReviewArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::mark_ready_for_review(&self.state, principal, arguments).await)
     }
 }
 
