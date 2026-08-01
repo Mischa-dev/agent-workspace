@@ -159,6 +159,8 @@ export function normalizeWorkItem(value: unknown): WorkItem {
         mergeabilityState: string(pullRequest.mergeabilityState),
         syncState: string(pullRequest.syncState),
         syncFailureCategory: nullableString(pullRequest.syncFailureCategory),
+        automationState: string(pullRequest.automationState),
+        automationReason: nullableString(pullRequest.automationReason),
       }
     }),
     capabilities: {

@@ -4,7 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { listRepositories } from '../repositories/api'
-import { getGitHubStatus, syncGitHubInstallation } from './api'
+import {
+  getGitHubAutomationSettings,
+  getGitHubStatus,
+  syncGitHubInstallation,
+  updateGitHubAutomationSettings,
+} from './api'
 
 export function GitHubIntegrationSettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
@@ -100,6 +105,7 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
         Credential files, installation tokens, and host paths never appear in
         this browser projection.
       </p>
+      <GitHubAutomationSettings projectId={projectId} />
       <GitHubReverify
         installationId={installation.installationId}
         onVerified={(current) => queryClient.setQueryData(queryKey, current)}
@@ -107,6 +113,62 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
         repositoryIds={installation.repositories.map((repository) => repository.id)}
       />
     </div>
+  )
+}
+
+function GitHubAutomationSettings({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient()
+  const queryKey = queryKeys.githubAutomation(projectId)
+  const settings = useQuery({
+    queryKey,
+    queryFn: () => getGitHubAutomationSettings(projectId),
+  })
+  const update = useMutation({
+    mutationFn: (next: {
+      pullRequestOpenEnabled: boolean
+      pullRequestMergeEnabled: boolean
+    }) => {
+      if (!settings.data) throw new Error('GitHub automation settings unavailable')
+      return updateGitHubAutomationSettings(projectId, {
+        expectedVersion: settings.data.version,
+        ...next,
+      })
+    },
+    onSuccess: (current) => queryClient.setQueryData(queryKey, current),
+    onError: () => void queryClient.invalidateQueries({ queryKey }),
+  })
+  if (settings.isPending) return <p>Loading GitHub automation…</p>
+  if (settings.isError) return <p role="alert">GitHub automation settings could not be loaded.</p>
+  return (
+    <fieldset disabled={update.isPending}>
+      <legend>Work Item automation</legend>
+      <label>
+        <input
+          checked={settings.data.pullRequestOpenEnabled}
+          onChange={(event) => update.mutate({
+            pullRequestOpenEnabled: event.target.checked,
+            pullRequestMergeEnabled: settings.data.pullRequestMergeEnabled,
+          })}
+          type="checkbox"
+        />
+        Move explicitly linked work to Review when a pull request opens
+      </label>
+      <label>
+        <input
+          checked={settings.data.pullRequestMergeEnabled}
+          onChange={(event) => update.mutate({
+            pullRequestOpenEnabled: settings.data.pullRequestOpenEnabled,
+            pullRequestMergeEnabled: event.target.checked,
+          })}
+          type="checkbox"
+        />
+        Move explicitly linked eligible work to Verification when merged
+      </label>
+      <p className="compact-note">
+        Automation never marks work Done and never reopens Done or Canceled work.
+      </p>
+      {update.isError && <p role="alert">The automation settings changed. Current values were reloaded.</p>}
+    </fieldset>
   )
 }
 

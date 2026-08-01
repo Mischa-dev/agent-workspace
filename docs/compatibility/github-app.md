@@ -98,6 +98,28 @@ Project command. Unresolved delivery hints and external failures retry with
 bounded leases/backoff, become visibly exhausted, and never expose response
 bodies or credentials.
 
+## Work Item automation boundary
+
+Automation consumes only the canonical pull-request state committed by the
+checks/review reconciliation worker. Each Project has two versioned settings:
+open-to-Review is disabled by default and merge-to-Verification is enabled by
+default. The browser may change those settings only through an authenticated,
+CSRF-protected, idempotent, optimistic-versioned Project management command.
+
+Only confirmed links whose source is `explicit` are eligible. Each rule must
+resolve exactly one enabled Work Item status with the corresponding semantic
+category and pass the existing Project workflow transition table. Draft or
+closed pull requests, disabled rules, absent explicit links, ambiguous target
+statuses, disallowed transitions, already-targeted items, and terminal or
+archived work become visible bounded skips. Automation never moves work to
+Done and never reopens Done or Canceled work.
+
+The status update, optimistic Work Item version, Integration Actor activity,
+audit event, outbox invalidation, exact pull-request-version result, and
+aggregate pull-request automation projection commit in one transaction. A
+unique result per pull-request version, rule, and Work Item makes reconciliation
+idempotent without treating webhook delivery order as canonical.
+
 ## Webhook boundary
 
 The listener binds separately on `127.0.0.1:3101`. It verifies:

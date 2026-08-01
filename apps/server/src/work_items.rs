@@ -352,6 +352,8 @@ struct LinkedPullRequestView {
     mergeability_state: String,
     sync_state: String,
     sync_failure_category: Option<String>,
+    automation_state: String,
+    automation_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -3869,6 +3871,8 @@ const WORK_ITEM_SELECT: &str = r#"
                     'mergeabilityState', pull_request.mergeability_state,
                     'syncState', pull_request.sync_state,
                     'syncFailureCategory', pull_request.sync_failure_category,
+                    'automationState', pull_request.automation_state,
+                    'automationReason', pull_request.automation_reason,
                     'source', link.source,
                     'confirmed', link.confirmed
                 ) ORDER BY pull_request.pull_request_number, pull_request.id
@@ -4214,7 +4218,7 @@ async fn record_work_item_change(
     .await
 }
 
-async fn insert_work_item_activity(
+pub(crate) async fn insert_work_item_activity(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,

@@ -255,6 +255,64 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     let viewer_status = get_json(&application, &viewer_cookie, &status_uri).await;
     assert_eq!(viewer_status.0, StatusCode::FORBIDDEN);
 
+    let automation_uri = format!(
+        "/api/v1/projects/{}/integrations/github/automation",
+        seed.project_id
+    );
+    let automation = get_json(&application, &owner_cookie, &automation_uri).await;
+    assert_eq!(automation.0, StatusCode::OK);
+    assert_eq!(automation.1["pullRequestOpenEnabled"], false);
+    assert_eq!(automation.1["pullRequestMergeEnabled"], true);
+    assert_eq!(automation.1["version"], 1);
+    let viewer_automation = get_json(&application, &viewer_cookie, &automation_uri).await;
+    assert_eq!(viewer_automation.0, StatusCode::FORBIDDEN);
+    let update_body = serde_json::to_vec(&json!({
+        "expectedVersion": 1,
+        "pullRequestOpenEnabled": true,
+        "pullRequestMergeEnabled": true
+    }))
+    .expect("serialize automation settings update");
+    let update_automation = || {
+        Request::builder()
+            .method("PUT")
+            .uri(&automation_uri)
+            .header("origin", "http://127.0.0.1:3100")
+            .header(header::COOKIE, &owner_cookie)
+            .header("x-csrf-token", csrf_from_cookie(&owner_cookie))
+            .header("idempotency-key", "m5-automation-settings")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(update_body.clone()))
+            .expect("build automation settings update")
+    };
+    let updated = response_json(
+        application
+            .clone()
+            .oneshot(update_automation())
+            .await
+            .expect("automation settings update response"),
+    )
+    .await;
+    assert_eq!(updated.0, StatusCode::OK);
+    assert_eq!(updated.1["pullRequestOpenEnabled"], true);
+    assert_eq!(updated.1["pullRequestMergeEnabled"], true);
+    assert_eq!(updated.1["version"], 2);
+    let replayed = response_json(
+        application
+            .clone()
+            .oneshot(update_automation())
+            .await
+            .expect("automation settings replay response"),
+    )
+    .await;
+    assert_eq!(replayed, updated);
+    let settings_audits = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE action = 'github.automation_settings_update'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("automation settings audit count");
+    assert_eq!(settings_audits, 1);
+
     let body = serde_json::to_vec(&json!({
         "installation": { "id": INSTALLATION_ID },
         "repository": {

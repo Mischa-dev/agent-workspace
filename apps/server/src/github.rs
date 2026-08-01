@@ -44,6 +44,7 @@ use crate::{
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    work_items,
 };
 
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
@@ -74,6 +75,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/integrations/github/sync",
             post(sync_installation),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/integrations/github/automation",
+            get(github_automation_settings).put(update_github_automation_settings),
         )
         .route(
             "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
@@ -217,6 +222,24 @@ struct InstallationRepositoryView {
 #[serde(rename_all = "camelCase")]
 struct GitHubCapabilities {
     manage: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct GitHubAutomationSettingsView {
+    project_id: Uuid,
+    pull_request_open_enabled: bool,
+    pull_request_merge_enabled: bool,
+    version: i64,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateGitHubAutomationSettingsRequest {
+    expected_version: i64,
+    pull_request_open_enabled: bool,
+    pull_request_merge_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
@@ -933,6 +956,147 @@ async fn github_status(
             manage: role_allows_manage(role),
         },
     }))
+}
+
+async fn github_automation_settings(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+) -> Result<Json<GitHubAutomationSettingsView>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ProjectManage,
+    )
+    .await?;
+    let settings = fetch_github_automation_settings(&mut transaction, project_id).await?;
+    transaction.commit().await?;
+    Ok(Json(settings))
+}
+
+async fn update_github_automation_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<UpdateGitHubAutomationSettingsRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if request.expected_version < 1 {
+        return Err(AppError::Validation("expectedVersion"));
+    }
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("projects", project_id, "github_automation")?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ProjectManage,
+    )
+    .await?;
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let settings: GitHubAutomationSettingsView = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(settings)).into_response());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let updated = sqlx::query_as::<_, GitHubAutomationSettingsView>(
+        r#"
+        UPDATE project_github_automation_settings
+        SET pull_request_open_enabled = $3,
+            pull_request_merge_enabled = $4,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND version = $2
+        RETURNING project_id, pull_request_open_enabled,
+                  pull_request_merge_enabled, version, updated_at::text AS updated_at
+        "#,
+    )
+    .bind(project_id)
+    .bind(request.expected_version)
+    .bind(request.pull_request_open_enabled)
+    .bind(request.pull_request_merge_enabled)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(settings) = updated else {
+        let current = fetch_github_automation_settings(&mut transaction, project_id).await?;
+        return Err(AppError::Conflict(
+            "github_automation_settings",
+            if current.version == request.expected_version {
+                "update_failed"
+            } else {
+                "version"
+            },
+        ));
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, session_id, authentication_class,
+            action, target_kind, target_id, outcome, request_id, metadata
+        ) VALUES (
+            $1, $2, $3, $4, 'password_session',
+            'github.automation_settings_update', 'project', $3,
+            'succeeded', $5,
+            jsonb_build_object(
+                'pull_request_open_enabled', $6::boolean,
+                'pull_request_merge_enabled', $7::boolean,
+                'version', $8::bigint
+            )
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(principal.actor_id)
+    .bind(project_id)
+    .bind(principal.session_id)
+    .bind(
+        headers
+            .get(crate::REQUEST_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.len() <= 128),
+    )
+    .bind(settings.pull_request_open_enabled)
+    .bind(settings.pull_request_merge_enabled)
+    .bind(settings.version)
+    .execute(&mut *transaction)
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &settings).await?;
+    transaction.commit().await?;
+    Ok((StatusCode::OK, Json(settings)).into_response())
+}
+
+async fn fetch_github_automation_settings(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+) -> Result<GitHubAutomationSettingsView, AppError> {
+    sqlx::query_as::<_, GitHubAutomationSettingsView>(
+        r#"
+        SELECT project_id, pull_request_open_enabled,
+               pull_request_merge_enabled, version,
+               updated_at::text AS updated_at
+        FROM project_github_automation_settings
+        WHERE project_id = $1
+        FOR SHARE
+        "#,
+    )
+    .bind(project_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("project"))
 }
 
 async fn sync_installation(
@@ -3173,7 +3337,7 @@ async fn complete_pull_request_sync_job(
     if updated.rows_affected() != 1 {
         return Err(AppError::Conflict("github_job", "lease_lost"));
     }
-    sqlx::query(
+    let pull_request_version = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE github_pull_requests
         SET head_sha = $3, title = $4, author_login = $5, draft = $6,
@@ -3185,6 +3349,7 @@ async fn complete_pull_request_sync_job(
             last_success_at = now(), sync_failure_category = NULL,
             version = version + 1, updated_at = now()
         WHERE project_id = $1 AND id = $2
+        RETURNING version
         "#,
     )
     .bind(job.project_id)
@@ -3205,7 +3370,7 @@ async fn complete_pull_request_sync_job(
     .bind(projection.review_state)
     .bind(projection.mergeability_state)
     .bind(requested_reviewers)
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await?;
 
     sqlx::query("DELETE FROM github_pull_request_check_runs WHERE github_pull_request_id = $1")
@@ -3261,6 +3426,14 @@ async fn complete_pull_request_sync_job(
         .execute(&mut *transaction)
         .await?;
     }
+    apply_pull_request_work_item_automation(
+        &mut transaction,
+        job,
+        pull_request_version,
+        canonical_state,
+        pull_request.draft,
+    )
+    .await?;
     if let Some(delivery_id) = job.webhook_delivery_id {
         sqlx::query(
             "UPDATE github_webhook_deliveries SET state = 'processed', failure_category = NULL, processed_at = now(), updated_at = now() WHERE id = $1",
@@ -3298,6 +3471,341 @@ async fn complete_pull_request_sync_job(
     .await?;
     enqueue_pull_request_invalidations(&mut transaction, job).await?;
     transaction.commit().await?;
+    Ok(())
+}
+
+#[derive(Debug, FromRow)]
+struct AutomationWorkItemRow {
+    id: Uuid,
+    version: i64,
+    status_id: Uuid,
+    status_name: String,
+    semantic_category: String,
+    archived: bool,
+}
+
+async fn apply_pull_request_work_item_automation(
+    transaction: &mut Transaction<'_, Postgres>,
+    job: &ClaimedPullRequestSyncJob,
+    pull_request_version: i64,
+    pull_request_state: &str,
+    draft: bool,
+) -> Result<(), AppError> {
+    let settings = sqlx::query_as::<_, (bool, bool)>(
+        r#"
+        SELECT pull_request_open_enabled, pull_request_merge_enabled
+        FROM project_github_automation_settings
+        WHERE project_id = $1
+        FOR SHARE
+        "#,
+    )
+    .bind(job.project_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let (rule, enabled, target_category) = match (pull_request_state, draft) {
+        ("merged", _) => ("pull_request_merge", settings.1, "verification"),
+        ("open", false) => ("pull_request_open", settings.0, "review"),
+        ("open", true) => {
+            set_pull_request_automation_projection(
+                transaction,
+                job,
+                "skipped",
+                Some("pull_request_draft"),
+            )
+            .await?;
+            return Ok(());
+        }
+        _ => {
+            set_pull_request_automation_projection(
+                transaction,
+                job,
+                "skipped",
+                Some("pull_request_closed"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let work_items = sqlx::query_as::<_, AutomationWorkItemRow>(
+        r#"
+        SELECT item.id, item.version, item.status_id,
+               status.name AS status_name, status.semantic_category,
+               (item.archived_at IS NOT NULL) AS archived
+        FROM github_pull_request_work_item_links link
+        JOIN work_items item
+          ON item.project_id = link.project_id AND item.id = link.work_item_id
+        JOIN work_item_statuses status
+          ON status.project_id = item.project_id AND status.id = item.status_id
+        WHERE link.project_id = $1
+          AND link.github_pull_request_id = $2
+          AND link.source = 'explicit'
+          AND link.confirmed
+        ORDER BY item.id
+        FOR UPDATE OF item, status
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if work_items.is_empty() {
+        set_pull_request_automation_projection(
+            transaction,
+            job,
+            "skipped",
+            Some("no_explicit_work_items"),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let target_statuses = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT id, name
+        FROM work_item_statuses
+        WHERE project_id = $1 AND semantic_category = $2 AND enabled
+        ORDER BY id
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(target_category)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let target_status = (target_statuses.len() == 1).then(|| target_statuses[0].clone());
+    let mut applied = 0usize;
+    let mut reasons = BTreeSet::new();
+    for item in work_items {
+        if !enabled {
+            insert_automation_skip(
+                transaction,
+                job,
+                pull_request_version,
+                &item,
+                rule,
+                "rule_disabled",
+            )
+            .await?;
+            reasons.insert("rule_disabled");
+            continue;
+        }
+        if item.archived || matches!(item.semantic_category.as_str(), "completed" | "canceled") {
+            insert_automation_skip(
+                transaction,
+                job,
+                pull_request_version,
+                &item,
+                rule,
+                "terminal_or_archived",
+            )
+            .await?;
+            reasons.insert("terminal_or_archived");
+            continue;
+        }
+        let Some((target_status_id, target_status_name)) = target_status.as_ref() else {
+            insert_automation_skip(
+                transaction,
+                job,
+                pull_request_version,
+                &item,
+                rule,
+                "ambiguous_target_status",
+            )
+            .await?;
+            reasons.insert("ambiguous_target_status");
+            continue;
+        };
+        if item.status_id == *target_status_id {
+            insert_automation_skip(
+                transaction,
+                job,
+                pull_request_version,
+                &item,
+                rule,
+                "already_in_target_status",
+            )
+            .await?;
+            reasons.insert("already_in_target_status");
+            continue;
+        }
+        let allowed = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM work_item_status_transitions
+                WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3
+            )
+            "#,
+        )
+        .bind(job.project_id)
+        .bind(item.status_id)
+        .bind(target_status_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if !allowed {
+            insert_automation_skip(
+                transaction,
+                job,
+                pull_request_version,
+                &item,
+                rule,
+                "transition_not_allowed",
+            )
+            .await?;
+            reasons.insert("transition_not_allowed");
+            continue;
+        }
+        let new_version = sqlx::query_scalar::<_, i64>(
+            r#"
+            UPDATE work_items
+            SET status_id = $3, version = version + 1,
+                updated_by_actor_id = $4, updated_at = now()
+            WHERE project_id = $1 AND id = $2 AND version = $5
+            RETURNING version
+            "#,
+        )
+        .bind(job.project_id)
+        .bind(item.id)
+        .bind(target_status_id)
+        .bind(job.integration_actor_id)
+        .bind(item.version)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::Conflict("work_item", "version"))?;
+        let payload = json!({
+            "githubPullRequestId": job.pull_request_id,
+            "pullRequestNumber": job.pull_request_number,
+            "previousStatusId": item.status_id,
+            "previousStatus": item.status_name,
+            "newStatusId": target_status_id,
+            "newStatus": target_status_name,
+            "rule": rule
+        });
+        let activity_id = work_items::insert_work_item_activity(
+            transaction,
+            job.project_id,
+            item.id,
+            job.integration_actor_id,
+            "github_automation_transition",
+            "GitHub pull request automation changed status",
+            &payload,
+        )
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_automation_results (
+                id, project_id, github_pull_request_id, pull_request_version,
+                work_item_id, rule, outcome, previous_status_id, new_status_id,
+                integration_actor_id, work_item_activity_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'applied', $7, $8, $9, $10)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(job.project_id)
+        .bind(job.pull_request_id)
+        .bind(pull_request_version)
+        .bind(item.id)
+        .bind(rule)
+        .bind(item.status_id)
+        .bind(target_status_id)
+        .bind(job.integration_actor_id)
+        .bind(activity_id)
+        .execute(&mut **transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO audit_events (
+                id, actor_id, project_id, authentication_class,
+                action, target_kind, target_id, outcome, metadata
+            ) VALUES (
+                $1, $2, $3, 'github_job',
+                'github.work_item_automation_transition',
+                'work_item', $4, 'succeeded', $5
+            )
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(job.integration_actor_id)
+        .bind(job.project_id)
+        .bind(item.id)
+        .bind(&payload)
+        .execute(&mut **transaction)
+        .await?;
+        outbox::enqueue_typed(
+            transaction,
+            job.project_id,
+            outbox::OutboxEventPayload::WorkItemUpdated(outbox::WorkItemUpdatedPayload {
+                work_item_id: item.id,
+                version: new_version,
+            }),
+        )
+        .await?;
+        applied += 1;
+    }
+    if applied > 0 {
+        set_pull_request_automation_projection(transaction, job, "applied", None).await?;
+    } else {
+        let reason = if reasons.len() == 1 {
+            reasons.first().copied().unwrap_or("no_eligible_transition")
+        } else {
+            "no_eligible_transition"
+        };
+        set_pull_request_automation_projection(transaction, job, "skipped", Some(reason)).await?;
+    }
+    Ok(())
+}
+
+async fn insert_automation_skip(
+    transaction: &mut Transaction<'_, Postgres>,
+    job: &ClaimedPullRequestSyncJob,
+    pull_request_version: i64,
+    item: &AutomationWorkItemRow,
+    rule: &str,
+    reason: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_request_automation_results (
+            id, project_id, github_pull_request_id, pull_request_version,
+            work_item_id, rule, outcome, reason, previous_status_id,
+            integration_actor_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'skipped', $7, $8, $9)
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .bind(pull_request_version)
+    .bind(item.id)
+    .bind(rule)
+    .bind(reason)
+    .bind(item.status_id)
+    .bind(job.integration_actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn set_pull_request_automation_projection(
+    transaction: &mut Transaction<'_, Postgres>,
+    job: &ClaimedPullRequestSyncJob,
+    state: &str,
+    reason: Option<&str>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE github_pull_requests
+        SET automation_state = $3, automation_reason = $4,
+            automation_evaluated_at = now(), updated_at = now()
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .bind(state)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

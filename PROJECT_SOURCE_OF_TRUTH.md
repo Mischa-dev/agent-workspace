@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 accepted; M5 authorized; source of truth v0.19
+**Status:** M4 accepted; M5 authorized; source of truth v0.20
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
@@ -12,6 +12,21 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.20 — Explicit pull-request Work Item automation
+
+- fixed pull-request automation as two Project-owned semantic rules: open to
+  Review is disabled by default and merge to Verification is enabled by
+  default
+- limited evaluation to confirmed explicit Work Item links after canonical
+  pull-request synchronization and required ordinary workflow-transition
+  validation plus optimistic Work Item versioning
+- required Integration Actor attribution, durable per-pull-request-version
+  results, Work Item activity, audit, and realtime invalidation in the same
+  transaction as the canonical projection
+- made disabled, draft, closed, terminal, archived, already-targeted,
+  ambiguous-target, and invalid-transition outcomes visible skips; automation
+  never marks work Done or reopens Done or Canceled work
 
 ### v0.19 — Canonical pull-request checks and review convergence
 
@@ -6165,6 +6180,22 @@ fields, Integration Actor audit, linked-resource invalidations, and delivery
 completion commit in one transaction; retries are leased and bounded, and
 operators may request the same reconciliation idempotently without receiving
 provider bodies or credential material.
+
+## D-046: GitHub automation is explicit, semantic, and monotonic
+
+**Status:** Accepted
+
+**Reason:** Pull-request state is useful workflow evidence but is not authority
+to complete or reopen work. Agent Workspace therefore evaluates only confirmed
+explicit Work Item links after a canonical GitHub sync. Each Project owns two
+fixed rules: open-to-Review is opt-in and merge-to-Verification is enabled by
+default. A rule resolves exactly one enabled target by semantic category and
+must pass the Project's existing workflow transition constraint. Done,
+Canceled, and archived items are never changed. Every evaluation is durable
+for the exact pull-request version, attributed to the GitHub Integration Actor,
+and records either the ordinary versioned Work Item transition or a bounded
+skip reason. This keeps retries idempotent and prevents external delivery order
+from granting GitHub authority over completion.
 
 ---
 
