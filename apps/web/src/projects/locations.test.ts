@@ -8,7 +8,7 @@ import {
 } from './locations'
 
 describe('structured Project locations', () => {
-  it('round-trips Project overview, settings, Channel, and Thread locations', () => {
+  it('round-trips Project overview, settings, Work Items, Channel, and Thread locations', () => {
     const projectId = 'project-a'
     const thread = { kind: 'thread', conversationId: 'thread-a' } as const
     expect(projectLocationHref(projectId, { kind: 'project_overview' })).toBe(
@@ -17,6 +17,12 @@ describe('structured Project locations', () => {
     expect(projectLocationHref(projectId, { kind: 'settings' })).toBe(
       '/projects/project-a/settings',
     )
+    expect(projectLocationHref(projectId, { kind: 'work_items' })).toBe(
+      '/projects/project-a/work-items',
+    )
+    expect(
+      projectLocationFromPath(projectId, '/projects/project-a/work-items/item-a'),
+    ).toEqual({ kind: 'work_items' })
     const href = projectLocationHref(projectId, thread)
     expect(projectLocationFromPath(projectId, href)).toEqual(thread)
     const channel = { kind: 'channel', conversationId: 'channel-a' } as const

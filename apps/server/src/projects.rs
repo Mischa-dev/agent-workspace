@@ -983,6 +983,7 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
 fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<String, AppError> {
     match (location.kind.as_str(), location.conversation_id) {
         ("project_overview", None) => Ok(format!("/projects/{project_id}")),
+        ("work_items", None) => Ok(format!("/projects/{project_id}/work-items")),
         ("settings", None) => Ok(format!("/projects/{project_id}/settings")),
         ("thread", Some(conversation_id)) => {
             Ok(format!("/projects/{project_id}/threads/{conversation_id}"))
@@ -1000,7 +1001,7 @@ async fn validate_navigation_location(
     location: &NavigationLocation,
 ) -> Result<(), AppError> {
     match (location.kind.as_str(), location.conversation_id) {
-        ("project_overview" | "settings", None) => Ok(()),
+        ("project_overview" | "work_items" | "settings", None) => Ok(()),
         (kind @ ("channel" | "thread"), Some(conversation_id)) => {
             let conversation = sqlx::query_as::<_, (String, Option<Uuid>)>(
                 r#"
@@ -1326,6 +1327,17 @@ mod tests {
             )
             .expect("channel href"),
             format!("/projects/{project_id}/channels/{conversation_id}")
+        );
+        assert_eq!(
+            navigation_href(
+                project_id,
+                &NavigationLocation {
+                    kind: "work_items".to_owned(),
+                    conversation_id: None,
+                },
+            )
+            .expect("Work Items href"),
+            format!("/projects/{project_id}/work-items")
         );
     }
 
