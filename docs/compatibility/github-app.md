@@ -145,7 +145,9 @@ The listener binds separately on `127.0.0.1:3101`. It verifies:
 An identical signed redelivery may requeue a failed or exhausted job. Job
 identity and its original bounded payload remain immutable; newly recognized
 bounded fields are stored on the already checksum-verified delivery record and
-are available only to that recovery attempt.
+are available only to that recovery attempt. Duplicate receipt takes the
+delivery row lock before the job row lock, so concurrent redeliveries serialize
+without creating a second job or inverting database locks.
 
 The Cloudflare Quick Tunnel exposes only this listener and is stopped
 immediately after the signed delivery proof.

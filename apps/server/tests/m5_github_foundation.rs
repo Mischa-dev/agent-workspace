@@ -353,9 +353,14 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .execute(&pool)
     .await
     .expect("simulate failed legacy delivery");
-    let retried = send_webhook(&webhooks, "delivery-m5-1", "push", &body, WEBHOOK_SECRET).await;
-    assert_eq!(retried.0, StatusCode::OK);
-    assert_eq!(retried.1["duplicate"], true);
+    let (retried_a, retried_b) = tokio::join!(
+        send_webhook(&webhooks, "delivery-m5-1", "push", &body, WEBHOOK_SECRET),
+        send_webhook(&webhooks, "delivery-m5-1", "push", &body, WEBHOOK_SECRET),
+    );
+    for retried in [retried_a, retried_b] {
+        assert_eq!(retried.0, StatusCode::OK);
+        assert_eq!(retried.1["duplicate"], true);
+    }
     let retried_job = sqlx::query_as::<_, (String, i32, Value)>(
         r#"
         SELECT job.state, job.attempts, delivery.redelivery_payload
