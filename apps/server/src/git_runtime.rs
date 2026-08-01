@@ -334,6 +334,10 @@ pub fn inspect_publishable_worktree(
 ) -> Result<PublishInspection, AppError> {
     validate_branch(expected_branch)?;
     validate_commit(base_commit)?;
+    let repository_root = mirror
+        .parent()
+        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+    let _lock = repository_lock(repository_root)?;
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
         return Err(AppError::Conflict(
