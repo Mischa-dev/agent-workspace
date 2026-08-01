@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M5 accepted; M6 authorized; source of truth v0.22
+**Status:** M5 accepted; M6 authorized; source of truth v0.23
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
@@ -12,6 +12,24 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.23 — M6 Local Codex and MCP entry backlog
+
+- elaborated every M6 task with acceptance criteria, dependencies, expected
+  tests, and exclusions following M5 acceptance
+- fixed one production Streamable HTTP MCP endpoint whose tools reuse the
+  ordinary Project policy and domain-command layers rather than exposing
+  database mutation or creating application Threads
+- defined host-issued development bearer credentials as hashed, revocable,
+  Actor/Project/scoped records and retained OAuth authorization-code plus PKCE
+  as the team-ready Codex authentication path
+- fixed bounded read and write tool contracts, accurate safety annotations,
+  optimistic conflicts, idempotent retries, MCP-specific audit attribution,
+  and rejection of client-supplied authorship
+- aligned Open in Codex with the documented `codex://new` `originUrl` and
+  prefilled `prompt` contract and required live bearer plus OAuth acceptance
+  from an isolated local Codex profile without creating an Agent Workspace
+  Thread
 
 ### v0.22 — M5 acceptance and M6 authorization
 
@@ -5585,21 +5603,361 @@ disaster-recovery/backup policy (M8).
 
 ### M6-001 MCP Streamable HTTP endpoint
 
+Promote the proven M0 spike into the application process as one bounded,
+production-shaped Codex integration surface.
+
+**Acceptance criteria**
+
+- mount `rmcp` `3.0.1` Streamable HTTP at `/api/v1/mcp` on the ordinary
+  loopback application listener and retain the negotiated MCP `2025-06-18`
+  compatibility contract for Codex `0.146.0`
+- replace the development fake store and fake tools completely; every handler
+  receives an authenticated application principal and calls the same
+  Project-policy and domain-command layers used by HTTP
+- publish server instructions whose first 512 characters contain the critical
+  Project/Work Item identification, status-noise, concurrency, pull-request
+  linking, and permission rules
+- enforce bounded request bodies, JSON fields, tool outputs, result counts,
+  timeouts, sessions, and graceful cancellation without holding database
+  transactions while waiting on the client
+- advertise accurate tool schemas and annotations, keep reads and writes
+  separate, and return only stable IDs, canonical URLs, bounded domain fields,
+  and recovery-safe errors
+- keep MCP sessions independent from browser sessions and application Threads;
+  connecting or calling a tool never creates a Conversation, Provider Session,
+  Agent Run, repository workspace, branch, or worktree
+
+**Dependencies:** accepted M0 MCP compatibility evidence, `rmcp` `3.0.1`, the
+M4 Work Item domain, M5 pull-request projection, centralized Project policy,
+request IDs, tracing, and graceful shutdown.
+
+**Expected tests:** initialize/list/call over real Streamable HTTP, protocol and
+instructions fixtures, malformed/oversized messages, unsupported methods,
+session cancellation, bounded output, graceful shutdown, no-Thread assertion,
+and compatibility replay with Codex `0.146.0`.
+
+**Exclusions:** stdio exposure, WebSocket MCP transport, arbitrary SQL/filesystem
+tools, provider App Server proxying, remote execution, ChatGPT plugin UI, and a
+second fake store.
+
 ### M6-002 Scoped bearer-token development auth
+
+Provide a reversible host-local credential path for isolated Codex profiles
+without reusing browser cookies or storing bearer secrets in PostgreSQL.
+
+**Acceptance criteria**
+
+- add Project-owned MCP client credentials bound to one active human Actor,
+  one named client, explicit read/write scopes, status, creation/last-used/
+  expiry/revocation times, and an optimistic version
+- issue at least 256 bits of randomness through an idempotent host-local CLI,
+  display the token exactly once, persist only a versioned digest and safe token
+  prefix, and require owner-restricted handling outside the repository
+- accept only exact `Authorization: Bearer` syntax, compare digests in constant
+  time, reject weak/malformed/expired/revoked credentials, and never fall back
+  to development browser authentication
+- resolve the Actor and Project server-side on every request, then apply
+  ordinary membership, role, archive, and resource authorization in addition
+  to credential scopes
+- update bounded last-used metadata without logging the token, authorization
+  header, digest, or environment value; revocation takes effect for new tool
+  calls without service restart
+- retain environment-variable injection only on the Codex client through
+  `bearer_token_env_var`; the server never forwards MCP credentials to Provider
+  Sessions, Git children, web responses, realtime events, or GitHub jobs
+
+**Dependencies:** M1 User/Actor sessions, M4 Project policy, secret redaction,
+host-local CLI conventions, and M6-001 request principal plumbing.
+
+**Expected tests:** issue/use/revoke/expire, weak token rejection, constant-time
+digest path, read-only versus write scope, cross-Project and inactive-member
+denial, archived Project behavior, last-used throttling, redacted logs/errors,
+and provider/child environment isolation.
+
+**Exclusions:** committing tokens, plaintext recovery, user-chosen tokens,
+browser-cookie reuse, global all-Project credentials, service-account Actors,
+and treating bearer auth as the team-ready final path.
 
 ### M6-003 MCP read tools
 
+Expose the minimum bounded Project context local Codex needs before it proposes
+or performs work.
+
+**Acceptance criteria**
+
+- implement `project_get`, `project_instructions_get`, `work_item_get`,
+  `work_item_search`, `work_item_context_get`, `repository_get`, and
+  `pull_request_get` as individually authorized read-only tools
+- prefer immutable IDs or canonical Agent Workspace URLs; accept a Work Item
+  key only when the authenticated Project context makes it unambiguous and
+  never search across unauthorized Organizations
+- return current Work Item version, workflow/status semantics, assignment,
+  bounded acceptance criteria, relevant links, and canonical PR state without
+  copying arbitrary comments, provider reasoning, GitHub bodies, diffs, logs,
+  or repository contents
+- make search deterministic, cursor-paginated, capped, and explicit about
+  truncation; reject unsupported filters rather than approximating them
+- make `work_item_context_get` compose only already-authorized bounded domain
+  projections and Project instructions, with source IDs and versions that make
+  later writes safe
+- annotate every read with `readOnlyHint=true`, `destructiveHint=false`, and
+  `openWorldHint=false`; reads produce no audit mutation beyond bounded
+  credential-use telemetry
+
+**Dependencies:** M4 Work Item/list/context projections, M5 repository and
+pull-request projections, canonical application URLs, M6-001, and M6-002.
+
+**Expected tests:** every read by UUID/URL/key, ambiguous and hostile keys,
+cross-Project non-disclosure, pagination/truncation, archived resources,
+bounded instructions/context, annotation/schema snapshots, scope denial, and
+zero domain/audit/outbox writes from reads.
+
+**Exclusions:** arbitrary analytics, full-text repository search, GitHub diff or
+comment retrieval, provider history/reasoning, attachment contents, and
+cross-Organization discovery.
+
 ### M6-004 MCP write tools
+
+Expose constrained domain commands for the common local development workflow
+without mirroring the generic HTTP surface or accepting authorship from Codex.
+
+**Acceptance criteria**
+
+- implement `work_item_set_status`, `work_item_post_update`,
+  `work_item_update`, `work_item_create_subtask`,
+  `work_item_link_pull_request`, `work_item_mark_blocked`, and
+  `work_item_mark_ready_for_review`
+- require immutable Project/Work Item identity, expected version for every
+  non-commutative change, and a client request ID for replay-safe commands;
+  status helpers still validate the Project-owned workflow
+- reuse the ordinary Work Item, comment/activity, relation, pull-request-link,
+  idempotency, policy, audit, outbox, and realtime command layers in one
+  transaction; no MCP-only mutation path may diverge from browser behavior
+- resolve authorship, requester identity, Project, and membership exclusively
+  from the authenticated credential; reject or ignore no client-supplied Actor,
+  User, membership, audit channel, or Project ownership field
+- return the updated bounded projection, its new version, changed fields,
+  activity/result IDs, and whether the request was an idempotent replay
+- mark writes `readOnlyHint=false`; use `destructiveHint=false` only for the
+  additive/reversible M6 commands and `openWorldHint=true` only for the command
+  that links an externally hosted pull request
+
+**Dependencies:** M4 domain commands and idempotency, M5 canonical explicit
+pull-request linking, M6-002 write scopes, and M6-003 identity conventions.
+
+**Expected tests:** each command success/denial/replay, allowed and invalid
+workflow transitions, comment/update bounds, subtask Project integrity,
+canonical PR link validation, archived/terminal items, client-authorship
+rejection, annotations, audit/outbox/realtime, and no automatic Thread.
+
+**Exclusions:** arbitrary status-definition editing, delete/archive, GitHub
+mutation, publish/PR creation/merge, repository writes, Worker invocation,
+approval decisions, and automatic status changes outside documented helpers.
 
 ### M6-005 Optimistic conflict handling
 
+Make concurrent browser, human, automation, and local Codex edits recoverable
+without silent overwrite or blind retry.
+
+**Acceptance criteria**
+
+- reject stale expected versions before mutation and return a structured,
+  bounded conflict result containing current version, current permitted
+  projection, changed fields when provable, and a stable retry category
+- distinguish version conflict, invalid workflow transition, idempotency-key
+  reuse with different input, permission change, archived resource, missing
+  external link, and transient server failure
+- treat expected-version plus request-ID replay of the same completed command
+  as success; never reinterpret a different request as an idempotent retry
+- write no activity, audit success, outbox event, or partial relation on a
+  conflict; failed authorization remains non-disclosing
+- describe in server instructions and tool results when Codex may refetch and
+  retry versus when it should ask the user
+
+**Dependencies:** existing optimistic Work Item versions/idempotency records,
+M6-003 current projections, and M6-004 command reuse.
+
+**Expected tests:** concurrent web/MCP writes, automation race, exact replay,
+request-ID payload mismatch, changed-field accuracy, invalid transition,
+membership revocation, archived item, transaction rollback, and model-readable
+fixture snapshots.
+
+**Exclusions:** last-write-wins, server-side merge of free text, automatic
+model retry loops, hidden retries after ambiguous external mutation, and
+global database serialization.
+
 ### M6-006 MCP audit records
+
+Make local Codex actions attributable to the human whose credential authorized
+them while keeping credential material out of durable evidence.
+
+**Acceptance criteria**
+
+- record every successful MCP write with the authenticated human Actor,
+  `authentication_class=mcp_bearer` or `mcp_oauth`, `channel=mcp`,
+  `client=codex`, credential/client ID, action, target, outcome, and request ID
+- reuse the same domain activity Actor attribution as browser work and retain
+  the authentication channel separately; never create an Integration Actor or
+  Worker Actor as the author of a local Codex MCP write
+- record bounded denial/conflict telemetry where existing audit policy allows,
+  without revealing unauthorized target existence or raw tool input
+- exclude tokens, token digests, authorization headers, OAuth codes/verifiers,
+  browser cookies, arbitrary update text, and provider/repository content from
+  audit metadata
+- expose owner-visible activity through existing projections and keep raw
+  security audit records out of ordinary Work Item/browser DTOs
+
+**Dependencies:** M1 audit model, M4 activity/outbox, M6 principals and command
+handlers, request IDs, and secret redaction.
+
+**Expected tests:** Actor/authentication/channel attribution for bearer and
+OAuth, replay behavior, denial/conflict metadata bounds, secret canaries,
+cross-Project non-disclosure, activity projection, and audit-row payload caps.
+
+**Exclusions:** provider reasoning logs, full MCP transcripts, token-use
+analytics UI, SIEM export, compliance retention policy, and external-agent
+authorship reserved for M9.
 
 ### M6-007 Open in Codex deep link
 
+Give a human an explicit browser action that opens a local Codex composer with
+the correct repository and bounded Work Item instructions, but does not send
+the prompt or mutate Agent Workspace.
+
+**Acceptance criteria**
+
+- render an authorized `Open in Codex` action on an active Work Item only when
+  one trusted linked Repository has a canonical Git remote URL
+- generate documented `codex://new` parameters using `originUrl` for Git
+  remote matching and `prompt` for prefilled composer text; percent-encode each
+  value and never include a host path, bearer token, browser session, or
+  database identity
+- include immutable Project and Work Item URLs/IDs, instruction to load Project
+  guidance through MCP, expected workflow behavior, useful-update restraint,
+  and pull-request linking guidance in a bounded prompt
+- require a separate human click and leave the composer unsent; opening the
+  link creates no application Thread, Message, run, branch, or status change
+- disable with an accessible reason when Repository selection is absent,
+  ambiguous, untrusted, archived, or lacks a supported origin URL
+
+**Dependencies:** M4 Work Item/Repository links, M5 trusted canonical
+Repository metadata, current documented Codex deep-link contract, and frontend
+URL escaping.
+
+**Expected tests:** exact URL encoding, immutable identity, hostile titles and
+origins, ambiguous/missing Repository, archived resources, prompt bound,
+keyboard/accessibility behavior, no-secret canaries, and browser click opening
+a prefilled unsent local Codex chat in the matched repository.
+
+**Exclusions:** automatically submitting prompts, choosing arbitrary local
+paths, launching a hosted Agent Run, creating Agent Workspace Threads, remote
+Codex cloud tasks, and silently installing MCP configuration.
+
 ### M6-008 Local setup documentation
 
+Document one repeatable, least-privilege local Codex connection through the
+existing SSH-forwarded private host boundary.
+
+**Acceptance criteria**
+
+- document SSH forwarding for port `3100`, host-local bearer issuance and
+  revocation, environment-variable handling, and a project-scoped trusted
+  `.codex/config.toml` example using `url` plus `bearer_token_env_var`
+- configure write-tool approval behavior explicitly, recommend `required=true`
+  only after the connection is verified, and document `/mcp`, `codex mcp list`,
+  restart, timeout, and diagnostic steps
+- provide separate bearer and OAuth setup/cleanup paths; never place a real
+  token, cookie, authorization code, private host path, or login fixture in the
+  repository or shell history examples
+- explain Project scope, read/write scopes, Actor attribution, optimistic
+  conflict recovery, no-automatic-Thread behavior, and how to remove the local
+  profile cleanly
+- keep the retained hosted Execution Profile and ordinary global Codex config
+  unchanged; acceptance uses a separate disposable local profile
+
+**Dependencies:** M6-001 through M6-007, checked-in compatibility notes,
+existing SSH/Red Hat runbooks, and current Codex MCP configuration behavior.
+
+**Expected tests:** copy/paste setup against a disposable profile, token
+redaction scan, missing/expired/revoked credential diagnostics, tunnel loss and
+reconnect, approval-mode behavior, OAuth login/logout, and cleanup proof.
+
+**Exclusions:** permanent public ingress, Tailscale route changes, global Codex
+replacement, credential synchronization, MCP marketplace/plugin packaging,
+and end-user installation polish.
+
 ### M6-009 OAuth design and implementation
+
+Add the team-ready Codex authentication ceremony without turning the M6 host
+into a general identity provider or weakening the development bearer boundary.
+
+**Acceptance criteria**
+
+- implement OAuth protected-resource and authorization-server metadata,
+  authorization-code flow with PKCE `S256`, exact redirect-URI matching, state,
+  short-lived single-use codes, scoped access tokens, rotating refresh tokens,
+  revocation, and bounded client registration required by the verified Codex
+  flow
+- authenticate the resource owner through the existing browser session and
+  CSRF/origin protections, show the named client, Project, and requested scopes,
+  require explicit consent, and bind the grant to that human Actor and active
+  Project membership
+- treat Codex as a public client: never require or issue a reusable client
+  secret to the local app, restrict loopback redirect URIs and registered
+  callback patterns, and reject wildcard, fragment, downgrade, and open-
+  redirect variants
+- store only hashed authorization codes, access tokens, and refresh tokens;
+  rotate refresh tokens atomically, detect replay, revoke the grant family on
+  reuse, and never accept browser cookies at the MCP resource endpoint
+- issue least-privilege read/write scopes, include standards-compliant
+  `WWW-Authenticate` challenges, and apply the same Actor/Project/policy checks
+  and audit model as bearer credentials
+- verify `codex mcp login` and logout/revocation from the isolated local
+  profile; bearer credentials remain an explicit development fallback and do
+  not auto-upgrade into OAuth grants
+
+**Dependencies:** accepted M1 browser sessions/CSRF, M6-001 principal boundary,
+M6-002 scopes/revocation, current Codex OAuth behavior, and the current MCP
+authorization specification. This does not resolve O-004 application login
+methods or O-003 shared Execution Profile policy for M7.
+
+**Expected tests:** metadata discovery, registration constraints, PKCE/state/
+redirect validation, consent, code single use/expiry, access scope/expiry,
+refresh rotation and replay-family revocation, logout/revoke, membership and
+Project archive changes, CSRF/open-redirect attacks, bearer/OAuth parity,
+redaction, restart durability, and a real Codex login/tool call.
+
+**Exclusions:** general third-party login, social identity providers, client
+credentials, password grant, implicit flow, device grant, wildcard redirects,
+public internet exposure, service-account Actors, and external-agent connector
+credentials reserved for M9.
+
+### M6 exit criteria
+
+- one exact green commit is deployed as an immutable Red Hat release with the
+  production MCP endpoint, bearer credential lifecycle, OAuth ceremony, tools,
+  audit, deep link, and documentation enabled only through the existing private
+  loopback/SSH boundary
+- a separate local Codex `0.146.0` profile negotiates MCP `2025-06-18`, reads
+  Project/Work Item/Repository/PR context, performs every supported write
+  category with correct Actor attribution, and creates no Agent Workspace
+  Thread or hosted run
+- an intentional stale-version race returns current version and changed fields,
+  then an informed retry succeeds exactly once; request replay produces no
+  duplicate activity, audit success, relation, or outbox event
+- bearer read/write scope, expiration, and live revocation are proven without
+  leaking secrets, and a real `codex mcp login` authorization-code/PKCE flow
+  proves consent, scoped calls, refresh rotation, logout, and revocation
+- the browser opens a prefilled unsent `codex://new` chat matched by
+  `originUrl`; no token, local path, browser session, database identity, or
+  arbitrary repository content appears in the link or prompt
+- controlled restart preserves MCP/OAuth durability, invalidates no valid
+  grant, resurrects no revoked credential, and requires no manual database or
+  filesystem repair
+- HTTP/MCP, PostgreSQL, policy, optimistic concurrency, idempotency, audit,
+  redaction, frontend accessibility, documentation, Red Hat, and real local
+  Codex acceptance pass against the same commit; M7 is elaborated before it is
+  authorized
 
 ## Milestone M7: Teams
 
