@@ -105,6 +105,7 @@ pub enum WriteResult {
     Conflict {
         work_item_id: String,
         current_version: i64,
+        current: Option<ConflictProjection>,
         changed_fields: Vec<String>,
         retry_category: String,
     },
@@ -164,6 +165,34 @@ struct LockedWorkItem {
     assignee_actor_id: Option<Uuid>,
     archived: bool,
     blocked_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictProjection {
+    id: String,
+    version: i64,
+    title: String,
+    status_id: String,
+    priority: String,
+    assignee_actor_id: Option<String>,
+    archived: bool,
+    blocked_reason: Option<String>,
+}
+
+impl From<&LockedWorkItem> for ConflictProjection {
+    fn from(item: &LockedWorkItem) -> Self {
+        Self {
+            id: item.id.to_string(),
+            version: item.version,
+            title: item.title.clone(),
+            status_id: item.status_id.to_string(),
+            priority: item.priority.clone(),
+            assignee_actor_id: item.assignee_actor_id.map(|id| id.to_string()),
+            archived: item.archived,
+            blocked_reason: item.blocked_reason.clone(),
+        }
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -517,6 +546,7 @@ async fn post_update_inner(
         return Ok(WriteResult::Conflict {
             work_item_id: work_item_id.to_string(),
             current_version: current.version,
+            current: Some((&current).into()),
             changed_fields: vec!["archived".to_owned()],
             retry_category: "do_not_retry".to_owned(),
         });
@@ -631,6 +661,7 @@ pub async fn create_subtask(
         if parent.archived {
             return Ok(WriteResult::Conflict {
                 work_item_id: parent_id.to_string(), current_version: parent.version,
+                current: Some((&parent).into()),
                 changed_fields: vec!["archived".to_owned()], retry_category: "do_not_retry".to_owned()
             });
         }
@@ -955,6 +986,7 @@ async fn authorize_write(
         return Ok(Some(WriteResult::Conflict {
             work_item_id: String::new(),
             current_version: 0,
+            current: None,
             changed_fields: vec!["projectArchived".to_owned()],
             retry_category: "do_not_retry".to_owned(),
         }));
@@ -996,6 +1028,7 @@ fn version_or_archive_conflict(
         return Some(WriteResult::Conflict {
             work_item_id: current.id.to_string(),
             current_version: current.version,
+            current: Some(current.into()),
             changed_fields: vec!["version".to_owned()],
             retry_category: "refetch_then_decide".to_owned(),
         });
@@ -1003,6 +1036,7 @@ fn version_or_archive_conflict(
     current.archived.then(|| WriteResult::Conflict {
         work_item_id: current.id.to_string(),
         current_version: current.version,
+        current: Some(current.into()),
         changed_fields: vec!["archived".to_owned()],
         retry_category: "do_not_retry".to_owned(),
     })
@@ -1225,6 +1259,7 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
         AppError::Conflict("idempotency_key", "payload mismatch") => WriteResult::Conflict {
             work_item_id: String::new(),
             current_version: 0,
+            current: None,
             changed_fields: vec!["clientRequestId".to_owned()],
             retry_category: "use_new_request_id".to_owned(),
         },

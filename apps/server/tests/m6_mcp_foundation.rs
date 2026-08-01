@@ -354,6 +354,15 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(stale.pointer("/outcome"), Some(&json!("conflict")));
     assert_eq!(stale.pointer("/currentVersion"), Some(&json!(2)));
+    assert_eq!(
+        stale.pointer("/current/id"),
+        Some(&json!(work_item_id.to_string()))
+    );
+    assert_eq!(stale.pointer("/current/version"), Some(&json!(2)));
+    assert_eq!(
+        stale.pointer("/current/title"),
+        Some(&json!("M6 write contract"))
+    );
 
     let blocked = call_tool(
         &application,
