@@ -701,6 +701,10 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         thread_link.2["linkedThreads"][0]["parentChannelId"],
         seed.channel_id.to_string()
     );
+    assert_eq!(
+        thread_link.2["linkedThreads"][0]["href"],
+        format!("/projects/{}/threads/{linked_thread_id}", seed.project_id)
+    );
     let thread_link_replay = post_json(
         &application,
         &cookie,

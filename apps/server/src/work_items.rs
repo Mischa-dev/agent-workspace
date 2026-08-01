@@ -3818,7 +3818,7 @@ const WORK_ITEM_SELECT: &str = r#"
                     'parentChannelName', channel.name,
                     'archivedAt', thread.archived_at::text,
                     'newestRunState', newest_run.state,
-                    'href', '/projects/' || item.project_id || '/channels/' || channel.id || '/threads/' || thread.id
+                    'href', '/projects/' || item.project_id || '/threads/' || thread.id
                 ) ORDER BY link.created_at, thread.id
             )
             FROM work_item_conversation_links link
