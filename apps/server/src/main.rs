@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use agent_workspace_server::{
-    AppState, bootstrap, config::AppConfig, migration_preflight, provider::SupervisorRegistry,
-    rate_limit::RateLimiters, realtime::RealtimeHub, recovery, router, seed, shutdown_signal,
-    telemetry::init_tracing, work_items,
+    AppState, bootstrap, config::AppConfig, github, migration_preflight,
+    provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
+    router, seed, shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
@@ -133,11 +133,19 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.server_addr)
         .await
         .with_context(|| format!("bind application server to {}", config.server_addr))?;
+    let webhook_listener = TcpListener::bind(config.webhook_addr)
+        .await
+        .with_context(|| format!("bind GitHub webhook server to {}", config.webhook_addr))?;
 
     tracing::info!(
         address = %config.server_addr,
         environment = %config.environment,
         "Agent Workspace server listening"
+    );
+    tracing::info!(
+        address = %config.webhook_addr,
+        github_configured = config.github.is_some(),
+        "GitHub webhook server listening"
     );
 
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
@@ -153,18 +161,21 @@ async fn main() -> anyhow::Result<()> {
             shutdown_receiver.clone(),
         ));
     let signal_shutdown_sender = shutdown_sender.clone();
-    let coordinated_shutdown = async move {
-        tokio::select! {
-            () = shutdown_signal() => {
-                let _ = signal_shutdown_sender.send(true);
-            }
-            () = wait_for_shutdown(shutdown_receiver) => {}
-        }
-    };
+    let signal_task = tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = signal_shutdown_sender.send(true);
+    });
+    let application_shutdown = shutdown_receiver.clone();
+    let webhook_shutdown = shutdown_receiver;
     let server = async move {
-        axum::serve(listener, router(state).into_make_service())
-            .with_graceful_shutdown(coordinated_shutdown)
-            .await
+        let application = axum::serve(listener, router(state.clone()).into_make_service())
+            .with_graceful_shutdown(wait_for_shutdown(application_shutdown));
+        let webhooks = axum::serve(
+            webhook_listener,
+            github::webhook_router(state).into_make_service(),
+        )
+        .with_graceful_shutdown(wait_for_shutdown(webhook_shutdown));
+        tokio::try_join!(application, webhooks).map(|_| ())
     };
     tokio::pin!(server);
 
@@ -216,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
+    signal_task.abort();
     supervisors.shutdown_all().await;
     result
 }

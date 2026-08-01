@@ -10,6 +10,7 @@ pub mod domain;
 pub mod error;
 pub mod execution;
 pub mod git_runtime;
+pub mod github;
 pub mod health;
 pub mod idempotency;
 pub mod message_content;
@@ -69,6 +70,7 @@ pub fn router(state: AppState) -> Router {
         .merge(account::router())
         .merge(conversations::router())
         .merge(repositories::router())
+        .merge(github::router())
         .merge(work_items::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
