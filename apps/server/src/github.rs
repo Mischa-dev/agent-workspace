@@ -14,6 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use reqwest::redirect::Policy;
@@ -81,6 +82,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
             post(create_pull_request),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
+            post(refresh_pull_request),
         )
 }
 
@@ -249,6 +254,15 @@ struct PullRequestRequestView {
     github_pull_request_id: Option<Uuid>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct PullRequestRefreshView {
+    job_id: Uuid,
+    pull_request_id: Uuid,
+    state: String,
+    failure_category: Option<String>,
+}
+
 #[derive(Debug, FromRow)]
 struct PullRequestCandidate {
     conversation_id: Uuid,
@@ -284,6 +298,29 @@ struct ClaimedPullRequestJob {
     body: String,
     work_item_ids: sqlx::types::Json<Vec<Uuid>>,
     mutation_attempted: bool,
+    scope_available: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct ClaimedPullRequestSyncJob {
+    job_id: Uuid,
+    project_id: Uuid,
+    pull_request_id: Uuid,
+    claim_id: Uuid,
+    attempts: i32,
+    max_attempts: i32,
+    webhook_delivery_id: Option<Uuid>,
+    integration_actor_id: Uuid,
+    installation_id: i64,
+    github_repository_id: i64,
+    owner: String,
+    repository_name: String,
+    pull_request_number: i64,
+    node_id: String,
+    html_url: String,
+    head_ref: String,
+    base_ref: String,
+    external_created_at: DateTime<Utc>,
     scope_available: bool,
 }
 
@@ -369,6 +406,7 @@ enum InstallationTokenScope {
     VerifyInstallation,
     ContentsWrite,
     PullRequestsWrite,
+    ChecksRead,
 }
 
 impl InstallationTokenScope {
@@ -388,6 +426,12 @@ impl InstallationTokenScope {
                 "metadata": "read",
                 "contents": "read",
                 "pull_requests": "write"
+            }),
+            Self::ChecksRead => json!({
+                "metadata": "read",
+                "contents": "read",
+                "pull_requests": "read",
+                "checks": "read"
             }),
         }
     }
@@ -441,6 +485,10 @@ struct GitHubPullRequest {
     updated_at: String,
     head: GitHubPullRequestRef,
     base: GitHubPullRequestRef,
+    #[serde(default)]
+    mergeable: Option<bool>,
+    #[serde(default)]
+    requested_reviewers: Vec<GitHubPullRequestUser>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -453,6 +501,31 @@ struct GitHubPullRequestRef {
     #[serde(rename = "ref")]
     name: String,
     sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubCheckRuns {
+    total_count: u64,
+    check_runs: Vec<GitHubCheckRun>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GitHubCheckRun {
+    id: u64,
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    details_url: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GitHubReview {
+    id: u64,
+    user: GitHubPullRequestUser,
+    state: String,
+    submitted_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -685,6 +758,98 @@ impl GitHubClient {
             .await
             .map_err(|_| GitHubError::Http)?;
         decode_response(response).await
+    }
+
+    async fn pull_request(
+        &self,
+        token: &InstallationToken,
+        owner: &str,
+        repository: &str,
+        number: u64,
+    ) -> Result<GitHubPullRequest, GitHubError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.api_base_url).map_err(|_| GitHubError::Response)?;
+        url.path_segments_mut()
+            .map_err(|_| GitHubError::Response)?
+            .extend(["repos", owner, repository, "pulls", &number.to_string()]);
+        let response = self
+            .http
+            .get(url)
+            .headers(github_headers(token.expose())?)
+            .send()
+            .await
+            .map_err(|_| GitHubError::Http)?;
+        decode_response(response).await
+    }
+
+    async fn check_runs(
+        &self,
+        token: &InstallationToken,
+        owner: &str,
+        repository: &str,
+        head_sha: &str,
+    ) -> Result<Vec<GitHubCheckRun>, GitHubError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.api_base_url).map_err(|_| GitHubError::Response)?;
+        url.path_segments_mut()
+            .map_err(|_| GitHubError::Response)?
+            .extend([
+                "repos",
+                owner,
+                repository,
+                "commits",
+                head_sha,
+                "check-runs",
+            ]);
+        url.query_pairs_mut().append_pair("per_page", "100");
+        let response: GitHubCheckRuns = decode_response(
+            self.http
+                .get(url)
+                .headers(github_headers(token.expose())?)
+                .send()
+                .await
+                .map_err(|_| GitHubError::Http)?,
+        )
+        .await?;
+        if response.total_count > 100 || response.check_runs.len() > 100 {
+            return Err(GitHubError::Response);
+        }
+        Ok(response.check_runs)
+    }
+
+    async fn reviews(
+        &self,
+        token: &InstallationToken,
+        owner: &str,
+        repository: &str,
+        number: u64,
+    ) -> Result<Vec<GitHubReview>, GitHubError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.api_base_url).map_err(|_| GitHubError::Response)?;
+        url.path_segments_mut()
+            .map_err(|_| GitHubError::Response)?
+            .extend([
+                "repos",
+                owner,
+                repository,
+                "pulls",
+                &number.to_string(),
+                "reviews",
+            ]);
+        url.query_pairs_mut().append_pair("per_page", "100");
+        let reviews: Vec<GitHubReview> = decode_response(
+            self.http
+                .get(url)
+                .headers(github_headers(token.expose())?)
+                .send()
+                .await
+                .map_err(|_| GitHubError::Http)?,
+        )
+        .await?;
+        if reviews.len() > 100 {
+            return Err(GitHubError::Response);
+        }
+        Ok(reviews)
     }
 }
 
@@ -1437,6 +1602,125 @@ async fn create_pull_request(
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }
 
+async fn refresh_pull_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if state.config.github.is_none() {
+        return Err(AppError::Conflict("github_integration", "not_configured"));
+    }
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("github_pull_requests", pull_request_id, "refresh")?;
+    let request_hash = RequestHash::for_value(&json!({}))?;
+    let mut transaction = state.pool.begin().await?;
+    require_project_access(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::PullRequestRefresh,
+    )
+    .await?;
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let view: PullRequestRefreshView = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(view)).into_response());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let pull_request = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT pull_request.github_installation_id, pull_request.repository_id
+        FROM github_pull_requests pull_request
+        JOIN repositories repository
+          ON repository.project_id = pull_request.project_id
+         AND repository.id = pull_request.repository_id
+         AND repository.enabled
+         AND repository.archived_at IS NULL
+        WHERE pull_request.project_id = $1 AND pull_request.id = $2
+        FOR SHARE OF pull_request, repository
+        "#,
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("github_pull_request"))?;
+    if let Some(existing) = sqlx::query_as::<_, PullRequestRefreshView>(
+        r#"
+        SELECT id AS job_id, github_pull_request_id AS pull_request_id,
+               state, failure_category
+        FROM github_jobs
+        WHERE project_id = $1 AND github_pull_request_id = $2
+          AND kind IN ('pull_request_sync', 'check_review_sync')
+          AND state IN ('queued', 'running', 'failed')
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR SHARE
+        "#,
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    {
+        complete(
+            &mut transaction,
+            &reservation,
+            StatusCode::ACCEPTED,
+            &existing,
+        )
+        .await?;
+        transaction.commit().await?;
+        return Ok((StatusCode::ACCEPTED, Json(existing)).into_response());
+    }
+    let job_id = Uuid::now_v7();
+    let view = PullRequestRefreshView {
+        job_id,
+        pull_request_id,
+        state: "queued".to_owned(),
+        failure_category: None,
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO github_jobs (
+            id, project_id, github_installation_id, repository_id,
+            kind, requesting_actor_id, github_pull_request_id
+        ) VALUES ($1, $2, $3, $4, 'check_review_sync', $5, $6)
+        "#,
+    )
+    .bind(job_id)
+    .bind(project_id)
+    .bind(pull_request.0)
+    .bind(pull_request.1)
+    .bind(principal.actor_id)
+    .bind(pull_request_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE github_pull_requests SET sync_state = 'stale', last_sync_attempt_at = now(), updated_at = now() WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .execute(&mut *transaction)
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
+    transaction.commit().await?;
+    kick_jobs(state);
+    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
+}
+
 async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
     loop {
         if let Some(job) = claim_publish_job(state).await? {
@@ -1460,6 +1744,18 @@ async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
                     "GitHub pull-request job processing failed"
                 );
                 fail_pull_request_job(state, &job, "job_processing_failed", false).await?;
+            }
+            continue;
+        }
+        if let Some(job) = claim_pull_request_sync_job(state).await? {
+            let job_id = job.job_id;
+            if let Err(error) = process_pull_request_sync_job(state, &job).await {
+                tracing::error!(
+                    %job_id,
+                    error_category = error.log_category(),
+                    "GitHub pull-request synchronization job processing failed"
+                );
+                fail_pull_request_sync_job(state, &job, "job_processing_failed", false).await?;
             }
             continue;
         }
@@ -1487,7 +1783,7 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
     let claim_id = Uuid::now_v7();
     let job = sqlx::query_as::<_, ClaimedPublishJob>(
         r#"
-        SELECT job.id AS job_id, job.project_id, job.repository_id,
+        SELECT job.id AS job_id, job.project_id,
                job.repository_workspace_id, job.agent_run_id,
                job.requesting_actor_id, job.intended_commit,
                job.attempts + 1 AS attempts, job.max_attempts,
@@ -1677,6 +1973,171 @@ async fn claim_pull_request_job(
     .bind(job.request_id)
     .execute(&mut *transaction)
     .await?;
+    transaction.commit().await?;
+    Ok(Some(job))
+}
+
+async fn claim_pull_request_sync_job(
+    state: &AppState,
+) -> Result<Option<ClaimedPullRequestSyncJob>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    let unresolved = sqlx::query_as::<_, (Option<Uuid>, String)>(
+        r#"
+        WITH candidate AS (
+            SELECT job.id
+            FROM github_jobs job
+            WHERE job.kind IN ('pull_request_sync', 'check_review_sync')
+              AND job.github_pull_request_id IS NULL
+              AND job.state IN ('queued', 'failed')
+              AND job.next_attempt_at <= now()
+              AND job.attempts < job.max_attempts
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM github_pull_requests pull_request
+                  WHERE pull_request.project_id = job.project_id
+                    AND pull_request.repository_id = job.repository_id
+                    AND (
+                        (
+                            (job.payload ->> 'number') ~ '^[0-9]{1,18}$'
+                            AND pull_request.pull_request_number = (job.payload ->> 'number')::bigint
+                        )
+                        OR (
+                            NOT COALESCE((job.payload ->> 'number') ~ '^[0-9]{1,18}$', false)
+                            AND
+                            (job.payload ->> 'head_sha') ~ '^[0-9a-f]{40}$'
+                            AND pull_request.head_sha = job.payload ->> 'head_sha'
+                        )
+                    )
+              )
+            ORDER BY job.next_attempt_at, job.created_at, job.id
+            FOR UPDATE OF job SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE github_jobs job
+        SET attempts = attempts + 1,
+            state = CASE WHEN attempts + 1 >= max_attempts THEN 'exhausted' ELSE 'failed' END,
+            failure_category = 'pull_request_unresolved',
+            next_attempt_at = now() + make_interval(
+                secs => LEAST(((attempts + 1) * (attempts + 1))::double precision, 60.0)
+            ),
+            updated_at = now()
+        FROM candidate
+        WHERE job.id = candidate.id
+        RETURNING job.webhook_delivery_id, job.state
+        "#,
+    )
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some((Some(delivery_id), delivery_state)) = unresolved {
+        sqlx::query(
+            "UPDATE github_webhook_deliveries SET state = $2, failure_category = 'pull_request_unresolved', processed_at = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .bind(delivery_state)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    let claim_id = Uuid::now_v7();
+    let job = sqlx::query_as::<_, ClaimedPullRequestSyncJob>(
+        r#"
+        SELECT job.id AS job_id, job.project_id,
+               pull_request.id AS pull_request_id, $1::uuid AS claim_id,
+               job.attempts + 1 AS attempts, job.max_attempts,
+               job.webhook_delivery_id, installation.integration_actor_id,
+               installation.installation_id, repository.github_repository_id,
+               repository.owner, repository.name AS repository_name,
+               pull_request.pull_request_number, pull_request.node_id,
+               pull_request.html_url, pull_request.head_ref,
+               pull_request.base_ref,
+               pull_request.external_created_at,
+               installation.enabled
+                   AND installation.state = 'available'
+                   AND access.access_state = 'selected'
+                   AND access.github_repository_id = repository.github_repository_id
+                   AND repository.enabled
+                   AND repository.archived_at IS NULL
+                   AS scope_available
+        FROM github_jobs job
+        JOIN github_installations installation
+          ON installation.project_id = job.project_id
+         AND installation.id = job.github_installation_id
+        JOIN repositories repository
+          ON repository.project_id = job.project_id
+         AND repository.id = job.repository_id
+        LEFT JOIN github_installation_repositories access
+          ON access.project_id = job.project_id
+         AND access.github_installation_id = installation.id
+         AND access.repository_id = repository.id
+        JOIN github_pull_requests pull_request
+          ON pull_request.project_id = job.project_id
+         AND pull_request.repository_id = repository.id
+         AND (
+             pull_request.id = job.github_pull_request_id
+             OR (
+                 job.github_pull_request_id IS NULL
+                 AND (
+                     (
+                         (job.payload ->> 'number') ~ '^[0-9]{1,18}$'
+                         AND pull_request.pull_request_number = (job.payload ->> 'number')::bigint
+                     )
+                     OR (
+                         NOT COALESCE((job.payload ->> 'number') ~ '^[0-9]{1,18}$', false)
+                         AND
+                         (job.payload ->> 'head_sha') ~ '^[0-9a-f]{40}$'
+                         AND pull_request.head_sha = job.payload ->> 'head_sha'
+                     )
+                 )
+             )
+         )
+        WHERE job.kind IN ('pull_request_sync', 'check_review_sync')
+          AND job.state IN ('queued', 'failed')
+          AND job.next_attempt_at <= now()
+          AND job.attempts < job.max_attempts
+        ORDER BY job.next_attempt_at, job.created_at, job.id
+        FOR UPDATE OF job, pull_request SKIP LOCKED
+        LIMIT 1
+        "#,
+    )
+    .bind(claim_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(job) = job else {
+        transaction.commit().await?;
+        return Ok(None);
+    };
+    let lease_seconds = i64::try_from(GITHUB_JOB_LEASE.as_secs()).unwrap_or(30);
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'running', attempts = attempts + 1,
+            lease_owner = $2,
+            lease_expires_at = now() + make_interval(secs => $3),
+            failure_category = NULL, updated_at = now()
+        WHERE id = $1 AND state IN ('queued', 'failed')
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(claim_id)
+    .bind(lease_seconds as f64)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "claim_lost"));
+    }
+    sqlx::query(
+        "UPDATE github_pull_requests SET sync_state = 'stale', last_sync_attempt_at = now(), updated_at = now() WHERE id = $1",
+    )
+    .bind(job.pull_request_id)
+    .execute(&mut *transaction)
+    .await?;
+    if let Some(delivery_id) = job.webhook_delivery_id {
+        sqlx::query(
+            "UPDATE github_webhook_deliveries SET state = 'processing', failure_category = NULL, processed_at = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
     Ok(Some(job))
 }
@@ -2358,6 +2819,589 @@ async fn fail_pull_request_job(
     Ok(())
 }
 
+async fn process_pull_request_sync_job(
+    state: &AppState,
+    job: &ClaimedPullRequestSyncJob,
+) -> Result<(), AppError> {
+    if !job.scope_available {
+        return fail_pull_request_sync_job(state, job, "pull_request_scope_unavailable", true)
+            .await;
+    }
+    let Some(config) = state.config.github.as_ref() else {
+        return fail_pull_request_sync_job(state, job, "github_not_configured", true).await;
+    };
+    let installation_id = match u64::try_from(job.installation_id) {
+        Ok(value) => value,
+        Err(_) => {
+            return fail_pull_request_sync_job(state, job, "installation_identity_invalid", true)
+                .await;
+        }
+    };
+    let repository_id = match u64::try_from(job.github_repository_id) {
+        Ok(value) => value,
+        Err(_) => {
+            return fail_pull_request_sync_job(state, job, "repository_identity_invalid", true)
+                .await;
+        }
+    };
+    let pull_request_number = match u64::try_from(job.pull_request_number) {
+        Ok(value) => value,
+        Err(_) => {
+            return fail_pull_request_sync_job(state, job, "pull_request_identity_invalid", true)
+                .await;
+        }
+    };
+    let client = GitHubClient::new(config).map_err(map_github_error)?;
+    let token = match client
+        .installation_token(
+            installation_id,
+            &[repository_id],
+            InstallationTokenScope::ChecksRead,
+        )
+        .await
+    {
+        Ok(token) => token,
+        Err(GitHubError::Scope) => {
+            return fail_pull_request_sync_job(state, job, "github_scope_incompatible", true).await;
+        }
+        Err(_) => {
+            return fail_pull_request_sync_job(state, job, "github_token_unavailable", false).await;
+        }
+    };
+    let pull_request = match client
+        .pull_request(
+            &token,
+            &job.owner,
+            &job.repository_name,
+            pull_request_number,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => {
+            drop(token);
+            return fail_pull_request_sync_job(state, job, "pull_request_fetch_failed", false)
+                .await;
+        }
+    };
+    if let Err(error) = validate_synced_pull_request(job, &pull_request) {
+        drop(token);
+        return Err(error);
+    }
+    let check_runs = match client
+        .check_runs(
+            &token,
+            &job.owner,
+            &job.repository_name,
+            &pull_request.head.sha,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => {
+            drop(token);
+            return fail_pull_request_sync_job(state, job, "check_runs_fetch_failed", false).await;
+        }
+    };
+    let reviews = match client
+        .reviews(
+            &token,
+            &job.owner,
+            &job.repository_name,
+            pull_request_number,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => {
+            drop(token);
+            return fail_pull_request_sync_job(state, job, "reviews_fetch_failed", false).await;
+        }
+    };
+    drop(token);
+    let projection = validate_and_reduce_review_projection(&pull_request, &check_runs, &reviews)?;
+    complete_pull_request_sync_job(
+        state,
+        job,
+        &pull_request,
+        &check_runs,
+        &reviews,
+        &projection,
+    )
+    .await
+}
+
+struct PullRequestReviewProjection {
+    checks_state: &'static str,
+    review_state: &'static str,
+    mergeability_state: &'static str,
+    requested_reviewers: Vec<String>,
+}
+
+fn validate_synced_pull_request(
+    job: &ClaimedPullRequestSyncJob,
+    pull_request: &GitHubPullRequest,
+) -> Result<(), AppError> {
+    let expected_url = format!(
+        "https://github.com/{}/{}/pull/{}",
+        job.owner, job.repository_name, pull_request.number
+    );
+    let created_at = DateTime::parse_from_rfc3339(&pull_request.created_at)
+        .map_err(|_| AppError::Conflict("github_pull_request", "external timestamp invalid"))?
+        .with_timezone(&Utc);
+    DateTime::parse_from_rfc3339(&pull_request.updated_at)
+        .map_err(|_| AppError::Conflict("github_pull_request", "external timestamp invalid"))?;
+    if pull_request.number != u64::try_from(job.pull_request_number).unwrap_or_default()
+        || pull_request.node_id != job.node_id
+        || pull_request.html_url != job.html_url
+        || pull_request.html_url != expected_url
+        || pull_request.head.name != job.head_ref
+        || pull_request.base.name != job.base_ref
+        || created_at != job.external_created_at
+        || pull_request.head.sha.len() != 40
+        || !pull_request
+            .head
+            .sha
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || pull_request.title.is_empty()
+        || pull_request.title.chars().count() > 256
+        || pull_request.title.chars().any(char::is_control)
+        || !valid_github_login(&pull_request.user.login)
+        || !matches!(pull_request.state.as_str(), "open" | "closed")
+        || pull_request
+            .merge_commit_sha
+            .as_deref()
+            .is_some_and(|sha| sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        || (pull_request.merged_at.is_some() && pull_request.merge_commit_sha.is_none())
+    {
+        return Err(AppError::Conflict(
+            "github_pull_request",
+            "provider identity mismatch",
+        ));
+    }
+    if let Some(merged_at) = pull_request.merged_at.as_deref() {
+        DateTime::parse_from_rfc3339(merged_at)
+            .map_err(|_| AppError::Conflict("github_pull_request", "external timestamp invalid"))?;
+    }
+    Ok(())
+}
+
+fn validate_and_reduce_review_projection(
+    pull_request: &GitHubPullRequest,
+    check_runs: &[GitHubCheckRun],
+    reviews: &[GitHubReview],
+) -> Result<PullRequestReviewProjection, AppError> {
+    let mut has_pending_check = false;
+    let mut has_failed_check = false;
+    for check in check_runs {
+        if check.id == 0
+            || check.name.is_empty()
+            || check.name.chars().count() > 256
+            || check.name.chars().any(char::is_control)
+            || !matches!(
+                check.status.as_str(),
+                "queued" | "in_progress" | "completed"
+            )
+            || !valid_external_url(check.details_url.as_deref())
+            || !valid_optional_timestamp(check.started_at.as_deref())
+            || !valid_optional_timestamp(check.completed_at.as_deref())
+        {
+            return Err(AppError::Conflict(
+                "github_check_run",
+                "provider field invalid",
+            ));
+        }
+        match (check.status.as_str(), check.conclusion.as_deref()) {
+            ("queued" | "in_progress", None) => has_pending_check = true,
+            ("completed", Some("success" | "neutral" | "skipped")) => {}
+            (
+                "completed",
+                Some(
+                    "action_required" | "cancelled" | "failure" | "stale" | "startup_failure"
+                    | "timed_out",
+                ),
+            ) => has_failed_check = true,
+            _ => {
+                return Err(AppError::Conflict(
+                    "github_check_run",
+                    "provider state invalid",
+                ));
+            }
+        }
+    }
+    let checks_state = if check_runs.is_empty() {
+        "unknown"
+    } else if has_failed_check {
+        "failure"
+    } else if has_pending_check {
+        "pending"
+    } else {
+        "success"
+    };
+
+    let mut latest_reviews = BTreeMap::<String, (String, u64, String)>::new();
+    for review in reviews {
+        let state = review.state.to_ascii_lowercase();
+        if review.id == 0
+            || !valid_github_login(&review.user.login)
+            || !matches!(
+                state.as_str(),
+                "approved" | "changes_requested" | "commented" | "dismissed"
+            )
+            || !valid_optional_timestamp(review.submitted_at.as_deref())
+        {
+            return Err(AppError::Conflict(
+                "github_review",
+                "provider field invalid",
+            ));
+        }
+        let order = review.submitted_at.clone().unwrap_or_default();
+        let entry = latest_reviews
+            .entry(review.user.login.clone())
+            .or_insert_with(|| (order.clone(), review.id, state.clone()));
+        if (order.as_str(), review.id) > (entry.0.as_str(), entry.1) {
+            *entry = (order, review.id, state);
+        }
+    }
+    let mut requested_reviewers = pull_request
+        .requested_reviewers
+        .iter()
+        .map(|reviewer| reviewer.login.clone())
+        .collect::<Vec<_>>();
+    requested_reviewers.sort();
+    requested_reviewers.dedup();
+    if requested_reviewers.len() > 50
+        || requested_reviewers
+            .iter()
+            .any(|login| !valid_github_login(login))
+    {
+        return Err(AppError::Conflict(
+            "github_pull_request",
+            "requested reviewer invalid",
+        ));
+    }
+    let review_state = if latest_reviews
+        .values()
+        .any(|(_, _, state)| state == "changes_requested")
+    {
+        "changes_requested"
+    } else if latest_reviews
+        .values()
+        .any(|(_, _, state)| state == "approved")
+    {
+        "approved"
+    } else if !requested_reviewers.is_empty() || !reviews.is_empty() {
+        "pending"
+    } else {
+        "unknown"
+    };
+    let canonical_state = if pull_request.merged_at.is_some() {
+        "merged"
+    } else {
+        pull_request.state.as_str()
+    };
+    let mergeability_state = if canonical_state != "open"
+        || pull_request.draft
+        || checks_state == "failure"
+        || review_state == "changes_requested"
+    {
+        "blocked"
+    } else {
+        match pull_request.mergeable {
+            Some(true) => "ready",
+            Some(false) => "blocked",
+            None => "unknown",
+        }
+    };
+    Ok(PullRequestReviewProjection {
+        checks_state,
+        review_state,
+        mergeability_state,
+        requested_reviewers,
+    })
+}
+
+fn valid_github_login(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 100 && !value.chars().any(char::is_control)
+}
+
+fn valid_optional_timestamp(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        value.len() <= 64
+            && !value.chars().any(char::is_control)
+            && DateTime::parse_from_rfc3339(value).is_ok()
+    })
+}
+
+fn valid_external_url(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        value.len() <= 2048
+            && !value.chars().any(char::is_control)
+            && reqwest::Url::parse(value).is_ok_and(|url| url.scheme() == "https")
+    })
+}
+
+async fn complete_pull_request_sync_job(
+    state: &AppState,
+    job: &ClaimedPullRequestSyncJob,
+    pull_request: &GitHubPullRequest,
+    check_runs: &[GitHubCheckRun],
+    reviews: &[GitHubReview],
+    projection: &PullRequestReviewProjection,
+) -> Result<(), AppError> {
+    let canonical_state = if pull_request.merged_at.is_some() {
+        "merged"
+    } else {
+        pull_request.state.as_str()
+    };
+    let requested_reviewers = serde_json::to_value(&projection.requested_reviewers)
+        .map_err(|_| AppError::Internal("serialize requested reviewers"))?;
+    let mut transaction = state.pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'completed', lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = NULL, completed_at = now(), updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(job.claim_id)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "lease_lost"));
+    }
+    sqlx::query(
+        r#"
+        UPDATE github_pull_requests
+        SET head_sha = $3, title = $4, author_login = $5, draft = $6,
+            state = $7, merged_at = $8::text::timestamptz,
+            merge_commit_sha = $9, external_updated_at = $10::text::timestamptz,
+            checks_state = $11, review_state = $12,
+            mergeability_state = $13, requested_reviewers = $14,
+            sync_state = 'fresh', last_sync_attempt_at = now(),
+            last_success_at = now(), sync_failure_category = NULL,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .bind(&pull_request.head.sha)
+    .bind(&pull_request.title)
+    .bind(&pull_request.user.login)
+    .bind(pull_request.draft)
+    .bind(canonical_state)
+    .bind(pull_request.merged_at.as_deref())
+    .bind(if canonical_state == "merged" {
+        pull_request.merge_commit_sha.as_deref()
+    } else {
+        None
+    })
+    .bind(&pull_request.updated_at)
+    .bind(projection.checks_state)
+    .bind(projection.review_state)
+    .bind(projection.mergeability_state)
+    .bind(requested_reviewers)
+    .execute(&mut *transaction)
+    .await?;
+
+    sqlx::query("DELETE FROM github_pull_request_check_runs WHERE github_pull_request_id = $1")
+        .bind(job.pull_request_id)
+        .execute(&mut *transaction)
+        .await?;
+    for check in check_runs {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_check_runs (
+                id, project_id, github_pull_request_id, github_check_run_id,
+                name, status, conclusion, details_url,
+                external_started_at, external_completed_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9::text::timestamptz, $10::text::timestamptz
+            )
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(job.project_id)
+        .bind(job.pull_request_id)
+        .bind(i64::try_from(check.id).map_err(|_| AppError::Internal("check run id"))?)
+        .bind(&check.name)
+        .bind(&check.status)
+        .bind(check.conclusion.as_deref())
+        .bind(check.details_url.as_deref())
+        .bind(check.started_at.as_deref())
+        .bind(check.completed_at.as_deref())
+        .execute(&mut *transaction)
+        .await?;
+    }
+    sqlx::query("DELETE FROM github_pull_request_reviews WHERE github_pull_request_id = $1")
+        .bind(job.pull_request_id)
+        .execute(&mut *transaction)
+        .await?;
+    for review in reviews {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_reviews (
+                id, project_id, github_pull_request_id, github_review_id,
+                author_login, state, external_submitted_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7::text::timestamptz)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(job.project_id)
+        .bind(job.pull_request_id)
+        .bind(i64::try_from(review.id).map_err(|_| AppError::Internal("review id"))?)
+        .bind(&review.user.login)
+        .bind(review.state.to_ascii_lowercase())
+        .bind(review.submitted_at.as_deref())
+        .execute(&mut *transaction)
+        .await?;
+    }
+    if let Some(delivery_id) = job.webhook_delivery_id {
+        sqlx::query(
+            "UPDATE github_webhook_deliveries SET state = 'processed', failure_category = NULL, processed_at = now(), updated_at = now() WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, authentication_class,
+            action, target_kind, target_id, outcome, metadata
+        ) VALUES (
+            $1, $2, $3, 'github_job', 'github.pull_request_sync',
+            'github_pull_request', $4, 'succeeded',
+            jsonb_build_object(
+                'checks_state', $5::text,
+                'review_state', $6::text,
+                'mergeability_state', $7::text,
+                'external_updated_at', $8::text
+            )
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(job.integration_actor_id)
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .bind(projection.checks_state)
+    .bind(projection.review_state)
+    .bind(projection.mergeability_state)
+    .bind(&pull_request.updated_at)
+    .execute(&mut *transaction)
+    .await?;
+    enqueue_pull_request_invalidations(&mut transaction, job).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+async fn enqueue_pull_request_invalidations(
+    transaction: &mut Transaction<'_, Postgres>,
+    job: &ClaimedPullRequestSyncJob,
+) -> Result<(), AppError> {
+    let runs = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT DISTINCT run.id, run.conversation_id
+        FROM github_pull_request_workspace_links link
+        JOIN agent_runs run
+          ON run.project_id = link.project_id AND run.id = link.agent_run_id
+        WHERE link.project_id = $1 AND link.github_pull_request_id = $2
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (run_id, conversation_id) in runs {
+        outbox::enqueue_agent_run_updated(transaction, job.project_id, conversation_id, run_id)
+            .await?;
+    }
+    let work_items = sqlx::query_as::<_, (Uuid, i64)>(
+        r#"
+        SELECT work_item.id, work_item.version
+        FROM github_pull_request_work_item_links link
+        JOIN work_items work_item
+          ON work_item.project_id = link.project_id AND work_item.id = link.work_item_id
+        WHERE link.project_id = $1 AND link.github_pull_request_id = $2
+        "#,
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (work_item_id, version) in work_items {
+        outbox::enqueue_typed(
+            transaction,
+            job.project_id,
+            outbox::OutboxEventPayload::WorkItemUpdated(outbox::WorkItemUpdatedPayload {
+                work_item_id,
+                version,
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn fail_pull_request_sync_job(
+    state: &AppState,
+    job: &ClaimedPullRequestSyncJob,
+    category: &'static str,
+    terminal: bool,
+) -> Result<(), AppError> {
+    let exhausted = terminal || job.attempts >= job.max_attempts;
+    let next_state = if exhausted { "exhausted" } else { "failed" };
+    let backoff_seconds = i64::from(job.attempts.clamp(1, 6)).pow(2).min(60);
+    let mut transaction = state.pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = $3, lease_owner = NULL, lease_expires_at = NULL,
+            failure_category = $4,
+            next_attempt_at = now() + make_interval(secs => $5),
+            updated_at = now()
+        WHERE id = $1 AND state = 'running' AND lease_owner = $2
+        "#,
+    )
+    .bind(job.job_id)
+    .bind(job.claim_id)
+    .bind(next_state)
+    .bind(category)
+    .bind(backoff_seconds as f64)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict("github_job", "lease_lost"));
+    }
+    sqlx::query(
+        "UPDATE github_pull_requests SET sync_state = 'failed', sync_failure_category = $3, last_sync_attempt_at = now(), updated_at = now() WHERE project_id = $1 AND id = $2",
+    )
+    .bind(job.project_id)
+    .bind(job.pull_request_id)
+    .bind(category)
+    .execute(&mut *transaction)
+    .await?;
+    if let Some(delivery_id) = job.webhook_delivery_id {
+        sqlx::query(
+            "UPDATE github_webhook_deliveries SET state = $2, failure_category = $3, processed_at = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(delivery_id)
+        .bind(next_state)
+        .bind(category)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    enqueue_pull_request_invalidations(&mut transaction, job).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 async fn insert_publish_job_audit(
     transaction: &mut Transaction<'_, Postgres>,
     job: &ClaimedPublishJob,
@@ -3016,10 +4060,16 @@ fn bounded_job_payload(
             ("base_ref", "/pull_request/base/ref"),
         ]
         .as_slice(),
-        "check_suite" => [("check_suite_id", "/check_suite/id")].as_slice(),
+        "check_suite" => [
+            ("check_suite_id", "/check_suite/id"),
+            ("head_sha", "/check_suite/head_sha"),
+            ("number", "/check_suite/pull_requests/0/number"),
+        ]
+        .as_slice(),
         "check_run" => [
             ("check_run_id", "/check_run/id"),
             ("head_sha", "/check_run/head_sha"),
+            ("number", "/check_run/pull_requests/0/number"),
         ]
         .as_slice(),
         "installation" | "installation_repositories" => [].as_slice(),
@@ -3193,10 +4243,88 @@ mod tests {
                 name: job.base_ref.clone(),
                 sha: "1111111111111111111111111111111111111111".to_owned(),
             },
+            mergeable: Some(true),
+            requested_reviewers: Vec::new(),
         };
         assert!(validate_pull_request(&job, &pull_request).is_ok());
         pull_request.head.sha = "2222222222222222222222222222222222222222".to_owned();
         assert!(validate_pull_request(&job, &pull_request).is_err());
+    }
+
+    #[test]
+    fn check_review_projection_is_bounded_and_never_overstates_certainty() {
+        assert_eq!(
+            InstallationTokenScope::ChecksRead.permissions(),
+            json!({
+                "metadata": "read",
+                "contents": "read",
+                "pull_requests": "read",
+                "checks": "read"
+            })
+        );
+        let mut pull_request = GitHubPullRequest {
+            number: 7,
+            node_id: "PR_kwDOCanonical".to_owned(),
+            html_url: "https://github.com/Mischa-dev/agent-workspace-m0-spike/pull/7".to_owned(),
+            title: "Canonical review state".to_owned(),
+            user: GitHubPullRequestUser {
+                login: "Mischa-dev".to_owned(),
+            },
+            draft: false,
+            state: "open".to_owned(),
+            merged_at: None,
+            merge_commit_sha: None,
+            created_at: "2026-08-01T10:00:00Z".to_owned(),
+            updated_at: "2026-08-01T10:00:01Z".to_owned(),
+            head: GitHubPullRequestRef {
+                name: "codex/m5-review".to_owned(),
+                sha: "0123456789012345678901234567890123456789".to_owned(),
+            },
+            base: GitHubPullRequestRef {
+                name: "main".to_owned(),
+                sha: "1111111111111111111111111111111111111111".to_owned(),
+            },
+            mergeable: Some(true),
+            requested_reviewers: vec![GitHubPullRequestUser {
+                login: "reviewer".to_owned(),
+            }],
+        };
+        let mut checks = vec![GitHubCheckRun {
+            id: 10,
+            name: "CI".to_owned(),
+            status: "completed".to_owned(),
+            conclusion: Some("success".to_owned()),
+            details_url: Some("https://example.test/check/10".to_owned()),
+            started_at: Some("2026-08-01T10:00:00Z".to_owned()),
+            completed_at: Some("2026-08-01T10:00:01Z".to_owned()),
+        }];
+        let reviews = vec![GitHubReview {
+            id: 20,
+            user: GitHubPullRequestUser {
+                login: "reviewer".to_owned(),
+            },
+            state: "APPROVED".to_owned(),
+            submitted_at: Some("2026-08-01T10:00:02Z".to_owned()),
+        }];
+        let projection = validate_and_reduce_review_projection(&pull_request, &checks, &reviews)
+            .expect("valid canonical projection");
+        assert_eq!(projection.checks_state, "success");
+        assert_eq!(projection.review_state, "approved");
+        assert_eq!(projection.mergeability_state, "ready");
+
+        checks[0].conclusion = Some("failure".to_owned());
+        let projection = validate_and_reduce_review_projection(&pull_request, &checks, &reviews)
+            .expect("failure projection");
+        assert_eq!(projection.checks_state, "failure");
+        assert_eq!(projection.mergeability_state, "blocked");
+
+        pull_request.mergeable = None;
+        checks.clear();
+        let projection = validate_and_reduce_review_projection(&pull_request, &checks, &[])
+            .expect("unknown projection");
+        assert_eq!(projection.checks_state, "unknown");
+        assert_eq!(projection.review_state, "pending");
+        assert_eq!(projection.mergeability_state, "unknown");
     }
 
     #[test]

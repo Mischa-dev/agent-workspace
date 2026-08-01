@@ -347,6 +347,11 @@ struct LinkedPullRequestView {
     draft: bool,
     source: String,
     confirmed: bool,
+    checks_state: String,
+    review_state: String,
+    mergeability_state: String,
+    sync_state: String,
+    sync_failure_category: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -3859,6 +3864,11 @@ const WORK_ITEM_SELECT: &str = r#"
                     'url', pull_request.html_url,
                     'state', pull_request.state,
                     'draft', pull_request.draft,
+                    'checksState', pull_request.checks_state,
+                    'reviewState', pull_request.review_state,
+                    'mergeabilityState', pull_request.mergeability_state,
+                    'syncState', pull_request.sync_state,
+                    'syncFailureCategory', pull_request.sync_failure_category,
                     'source', link.source,
                     'confirmed', link.confirmed
                 ) ORDER BY pull_request.pull_request_number, pull_request.id

@@ -2000,10 +2000,16 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             pull_request_request.state AS pull_request_request_state,
             pull_request_request.failure_category AS pull_request_failure_category,
             pull_request.pull_request_number,
+            pull_request.id AS pull_request_id,
             pull_request.html_url AS pull_request_url,
             pull_request.title AS pull_request_title,
             pull_request.state AS pull_request_state,
             pull_request.draft AS pull_request_draft,
+            pull_request.checks_state AS pull_request_checks_state,
+            pull_request.review_state AS pull_request_review_state,
+            pull_request.mergeability_state AS pull_request_mergeability_state,
+            pull_request.sync_state AS pull_request_sync_state,
+            pull_request.sync_failure_category AS pull_request_sync_failure_category,
             CASE WHEN ar.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
@@ -2038,6 +2044,7 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             retry: false,
             publish: false,
             create_pull_request: false,
+            refresh_pull_request: false,
         },
     })
 }

@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 accepted; M5 authorized; source of truth v0.18
+**Status:** M4 accepted; M5 authorized; source of truth v0.19
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
@@ -12,6 +12,19 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.19 — Canonical pull-request checks and review convergence
+
+- made pull-request, review, check-suite, and check-run deliveries bounded
+  invalidation hints whose durable jobs refetch canonical GitHub state
+- defined explicit unknown, pending, success, failure, approved,
+  changes-requested, blocked, and ready projections without ingesting logs,
+  annotations, review bodies, comments, or diffs
+- added an idempotent authorized refresh command, leased restart-safe sync jobs,
+  bounded retry/exhaustion for unresolved events, and Integration Actor audit
+  attribution with the external update time preserved separately
+- required Thread and Work Item projections to converge through ordinary HTTP
+  refetch after realtime invalidation and to expose stale or failed sync state
 
 ### v0.18 — Durable pull-request creation and explicit links
 
@@ -6137,6 +6150,21 @@ does not issue another create blindly. One canonical pull-request record then
 links automatically to its Thread, Agent Run, Repository Workspace, and exact
 commit; only explicit Work Item links are immediately confirmed. This prevents
 duplicate PRs and keeps heuristic association visible and reversible.
+
+## D-045: GitHub webhook deliveries invalidate; canonical APIs decide review state
+
+**Status:** Accepted
+
+**Reason:** GitHub pull-request, review, and check deliveries may be duplicated,
+missed, partial, or out of order. Agent Workspace therefore stores only a
+bounded identity hint in the webhook job and uses a repository-scoped
+installation token to refetch the pull request, check runs, reviews, and
+requested reviewers. The reducer explicitly distinguishes unknown from
+pending and never infers readiness from an incomplete delivery. Canonical
+fields, Integration Actor audit, linked-resource invalidations, and delivery
+completion commit in one transaction; retries are leased and bounded, and
+operators may request the same reconciliation idempotently without receiving
+provider bodies or credential material.
 
 ---
 
