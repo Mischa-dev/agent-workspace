@@ -22,6 +22,9 @@
 - restricted the merged commit fallback to a signed merged
   `pull_request.closed` event so delayed open, review, and check deliveries
   cannot supply canonical merge identity
+- allowed later authenticated refresh and stale-lease recovery to retain that
+  already-canonical merge identity when GitHub REST again returns null, while
+  preserving mismatch rejection and the unmerged boundary
 
 ### v0.20 — Explicit pull-request Work Item automation
 
@@ -6214,7 +6217,7 @@ and records either the ordinary versioned Work Item transition or a bounded
 skip reason. This keeps retries idempotent and prevents external delivery order
 from granting GitHub authority over completion.
 
-## D-047: Explicit signed redelivery may recover only its failed delivery job
+## D-047: Signed redelivery and retained canonical merge identity are bounded recovery inputs
 
 **Status:** Accepted
 
@@ -6228,6 +6231,13 @@ second job, domain activity, notification, or outbox event is created, and a
 redelivery of queued, running, or completed work remains a no-op. A checksum
 mismatch remains a conflict, while authenticated operator reconciliation stays
 available for missed events and non-delivery failures.
+
+GitHub may continue returning a null merge commit on later authenticated REST
+refreshes after the merged head branch is deleted. Once an exact signed merged
+close delivery has committed its merge identity canonically, a later manual or
+stale-lease recovery job may retain that same stored identity when REST again
+returns null. It may not invent or replace a merge identity, use the fallback
+for an unmerged pull request, or accept a mismatch with a non-null REST value.
 
 ---
 
