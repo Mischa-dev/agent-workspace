@@ -35,7 +35,7 @@ const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
 const MAX_TOKEN_BYTES: usize = 128;
 const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
-const LAST_USED_THROTTLE_MINUTES: i64 = 5;
+const LAST_USED_THROTTLE_MINUTES: i32 = 5;
 #[cfg(test)]
 const SERVER_INSTRUCTIONS: &str = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run.";
 
@@ -302,7 +302,7 @@ async fn resolve_bearer_principal(
         UPDATE mcp_client_credentials
         SET last_used_at = now(), updated_at = now()
         WHERE id = $1
-          AND (last_used_at IS NULL OR last_used_at < now() - make_interval(mins => $2))
+          AND (last_used_at IS NULL OR last_used_at < now() - make_interval(mins => $2::integer))
         "#,
     )
     .bind(row.credential_id)
