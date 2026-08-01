@@ -21,8 +21,10 @@
   ordinary Project policy and domain-command layers rather than exposing
   database mutation or creating application Threads
 - defined host-issued development bearer credentials as hashed, revocable,
-  Actor/Project/scoped records and retained OAuth authorization-code plus PKCE
-  as the team-ready Codex authentication path
+  Actor/Project/scoped records, made one-shot issuance explicitly
+  non-idempotent with atomic replacement for uncertain output, and retained
+  OAuth authorization-code plus PKCE as the team-ready Codex authentication
+  path
 - fixed bounded read and write tool contracts, accurate safety annotations,
   optimistic conflicts, idempotent retries, MCP-specific audit attribution,
   and rejection of client-supplied authorship
@@ -5650,9 +5652,15 @@ without reusing browser cookies or storing bearer secrets in PostgreSQL.
 - add Project-owned MCP client credentials bound to one active human Actor,
   one named client, explicit read/write scopes, status, creation/last-used/
   expiry/revocation times, and an optimistic version
-- issue at least 256 bits of randomness through an idempotent host-local CLI,
-  display the token exactly once, persist only a versioned digest and safe token
-  prefix, and require owner-restricted handling outside the repository
+- issue at least 256 bits of randomness through an explicitly non-idempotent
+  host-local create command, display the token exactly once, persist only a
+  versioned digest and safe token prefix, and require owner-restricted handling
+  outside the repository
+- make uncertain create output recoverable without plaintext persistence: the
+  operator lists safe credential metadata, then uses an optimistic replace
+  command that atomically revokes the exact old credential and creates a new
+  one whose token is displayed once; create never claims a replay, and revoke
+  remains available when no replacement is wanted
 - accept only exact `Authorization: Bearer` syntax, compare digests in constant
   time, reject weak/malformed/expired/revoked credentials, and never fall back
   to development browser authentication
@@ -5669,10 +5677,11 @@ without reusing browser cookies or storing bearer secrets in PostgreSQL.
 **Dependencies:** M1 User/Actor sessions, M4 Project policy, secret redaction,
 host-local CLI conventions, and M6-001 request principal plumbing.
 
-**Expected tests:** issue/use/revoke/expire, weak token rejection, constant-time
-digest path, read-only versus write scope, cross-Project and inactive-member
-denial, archived Project behavior, last-used throttling, redacted logs/errors,
-and provider/child environment isolation.
+**Expected tests:** issue/use/revoke/replace/expire, uncertain-output recovery,
+stale-version replacement conflict, weak token rejection, constant-time digest
+path, read-only versus write scope, cross-Project and inactive-member denial,
+archived Project behavior, last-used throttling, redacted logs/errors, and
+provider/child environment isolation.
 
 **Exclusions:** committing tokens, plaintext recovery, user-chosen tokens,
 browser-cookie reuse, global all-Project credentials, service-account Actors,
@@ -6617,6 +6626,22 @@ close delivery has committed its merge identity canonically, a later manual or
 stale-lease recovery job may retain that same stored identity when REST again
 returns null. It may not invent or replace a merge identity, use the fallback
 for an unmerged pull request, or accept a mismatch with a non-null REST value.
+
+## D-048: MCP credentials are Project-scoped Actor grants; OAuth with PKCE is the team path
+
+**Status:** Accepted
+
+**Reason:** Local Codex must call the same authorized domain operations as the
+browser without reusing browser cookies or becoming a privileged database
+client. Every MCP credential therefore resolves one active human Actor, one
+Project, one named client, and explicit scopes before ordinary membership and
+resource policy runs. Private development may use a high-entropy bearer whose
+digest alone is stored; its create operation is deliberately non-idempotent,
+and uncertain output is recovered by optimistic atomic replacement or
+revocation rather than plaintext recovery. Team-ready access uses OAuth
+authorization code with PKCE S256, explicit consent, hashed bounded tokens,
+and refresh rotation. Neither path creates an application Thread, grants
+provider execution identity, or permits client-supplied authorship.
 
 ---
 
