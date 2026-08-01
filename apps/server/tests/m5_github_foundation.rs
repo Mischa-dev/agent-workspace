@@ -148,13 +148,12 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .expect("insert GitHub Project membership");
     let installation_row_id = Uuid::now_v7();
     let events = vec![
-        "installation",
-        "installation_repositories",
         "push",
         "pull_request",
         "pull_request_review",
         "check_suite",
         "check_run",
+        "repository",
     ];
     sqlx::query(
         r#"

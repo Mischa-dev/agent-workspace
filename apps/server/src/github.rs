@@ -37,24 +37,20 @@ use crate::{
 
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
 const MAX_GITHUB_RESPONSE_BYTES: usize = 1024 * 1024;
-const REQUIRED_EVENTS: [&str; 7] = [
-    "installation",
-    "installation_repositories",
+const REQUIRED_EVENTS: [&str; 5] = [
     "push",
     "pull_request",
     "pull_request_review",
     "check_suite",
     "check_run",
 ];
-const PERMITTED_EVENTS: [&str; 8] = [
-    "installation",
-    "installation_repositories",
-    "installation_target",
+const PERMITTED_EVENTS: [&str; 6] = [
     "push",
     "pull_request",
     "pull_request_review",
     "check_suite",
     "check_run",
+    "repository",
 ];
 
 pub fn router() -> Router<AppState> {
@@ -1422,6 +1418,9 @@ mod tests {
         installation.permissions.remove("issues");
         installation.events.push("push".to_owned());
         assert!(validate_installation(&config, &installation).is_err());
+        installation.events.pop();
+        installation.events.push("repository".to_owned());
+        assert!(validate_installation(&config, &installation).is_ok());
         installation.events.pop();
         installation.repository_selection = "all".to_owned();
         assert!(validate_installation(&config, &installation).is_err());
