@@ -146,6 +146,20 @@ impl AppError {
             Self::Internal(_) => "internal",
         }
     }
+
+    /// Return bounded database diagnostics suitable for structured logs.
+    ///
+    /// SQLSTATE and constraint names identify the failed invariant without
+    /// exposing driver messages, SQL text, bound values, or database content.
+    pub fn database_log_fields(&self) -> (Option<String>, Option<String>) {
+        let Self::Database(sqlx::Error::Database(error)) = self else {
+            return (None, None);
+        };
+        (
+            error.code().map(|value| value.into_owned()),
+            error.constraint().map(str::to_owned),
+        )
+    }
 }
 
 #[derive(Serialize)]

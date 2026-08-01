@@ -1264,7 +1264,14 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
             retry_category: "use_new_request_id".to_owned(),
         },
         error => {
-            tracing::error!(command, category = error.log_category(), "MCP write failed");
+            let (database_code, database_constraint) = error.database_log_fields();
+            tracing::error!(
+                command,
+                category = error.log_category(),
+                database_code,
+                database_constraint,
+                "MCP write failed"
+            );
             WriteResult::unavailable()
         }
     }

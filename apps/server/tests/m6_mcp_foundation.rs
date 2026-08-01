@@ -21,6 +21,10 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("agent_workspace=debug")
+        .try_init();
     let Some((database_url, administrative_pool)) = integration_pool().await else {
         return;
     };
@@ -64,6 +68,19 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     ]))
     .expect("M6 configuration");
     let seed = dev_seed(&pool, &config).await.expect("seed M6 fixture");
+    let work_item_number = sqlx::query_scalar::<_, i64>(
+        r#"
+        UPDATE project_counters
+        SET next_work_item_number = next_work_item_number + 1,
+            updated_at = now()
+        WHERE project_id = $1
+        RETURNING next_work_item_number - 1
+        "#,
+    )
+    .bind(seed.project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("allocate M6 Work Item number");
     let work_item_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -72,7 +89,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             priority, created_by_actor_id, board_rank
         )
         SELECT
-            $1, $2, 1, 'M6 read contract', 'Bounded MCP context', type.id,
+            $1, $2, $4, 'M6 read contract', 'Bounded MCP context', type.id,
             status.id, 'high', $3, 1024
         FROM work_item_types type
         CROSS JOIN work_item_statuses status
@@ -83,6 +100,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .bind(work_item_id)
     .bind(seed.project_id)
     .bind(seed.human_actor_id)
+    .bind(work_item_number)
     .execute(&pool)
     .await
     .expect("insert M6 Work Item fixture");
