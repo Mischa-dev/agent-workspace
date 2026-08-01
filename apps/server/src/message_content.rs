@@ -7,6 +7,7 @@ pub const MESSAGE_CONTENT_VERSION: u16 = 1;
 pub const MAX_MESSAGE_NODES: usize = 128;
 pub const MAX_MESSAGE_TEXT_CHARACTERS: usize = 20_000;
 pub const MAX_MESSAGE_MENTIONS: usize = 32;
+pub const MAX_MESSAGE_WORK_ITEM_REFERENCES: usize = 32;
 
 /// Incrementally validates provider-authored plain text against the same
 /// boundary used for durable Message content. A fragment is checked before it
@@ -66,13 +67,17 @@ pub enum MessageNode {
         #[serde(rename = "actorId")]
         actor_id: Uuid,
     },
+    WorkItemRef {
+        #[serde(rename = "workItemId", alias = "work_item_id")]
+        work_item_id: Uuid,
+    },
 }
 
 impl MessageNode {
     pub fn actor_id(&self) -> Option<Uuid> {
         match self {
             Self::Mention { actor_id } => Some(*actor_id),
-            Self::Text { .. } => None,
+            Self::Text { .. } | Self::WorkItemRef { .. } => None,
         }
     }
 }
@@ -122,6 +127,10 @@ pub enum MessageContentError {
     MentionUnavailable,
     #[error("a mentioned Actor has an invalid handle")]
     InvalidMentionHandle,
+    #[error("a referenced Work Item is unavailable")]
+    WorkItemUnavailable,
+    #[error("a referenced Work Item has an invalid label")]
+    InvalidWorkItemLabel,
 }
 
 impl MessageContent {
@@ -132,7 +141,7 @@ impl MessageContent {
             version: MESSAGE_CONTENT_VERSION,
             nodes: vec![MessageNode::Text { text: text.into() }],
         }
-        .validate_with_mentions(|_| None)
+        .validate_with_resources(|_| None, |_| None)
     }
 
     pub fn from_json(value: serde_json::Value) -> Result<Self, MessageContentError> {
@@ -155,6 +164,7 @@ impl MessageContent {
 
         let mut text_characters = 0usize;
         let mut mentions = 0usize;
+        let mut work_item_references = 0usize;
         for node in &self.nodes {
             match node {
                 MessageNode::Text { text } => {
@@ -177,6 +187,15 @@ impl MessageContent {
                         return Err(MessageContentError::TooManyMentions);
                     }
                 }
+                MessageNode::WorkItemRef { work_item_id } => {
+                    if work_item_id.is_nil() {
+                        return Err(MessageContentError::Malformed);
+                    }
+                    work_item_references += 1;
+                    if work_item_references > MAX_MESSAGE_WORK_ITEM_REFERENCES {
+                        return Err(MessageContentError::TooManyNodes);
+                    }
+                }
             }
         }
         Ok(())
@@ -191,12 +210,35 @@ impl MessageContent {
             .collect()
     }
 
+    pub fn work_item_references(&self) -> Vec<(usize, Uuid)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match node {
+                MessageNode::WorkItemRef { work_item_id } => Some((index, *work_item_id)),
+                MessageNode::Text { .. } | MessageNode::Mention { .. } => None,
+            })
+            .collect()
+    }
+
     pub fn validate_with_mentions<F>(
         self,
-        mut resolve_handle: F,
+        resolve_handle: F,
     ) -> Result<ValidatedMessageContent, MessageContentError>
     where
         F: FnMut(Uuid) -> Option<String>,
+    {
+        self.validate_with_resources(resolve_handle, |_| None)
+    }
+
+    pub fn validate_with_resources<F, W>(
+        self,
+        mut resolve_handle: F,
+        mut resolve_work_item_label: W,
+    ) -> Result<ValidatedMessageContent, MessageContentError>
+    where
+        F: FnMut(Uuid) -> Option<String>,
+        W: FnMut(Uuid) -> Option<String>,
     {
         self.validate_structure()?;
 
@@ -226,6 +268,20 @@ impl MessageContent {
                     if seen.insert(*actor_id) {
                         mentioned_actor_ids.push(*actor_id);
                     }
+                }
+                MessageNode::WorkItemRef { work_item_id } => {
+                    let label = resolve_work_item_label(*work_item_id)
+                        .ok_or(MessageContentError::WorkItemUnavailable)?;
+                    if label.is_empty()
+                        || label.len() > 251
+                        || label.chars().any(unsupported_control_character)
+                    {
+                        return Err(MessageContentError::InvalidWorkItemLabel);
+                    }
+                    plain_text.push_str(&label);
+                    plain_text_characters = plain_text_characters
+                        .checked_add(label.chars().count())
+                        .ok_or(MessageContentError::TextTooLong)?;
                 }
             }
             if plain_text_characters > MAX_MESSAGE_TEXT_CHARACTERS {
@@ -303,6 +359,28 @@ mod tests {
         assert_eq!(validated.plain_text(), "Ask @mischa and @agent@mischa");
         assert_eq!(validated.mentioned_actor_ids(), &[human, worker]);
         assert_eq!(validated.content(), &content);
+    }
+
+    #[test]
+    fn work_item_references_are_structured_resolved_and_ordered() {
+        let work_item = actor(3);
+        let content = MessageContent::from_json(serde_json::json!({
+            "version": 1,
+            "nodes": [
+                {"type": "text", "text": "Review "},
+                {"type": "work_item_ref", "work_item_id": work_item},
+                {"type": "work_item_ref", "workItemId": work_item}
+            ]
+        }))
+        .expect("parse Work Item references");
+        assert_eq!(
+            content.work_item_references(),
+            vec![(1, work_item), (2, work_item)]
+        );
+        let validated = content
+            .validate_with_resources(|_| None, |id| (id == work_item).then(|| "AW-7".to_owned()))
+            .expect("resolve Work Item reference");
+        assert_eq!(validated.plain_text(), "Review AW-7AW-7");
     }
 
     #[test]

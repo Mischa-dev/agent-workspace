@@ -7,6 +7,7 @@ import type {
   WorkItemListResponse,
   WorkItemPatch,
   WorkItemPriority,
+  WorkItemTimelineEntry,
   WorkItemWorkflow,
 } from './types'
 
@@ -77,6 +78,33 @@ export function normalizeWorkItem(value: unknown): WorkItem {
     archivedAt: nullableString(item.archivedAt),
     createdAt: string(item.createdAt),
     updatedAt: string(item.updatedAt),
+    acceptanceCriteria: (Array.isArray(item.acceptanceCriteria)
+      ? item.acceptanceCriteria
+      : []
+    ).map((value) => {
+      const criterion = record(value)
+      const completedBy = criterion.completedBy
+        ? record(criterion.completedBy)
+        : null
+      return {
+        id: string(criterion.id),
+        text: string(criterion.text),
+        position: number(criterion.position),
+        completed: boolean(criterion.completed),
+        completedBy:
+          completedBy === null
+            ? null
+            : {
+                id: string(completedBy.id),
+                displayName: string(completedBy.displayName),
+                handle: string(completedBy.handle),
+                kind: string(completedBy.kind),
+              },
+        completedAt: nullableString(criterion.completedAt),
+        createdAt: string(criterion.createdAt),
+        updatedAt: string(criterion.updatedAt),
+      }
+    }),
     capabilities: {
       view: boolean(capabilities.view),
       edit: boolean(capabilities.edit),
@@ -248,6 +276,132 @@ export async function searchAssignableActors(
       displayName: string(actor.displayName),
       handle: string(actor.handle),
       kind: string(actor.kind),
+    }
+  })
+}
+
+export async function createAcceptanceCriterion(input: {
+  projectId: string
+  workItemId: string
+  expectedVersion: number
+  text: string
+  idempotencyKey: string
+}) {
+  return normalizeWorkItem(
+    await requestJson<unknown>(
+      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/acceptance-criteria`,
+      {
+        method: 'POST',
+        idempotencyKey: input.idempotencyKey,
+        json: { expectedVersion: input.expectedVersion, text: input.text },
+      },
+    ),
+  )
+}
+
+export async function updateAcceptanceCriterion(input: {
+  projectId: string
+  workItemId: string
+  criterionId: string
+  expectedVersion: number
+  text?: string
+  position?: number
+  completed?: boolean
+  idempotencyKey: string
+}) {
+  const { projectId, workItemId, criterionId, idempotencyKey, ...json } = input
+  return normalizeWorkItem(
+    await requestJson<unknown>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/acceptance-criteria/${encodeURIComponent(criterionId)}`,
+      { method: 'PATCH', idempotencyKey, json },
+    ),
+  )
+}
+
+export async function removeAcceptanceCriterion(input: {
+  projectId: string
+  workItemId: string
+  criterionId: string
+  expectedVersion: number
+  idempotencyKey: string
+}) {
+  return normalizeWorkItem(
+    await requestJson<unknown>(
+      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/acceptance-criteria/${encodeURIComponent(input.criterionId)}`,
+      {
+        method: 'DELETE',
+        idempotencyKey: input.idempotencyKey,
+        json: { expectedVersion: input.expectedVersion },
+      },
+    ),
+  )
+}
+
+export async function createWorkItemComment(input: {
+  projectId: string
+  workItemId: string
+  text: string
+  idempotencyKey: string
+}) {
+  return requestJson<unknown>(
+    `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/comments`,
+    {
+      method: 'POST',
+      idempotencyKey: input.idempotencyKey,
+      json: {
+        content: { version: 1, nodes: [{ type: 'text', text: input.text }] },
+      },
+    },
+  )
+}
+
+export async function getWorkItemTimeline(
+  projectId: string,
+  workItemId: string,
+): Promise<WorkItemTimelineEntry[]> {
+  const payload = record(
+    await requestJson<unknown>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/timeline?limit=100`,
+    ),
+  )
+  return (Array.isArray(payload.entries) ? payload.entries : []).map((value) => {
+    const entry = record(value)
+    const activity = entry.activity ? record(entry.activity) : null
+    const activityActor = activity?.actor ? record(activity.actor) : null
+    const comment = entry.comment ? record(entry.comment) : null
+    const commentAuthor = comment?.author ? record(comment.author) : null
+    return {
+      sequence: number(entry.sequence),
+      kind: entry.kind === 'comment' ? 'comment' : 'activity',
+      createdAt: string(entry.createdAt),
+      activity:
+        activity && activityActor
+          ? {
+              id: string(activity.id),
+              actor: {
+                id: string(activityActor.id),
+                displayName: string(activityActor.displayName),
+                handle: string(activityActor.handle),
+                kind: string(activityActor.kind),
+              },
+              kind: string(activity.kind),
+              summary: string(activity.summary),
+            }
+          : null,
+      comment:
+        comment && commentAuthor
+          ? {
+              id: string(comment.id),
+              author: {
+                id: string(commentAuthor.id),
+                displayName: string(commentAuthor.displayName),
+                handle: string(commentAuthor.handle),
+                kind: string(commentAuthor.kind),
+              },
+              plainText: string(comment.plainText),
+              createdAt: string(comment.createdAt),
+            }
+          : null,
     }
   })
 }

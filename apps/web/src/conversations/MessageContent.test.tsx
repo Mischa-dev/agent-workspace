@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 
 import { MessageContent } from './MessageContent'
@@ -65,6 +66,37 @@ describe('MessageContent', () => {
 
     expect(screen.getByLabelText('Unavailable Actor mention')).toHaveTextContent(
       '@unavailable',
+    )
+  })
+
+  it('renders a durable Work Item reference as a safe canonical link', () => {
+    const workItemId = '019fb8b0-0000-7000-8000-000000000002'
+    render(
+      <MemoryRouter>
+        <MessageContent
+          actors={[]}
+          content={{
+            version: 1,
+            nodes: [{ type: 'work_item_ref', work_item_id: workItemId }],
+          }}
+          fallbackPlainText="AW-7"
+          workItems={[
+            {
+              id: workItemId,
+              key: 'AW-7',
+              title: '<script>inert</script>',
+              statusCategory: 'started',
+              archivedAt: null,
+              href: `/projects/project-a/work-items/${workItemId}`,
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: 'AW-7: <script>inert</script>' })).toHaveAttribute(
+      'href',
+      `/projects/project-a/work-items/${workItemId}`,
     )
   })
 })

@@ -11,10 +11,15 @@ import { normalizeWorkItem } from './api'
 import { workItemPriorities } from './constants'
 import {
   useAssignableActors,
+  useCreateAcceptanceCriterion,
+  useCreateWorkItemComment,
+  useRemoveAcceptanceCriterion,
   useSetWorkItemArchived,
+  useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
   useWorkItemWorkflow,
+  useWorkItemTimeline,
 } from './hooks'
 import type { WorkItem, WorkItemPriority } from './types'
 
@@ -260,6 +265,18 @@ function WorkItemEditor({
         </div>
       </form>
 
+      <AcceptanceCriteria
+        disabled={disabled}
+        item={base}
+        onItemChange={(current) => {
+          setBase(current)
+          setDraft(draftFromItem(current))
+          setConflict(null)
+        }}
+      />
+
+      <WorkItemCollaboration disabled={disabled} item={base} />
+
       {base.capabilities.archive && !projectArchived ? (
         <section className="archive-project work-item-archive" aria-labelledby="archive-work-item-heading">
           <h2 id="archive-work-item-heading">{base.archivedAt ? 'Restore Work Item' : 'Archive Work Item'}</h2>
@@ -271,6 +288,206 @@ function WorkItemEditor({
         </section>
       ) : null}
     </>
+  )
+}
+
+function AcceptanceCriteria({
+  disabled,
+  item,
+  onItemChange,
+}: {
+  disabled: boolean
+  item: WorkItem
+  onItemChange: (item: WorkItem) => void
+}) {
+  const create = useCreateAcceptanceCriterion()
+  const update = useUpdateAcceptanceCriterion()
+  const remove = useRemoveAcceptanceCriterion()
+  const [text, setText] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState('')
+  const operationKey = useRef(crypto.randomUUID())
+  const busy = create.isPending || update.isPending || remove.isPending
+
+  const nextKey = () => {
+    const key = operationKey.current
+    operationKey.current = crypto.randomUUID()
+    return key
+  }
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!text.trim() || busy) return
+    create.mutate(
+      {
+        projectId: item.projectId,
+        workItemId: item.id,
+        expectedVersion: item.version,
+        text: text.trim(),
+        idempotencyKey: nextKey(),
+      },
+      {
+        onSuccess: (current) => {
+          setText('')
+          onItemChange(current)
+        },
+      },
+    )
+  }
+
+  return (
+    <section className="work-item-section" aria-labelledby="acceptance-heading">
+      <header>
+        <div>
+          <h2 id="acceptance-heading">Acceptance criteria</h2>
+          <p>{item.acceptanceCriteria.filter((criterion) => criterion.completed).length} of {item.acceptanceCriteria.length} complete</p>
+        </div>
+      </header>
+      {item.acceptanceCriteria.length ? (
+        <ol className="criteria-list">
+          {item.acceptanceCriteria.map((criterion, index) => (
+            <li key={criterion.id}>
+              {editingId === criterion.id ? (
+                <form
+                  className="criterion-edit-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    if (!editingText.trim() || busy) return
+                    update.mutate(
+                      {
+                        projectId: item.projectId,
+                        workItemId: item.id,
+                        criterionId: criterion.id,
+                        expectedVersion: item.version,
+                        text: editingText.trim(),
+                        idempotencyKey: nextKey(),
+                      },
+                      {
+                        onSuccess: (current) => {
+                          setEditingId(null)
+                          setEditingText('')
+                          onItemChange(current)
+                        },
+                      },
+                    )
+                  }}
+                >
+                  <label className="visually-hidden" htmlFor={`edit-criterion-${criterion.id}`}>Edit {criterion.text}</label>
+                  <input
+                    autoFocus
+                    id={`edit-criterion-${criterion.id}`}
+                    maxLength={1000}
+                    onChange={(event) => setEditingText(event.target.value)}
+                    value={editingText}
+                  />
+                  <button className="secondary-button" disabled={!editingText.trim() || busy} type="submit">Save</button>
+                  <button className="text-button" disabled={busy} onClick={() => setEditingId(null)} type="button">Cancel</button>
+                </form>
+              ) : (
+                <label>
+                  <input
+                    checked={criterion.completed}
+                    disabled={disabled || busy}
+                    onChange={(event) =>
+                      update.mutate(
+                        {
+                          projectId: item.projectId,
+                          workItemId: item.id,
+                          criterionId: criterion.id,
+                          expectedVersion: item.version,
+                          completed: event.target.checked,
+                          idempotencyKey: nextKey(),
+                        },
+                        { onSuccess: onItemChange },
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  <span>{criterion.text}</span>
+                </label>
+              )}
+              <div className="criterion-actions">
+                <button
+                  aria-label={`Edit ${criterion.text}`}
+                  disabled={disabled || busy || editingId === criterion.id}
+                  onClick={() => { setEditingId(criterion.id); setEditingText(criterion.text) }}
+                  type="button"
+                >Edit</button>
+                <button
+                  aria-label={`Move ${criterion.text} up`}
+                  disabled={disabled || busy || index === 0}
+                  onClick={() => update.mutate({ projectId: item.projectId, workItemId: item.id, criterionId: criterion.id, expectedVersion: item.version, position: index, idempotencyKey: nextKey() }, { onSuccess: onItemChange })}
+                  type="button"
+                >↑</button>
+                <button
+                  aria-label={`Move ${criterion.text} down`}
+                  disabled={disabled || busy || index === item.acceptanceCriteria.length - 1}
+                  onClick={() => update.mutate({ projectId: item.projectId, workItemId: item.id, criterionId: criterion.id, expectedVersion: item.version, position: index + 2, idempotencyKey: nextKey() }, { onSuccess: onItemChange })}
+                  type="button"
+                >↓</button>
+                <button
+                  aria-label={`Remove ${criterion.text}`}
+                  disabled={disabled || busy}
+                  onClick={() => remove.mutate({ projectId: item.projectId, workItemId: item.id, criterionId: criterion.id, expectedVersion: item.version, idempotencyKey: nextKey() }, { onSuccess: onItemChange })}
+                  type="button"
+                >×</button>
+              </div>
+              {criterion.completedBy ? <small>Completed by {criterion.completedBy.displayName}</small> : null}
+            </li>
+          ))}
+        </ol>
+      ) : <p className="compact-note">No acceptance criteria yet.</p>}
+      {!disabled ? (
+        <form className="inline-create-form" onSubmit={submit}>
+          <label className="visually-hidden" htmlFor={`criterion-${item.id}`}>New acceptance criterion</label>
+          <input id={`criterion-${item.id}`} maxLength={1000} onChange={(event) => setText(event.target.value)} placeholder="Add an observable outcome" value={text} />
+          <button className="secondary-button" disabled={!text.trim() || busy} type="submit">Add criterion</button>
+        </form>
+      ) : null}
+      {create.isError || update.isError || remove.isError ? <p className="form-error-summary" role="alert">The checklist changed before this action completed. Reload the Work Item and reapply the change.</p> : null}
+    </section>
+  )
+}
+
+function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: WorkItem }) {
+  const timeline = useWorkItemTimeline(item.projectId, item.id)
+  const createComment = useCreateWorkItemComment()
+  const [comment, setComment] = useState('')
+  const key = useRef(crypto.randomUUID())
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!comment.trim() || createComment.isPending) return
+    createComment.mutate(
+      { projectId: item.projectId, workItemId: item.id, text: comment.trim(), idempotencyKey: key.current },
+      { onSuccess: () => { key.current = crypto.randomUUID(); setComment('') } },
+    )
+  }
+  return (
+    <section className="work-item-section" aria-labelledby="activity-heading">
+      <header><div><h2 id="activity-heading">Activity</h2><p>Comments and durable changes in one ordered history.</p></div></header>
+      {timeline.isPending ? <p className="compact-note">Loading activity…</p> : null}
+      {timeline.isError ? <p className="form-error-summary" role="alert">Activity could not be loaded.</p> : null}
+      {timeline.data?.length ? (
+        <ol className="work-item-activity-list">
+          {[...timeline.data].reverse().map((entry) => (
+            <li key={entry.sequence}>
+              <span className="activity-avatar" aria-hidden="true">{(entry.comment?.author.displayName ?? entry.activity?.actor.displayName ?? 'A').charAt(0)}</span>
+              <div>
+                <p><strong>{entry.comment?.author.displayName ?? entry.activity?.actor.displayName}</strong> {entry.comment ? 'commented' : entry.activity?.summary.toLowerCase()}</p>
+                {entry.comment ? <p className="activity-comment">{entry.comment.plainText}</p> : null}
+                <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : timeline.isSuccess ? <p className="compact-note">No activity yet.</p> : null}
+      {!disabled ? (
+        <form className="comment-composer" onSubmit={submit}>
+          <label htmlFor={`comment-${item.id}`}>Add a comment</label>
+          <textarea id={`comment-${item.id}`} maxLength={20000} onChange={(event) => setComment(event.target.value)} placeholder="Add context without changing the Work Item fields." rows={4} value={comment} />
+          <div className="composer-actions"><span>{comment.length.toLocaleString()} / 20,000</span><button className="primary-button" disabled={!comment.trim() || createComment.isPending} type="submit">{createComment.isPending ? 'Posting…' : 'Post comment'}</button></div>
+        </form>
+      ) : null}
+    </section>
   )
 }
 

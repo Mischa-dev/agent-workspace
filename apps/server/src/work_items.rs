@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::{
     Json, Router,
     extract::State,
@@ -18,6 +20,7 @@ use crate::{
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
+    message_content::{MessageContent, MessageContentError, MessageNode},
     outbox::{OutboxEventPayload, WorkItemUpdatedPayload, enqueue_typed},
     policy::{
         Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
@@ -98,8 +101,29 @@ pub fn router() -> Router<AppState> {
             get(search_assignable_actors),
         )
         .route(
+            "/api/v1/projects/{project_id}/work-item-references",
+            get(search_work_item_references),
+        )
+        .route(
             "/api/v1/projects/{project_id}/work-item-workflow",
             get(get_workflow),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
+            get(list_acceptance_criteria).post(create_acceptance_criterion),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
+            axum::routing::patch(update_acceptance_criterion)
+                .delete(remove_acceptance_criterion),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
+            get(get_work_item_timeline),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
+            axum::routing::post(create_work_item_comment),
         )
 }
 
@@ -168,6 +192,7 @@ struct WorkItemRow {
     archived_at: Option<String>,
     created_at: String,
     updated_at: String,
+    acceptance_criteria: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +249,13 @@ struct AssigneeSearchQuery {
     limit: Option<u16>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkItemReferenceSearchQuery {
+    q: Option<String>,
+    limit: Option<u16>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkItemView {
@@ -241,7 +273,147 @@ pub struct WorkItemView {
     archived_at: Option<String>,
     created_at: String,
     updated_at: String,
+    acceptance_criteria: Vec<AcceptanceCriterionView>,
     capabilities: WorkItemCapabilities,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcceptanceCriterionView {
+    id: Uuid,
+    text: String,
+    position: i32,
+    completed: bool,
+    completed_by: Option<ActorView>,
+    completed_at: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateCriterionRequest {
+    expected_version: i64,
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateCriterionRequest {
+    expected_version: i64,
+    text: Option<String>,
+    position: Option<i32>,
+    completed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RemoveCriterionRequest {
+    expected_version: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateCommentRequest {
+    content: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemReferenceView {
+    id: Uuid,
+    key: String,
+    title: String,
+    status_category: String,
+    archived_at: Option<String>,
+    href: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemReferenceSearchResponse {
+    items: Vec<WorkItemReferenceView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemCommentView {
+    id: Uuid,
+    author: ActorView,
+    content: serde_json::Value,
+    plain_text: String,
+    mentioned_actors: Vec<ActorView>,
+    referenced_work_items: Vec<WorkItemReferenceView>,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentAppendResponse {
+    work_item_id: Uuid,
+    sequence: i64,
+    comment: WorkItemCommentView,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkItemTimelineQuery {
+    cursor: Option<String>,
+    limit: Option<u16>,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkItemTimelineRow {
+    sequence: i64,
+    kind: String,
+    created_at: String,
+    activity_id: Option<Uuid>,
+    activity_kind: Option<String>,
+    activity_summary: Option<String>,
+    activity_payload: Option<serde_json::Value>,
+    comment_id: Option<Uuid>,
+    comment_content: Option<serde_json::Value>,
+    comment_plain_text: Option<String>,
+    actor_id: Uuid,
+    actor_kind: String,
+    actor_display_name: String,
+    actor_handle: String,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkItemReferenceRow {
+    id: Uuid,
+    key: String,
+    title: String,
+    status_category: String,
+    archived_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemTimelineResponse {
+    entries: Vec<WorkItemTimelineEntryView>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemTimelineEntryView {
+    sequence: i64,
+    kind: String,
+    created_at: String,
+    activity: Option<WorkItemActivityView>,
+    comment: Option<WorkItemCommentView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemActivityView {
+    id: Uuid,
+    actor: ActorView,
+    kind: String,
+    summary: String,
+    payload: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -281,6 +453,13 @@ struct AssigneeSearchRow {
     display_name: String,
     handle: String,
     kind: String,
+}
+
+#[derive(Debug, FromRow)]
+struct CriterionRow {
+    text: String,
+    position: i32,
+    completed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -646,7 +825,8 @@ async fn list_work_items(
             END AS assignee_active,
             item.version, item.archived_at::text AS archived_at,
             item.created_at::text AS created_at,
-            item.updated_at::text AS updated_at
+            item.updated_at::text AS updated_at,
+            '[]'::jsonb AS acceptance_criteria
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_types item_type
@@ -1228,6 +1408,49 @@ async fn search_assignable_actors(
     }))
 }
 
+async fn search_work_item_references(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<WorkItemReferenceSearchQuery>,
+) -> Result<Json<WorkItemReferenceSearchResponse>, AppError> {
+    let membership = project_membership(&state.pool, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
+    let search = normalize_search(query.q.as_deref())?.unwrap_or_default();
+    let limit = i64::from(query.limit.unwrap_or(20).clamp(1, 50));
+    let rows = sqlx::query_as::<_, WorkItemReferenceRow>(
+        r#"
+        SELECT item.id, project.project_key || '-' || item.number::text AS key,
+               item.title, status.semantic_category AS status_category,
+               item.archived_at::text AS archived_at
+        FROM work_items item
+        JOIN projects project ON project.id = item.project_id
+        JOIN work_item_statuses status
+          ON status.project_id = item.project_id AND status.id = item.status_id
+        WHERE item.project_id = $1
+          AND (
+              $2 = '' OR item.title ILIKE '%' || $2 || '%'
+              OR project.project_key || '-' || item.number::text ILIKE '%' || $2 || '%'
+          )
+        ORDER BY item.archived_at NULLS FIRST, item.number DESC, item.id
+        LIMIT $3
+        "#,
+    )
+    .bind(project_id)
+    .bind(search)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(WorkItemReferenceSearchResponse {
+        items: rows
+            .into_iter()
+            .map(|row| work_item_reference_view(project_id, row))
+            .collect(),
+    }))
+}
+
 async fn create_work_item(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1325,19 +1548,15 @@ async fn create_work_item(
             .bind(board_rank)
             .execute(&mut *transaction)
             .await?;
-            sqlx::query(
-                r#"
-                INSERT INTO work_item_activity (
-                    id, project_id, work_item_id, actor_id, kind, summary, payload
-                )
-                VALUES ($1, $2, $3, $4, 'work_item_created', 'Work Item created', '{}'::jsonb)
-                "#,
+            insert_work_item_activity(
+                &mut transaction,
+                project_id,
+                work_item_id,
+                principal.actor_id,
+                "work_item_created",
+                "Work Item created",
+                &serde_json::json!({}),
             )
-            .bind(Uuid::now_v7())
-            .bind(project_id)
-            .bind(work_item_id)
-            .bind(principal.actor_id)
-            .execute(&mut *transaction)
             .await?;
             enqueue_typed(
                 &mut transaction,
@@ -1369,6 +1588,669 @@ async fn create_work_item(
     }
 }
 
+async fn list_acceptance_criteria(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Json<Vec<AcceptanceCriterionView>>, AppError> {
+    let membership = project_membership(&state.pool, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemView,
+        Some(work_item_id),
+    )?;
+    let row = fetch_work_item(&state.pool, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    Ok(Json(
+        work_item_view(row, capabilities(&membership)?)?.acceptance_criteria,
+    ))
+}
+
+async fn create_acceptance_criterion(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(mut request): ApiJson<CreateCriterionRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    request.text = normalize_criterion_text(&request.text)?;
+    if request.expected_version < 1 {
+        return Err(AppError::Validation("expectedVersion"));
+    }
+    let key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("work_items", work_item_id, "criterion_create")?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let item_capabilities = capabilities(&membership)?;
+    if current.version != request.expected_version {
+        return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
+    }
+    if current.archived_at.is_some() {
+        return Err(AppError::Conflict("work_item", "archived"));
+    }
+    let position = sqlx::query_scalar::<_, i32>(
+        "SELECT COALESCE(max(position), 0) + 1 FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if position > 1000 {
+        return Err(AppError::Validation("acceptanceCriteria"));
+    }
+    let criterion_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_acceptance_criteria (
+            id, project_id, work_item_id, text, position, created_by_actor_id
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(criterion_id)
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(&request.text)
+    .bind(position)
+    .bind(principal.actor_id)
+    .execute(&mut *transaction)
+    .await?;
+    let version = advance_work_item_version(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        request.expected_version,
+    )
+    .await?;
+    record_work_item_change(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        "criterion_created",
+        "Acceptance criterion added",
+        "work_item.criterion_created",
+        serde_json::json!({"criterionId": criterion_id, "position": position}),
+        version,
+    )
+    .await?;
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        item_capabilities,
+    )
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::CREATED, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::CREATED, item)
+}
+
+async fn update_acceptance_criterion(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, criterion_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(mut request): ApiJson<UpdateCriterionRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if request.expected_version < 1
+        || (request.text.is_none() && request.position.is_none() && request.completed.is_none())
+    {
+        return Err(AppError::Validation("acceptance criterion update"));
+    }
+    request.text = request
+        .text
+        .as_deref()
+        .map(normalize_criterion_text)
+        .transpose()?;
+    let key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("criteria", criterion_id, "update")?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let item_capabilities = capabilities(&membership)?;
+    if current.version != request.expected_version {
+        return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
+    }
+    if current.archived_at.is_some() {
+        return Err(AppError::Conflict("work_item", "archived"));
+    }
+    let criterion = sqlx::query_as::<_, CriterionRow>(
+        r#"
+        SELECT text, position, completed
+        FROM work_item_acceptance_criteria
+        WHERE project_id = $1 AND work_item_id = $2 AND id = $3
+        FOR UPDATE
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(criterion_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("acceptance_criterion"))?;
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let target_position = request.position.unwrap_or(criterion.position);
+    if target_position < 1 || i64::from(target_position) > count {
+        return Err(AppError::Validation("position"));
+    }
+    let text = request.text.unwrap_or_else(|| criterion.text.clone());
+    let completed_state = request.completed.unwrap_or(criterion.completed);
+    if text == criterion.text
+        && target_position == criterion.position
+        && completed_state == criterion.completed
+    {
+        let item = work_item_view(current, item_capabilities)?;
+        complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+        transaction.commit().await?;
+        return work_item_response(StatusCode::OK, item);
+    }
+    if target_position != criterion.position {
+        sqlx::query("SET CONSTRAINTS work_item_acceptance_criteria_position_unique DEFERRED")
+            .execute(&mut *transaction)
+            .await?;
+        if target_position > criterion.position {
+            sqlx::query(
+                "UPDATE work_item_acceptance_criteria SET position = position - 1, updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND position > $3 AND position <= $4",
+            )
+            .bind(project_id)
+            .bind(work_item_id)
+            .bind(criterion.position)
+            .bind(target_position)
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE work_item_acceptance_criteria SET position = position + 1, updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND position >= $3 AND position < $4",
+            )
+            .bind(project_id)
+            .bind(work_item_id)
+            .bind(target_position)
+            .bind(criterion.position)
+            .execute(&mut *transaction)
+            .await?;
+        }
+    }
+    sqlx::query(
+        r#"
+        UPDATE work_item_acceptance_criteria
+        SET text = $4, position = $5, completed = $6,
+            completed_by_actor_id = CASE WHEN $6 THEN
+                CASE WHEN completed THEN completed_by_actor_id ELSE $7 END
+                ELSE NULL END,
+            completed_at = CASE WHEN $6 THEN
+                CASE WHEN completed THEN completed_at ELSE now() END
+                ELSE NULL END,
+            updated_at = now()
+        WHERE project_id = $1 AND work_item_id = $2 AND id = $3
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(criterion_id)
+    .bind(&text)
+    .bind(target_position)
+    .bind(completed_state)
+    .bind(principal.actor_id)
+    .execute(&mut *transaction)
+    .await?;
+    let version = advance_work_item_version(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        request.expected_version,
+    )
+    .await?;
+    let (kind, summary) = match (criterion.completed, completed_state) {
+        (false, true) => ("criterion_completed", "Acceptance criterion completed"),
+        (true, false) => ("criterion_reopened", "Acceptance criterion reopened"),
+        _ => ("criterion_updated", "Acceptance criterion updated"),
+    };
+    record_work_item_change(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        kind,
+        summary,
+        "work_item.criterion_updated",
+        serde_json::json!({"criterionId": criterion_id}),
+        version,
+    )
+    .await?;
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        item_capabilities,
+    )
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::OK, item)
+}
+
+async fn remove_acceptance_criterion(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id, criterion_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    ApiJson(request): ApiJson<RemoveCriterionRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if request.expected_version < 1 {
+        return Err(AppError::Validation("expectedVersion"));
+    }
+    let key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("criteria", criterion_id, "remove")?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let item: WorkItemView = replay.decode()?;
+            transaction.commit().await?;
+            return work_item_response(replay.status(), item);
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let item_capabilities = capabilities(&membership)?;
+    if current.version != request.expected_version {
+        return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
+    }
+    if current.archived_at.is_some() || membership.project_archived_at.is_some() {
+        return Err(AppError::Conflict("work_item", "archived"));
+    }
+    let position = sqlx::query_scalar::<_, i32>(
+        "DELETE FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2 AND id = $3 RETURNING position",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(criterion_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("acceptance_criterion"))?;
+    sqlx::query(
+        "UPDATE work_item_acceptance_criteria SET position = position - 1, updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND position > $3",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(position)
+    .execute(&mut *transaction)
+    .await?;
+    let version = advance_work_item_version(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        request.expected_version,
+    )
+    .await?;
+    record_work_item_change(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        work_item_id,
+        "criterion_removed",
+        "Acceptance criterion removed",
+        "work_item.criterion_removed",
+        serde_json::json!({"criterionId": criterion_id, "position": position}),
+        version,
+    )
+    .await?;
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        item_capabilities,
+    )
+    .await?;
+    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
+    transaction.commit().await?;
+    work_item_response(StatusCode::OK, item)
+}
+
+async fn create_work_item_comment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(request): ApiJson<CreateCommentRequest>,
+) -> Result<Response, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
+    let key = IdempotencyKey::from_headers(&headers)?;
+    let scope = resource_bound_scope("work_items", work_item_id, "comment_create")?;
+    let request_hash = RequestHash::for_value(&content)?;
+    let mut transaction = state.pool.begin().await?;
+    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let body: CommentAppendResponse = replay.decode()?;
+            transaction.commit().await?;
+            return Ok((replay.status(), Json(body)).into_response());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    if current.archived_at.is_some() {
+        return Err(AppError::Conflict("work_item", "archived"));
+    }
+    let mention_ids = content.mentioned_actor_ids();
+    let mention_rows = fetch_comment_actor_rows(&mut transaction, project_id, &mention_ids).await?;
+    let handles = mention_rows
+        .iter()
+        .map(|actor| (actor.id, actor.handle.clone()))
+        .collect::<HashMap<_, _>>();
+    let references = content.work_item_references();
+    let reference_ids = references
+        .iter()
+        .map(|(_, work_item_id)| *work_item_id)
+        .collect::<Vec<_>>();
+    let reference_rows =
+        fetch_work_item_reference_rows(&mut transaction, project_id, &reference_ids).await?;
+    let labels = reference_rows
+        .iter()
+        .map(|item| (item.id, item.key.clone()))
+        .collect::<HashMap<_, _>>();
+    let mention_nodes = content
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| match node {
+            MessageNode::Mention { actor_id } => Some((index, *actor_id)),
+            MessageNode::Text { .. } | MessageNode::WorkItemRef { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let (content, plain_text, _) = content
+        .validate_with_resources(
+            |actor_id| handles.get(&actor_id).cloned(),
+            |referenced_id| labels.get(&referenced_id).cloned(),
+        )
+        .map_err(message_content_error)?
+        .into_parts();
+    let content_json = serde_json::to_value(content)
+        .map_err(|_| AppError::Internal("serialize Work Item comment"))?;
+    let comment_id = Uuid::now_v7();
+    let created_at = sqlx::query_scalar::<_, String>(
+        r#"
+        INSERT INTO work_item_comments (
+            id, project_id, work_item_id, author_actor_id,
+            content_version, content, plain_text
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6)
+        RETURNING created_at::text
+        "#,
+    )
+    .bind(comment_id)
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(principal.actor_id)
+    .bind(&content_json)
+    .bind(&plain_text)
+    .fetch_one(&mut *transaction)
+    .await?;
+    for (node_index, actor_id) in mention_nodes {
+        sqlx::query(
+            "INSERT INTO work_item_comment_mentions (project_id, work_item_id, comment_id, actor_id, node_index) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(comment_id)
+        .bind(actor_id)
+        .bind(i32::try_from(node_index).map_err(|_| AppError::Validation("comment content"))?)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    for (node_index, referenced_id) in &references {
+        sqlx::query(
+            "INSERT INTO work_item_comment_references (project_id, source_work_item_id, comment_id, referenced_work_item_id, node_index) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(comment_id)
+        .bind(referenced_id)
+        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("comment content"))?)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    let sequence = insert_work_item_comment_timeline_entry(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        comment_id,
+    )
+    .await?;
+    enqueue_typed(
+        &mut transaction,
+        project_id,
+        OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
+            work_item_id,
+            version: current.version,
+        }),
+    )
+    .await?;
+    insert_audit_event(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        "work_item.comment_created",
+        work_item_id,
+        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
+    )
+    .await?;
+    let author = fetch_comment_actor_rows(&mut transaction, project_id, &[principal.actor_id])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(AppError::Internal("comment author unavailable"))?;
+    let body = CommentAppendResponse {
+        work_item_id,
+        sequence,
+        comment: WorkItemCommentView {
+            id: comment_id,
+            author,
+            content: content_json,
+            plain_text,
+            mentioned_actors: mention_rows,
+            referenced_work_items: reference_rows
+                .into_iter()
+                .map(|row| work_item_reference_view(project_id, row))
+                .collect(),
+            created_at,
+        },
+    };
+    complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
+    transaction.commit().await?;
+    Ok((StatusCode::CREATED, Json(body)).into_response())
+}
+
+async fn get_work_item_timeline(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
+    ApiQuery(query): ApiQuery<WorkItemTimelineQuery>,
+) -> Result<Json<WorkItemTimelineResponse>, AppError> {
+    let membership = project_membership(&state.pool, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        &principal,
+        &membership,
+        Action::WorkItemView,
+        Some(work_item_id),
+    )?;
+    fetch_work_item(&state.pool, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    let before_sequence = query
+        .cursor
+        .as_deref()
+        .map(|cursor| decode_work_item_timeline_cursor(cursor, project_id, work_item_id))
+        .transpose()?;
+    let limit = i64::from(query.limit.unwrap_or(50).clamp(1, 100));
+    let rows = sqlx::query_as::<_, WorkItemTimelineRow>(
+        r#"
+        SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
+               activity.id AS activity_id, activity.kind AS activity_kind,
+               activity.summary AS activity_summary,
+               activity.payload AS activity_payload,
+               comment.id AS comment_id, comment.content AS comment_content,
+               comment.plain_text AS comment_plain_text,
+               actor.id AS actor_id, actor.kind AS actor_kind,
+               membership.display_name AS actor_display_name,
+               membership.handle AS actor_handle
+        FROM work_item_timeline_entries entry
+        LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
+        LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
+        JOIN actors actor ON actor.id = COALESCE(activity.actor_id, comment.author_actor_id)
+        JOIN project_memberships membership
+          ON membership.project_id = entry.project_id AND membership.actor_id = actor.id
+        WHERE entry.project_id = $1 AND entry.work_item_id = $2
+          AND ($3::bigint IS NULL OR entry.sequence < $3)
+        ORDER BY entry.sequence DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(before_sequence)
+    .bind(limit + 1)
+    .fetch_all(&state.pool)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|row| encode_work_item_timeline_cursor(project_id, work_item_id, row.sequence))
+            .transpose()?
+    } else {
+        None
+    };
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        entries.push(timeline_entry_view(&state.pool, project_id, work_item_id, row).await?);
+    }
+    Ok(Json(WorkItemTimelineResponse {
+        entries,
+        next_cursor,
+    }))
+}
+
 async fn select_definition(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -1398,6 +2280,200 @@ async fn select_definition(
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::Validation("Work Item definition"))
+}
+
+async fn fetch_comment_actor_rows(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_ids: &[Uuid],
+) -> Result<Vec<ActorView>, AppError> {
+    if actor_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_as::<_, (Uuid, String, String, String)>(
+        r#"
+        SELECT actor.id, actor.kind, membership.display_name, membership.handle
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id
+        WHERE membership.project_id = $1
+          AND membership.actor_id = ANY($2)
+          AND membership.enabled AND actor.status = 'active'
+        ORDER BY lower(membership.display_name), actor.id
+        FOR SHARE OF membership, actor
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_ids)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .map(|(id, kind, display_name, handle)| ActorView {
+        id,
+        kind,
+        display_name,
+        handle,
+        avatar_url: None,
+    })
+    .collect())
+}
+
+async fn fetch_work_item_reference_rows(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_ids: &[Uuid],
+) -> Result<Vec<WorkItemReferenceRow>, AppError> {
+    if work_item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_as::<_, WorkItemReferenceRow>(
+        r#"
+        SELECT item.id, project.project_key || '-' || item.number::text AS key,
+               item.title, status.semantic_category AS status_category,
+               item.archived_at::text AS archived_at
+        FROM work_items item
+        JOIN projects project ON project.id = item.project_id
+        JOIN work_item_statuses status
+          ON status.project_id = item.project_id AND status.id = item.status_id
+        WHERE item.project_id = $1 AND item.id = ANY($2)
+        ORDER BY item.number, item.id
+        FOR SHARE OF item
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_ids)
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> WorkItemReferenceView {
+    WorkItemReferenceView {
+        id: row.id,
+        key: row.key,
+        title: row.title,
+        status_category: row.status_category,
+        archived_at: row.archived_at,
+        href: format!("/projects/{project_id}/work-items/{}", row.id),
+    }
+}
+
+async fn timeline_entry_view(
+    pool: &PgPool,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    row: WorkItemTimelineRow,
+) -> Result<WorkItemTimelineEntryView, AppError> {
+    let actor = ActorView {
+        id: row.actor_id,
+        kind: row.actor_kind,
+        display_name: row.actor_display_name,
+        handle: row.actor_handle,
+        avatar_url: None,
+    };
+    match row.kind.as_str() {
+        "activity" => Ok(WorkItemTimelineEntryView {
+            sequence: row.sequence,
+            kind: row.kind,
+            created_at: row.created_at,
+            activity: Some(WorkItemActivityView {
+                id: row
+                    .activity_id
+                    .ok_or(AppError::Internal("activity timeline entry"))?,
+                actor,
+                kind: row
+                    .activity_kind
+                    .ok_or(AppError::Internal("activity timeline kind"))?,
+                summary: row
+                    .activity_summary
+                    .ok_or(AppError::Internal("activity timeline summary"))?,
+                payload: row
+                    .activity_payload
+                    .ok_or(AppError::Internal("activity timeline payload"))?,
+            }),
+            comment: None,
+        }),
+        "comment" => {
+            let comment_id = row
+                .comment_id
+                .ok_or(AppError::Internal("comment timeline entry"))?;
+            let mentioned_actors = sqlx::query_as::<_, (Uuid, String, String, String)>(
+                r#"
+                SELECT actor.id, actor.kind, membership.display_name, membership.handle
+                FROM work_item_comment_mentions mention
+                JOIN actors actor ON actor.id = mention.actor_id
+                JOIN project_memberships membership
+                  ON membership.project_id = mention.project_id
+                 AND membership.actor_id = mention.actor_id
+                WHERE mention.project_id = $1 AND mention.work_item_id = $2
+                  AND mention.comment_id = $3
+                GROUP BY actor.id, actor.kind, membership.display_name, membership.handle
+                ORDER BY min(mention.node_index), actor.id
+                "#,
+            )
+            .bind(project_id)
+            .bind(work_item_id)
+            .bind(comment_id)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|(id, kind, display_name, handle)| ActorView {
+                id,
+                kind,
+                display_name,
+                handle,
+                avatar_url: None,
+            })
+            .collect();
+            let referenced_work_items = sqlx::query_as::<_, WorkItemReferenceRow>(
+                r#"
+                SELECT item.id,
+                       project.project_key || '-' || item.number::text AS key,
+                       item.title, status.semantic_category AS status_category,
+                       item.archived_at::text AS archived_at
+                FROM work_item_comment_references reference
+                JOIN work_items item
+                  ON item.project_id = reference.project_id
+                 AND item.id = reference.referenced_work_item_id
+                JOIN projects project ON project.id = item.project_id
+                JOIN work_item_statuses status
+                  ON status.project_id = item.project_id AND status.id = item.status_id
+                WHERE reference.project_id = $1
+                  AND reference.source_work_item_id = $2
+                  AND reference.comment_id = $3
+                GROUP BY item.id, project.project_key, item.number, item.title,
+                         status.semantic_category, item.archived_at
+                ORDER BY min(reference.node_index), item.id
+                "#,
+            )
+            .bind(project_id)
+            .bind(work_item_id)
+            .bind(comment_id)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|item| work_item_reference_view(project_id, item))
+            .collect();
+            Ok(WorkItemTimelineEntryView {
+                sequence: row.sequence,
+                kind: row.kind,
+                created_at: row.created_at.clone(),
+                activity: None,
+                comment: Some(WorkItemCommentView {
+                    id: comment_id,
+                    author: actor,
+                    content: row
+                        .comment_content
+                        .ok_or(AppError::Internal("comment timeline content"))?,
+                    plain_text: row
+                        .comment_plain_text
+                        .ok_or(AppError::Internal("comment timeline text"))?,
+                    mentioned_actors,
+                    referenced_work_items,
+                    created_at: row.created_at,
+                }),
+            })
+        }
+        _ => Err(AppError::Internal("Work Item timeline kind")),
+    }
 }
 
 async fn validate_assignee(
@@ -1587,6 +2663,40 @@ async fn fetch_work_item_for_update(
         .await?)
 }
 
+async fn current_work_item_view(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    capabilities: WorkItemCapabilities,
+) -> Result<WorkItemView, AppError> {
+    let row = fetch_work_item_in_transaction(transaction, project_id, work_item_id)
+        .await?
+        .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
+    work_item_view(row, capabilities)
+}
+
+async fn advance_work_item_version(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    expected_version: i64,
+) -> Result<i64, AppError> {
+    sqlx::query_scalar(
+        r#"
+        UPDATE work_items
+        SET version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND version = $3
+        RETURNING version
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(expected_version)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::Internal("locked Work Item lost its version"))
+}
+
 const WORK_ITEM_SELECT: &str = r#"
     SELECT
         item.id, item.project_id, project.project_key,
@@ -1603,7 +2713,38 @@ const WORK_ITEM_SELECT: &str = r#"
         END AS assignee_active,
         item.version, item.archived_at::text AS archived_at,
         item.created_at::text AS created_at,
-        item.updated_at::text AS updated_at
+        item.updated_at::text AS updated_at,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', criterion.id,
+                    'text', criterion.text,
+                    'position', criterion.position,
+                    'completed', criterion.completed,
+                    'completedBy', CASE
+                        WHEN criterion.completed_by_actor_id IS NULL THEN NULL
+                        ELSE jsonb_build_object(
+                            'id', completed_actor.id,
+                            'kind', completed_actor.kind,
+                            'displayName', completed_membership.display_name,
+                            'handle', completed_membership.handle,
+                            'avatarUrl', NULL
+                        )
+                    END,
+                    'completedAt', criterion.completed_at::text,
+                    'createdAt', criterion.created_at::text,
+                    'updatedAt', criterion.updated_at::text
+                ) ORDER BY criterion.position, criterion.id
+            )
+            FROM work_item_acceptance_criteria criterion
+            LEFT JOIN project_memberships completed_membership
+              ON completed_membership.project_id = criterion.project_id
+             AND completed_membership.actor_id = criterion.completed_by_actor_id
+            LEFT JOIN actors completed_actor
+              ON completed_actor.id = criterion.completed_by_actor_id
+            WHERE criterion.project_id = item.project_id
+              AND criterion.work_item_id = item.id
+        ), '[]'::jsonb) AS acceptance_criteria
     FROM work_items item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_types item_type
@@ -1642,6 +2783,8 @@ fn work_item_view(
         (None, None, None, None, None) => None,
         _ => return Err(AppError::Internal("invalid Work Item assignee projection")),
     };
+    let acceptance_criteria = serde_json::from_value(row.acceptance_criteria)
+        .map_err(|_| AppError::Internal("invalid Work Item criteria projection"))?;
     Ok(WorkItemView {
         id: row.id,
         project_id: row.project_id,
@@ -1664,6 +2807,7 @@ fn work_item_view(
         archived_at: row.archived_at,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        acceptance_criteria,
         capabilities,
     })
 }
@@ -1687,6 +2831,19 @@ fn normalize_description(value: &str) -> Result<String, AppError> {
             .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
     {
         return Err(AppError::Validation("description"));
+    }
+    Ok(value.to_owned())
+}
+
+fn normalize_criterion_text(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 1000
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(AppError::Validation("criterion text"));
     }
     Ok(value.to_owned())
 }
@@ -1794,6 +2951,55 @@ fn decode_cursor(value: &str, project_id: Uuid) -> Result<i64, AppError> {
     Ok(number)
 }
 
+fn encode_work_item_timeline_cursor(
+    project_id: Uuid,
+    work_item_id: Uuid,
+    before_sequence: i64,
+) -> Result<String, AppError> {
+    if before_sequence < 1 {
+        return Err(AppError::Internal("encode Work Item timeline cursor"));
+    }
+    let mut bytes = Vec::with_capacity(41);
+    bytes.push(1);
+    bytes.extend_from_slice(project_id.as_bytes());
+    bytes.extend_from_slice(work_item_id.as_bytes());
+    bytes.extend_from_slice(&before_sequence.to_be_bytes());
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn decode_work_item_timeline_cursor(
+    value: &str,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<i64, AppError> {
+    if value.len() > 80 {
+        return Err(AppError::Invalid("Work Item timeline cursor"));
+    }
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| AppError::Invalid("Work Item timeline cursor"))?;
+    if bytes.len() != 41
+        || bytes[0] != 1
+        || bytes[1..17] != *project_id.as_bytes()
+        || bytes[17..33] != *work_item_id.as_bytes()
+    {
+        return Err(AppError::Invalid("Work Item timeline cursor"));
+    }
+    let sequence = i64::from_be_bytes(
+        bytes[33..41]
+            .try_into()
+            .map_err(|_| AppError::Invalid("Work Item timeline cursor"))?,
+    );
+    if sequence < 1 {
+        return Err(AppError::Invalid("Work Item timeline cursor"));
+    }
+    Ok(sequence)
+}
+
+fn message_content_error(_error: MessageContentError) -> AppError {
+    AppError::Validation("comment content")
+}
+
 fn work_item_response(status: StatusCode, item: WorkItemView) -> Result<Response, AppError> {
     let location = HeaderValue::from_str(&format!(
         "/projects/{}/work-items/{}",
@@ -1834,22 +3040,15 @@ async fn record_work_item_change(
     payload: serde_json::Value,
     version: i64,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_activity (
-            id, project_id, work_item_id, actor_id, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#,
+    insert_work_item_activity(
+        transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+        kind,
+        summary,
+        &payload,
     )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(principal.actor_id)
-    .bind(kind)
-    .bind(summary)
-    .bind(&payload)
-    .execute(&mut **transaction)
     .await?;
     enqueue_typed(
         transaction,
@@ -1870,6 +3069,97 @@ async fn record_work_item_change(
         payload,
     )
     .await
+}
+
+async fn insert_work_item_activity(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    actor_id: Uuid,
+    kind: &str,
+    summary: &str,
+    payload: &serde_json::Value,
+) -> Result<Uuid, AppError> {
+    let activity_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_activity (
+            id, project_id, work_item_id, actor_id, kind, summary, payload
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(activity_id)
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(actor_id)
+    .bind(kind)
+    .bind(summary)
+    .bind(payload)
+    .execute(&mut **transaction)
+    .await?;
+    let sequence =
+        allocate_work_item_timeline_sequence(transaction, project_id, work_item_id).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_timeline_entries (
+            project_id, work_item_id, sequence, kind, activity_id
+        )
+        VALUES ($1, $2, $3, 'activity', $4)
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(sequence)
+    .bind(activity_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(activity_id)
+}
+
+async fn allocate_work_item_timeline_sequence(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<i64, AppError> {
+    sqlx::query_scalar(
+        r#"
+        UPDATE work_items
+        SET next_timeline_sequence = next_timeline_sequence + 1
+        WHERE project_id = $1 AND id = $2
+        RETURNING next_timeline_sequence - 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("work_item"))
+}
+
+async fn insert_work_item_comment_timeline_entry(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+) -> Result<i64, AppError> {
+    let sequence =
+        allocate_work_item_timeline_sequence(transaction, project_id, work_item_id).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_timeline_entries (
+            project_id, work_item_id, sequence, kind, comment_id
+        )
+        VALUES ($1, $2, $3, 'comment', $4)
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(sequence)
+    .bind(comment_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(sequence)
 }
 
 async fn insert_audit_event(

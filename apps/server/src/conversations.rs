@@ -202,7 +202,19 @@ pub struct MessageView {
     pub content: serde_json::Value,
     pub plain_text: String,
     pub mentioned_actors: Vec<ActorView>,
+    pub referenced_work_items: Vec<ConversationWorkItemReferenceView>,
     pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationWorkItemReferenceView {
+    pub id: Uuid,
+    pub key: String,
+    pub title: String,
+    pub status_category: String,
+    pub archived_at: Option<String>,
+    pub href: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -376,6 +388,7 @@ struct TimelineEntryRow {
     content: Option<serde_json::Value>,
     plain_text: Option<String>,
     mentioned_actors: serde_json::Value,
+    referenced_work_items: serde_json::Value,
     agent_run_event_id: Option<Uuid>,
     agent_run_id: Option<Uuid>,
     event_kind: Option<String>,
@@ -956,8 +969,41 @@ async fn send_message(
         .await?
     };
     let handles = mention_rows.into_iter().collect::<HashMap<_, _>>();
+    let work_item_references = content.work_item_references();
+    let work_item_ids = work_item_references
+        .iter()
+        .map(|(_, work_item_id)| *work_item_id)
+        .collect::<Vec<_>>();
+    let work_item_rows = if work_item_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
+            r#"
+            SELECT item.id, project.project_key || '-' || item.number::text,
+                   item.title, status.semantic_category,
+                   item.archived_at::text AS archived_at
+            FROM work_items item
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            WHERE item.project_id = $1 AND item.id = ANY($2)
+            FOR SHARE OF item
+            "#,
+        )
+        .bind(conversation.project_id)
+        .bind(&work_item_ids)
+        .fetch_all(&mut *transaction)
+        .await?
+    };
+    let work_item_labels = work_item_rows
+        .iter()
+        .map(|row| (row.0, row.1.clone()))
+        .collect::<HashMap<_, _>>();
     let (content, plain_text, mentioned_actor_ids) = content
-        .validate_with_mentions(|actor_id| handles.get(&actor_id).cloned())
+        .validate_with_resources(
+            |actor_id| handles.get(&actor_id).cloned(),
+            |work_item_id| work_item_labels.get(&work_item_id).cloned(),
+        )
         .map_err(message_content_error)?
         .into_parts();
     let content_json = serde_json::to_value(&content)
@@ -991,6 +1037,22 @@ async fn send_message(
         .bind(conversation.project_id)
         .bind(message_id)
         .bind(actor_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    for (node_index, work_item_id) in &work_item_references {
+        sqlx::query(
+            r#"
+            INSERT INTO message_work_item_references (
+                project_id, message_id, work_item_id, node_index
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(conversation.project_id)
+        .bind(message_id)
+        .bind(work_item_id)
+        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("message content"))?)
         .execute(&mut *transaction)
         .await?;
     }
@@ -1049,6 +1111,19 @@ async fn send_message(
         &mentioned_actor_ids,
     )
     .await?;
+    let referenced_work_items = work_item_rows
+        .into_iter()
+        .map(
+            |(id, key, title, status_category, archived_at)| ConversationWorkItemReferenceView {
+                id,
+                key,
+                title,
+                status_category,
+                archived_at,
+                href: format!("/projects/{}/work-items/{id}", conversation.project_id),
+            },
+        )
+        .collect();
     let message = MessageView {
         id: result.message_id,
         author: ActorView {
@@ -1061,6 +1136,7 @@ async fn send_message(
         content: content_json,
         plain_text,
         mentioned_actors,
+        referenced_work_items,
         created_at: result.message_created_at,
     };
     let body = MessageAppendResponse {
@@ -1126,6 +1202,7 @@ async fn conversation_timeline(
             message.content,
             message.plain_text,
             COALESCE(mentions.actors, '[]'::jsonb) AS mentioned_actors,
+            COALESCE(work_item_references.items, '[]'::jsonb) AS referenced_work_items,
             event.id AS agent_run_event_id,
             event.agent_run_id,
             event.kind AS event_kind,
@@ -1155,6 +1232,29 @@ async fn conversation_timeline(
              AND mentioned_membership.actor_id = mention.actor_id
             WHERE mention.message_id = message.id
         ) mentions ON true
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', item.id,
+                    'key', project.project_key || '-' || item.number::text,
+                    'title', item.title,
+                    'statusCategory', status.semantic_category,
+                    'archivedAt', item.archived_at::text,
+                    'href', '/projects/' || item.project_id::text || '/work-items/' || item.id::text
+                ) ORDER BY min_reference.first_node_index, item.id
+            ) AS items
+            FROM (
+                SELECT reference.work_item_id AS referenced_work_item_id,
+                       min(reference.node_index) AS first_node_index
+                FROM message_work_item_references reference
+                WHERE reference.message_id = message.id
+                GROUP BY reference.work_item_id
+            ) min_reference
+            JOIN work_items item ON item.id = min_reference.referenced_work_item_id
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+        ) work_item_references ON true
         LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id
         WHERE entry.conversation_id = $1
           AND entry.sequence < $3
@@ -2283,6 +2383,10 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
             let mentioned_actors =
                 serde_json::from_value::<Vec<ActorView>>(row.mentioned_actors)
                     .map_err(|_| AppError::Internal("decode timeline Message mentions"))?;
+            let referenced_work_items = serde_json::from_value::<
+                Vec<ConversationWorkItemReferenceView>,
+            >(row.referenced_work_items)
+            .map_err(|_| AppError::Internal("decode timeline Work Item references"))?;
             Some(MessageView {
                 id,
                 author: ActorView {
@@ -2305,6 +2409,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .ok_or(AppError::Internal("timeline Message missing content"))?,
                 plain_text: row.plain_text.unwrap_or_default(),
                 mentioned_actors,
+                referenced_work_items,
                 created_at: row
                     .message_created_at
                     .unwrap_or_else(|| row.created_at.clone()),

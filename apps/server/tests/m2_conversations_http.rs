@@ -50,6 +50,8 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         include_str!("../migrations/0013_m3_provider_event_idempotency.sql"),
         include_str!("../migrations/0014_m3_run_acknowledgements.sql"),
         include_str!("../migrations/0015_m4_work_items_foundation.sql"),
+        include_str!("../migrations/0016_m4_work_item_navigation.sql"),
+        include_str!("../migrations/0017_m4_work_item_collaboration.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)

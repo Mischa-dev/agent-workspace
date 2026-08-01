@@ -3,12 +3,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
 import {
   createWorkItem,
+  createAcceptanceCriterion,
+  createWorkItemComment,
   getWorkItem,
   getWorkItemWorkflow,
   listWorkItems,
+  getWorkItemTimeline,
+  removeAcceptanceCriterion,
   searchAssignableActors,
   setWorkItemArchived,
   updateWorkItem,
+  updateAcceptanceCriterion,
 } from './api'
 import type { WorkItemFilters } from './types'
 
@@ -34,6 +39,14 @@ export function useWorkItemWorkflow(projectId: string) {
     queryFn: () => getWorkItemWorkflow(projectId),
     enabled: Boolean(projectId),
     staleTime: 60_000,
+  })
+}
+
+export function useWorkItemTimeline(projectId: string, workItemId: string) {
+  return useQuery({
+    queryKey: queryKeys.workItemTimeline(projectId, workItemId),
+    queryFn: () => getWorkItemTimeline(projectId, workItemId),
+    enabled: Boolean(projectId && workItemId),
   })
 }
 
@@ -82,4 +95,48 @@ export function useSetWorkItemArchived() {
       void invalidate(item.projectId)
     },
   })
+}
+
+function useWorkItemChildMutation<TInput, TResult>(
+  mutationFn: (input: TInput) => Promise<TResult>,
+) {
+  const queryClient = useQueryClient()
+  const invalidate = useInvalidateWorkItems()
+  return useMutation({
+    mutationFn,
+    onSuccess: (result, input) => {
+      const scoped = input as { projectId: string; workItemId: string }
+      if (
+        result &&
+        typeof result === 'object' &&
+        'id' in result &&
+        (result as { id?: unknown }).id === scoped.workItemId
+      ) {
+        queryClient.setQueryData(
+          queryKeys.workItem(scoped.projectId, scoped.workItemId),
+          result,
+        )
+      }
+      void invalidate(scoped.projectId)
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workItemTimeline(scoped.projectId, scoped.workItemId),
+      })
+    },
+  })
+}
+
+export function useCreateAcceptanceCriterion() {
+  return useWorkItemChildMutation(createAcceptanceCriterion)
+}
+
+export function useUpdateAcceptanceCriterion() {
+  return useWorkItemChildMutation(updateAcceptanceCriterion)
+}
+
+export function useRemoveAcceptanceCriterion() {
+  return useWorkItemChildMutation(removeAcceptanceCriterion)
+}
+
+export function useCreateWorkItemComment() {
+  return useWorkItemChildMutation(createWorkItemComment)
 }

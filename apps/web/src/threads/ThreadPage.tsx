@@ -851,6 +851,7 @@ function TimelineItem({ entry }: { entry: ConversationTimelineEntry }) {
             actors={entry.message.mentionedActors ?? []}
             content={entry.message.content}
             fallbackPlainText={entry.message.plainText}
+            workItems={entry.message.referencedWorkItems ?? []}
           />
         </p>
       </article>

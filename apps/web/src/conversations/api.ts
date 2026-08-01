@@ -8,6 +8,7 @@ import type {
   ConversationMessage,
   ConversationTimelineEntry,
   ConversationTimelinePage,
+  ConversationWorkItemReference,
   MentionSearchPage,
   MessageContentV1,
   ProjectConversationSidebar,
@@ -67,6 +68,30 @@ export function normalizeConversationActor(
   }
 }
 
+function normalizeWorkItemReference(
+  value: unknown,
+): ConversationWorkItemReference | null {
+  const item = asRecord(value)
+  if (
+    typeof item.id !== 'string' ||
+    typeof item.key !== 'string' ||
+    typeof item.title !== 'string' ||
+    typeof item.statusCategory !== 'string' ||
+    typeof item.href !== 'string' ||
+    !item.href.startsWith('/projects/')
+  ) {
+    return null
+  }
+  return {
+    id: item.id,
+    key: item.key.slice(0, 64),
+    title: item.title.slice(0, 240),
+    statusCategory: item.statusCategory.slice(0, 40),
+    archivedAt: nullableString(item.archivedAt),
+    href: item.href,
+  }
+}
+
 function normalizeMessage(value: unknown): ConversationMessage | null {
   const message = asRecord(value)
   const author = normalizeConversationActor(message.author)
@@ -89,6 +114,13 @@ function normalizeMessage(value: unknown): ConversationMessage | null {
       ? message.mentionedActors
           .map(normalizeConversationActor)
           .filter((actor): actor is ConversationActor => actor !== null)
+      : [],
+    referencedWorkItems: Array.isArray(message.referencedWorkItems)
+      ? message.referencedWorkItems
+          .map(normalizeWorkItemReference)
+          .filter(
+            (item): item is ConversationWorkItemReference => item !== null,
+          )
       : [],
     createdAt: string(message.createdAt),
   }

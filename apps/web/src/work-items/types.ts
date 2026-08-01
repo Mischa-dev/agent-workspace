@@ -42,10 +42,25 @@ export type WorkItem = {
   archivedAt: string | null
   createdAt: string
   updatedAt: string
+  acceptanceCriteria: AcceptanceCriterion[]
   capabilities: WorkItemCapabilities
 }
 
-export type WorkItemCard = Omit<WorkItem, 'description' | 'createdAt'>
+export type AcceptanceCriterion = {
+  id: string
+  text: string
+  position: number
+  completed: boolean
+  completedBy: AssignableActor | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type WorkItemCard = Omit<
+  WorkItem,
+  'description' | 'createdAt' | 'acceptanceCriteria'
+>
 
 export type WorkflowType = WorkItemType & {
   position: number
@@ -96,4 +111,22 @@ export type WorkItemPatch = {
   statusId?: string
   priority?: WorkItemPriority
   assigneeActorId?: string | null
+}
+
+export type WorkItemTimelineEntry = {
+  sequence: number
+  kind: 'activity' | 'comment'
+  createdAt: string
+  activity: {
+    id: string
+    actor: AssignableActor
+    kind: string
+    summary: string
+  } | null
+  comment: {
+    id: string
+    author: AssignableActor
+    plainText: string
+    createdAt: string
+  } | null
 }

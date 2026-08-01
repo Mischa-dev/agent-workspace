@@ -8,7 +8,15 @@ export type MessageMentionNode = {
   actorId: string
 }
 
-export type MessageNode = MessageTextNode | MessageMentionNode
+export type MessageWorkItemReferenceNode = {
+  type: 'work_item_ref'
+  workItemId: string
+}
+
+export type MessageNode =
+  | MessageTextNode
+  | MessageMentionNode
+  | MessageWorkItemReferenceNode
 
 export type MessageContentV1 = {
   version: 1
@@ -29,7 +37,17 @@ export type ConversationMessage = {
   content: MessageContentV1
   plainText: string
   mentionedActors: ConversationActor[]
+  referencedWorkItems: ConversationWorkItemReference[]
   createdAt: string
+}
+
+export type ConversationWorkItemReference = {
+  id: string
+  key: string
+  title: string
+  statusCategory: string
+  archivedAt: string | null
+  href: string
 }
 
 export type ConversationWorkerEvent = {
