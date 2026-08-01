@@ -628,6 +628,29 @@ function WorkItemLinks({
           ) : null}
         </div>
       </div>
+      <div>
+        <h3>Pull requests</h3>
+        {item.linkedPullRequests.length ? (
+          <ul className="linked-record-list">
+            {item.linkedPullRequests.map((pullRequest) => (
+              <li key={pullRequest.id}>
+                <div>
+                  <a href={pullRequest.url} rel="noreferrer" target="_blank">
+                    #{pullRequest.number} {pullRequest.title}
+                  </a>
+                  <small>
+                    {pullRequest.draft ? 'draft · ' : ''}
+                    {pullRequest.state} · {pullRequest.source}
+                    {pullRequest.confirmed ? '' : ' · needs confirmation'}
+                  </small>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="compact-note">No linked pull requests.</p>
+        )}
+      </div>
       {threadMutation.isError || repositoryMutation.isError || primaryMutation.isError ? <p className="form-error-summary" role="alert">The links changed before this action completed. Reload the Work Item and try again.</p> : null}
     </section>
   )

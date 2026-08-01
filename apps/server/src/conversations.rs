@@ -322,6 +322,13 @@ pub(crate) struct RunRow {
     pub(crate) published_commit: Option<String>,
     pub(crate) published_at: Option<String>,
     pub(crate) publish_failure_category: Option<String>,
+    pub(crate) pull_request_request_state: Option<String>,
+    pub(crate) pull_request_failure_category: Option<String>,
+    pub(crate) pull_request_number: Option<i64>,
+    pub(crate) pull_request_url: Option<String>,
+    pub(crate) pull_request_title: Option<String>,
+    pub(crate) pull_request_state: Option<String>,
+    pub(crate) pull_request_draft: Option<bool>,
     pub(crate) queue_position: Option<i64>,
     pub(crate) failure_reason: Option<String>,
     pub(crate) created_at: String,
@@ -342,6 +349,7 @@ pub(crate) struct RunCapabilities {
     pub(crate) interrupt: bool,
     pub(crate) retry: bool,
     pub(crate) publish: bool,
+    pub(crate) create_pull_request: bool,
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -2498,6 +2506,13 @@ async fn fetch_run_projection(
             workspace.published_commit,
             workspace.published_at::text AS published_at,
             workspace.publish_failure_category,
+            pull_request_request.state AS pull_request_request_state,
+            pull_request_request.failure_category AS pull_request_failure_category,
+            pull_request.pull_request_number,
+            pull_request.html_url AS pull_request_url,
+            pull_request.title AS pull_request_title,
+            pull_request.state AS pull_request_state,
+            pull_request.draft AS pull_request_draft,
             CASE WHEN run.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
@@ -2509,6 +2524,10 @@ async fn fetch_run_projection(
         FROM agent_runs run
         LEFT JOIN repository_workspaces workspace
           ON workspace.id = run.repository_workspace_id
+        LEFT JOIN github_pull_request_requests pull_request_request
+          ON pull_request_request.agent_run_id = run.id
+        LEFT JOIN github_pull_requests pull_request
+          ON pull_request.id = pull_request_request.github_pull_request_id
         WHERE run.conversation_id = $1
           AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
         ORDER BY run.created_at DESC, run.id DESC
@@ -2528,6 +2547,13 @@ async fn fetch_run_projection(
             workspace.published_commit,
             workspace.published_at::text AS published_at,
             workspace.publish_failure_category,
+            pull_request_request.state AS pull_request_request_state,
+            pull_request_request.failure_category AS pull_request_failure_category,
+            pull_request.pull_request_number,
+            pull_request.html_url AS pull_request_url,
+            pull_request.title AS pull_request_title,
+            pull_request.state AS pull_request_state,
+            pull_request.draft AS pull_request_draft,
             NULL::bigint AS queue_position,
             run.failure_reason,
             run.created_at::text AS created_at,
@@ -2535,6 +2561,10 @@ async fn fetch_run_projection(
         FROM agent_runs run
         LEFT JOIN repository_workspaces workspace
           ON workspace.id = run.repository_workspace_id
+        LEFT JOIN github_pull_request_requests pull_request_request
+          ON pull_request_request.agent_run_id = run.id
+        LEFT JOIN github_pull_requests pull_request
+          ON pull_request.id = pull_request_request.github_pull_request_id
         WHERE run.conversation_id = $1
           AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
         ORDER BY run.created_at DESC, run.id DESC
@@ -2611,6 +2641,7 @@ async fn fetch_run_projection(
                 interrupt,
                 retry: false,
                 publish: false,
+                create_pull_request: false,
             },
         }
     });
@@ -2647,6 +2678,24 @@ async fn fetch_run_projection(
                 ),
             )
             .unwrap_or(false);
+        let create_pull_request = active_run.is_none()
+            && run.published_commit.is_some()
+            && run.pull_request_request_state.is_none()
+            && state.config.github.is_some()
+            && policy_allows(
+                principal,
+                &conversation.membership_role,
+                conversation.membership_enabled,
+                conversation.project_id,
+                Action::PullRequestCreate,
+                ProjectScope::run(
+                    conversation.project_id,
+                    conversation.id,
+                    run.id,
+                    run.repository_id,
+                ),
+            )
+            .unwrap_or(false);
         RunView {
             run,
             failure_acknowledged: latest_failure_acknowledged,
@@ -2654,6 +2703,7 @@ async fn fetch_run_projection(
                 interrupt: false,
                 retry,
                 publish,
+                create_pull_request,
             },
         }
     });

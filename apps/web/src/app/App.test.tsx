@@ -1359,6 +1359,79 @@ describe('M1 authenticated shell', () => {
     })
   })
 
+  it('creates a pull request only from the exact published run and explicit Work Item links', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const terminalTimeline = {
+      ...timeline,
+      linkedWorkItems: [
+        {
+          id: '019fbc00-0000-7000-8000-000000000001',
+          key: 'AW-42',
+          title: 'Ship exact publication',
+          statusCategory: 'in_progress',
+          archivedAt: null,
+          href: `/projects/${projectAId}/work-items/AW-42`,
+        },
+      ],
+      activeRun: null,
+      latestTerminalRun: {
+        ...timeline.activeRun,
+        state: 'completed',
+        publishedCommit: '0123456789012345678901234567890123456789',
+        capabilities: {
+          interrupt: false,
+          retry: false,
+          publish: false,
+          createPullRequest: true,
+        },
+      },
+      approvals: [],
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(terminalTimeline)
+      }
+      if (
+        path.includes(
+          `/projects/${projectAId}/agent-runs/run-1/pull-request`,
+        )
+      ) {
+        return jsonResponse({ requestId: 'pull-request-1', state: 'queued' }, 202)
+      }
+      return standardImplementation?.(input, init) ?? Promise.reject()
+    })
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Create pull request' }),
+    )
+
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([path]) =>
+        String(path).includes(
+          `/projects/${projectAId}/agent-runs/run-1/pull-request`,
+        ),
+      )
+      expect(request).toBeDefined()
+      expect(request?.[1]?.method).toBe('POST')
+      expect(
+        new Headers(request?.[1]?.headers).get('idempotency-key'),
+      ).toMatch(/^[0-9a-f-]{36}$/i)
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        title: 'AW-42: Ship exact publication',
+        body: 'Created from an explicitly published Agent Workspace run.',
+        workItemIds: ['019fbc00-0000-7000-8000-000000000001'],
+      })
+    })
+  })
+
   it('does not remember an active child while browsing archived-parent history', async () => {
     const archivedChildId = '019fb600-0000-7000-8000-000000000014'
     window.history.replaceState(

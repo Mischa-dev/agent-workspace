@@ -1997,6 +1997,13 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             workspace.published_commit,
             workspace.published_at::text AS published_at,
             workspace.publish_failure_category,
+            pull_request_request.state AS pull_request_request_state,
+            pull_request_request.failure_category AS pull_request_failure_category,
+            pull_request.pull_request_number,
+            pull_request.html_url AS pull_request_url,
+            pull_request.title AS pull_request_title,
+            pull_request.state AS pull_request_state,
+            pull_request.draft AS pull_request_draft,
             CASE WHEN ar.state = 'queued' THEN (
                 SELECT count(*) FROM agent_runs queued
                 WHERE queued.state = 'queued'
@@ -2011,6 +2018,10 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
          AND c.project_id = $2
         LEFT JOIN repository_workspaces workspace
           ON workspace.id = ar.repository_workspace_id
+        LEFT JOIN github_pull_request_requests pull_request_request
+          ON pull_request_request.agent_run_id = ar.id
+        LEFT JOIN github_pull_requests pull_request
+          ON pull_request.id = pull_request_request.github_pull_request_id
         WHERE ar.id = $1
         "#,
     )
@@ -2026,6 +2037,7 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             interrupt: false,
             retry: false,
             publish: false,
+            create_pull_request: false,
         },
     })
 }

@@ -223,6 +223,7 @@ struct WorkItemRow {
     acceptance_criteria: serde_json::Value,
     linked_threads: serde_json::Value,
     linked_repositories: serde_json::Value,
+    linked_pull_requests: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,6 +307,7 @@ pub struct WorkItemView {
     acceptance_criteria: Vec<AcceptanceCriterionView>,
     linked_threads: Vec<LinkedThreadView>,
     linked_repositories: Vec<LinkedRepositoryView>,
+    linked_pull_requests: Vec<LinkedPullRequestView>,
     capabilities: WorkItemCapabilities,
 }
 
@@ -332,6 +334,19 @@ struct LinkedRepositoryView {
     available: bool,
     archived_at: Option<String>,
     href: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkedPullRequestView {
+    id: Uuid,
+    number: i64,
+    title: String,
+    url: String,
+    state: String,
+    draft: bool,
+    source: String,
+    confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -942,7 +957,8 @@ async fn list_work_items(
             item.updated_at::text AS updated_at,
             '[]'::jsonb AS acceptance_criteria,
             '[]'::jsonb AS linked_threads,
-            '[]'::jsonb AS linked_repositories
+            '[]'::jsonb AS linked_repositories,
+            '[]'::jsonb AS linked_pull_requests
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         JOIN work_item_types item_type
@@ -1065,7 +1081,8 @@ async fn get_work_item_board(
                 item.updated_at::text AS updated_at,
                 '[]'::jsonb AS acceptance_criteria,
                 '[]'::jsonb AS linked_threads,
-                '[]'::jsonb AS linked_repositories
+                '[]'::jsonb AS linked_repositories,
+                '[]'::jsonb AS linked_pull_requests
             FROM work_items item
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_types item_type
@@ -3832,7 +3849,26 @@ const WORK_ITEM_SELECT: &str = r#"
             JOIN repositories repository
               ON repository.project_id = link.project_id AND repository.id = link.repository_id
             WHERE link.project_id = item.project_id AND link.work_item_id = item.id
-        ), '[]'::jsonb) AS linked_repositories
+        ), '[]'::jsonb) AS linked_repositories,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', pull_request.id,
+                    'number', pull_request.pull_request_number,
+                    'title', pull_request.title,
+                    'url', pull_request.html_url,
+                    'state', pull_request.state,
+                    'draft', pull_request.draft,
+                    'source', link.source,
+                    'confirmed', link.confirmed
+                ) ORDER BY pull_request.pull_request_number, pull_request.id
+            )
+            FROM github_pull_request_work_item_links link
+            JOIN github_pull_requests pull_request
+              ON pull_request.project_id = link.project_id
+             AND pull_request.id = link.github_pull_request_id
+            WHERE link.project_id = item.project_id AND link.work_item_id = item.id
+        ), '[]'::jsonb) AS linked_pull_requests
     FROM work_items item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_types item_type
@@ -3877,6 +3913,8 @@ fn work_item_view(
         .map_err(|_| AppError::Internal("invalid linked Thread projection"))?;
     let linked_repositories = serde_json::from_value(row.linked_repositories)
         .map_err(|_| AppError::Internal("invalid linked Repository projection"))?;
+    let linked_pull_requests = serde_json::from_value(row.linked_pull_requests)
+        .map_err(|_| AppError::Internal("invalid linked pull-request projection"))?;
     Ok(WorkItemView {
         id: row.id,
         project_id: row.project_id,
@@ -3902,6 +3940,7 @@ fn work_item_view(
         acceptance_criteria,
         linked_threads,
         linked_repositories,
+        linked_pull_requests,
         capabilities,
     })
 }

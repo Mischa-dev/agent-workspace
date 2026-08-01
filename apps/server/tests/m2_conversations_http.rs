@@ -57,6 +57,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         include_str!("../migrations/0020_m5_github_foundation.sql"),
         include_str!("../migrations/0021_m5_github_installation_compat.sql"),
         include_str!("../migrations/0022_m5_github_publishing.sql"),
+        include_str!("../migrations/0023_m5_github_pull_requests.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)

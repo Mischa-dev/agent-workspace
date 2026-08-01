@@ -124,6 +124,7 @@ const workItem = {
   acceptanceCriteria: [],
   linkedThreads: [],
   linkedRepositories: [],
+  linkedPullRequests: [],
   capabilities: { view: true, edit: true, archive: true },
 }
 

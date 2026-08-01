@@ -54,6 +54,23 @@ terminal divergence; and an unconfirmed remote result remains retryable. Job
 identity is immutable, leases recover after restart, retry count and backoff are
 bounded, and a dirty or changed worktree is preserved for operator inspection.
 
+## Pull-request creation boundary
+
+Pull-request creation uses a fresh repository-scoped installation token with
+Metadata read, Contents read, and Pull requests write. The durable request is
+bound to the exact published head commit, collision-safe head branch, recorded
+base branch, Repository Workspace, Agent Run, requesting Actor, and selected
+Work Items. It stores only the bounded title/body needed to perform that
+explicit action.
+
+Every attempt first queries the exact repository, owner-qualified head, and
+base tuple. An existing single open pull request completes idempotently; more
+than one is a visible terminal conflict. The worker records
+`mutation_attempted_at` before POSTing to GitHub. If the response is uncertain,
+later attempts query for the result but never issue another create blindly.
+Canonical records retain bounded identity and status fields only, while diffs,
+comments, reviews, merge, and close remain on GitHub.
+
 ## Webhook boundary
 
 The listener binds separately on `127.0.0.1:3101`. It verifies:

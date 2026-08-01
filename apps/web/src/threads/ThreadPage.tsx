@@ -74,6 +74,13 @@ type Run = {
   publishedCommit: string | null
   publishedAt: string | null
   publishFailureCategory: string | null
+  pullRequestRequestState: string | null
+  pullRequestFailureCategory: string | null
+  pullRequestNumber: number | null
+  pullRequestUrl: string | null
+  pullRequestTitle: string | null
+  pullRequestState: string | null
+  pullRequestDraft: boolean | null
   queuePosition: number | null
   failureReason: string | null
   failureAcknowledged: boolean
@@ -83,6 +90,7 @@ type Run = {
     interrupt: boolean
     retry: boolean
     publish: boolean
+    createPullRequest: boolean
   }
 }
 
@@ -177,6 +185,13 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof activeRunRecord.publishFailureCategory === 'string'
               ? activeRunRecord.publishFailureCategory
               : null,
+          pullRequestRequestState: null,
+          pullRequestFailureCategory: null,
+          pullRequestNumber: null,
+          pullRequestUrl: null,
+          pullRequestTitle: null,
+          pullRequestState: null,
+          pullRequestDraft: null,
           queuePosition:
             typeof activeRunRecord.queuePosition === 'number'
               ? activeRunRecord.queuePosition
@@ -189,6 +204,7 @@ function normalizeTimeline(value: unknown): Timeline {
             ),
             retry: explicitCapability(activeRunRecord.capabilities, 'retry'),
             publish: false,
+            createPullRequest: false,
           },
         } as Run)
       : null
@@ -221,6 +237,35 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof latestTerminalRunRecord.publishFailureCategory === 'string'
               ? latestTerminalRunRecord.publishFailureCategory
               : null,
+          pullRequestRequestState:
+            typeof latestTerminalRunRecord.pullRequestRequestState === 'string'
+              ? latestTerminalRunRecord.pullRequestRequestState
+              : null,
+          pullRequestFailureCategory:
+            typeof latestTerminalRunRecord.pullRequestFailureCategory ===
+            'string'
+              ? latestTerminalRunRecord.pullRequestFailureCategory
+              : null,
+          pullRequestNumber:
+            typeof latestTerminalRunRecord.pullRequestNumber === 'number'
+              ? latestTerminalRunRecord.pullRequestNumber
+              : null,
+          pullRequestUrl:
+            typeof latestTerminalRunRecord.pullRequestUrl === 'string'
+              ? latestTerminalRunRecord.pullRequestUrl
+              : null,
+          pullRequestTitle:
+            typeof latestTerminalRunRecord.pullRequestTitle === 'string'
+              ? latestTerminalRunRecord.pullRequestTitle
+              : null,
+          pullRequestState:
+            typeof latestTerminalRunRecord.pullRequestState === 'string'
+              ? latestTerminalRunRecord.pullRequestState
+              : null,
+          pullRequestDraft:
+            typeof latestTerminalRunRecord.pullRequestDraft === 'boolean'
+              ? latestTerminalRunRecord.pullRequestDraft
+              : null,
           queuePosition: null,
           failureAcknowledged:
             latestTerminalRunRecord.failureAcknowledged === true,
@@ -233,6 +278,10 @@ function normalizeTimeline(value: unknown): Timeline {
             publish: explicitCapability(
               latestTerminalRunRecord.capabilities,
               'publish',
+            ),
+            createPullRequest: explicitCapability(
+              latestTerminalRunRecord.capabilities,
+              'createPullRequest',
             ),
           },
         } as Run)
@@ -319,6 +368,9 @@ export function ThreadPage() {
     null,
   )
   const [publishIdempotencyKey, setPublishIdempotencyKey] = useState<
+    string | null
+  >(null)
+  const [pullRequestIdempotencyKey, setPullRequestIdempotencyKey] = useState<
     string | null
   >(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
@@ -523,6 +575,41 @@ export function ThreadPage() {
       ),
     ).then((succeeded) => {
       if (succeeded) setPublishIdempotencyKey(null)
+    })
+  }
+
+  const createPullRequest = () => {
+    const runId = latestTerminalRun?.id
+    if (
+      !runId ||
+      latestTerminalRun.capabilities.createPullRequest !== true ||
+      activeRun
+    ) {
+      return
+    }
+    const firstWorkItem = verifiedTimeline?.linkedWorkItems[0]
+    const rawTitle = firstWorkItem
+      ? `${firstWorkItem.key}: ${firstWorkItem.title}`
+      : verifiedTimeline?.conversation.name || 'Agent Workspace change'
+    const title = Array.from(rawTitle).slice(0, 256).join('')
+    const commandKey = pullRequestIdempotencyKey ?? crypto.randomUUID()
+    if (!pullRequestIdempotencyKey) setPullRequestIdempotencyKey(commandKey)
+    void perform('pull-request', () =>
+      requestJson(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`,
+        {
+          method: 'POST',
+          idempotencyKey: commandKey,
+          json: {
+            title,
+            body: 'Created from an explicitly published Agent Workspace run.',
+            workItemIds:
+              verifiedTimeline?.linkedWorkItems.map((item) => item.id) ?? [],
+          },
+        },
+      ),
+    ).then((succeeded) => {
+      if (succeeded) setPullRequestIdempotencyKey(null)
     })
   }
 
@@ -848,6 +935,18 @@ export function ThreadPage() {
                         : 'Publish branch'}
                     </button>
                   )}
+                {latestTerminalRun?.capabilities.createPullRequest && (
+                  <button
+                    className="secondary-button"
+                    disabled={Boolean(busyAction)}
+                    onClick={createPullRequest}
+                    type="button"
+                  >
+                    {busyAction === 'pull-request'
+                      ? 'Queueing pull request…'
+                      : 'Create pull request'}
+                  </button>
+                )}
                 {latestTerminalRun?.capabilities.retry && (
                   <button
                     className="secondary-button"
@@ -899,6 +998,38 @@ export function ThreadPage() {
             <p className="action-error" role="status">
               Publish needs attention:{' '}
               {latestTerminalRun.publishFailureCategory.replaceAll('_', ' ')}.
+            </p>
+          )}
+          {latestTerminalRun?.pullRequestUrl &&
+            latestTerminalRun.pullRequestNumber && (
+              <p className="compact-note">
+                Pull request{' '}
+                <a
+                  href={latestTerminalRun.pullRequestUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  #{latestTerminalRun.pullRequestNumber}{' '}
+                  {latestTerminalRun.pullRequestTitle}
+                </a>{' '}
+                · {latestTerminalRun.pullRequestDraft ? 'draft ' : ''}
+                {latestTerminalRun.pullRequestState}
+              </p>
+            )}
+          {latestTerminalRun?.pullRequestRequestState &&
+            !latestTerminalRun.pullRequestUrl && (
+              <p className="compact-note">
+                Pull request: {latestTerminalRun.pullRequestRequestState}
+              </p>
+            )}
+          {latestTerminalRun?.pullRequestFailureCategory && (
+            <p className="action-error" role="status">
+              Pull request needs attention:{' '}
+              {latestTerminalRun.pullRequestFailureCategory.replaceAll(
+                '_',
+                ' ',
+              )}
+              .
             </p>
           )}
           {actionError && (
