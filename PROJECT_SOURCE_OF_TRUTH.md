@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 accepted; M5 authorized; source of truth v0.20
+**Status:** M4 accepted; M5 authorized; source of truth v0.21
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
@@ -12,6 +12,16 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.21 — Signed webhook redelivery recovery
+
+- preserved immutable webhook job identity while allowing an exact signed
+  redelivery to requeue only its own failed or exhausted job
+- stored newly recognized bounded recovery fields on the checksum-verified
+  delivery record rather than replacing the original job payload
+- restricted the merged commit fallback to a signed merged
+  `pull_request.closed` event so delayed open, review, and check deliveries
+  cannot supply canonical merge identity
 
 ### v0.20 — Explicit pull-request Work Item automation
 
@@ -5258,9 +5268,16 @@ and convert verified deliveries into durable retryable work.
   timestamps; do not retain arbitrary raw payload or headers after extracting
   the bounded allowlisted fields required by the job
 - enqueue one versioned processing job in the same transaction; an exact
-  duplicate returns success without a second job, state transition, activity,
-  notification, or outbox event, while a reused delivery ID with a different
-  checksum is rejected and audited
+  duplicate returns success without a second job, activity, notification, or
+  outbox event, while a reused delivery ID with a different checksum is
+  rejected and audited
+- an exact duplicate normally causes no state transition; when GitHub
+  explicitly redelivers the identical signed payload after that delivery's
+  sole job failed or exhausted, atomically reset only the same job's mutable
+  attempts/lease state and requeue it, retain its immutable identity and
+  original bounded payload, and store any newly recognized bounded fields on
+  the checksum-verified delivery record; repeated redelivery while queued,
+  running, or completed remains a no-op
 - acknowledge verified durable receipt promptly, process outside the request,
   and retain exhausted failures with a redacted category and operator retry
   path
@@ -6196,6 +6213,21 @@ for the exact pull-request version, attributed to the GitHub Integration Actor,
 and records either the ordinary versioned Work Item transition or a bounded
 skip reason. This keeps retries idempotent and prevents external delivery order
 from granting GitHub authority over completion.
+
+## D-047: Explicit signed redelivery may recover only its failed delivery job
+
+**Status:** Accepted
+
+**Reason:** A checksum-identical GitHub redelivery is an explicit provider
+retry signal, not merely an accidental duplicate. If and only if that
+delivery's sole durable job is failed or exhausted, Agent Workspace may reset
+the same job's mutable attempts and lease state and requeue it. The job ID,
+kind, scope, and original bounded payload remain immutable; newly recognized
+bounded fields live on the already checksum-verified delivery record. No
+second job, domain activity, notification, or outbox event is created, and a
+redelivery of queued, running, or completed work remains a no-op. A checksum
+mismatch remains a conflict, while authenticated operator reconciliation stays
+available for missed events and non-delivery failures.
 
 ---
 
