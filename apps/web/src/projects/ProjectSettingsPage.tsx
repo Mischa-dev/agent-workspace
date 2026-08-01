@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { ExecutionAccountSettings } from '../execution/ExecutionAccountSettings'
+import { GitHubIntegrationSettings } from '../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../repositories/RepositorySettings'
 import { AppShell } from '../shell/AppShell'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
@@ -156,6 +157,16 @@ export function ProjectSettingsPage() {
             mirrors before starting hosted runs.
           </p>
           <RepositorySettings projectId={project.data.id} />
+        </section>
+
+        <section aria-labelledby="github-integration-heading" className="page-section">
+          <h2 id="github-integration-heading">GitHub delivery</h2>
+          <p>
+            View the Project-scoped GitHub App installation, selected
+            repositories, least-privilege permissions, and synchronization
+            health. External App installation remains an operator action.
+          </p>
+          <GitHubIntegrationSettings projectId={project.data.id} />
         </section>
 
         {project.data.capabilities.archive && !project.data.archivedAt && (

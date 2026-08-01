@@ -1,10 +1,17 @@
 use std::{
-    collections::BTreeMap, fmt, net::SocketAddr, path::PathBuf, str::FromStr, time::Duration,
+    collections::BTreeMap,
+    fmt,
+    net::SocketAddr,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
 };
 
 use thiserror::Error;
 
 const PREFIX: &str = "AGENT_WORKSPACE_";
+pub const GITHUB_API_VERSION: &str = "2026-03-10";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Environment {
@@ -83,7 +90,30 @@ pub struct AppConfig {
     pub codex_request_timeout: Duration,
     pub codex_shutdown_timeout: Duration,
     pub demo_executor: bool,
+    pub github: Option<GitHubConfig>,
     pub log_filter: String,
+}
+
+#[derive(Clone)]
+pub struct GitHubConfig {
+    pub app_id: u64,
+    pub private_key_path: PathBuf,
+    pub webhook_secret_path: PathBuf,
+    pub api_base_url: String,
+    pub api_version: String,
+}
+
+impl fmt::Debug for GitHubConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GitHubConfig")
+            .field("app_id", &self.app_id)
+            .field("private_key_path", &"[REDACTED]")
+            .field("webhook_secret_path", &"[REDACTED]")
+            .field("api_base_url", &self.api_base_url)
+            .field("api_version", &self.api_version)
+            .finish()
+    }
 }
 
 impl AppConfig {
@@ -125,6 +155,7 @@ impl AppConfig {
         let codex_shutdown_timeout =
             Duration::from_secs(parse(values, "CODEX_SHUTDOWN_TIMEOUT_SECONDS", "5")?);
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
+        let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let allowed_origins = allowed_origins(values, environment)?;
 
@@ -208,9 +239,109 @@ impl AppConfig {
             codex_request_timeout,
             codex_shutdown_timeout,
             demo_executor,
+            github,
             log_filter,
         })
     }
+}
+
+fn github_config(
+    values: &BTreeMap<String, String>,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<GitHubConfig>, ConfigError> {
+    let app_id = values.get(&format!("{PREFIX}GITHUB_APP_ID"));
+    let private_key = values.get(&format!("{PREFIX}GITHUB_PRIVATE_KEY_PATH"));
+    let webhook_secret = values.get(&format!("{PREFIX}GITHUB_WEBHOOK_SECRET_PATH"));
+    let configured = [app_id, private_key, webhook_secret]
+        .iter()
+        .filter(|value| value.is_some_and(|value| !value.trim().is_empty()))
+        .count();
+    if configured == 0 {
+        return Ok(None);
+    }
+    if configured != 3 {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_APP_ID"),
+            reason: "GitHub App ID, private-key path, and webhook-secret path must be configured together".into(),
+        });
+    }
+
+    let app_id = app_id
+        .expect("counted GitHub App ID")
+        .parse::<u64>()
+        .map_err(|error| ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_APP_ID"),
+            reason: error.to_string(),
+        })?;
+    if app_id == 0 {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_APP_ID"),
+            reason: "must be greater than zero".into(),
+        });
+    }
+    let private_key_path = PathBuf::from(private_key.expect("counted private-key path"));
+    let webhook_secret_path = PathBuf::from(webhook_secret.expect("counted webhook-secret path"));
+    validate_secret_file(
+        "GITHUB_PRIVATE_KEY_PATH",
+        &private_key_path,
+        data_root,
+        web_root,
+    )?;
+    validate_secret_file(
+        "GITHUB_WEBHOOK_SECRET_PATH",
+        &webhook_secret_path,
+        data_root,
+        web_root,
+    )?;
+
+    let api_base_url = optional(values, "GITHUB_API_BASE_URL", "https://api.github.com");
+    if api_base_url != "https://api.github.com" {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_API_BASE_URL"),
+            reason: "version one supports only https://api.github.com".into(),
+        });
+    }
+    let api_version = optional(values, "GITHUB_API_VERSION", GITHUB_API_VERSION);
+    if api_version != GITHUB_API_VERSION {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_API_VERSION"),
+            reason: format!("must equal the pinned version {GITHUB_API_VERSION}"),
+        });
+    }
+
+    Ok(Some(GitHubConfig {
+        app_id,
+        private_key_path,
+        webhook_secret_path,
+        api_base_url,
+        api_version,
+    }))
+}
+
+fn validate_secret_file(
+    key: &str,
+    path: &Path,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<(), ConfigError> {
+    if !path.is_absolute() || path.starts_with(data_root) || path.starts_with(web_root) {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: "must be an absolute path outside runtime data and release roots".into(),
+        });
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| ConfigError::Invalid {
+        key: format!("{PREFIX}{key}"),
+        reason: "secret file is unavailable".into(),
+    })?;
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: "secret must be a regular owner-only file".into(),
+        });
+    }
+    Ok(())
 }
 
 fn allowed_origins(
@@ -326,6 +457,8 @@ pub enum ConfigError {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
+
     use super::*;
 
     fn base_values() -> BTreeMap<String, String> {
@@ -429,5 +562,91 @@ mod tests {
             "601".to_owned(),
         );
         assert!(AppConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn github_configuration_is_all_or_none_and_redacts_paths() {
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_APP_ID".to_owned(),
+            "4442593".to_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("partial config must fail");
+        assert!(error.to_string().contains("configured together"));
+
+        let directory = tempfile::tempdir().expect("secret directory");
+        let private_key = directory.path().join("github-app.pem");
+        let webhook_secret = directory.path().join("github-webhook-secret");
+        for (path, bytes) in [
+            (&private_key, b"private-key-placeholder".as_slice()),
+            (
+                &webhook_secret,
+                b"high-entropy-webhook-secret-placeholder".as_slice(),
+            ),
+        ] {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(path)
+                .expect("owner-only secret file");
+            file.write_all(bytes).expect("write secret fixture");
+        }
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_PRIVATE_KEY_PATH".to_owned(),
+            private_key.to_string_lossy().into_owned(),
+        );
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_WEBHOOK_SECRET_PATH".to_owned(),
+            webhook_secret.to_string_lossy().into_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("complete GitHub config");
+        let debug = format!("{config:?}");
+        assert!(config.github.is_some());
+        assert!(!debug.contains(private_key.to_string_lossy().as_ref()));
+        assert!(!debug.contains(webhook_secret.to_string_lossy().as_ref()));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn github_secret_files_reject_symlinks_and_group_or_world_access() {
+        let directory = tempfile::tempdir().expect("secret directory");
+        let private_key = directory.path().join("github-app.pem");
+        let webhook_secret = directory.path().join("github-webhook-secret");
+        std::fs::write(&private_key, "private-key-placeholder").expect("private key");
+        std::fs::write(&webhook_secret, "webhook-secret-placeholder").expect("webhook secret");
+        std::fs::set_permissions(&private_key, std::fs::Permissions::from_mode(0o640))
+            .expect("set unsafe mode");
+        std::fs::set_permissions(&webhook_secret, std::fs::Permissions::from_mode(0o600))
+            .expect("set safe mode");
+
+        let mut values = base_values();
+        values.extend([
+            (
+                "AGENT_WORKSPACE_GITHUB_APP_ID".to_owned(),
+                "4442593".to_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_GITHUB_PRIVATE_KEY_PATH".to_owned(),
+                private_key.to_string_lossy().into_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_GITHUB_WEBHOOK_SECRET_PATH".to_owned(),
+                webhook_secret.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let error = AppConfig::from_values(&values).expect_err("unsafe mode must fail");
+        assert!(error.to_string().contains("owner-only"));
+
+        std::fs::set_permissions(&private_key, std::fs::Permissions::from_mode(0o600))
+            .expect("set safe mode");
+        let symlink = directory.path().join("webhook-secret-link");
+        std::os::unix::fs::symlink(&webhook_secret, &symlink).expect("secret symlink");
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_WEBHOOK_SECRET_PATH".to_owned(),
+            symlink.to_string_lossy().into_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("symlink must fail");
+        assert!(error.to_string().contains("regular owner-only file"));
     }
 }
