@@ -642,6 +642,12 @@ function WorkItemLinks({
                     {pullRequest.draft ? 'draft · ' : ''}
                     {pullRequest.state} · {pullRequest.source}
                     {pullRequest.confirmed ? '' : ' · needs confirmation'}
+                    {' · checks '}{pullRequest.checksState}
+                    {' · review '}{pullRequest.reviewState}
+                    {' · mergeability '}{pullRequest.mergeabilityState}
+                    {pullRequest.syncState === 'failed'
+                      ? ` · sync failed: ${(pullRequest.syncFailureCategory ?? 'unknown').replaceAll('_', ' ')}`
+                      : ''}
                   </small>
                 </div>
               </li>

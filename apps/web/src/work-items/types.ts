@@ -79,6 +79,11 @@ export type LinkedPullRequest = {
   draft: boolean
   source: string
   confirmed: boolean
+  checksState: string
+  reviewState: string
+  mergeabilityState: string
+  syncState: string
+  syncFailureCategory: string | null
 }
 
 export type AcceptanceCriterion = {
