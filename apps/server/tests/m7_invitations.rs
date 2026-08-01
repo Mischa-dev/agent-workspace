@@ -85,13 +85,11 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
     .expect("bootstrap M7 owner");
 
     let admin_actor_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO actors (id, kind, handle, display_name, status) VALUES ($1, 'human', 'm7_admin', 'M7 Admin', 'active')",
-    )
-    .bind(admin_actor_id)
-    .execute(&pool)
-    .await
-    .expect("insert M7 admin Actor");
+    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+        .bind(admin_actor_id)
+        .execute(&pool)
+        .await
+        .expect("insert M7 admin Actor");
     sqlx::query(
         "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'admin')",
     )
@@ -101,8 +99,9 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
     .await
     .expect("insert M7 admin Organization membership");
     sqlx::query(
-        "INSERT INTO project_memberships (project_id, actor_id, role) VALUES ($1, $2, 'admin')",
+        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) VALUES ($1, $2, $3, 'admin', 'M7 Admin', 'm7_admin')",
     )
+    .bind(Uuid::now_v7())
     .bind(seed.project_id)
     .bind(admin_actor_id)
     .execute(&pool)

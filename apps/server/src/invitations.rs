@@ -136,14 +136,16 @@ async fn list_invitations(
                CASE WHEN invitation.status = 'active' AND invitation.expires_at <= now()
                     THEN 'expired' ELSE invitation.status END AS status,
                invitation.version, invitation.issued_by_actor_id,
-               issuer.display_name AS issued_by_display_name,
+               issuer_membership.display_name AS issued_by_display_name,
                invitation.expires_at::text AS expires_at,
                invitation.accepted_by_actor_id,
                invitation.accepted_at::text AS accepted_at,
                invitation.revoked_at::text AS revoked_at,
                invitation.created_at::text AS created_at
         FROM project_invitations invitation
-        JOIN actors issuer ON issuer.id = invitation.issued_by_actor_id
+        JOIN project_memberships issuer_membership
+          ON issuer_membership.project_id = invitation.project_id
+         AND issuer_membership.actor_id = invitation.issued_by_actor_id
         WHERE invitation.project_id = $1
         ORDER BY invitation.created_at DESC, invitation.id DESC
         LIMIT 200
@@ -522,14 +524,16 @@ async fn fetch_invitation(
                CASE WHEN invitation.status = 'active' AND invitation.expires_at <= now()
                     THEN 'expired' ELSE invitation.status END AS status,
                invitation.version, invitation.issued_by_actor_id,
-               issuer.display_name AS issued_by_display_name,
+               issuer_membership.display_name AS issued_by_display_name,
                invitation.expires_at::text AS expires_at,
                invitation.accepted_by_actor_id,
                invitation.accepted_at::text AS accepted_at,
                invitation.revoked_at::text AS revoked_at,
                invitation.created_at::text AS created_at
         FROM project_invitations invitation
-        JOIN actors issuer ON issuer.id = invitation.issued_by_actor_id
+        JOIN project_memberships issuer_membership
+          ON issuer_membership.project_id = invitation.project_id
+         AND issuer_membership.actor_id = invitation.issued_by_actor_id
         WHERE invitation.project_id = $1 AND invitation.id = $2
         "#,
     )
