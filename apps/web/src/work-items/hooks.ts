@@ -11,7 +11,10 @@ import {
   getWorkItemTimeline,
   removeAcceptanceCriterion,
   searchAssignableActors,
+  setWorkItemPrimaryRepository,
   setWorkItemArchived,
+  setWorkItemRepositoryLink,
+  setWorkItemThreadLink,
   updateWorkItem,
   updateAcceptanceCriterion,
 } from './api'
@@ -139,4 +142,16 @@ export function useRemoveAcceptanceCriterion() {
 
 export function useCreateWorkItemComment() {
   return useWorkItemChildMutation(createWorkItemComment)
+}
+
+export function useSetWorkItemThreadLink() {
+  return useWorkItemChildMutation(setWorkItemThreadLink)
+}
+
+export function useSetWorkItemRepositoryLink() {
+  return useWorkItemChildMutation(setWorkItemRepositoryLink)
+}
+
+export function useSetWorkItemPrimaryRepository() {
+  return useWorkItemChildMutation(setWorkItemPrimaryRepository)
 }

@@ -618,6 +618,192 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     );
     assert_eq!(removed_criterion.2["acceptanceCriteria"][0]["position"], 1);
 
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE project_id = $1 AND id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("make seeded repository ready for Work Item linking");
+    let linked_thread = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-create-linked-thread"),
+        &format!("/api/v1/channels/{}/threads", seed.channel_id),
+        json!({"name": "Work Item implementation", "originMessageId": null}),
+    )
+    .await;
+    assert_eq!(linked_thread.0, StatusCode::CREATED, "{}", linked_thread.1);
+    let linked_thread_id = linked_thread.2["conversation"]["id"]
+        .as_str()
+        .expect("linked Thread ID");
+    let thread_link_uri = format!(
+        "{base}/{}/threads/{linked_thread_id}",
+        created.2["id"].as_str().expect("created ID")
+    );
+    let thread_link = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-thread-link"),
+        &thread_link_uri,
+        json!({}),
+    )
+    .await;
+    assert_eq!(thread_link.0, StatusCode::OK, "{}", thread_link.1);
+    assert_eq!(thread_link.2["version"], 9);
+    assert_eq!(thread_link.2["linkedThreads"][0]["id"], linked_thread_id);
+    assert_eq!(
+        thread_link.2["linkedThreads"][0]["parentChannelId"],
+        seed.channel_id.to_string()
+    );
+    let thread_link_replay = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-thread-link"),
+        &thread_link_uri,
+        json!({}),
+    )
+    .await;
+    assert_eq!(thread_link_replay.2["version"], 9);
+    let channel_link = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-channel-link-rejected"),
+        &format!(
+            "{base}/{}/threads/{}",
+            created.2["id"].as_str().expect("created ID"),
+            seed.channel_id
+        ),
+        json!({}),
+    )
+    .await;
+    assert_eq!(channel_link.0, StatusCode::NOT_FOUND);
+
+    let first_repository_uri = format!(
+        "{base}/{}/repositories/{}",
+        created.2["id"].as_str().expect("created ID"),
+        seed.repository_id
+    );
+    let primary_repository = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-primary-repository"),
+        &first_repository_uri,
+        json!({"expectedVersion": 9, "role": "primary"}),
+    )
+    .await;
+    assert_eq!(
+        primary_repository.0,
+        StatusCode::OK,
+        "{}",
+        primary_repository.1
+    );
+    assert_eq!(primary_repository.2["version"], 10);
+    assert_eq!(
+        primary_repository.2["linkedRepositories"][0]["role"],
+        "primary"
+    );
+
+    let second_repository_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url,
+            default_branch, mirror_path, trusted, preparation_state, prepared_at
+        ) VALUES ($1, $2, 987654321, 'Mischa-dev', 'agent-workspace-related',
+                  'https://github.com/Mischa-dev/agent-workspace-related.git',
+                  'main', $3, true, 'ready', now())
+        "#,
+    )
+    .bind(second_repository_id)
+    .bind(seed.project_id)
+    .bind(format!(
+        "/tmp/agent-workspace-test-{second_repository_id}.git"
+    ))
+    .execute(&pool)
+    .await
+    .expect("insert second ready repository");
+    let second_repository_uri = format!(
+        "{base}/{}/repositories/{second_repository_id}",
+        created.2["id"].as_str().expect("created ID")
+    );
+    let related_repository = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-related-repository"),
+        &second_repository_uri,
+        json!({"expectedVersion": 10, "role": "related"}),
+    )
+    .await;
+    assert_eq!(
+        related_repository.0,
+        StatusCode::OK,
+        "{}",
+        related_repository.1
+    );
+    assert_eq!(related_repository.2["version"], 11);
+    let swapped_primary = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-swap-primary"),
+        &format!("{second_repository_uri}/primary"),
+        json!({"expectedVersion": 11}),
+    )
+    .await;
+    assert_eq!(swapped_primary.0, StatusCode::OK, "{}", swapped_primary.1);
+    assert_eq!(swapped_primary.2["version"], 12);
+    assert_eq!(
+        swapped_primary.2["linkedRepositories"][0]["id"],
+        second_repository_id.to_string()
+    );
+    assert_eq!(
+        swapped_primary.2["linkedRepositories"][0]["role"],
+        "primary"
+    );
+    let unlinked_repository = delete_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-unlink-repository",
+        &second_repository_uri,
+        json!({"expectedVersion": 12}),
+    )
+    .await;
+    assert_eq!(
+        unlinked_repository.0,
+        StatusCode::OK,
+        "{}",
+        unlinked_repository.1
+    );
+    assert_eq!(unlinked_repository.2["version"], 13);
+    let restored_primary = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-restore-primary"),
+        &format!("{first_repository_uri}/primary"),
+        json!({"expectedVersion": 13}),
+    )
+    .await;
+    assert_eq!(restored_primary.0, StatusCode::OK, "{}", restored_primary.1);
+    assert_eq!(restored_primary.2["version"], 14);
+    assert_eq!(
+        restored_primary.2["linkedRepositories"][0]["id"],
+        seed.repository_id.to_string()
+    );
+    assert_eq!(
+        restored_primary.2["linkedRepositories"][0]["role"],
+        "primary"
+    );
+
     let comment_uri = format!(
         "{base}/{}/comments",
         created.2["id"].as_str().expect("created ID")
@@ -642,7 +828,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(comment.0, StatusCode::CREATED, "{}", comment.1);
-    assert_eq!(comment.2["sequence"], 9);
+    assert_eq!(comment.2["sequence"], 15);
     assert_eq!(
         comment.2["comment"]["mentionedActors"][0]["id"],
         seed.human_actor_id.to_string()
@@ -727,7 +913,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .await;
     assert_eq!(timeline.0, StatusCode::OK, "{}", timeline.1);
     assert_eq!(timeline.2["entries"][0]["kind"], "comment");
-    assert_eq!(timeline.2["entries"][0]["sequence"], 9);
+    assert_eq!(timeline.2["entries"][0]["sequence"], 15);
     assert!(timeline.2["nextCursor"].is_string());
 
     let activity_count = sqlx::query_scalar::<_, i64>(
@@ -737,7 +923,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 activity");
-    assert_eq!(activity_count, 10);
+    assert_eq!(activity_count, 16);
     let outbox_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND resource_kind = 'work_item' AND conversation_id IS NULL",
     )
@@ -745,7 +931,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 outbox events");
-    assert_eq!(outbox_count, 11);
+    assert_eq!(outbox_count, 17);
     let counter = sqlx::query_scalar::<_, i64>(
         "SELECT next_work_item_number FROM project_counters WHERE project_id = $1",
     )

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { WorkItemsPage } from './WorkItemsPage'
 import {
@@ -11,6 +12,9 @@ import {
   useCreateWorkItemComment,
   useRemoveAcceptanceCriterion,
   useSetWorkItemArchived,
+  useSetWorkItemPrimaryRepository,
+  useSetWorkItemRepositoryLink,
+  useSetWorkItemThreadLink,
   useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
@@ -27,6 +31,16 @@ vi.mock('../auth/session', () => ({
   useAuthenticatedSession: () => ({ user: { displayName: 'Mischa' } }),
 }))
 vi.mock('../projects/hooks', () => ({ useProject: vi.fn() }))
+vi.mock('../conversations/hooks', () => ({
+  useProjectConversationSidebar: () => ({
+    data: { channels: [] },
+    isPending: false,
+    isError: false,
+  }),
+}))
+vi.mock('../repositories/api', () => ({
+  listRepositories: () => Promise.resolve({ repositories: [], canManage: false }),
+}))
 vi.mock('../projects/useRememberProjectLocation', () => ({
   useRememberProjectLocation: vi.fn(),
 }))
@@ -37,6 +51,9 @@ vi.mock('./hooks', () => ({
   useCreateWorkItemComment: vi.fn(),
   useRemoveAcceptanceCriterion: vi.fn(),
   useSetWorkItemArchived: vi.fn(),
+  useSetWorkItemPrimaryRepository: vi.fn(),
+  useSetWorkItemRepositoryLink: vi.fn(),
+  useSetWorkItemThreadLink: vi.fn(),
   useUpdateAcceptanceCriterion: vi.fn(),
   useUpdateWorkItem: vi.fn(),
   useWorkItem: vi.fn(),
@@ -102,6 +119,8 @@ const workItem = {
   createdAt: '2026-07-31T00:00:00Z',
   updatedAt: '2026-07-31T00:00:00Z',
   acceptanceCriteria: [],
+  linkedThreads: [],
+  linkedRepositories: [],
   capabilities: { view: true, edit: true, archive: true },
 }
 
@@ -173,6 +192,9 @@ beforeEach(() => {
     useUpdateAcceptanceCriterion,
     useRemoveAcceptanceCriterion,
     useCreateWorkItemComment,
+    useSetWorkItemThreadLink,
+    useSetWorkItemRepositoryLink,
+    useSetWorkItemPrimaryRepository,
   ]) {
     vi.mocked(hook).mockReturnValue({
       mutate: vi.fn(),
@@ -278,18 +300,20 @@ describe('Work Item detail', () => {
       error: new Error('conflict'),
     } as unknown as ReturnType<typeof useUpdateWorkItem>)
     render(
-      <MemoryRouter
-        initialEntries={[
-          `/projects/${projectId}/work-items/${workItemId}`,
-        ]}
-      >
-        <Routes>
-          <Route
-            element={<WorkItemDetailPage />}
-            path="/projects/:projectId/work-items/:workItemId"
-          />
-        </Routes>
-      </MemoryRouter>,
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter
+          initialEntries={[
+            `/projects/${projectId}/work-items/${workItemId}`,
+          ]}
+        >
+          <Routes>
+            <Route
+              element={<WorkItemDetailPage />}
+              path="/projects/:projectId/work-items/:workItemId"
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
     )
 
     const title = screen.getByLabelText('Title')

@@ -710,7 +710,43 @@ async fn select_run_setup(
     .bind(project_id)
     .fetch_all(&mut **transaction)
     .await?;
-    let selected_repository_id = match bound_repository_id.or(explicit_repository_id) {
+    let linked_work_item_count = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM work_item_conversation_links WHERE project_id = $1 AND conversation_id = $2",
+    )
+    .bind(project_id)
+    .bind(conversation_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let linked_primary_repository_id = if linked_work_item_count == 1 {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT repository.id
+            FROM work_item_conversation_links conversation_link
+            JOIN work_item_repository_links repository_link
+              ON repository_link.project_id = conversation_link.project_id
+             AND repository_link.work_item_id = conversation_link.work_item_id
+             AND repository_link.role = 'primary'
+            JOIN repositories repository
+              ON repository.project_id = repository_link.project_id
+             AND repository.id = repository_link.repository_id
+            WHERE conversation_link.project_id = $1
+              AND conversation_link.conversation_id = $2
+              AND repository.enabled AND repository.trusted
+              AND repository.archived_at IS NULL
+              AND repository.preparation_state = 'ready'
+            "#,
+        )
+        .bind(project_id)
+        .bind(conversation_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    } else {
+        None
+    };
+    let selected_repository_id = match bound_repository_id
+        .or(explicit_repository_id)
+        .or(linked_primary_repository_id)
+    {
         Some(repository_id) if ready_repository_ids.contains(&repository_id) => repository_id,
         Some(_) => return Err(AppError::NotFound("repository")),
         None if ready_repository_ids.len() == 1 => ready_repository_ids[0],
