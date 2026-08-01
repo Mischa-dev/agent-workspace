@@ -102,7 +102,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             project_id: seed.project_id,
             actor_id: seed.human_actor_id,
             client_name: "codex-m6-test".to_owned(),
-            scopes: vec!["read".to_owned()],
+            scopes: vec!["read".to_owned(), "write".to_owned()],
             expires_in_days: 1,
         },
     )
@@ -202,7 +202,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(7)
+        Some(14)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),
@@ -290,6 +290,171 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         );
     }
 
+    let update_arguments = json!({
+        "workItemId":work_item_id.to_string(),
+        "expectedVersion":1,
+        "title":"M6 write contract",
+        "clientRequestId":"m6-update-1"
+    });
+    let updated = call_tool(
+        &application,
+        &token,
+        &session_id,
+        10,
+        "work_item_update",
+        update_arguments.clone(),
+    )
+    .await;
+    assert_eq!(updated.pointer("/outcome"), Some(&json!("applied")));
+    assert_eq!(updated.pointer("/version"), Some(&json!(2)));
+    assert_eq!(updated.pointer("/idempotentReplay"), Some(&json!(false)));
+    let replay = call_tool(
+        &application,
+        &token,
+        &session_id,
+        11,
+        "work_item_update",
+        update_arguments,
+    )
+    .await;
+    assert_eq!(replay.pointer("/idempotentReplay"), Some(&json!(true)));
+
+    let stale = call_tool(
+        &application,
+        &token,
+        &session_id,
+        12,
+        "work_item_set_status",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":1,
+            "status":"Ready",
+            "clientRequestId":"m6-stale-1"
+        }),
+    )
+    .await;
+    assert_eq!(stale.pointer("/outcome"), Some(&json!("conflict")));
+    assert_eq!(stale.pointer("/currentVersion"), Some(&json!(2)));
+
+    let blocked = call_tool(
+        &application,
+        &token,
+        &session_id,
+        13,
+        "work_item_mark_blocked",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":2,
+            "reason":"Waiting for a bounded dependency",
+            "clientRequestId":"m6-blocked-1"
+        }),
+    )
+    .await;
+    assert_eq!(blocked.pointer("/version"), Some(&json!(3)));
+
+    let posted = call_tool(
+        &application,
+        &token,
+        &session_id,
+        14,
+        "work_item_post_update",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "update":"Useful bounded progress update.",
+            "clientRequestId":"m6-post-1"
+        }),
+    )
+    .await;
+    assert_eq!(posted.pointer("/version"), Some(&json!(3)));
+
+    let subtask = call_tool(
+        &application,
+        &token,
+        &session_id,
+        15,
+        "work_item_create_subtask",
+        json!({
+            "parentWorkItemId":work_item_id.to_string(),
+            "title":"Verify MCP audit",
+            "clientRequestId":"m6-subtask-1"
+        }),
+    )
+    .await;
+    assert_eq!(subtask.pointer("/outcome"), Some(&json!("applied")));
+
+    let ready = call_tool(
+        &application,
+        &token,
+        &session_id,
+        16,
+        "work_item_set_status",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":3,
+            "status":"Ready",
+            "clientRequestId":"m6-ready-1"
+        }),
+    )
+    .await;
+    assert_eq!(ready.pointer("/version"), Some(&json!(4)));
+    let started = call_tool(
+        &application,
+        &token,
+        &session_id,
+        17,
+        "work_item_set_status",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":4,
+            "status":"In Progress",
+            "clientRequestId":"m6-started-1"
+        }),
+    )
+    .await;
+    assert_eq!(started.pointer("/version"), Some(&json!(5)));
+    let review = call_tool(
+        &application,
+        &token,
+        &session_id,
+        18,
+        "work_item_mark_ready_for_review",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":5,
+            "clientRequestId":"m6-review-1"
+        }),
+    )
+    .await;
+    assert_eq!(review.pointer("/version"), Some(&json!(6)));
+
+    let missing_pr = call_tool(
+        &application,
+        &token,
+        &session_id,
+        19,
+        "work_item_link_pull_request",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":6,
+            "pullRequestId":Uuid::now_v7().to_string(),
+            "clientRequestId":"m6-pr-1"
+        }),
+    )
+    .await;
+    assert_eq!(missing_pr.pointer("/outcome"), Some(&json!("not_found")));
+
+    let mcp_audits = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM audit_events WHERE authentication_class = 'mcp_bearer' AND channel = 'mcp' AND mcp_credential_id = $1",
+    )
+    .bind(issued.credential_id)
+    .fetch_one(&pool)
+    .await
+    .expect("MCP audit count");
+    assert_eq!(
+        mcp_audits, 7,
+        "exact replay and conflicts create no success audit"
+    );
+
     let before_conversations = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversations")
         .fetch_one(&pool)
         .await
@@ -350,6 +515,35 @@ async fn mcp_request(
         )
         .await
         .expect("MCP response")
+}
+
+async fn call_tool(
+    application: &axum::Router,
+    token: &str,
+    session_id: &str,
+    id: i64,
+    name: &str,
+    arguments: Value,
+) -> Value {
+    let response = protocol_json(
+        mcp_request(
+            application,
+            Some(token),
+            Some(session_id),
+            &json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"tools/call",
+                "params":{"name":name,"arguments":arguments}
+            }),
+        )
+        .await,
+    )
+    .await;
+    response
+        .pointer("/result/structuredContent")
+        .cloned()
+        .unwrap_or_else(|| panic!("missing structured result for {name}: {response}"))
 }
 
 async fn protocol_json(response: axum::response::Response) -> Value {
