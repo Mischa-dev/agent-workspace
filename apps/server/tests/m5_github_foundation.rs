@@ -1,11 +1,18 @@
 use std::{
-    collections::BTreeMap, fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, sync::Arc,
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
+    process::Command,
+    sync::Arc,
 };
 
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin, bootstrap_development_member},
     config::AppConfig,
+    git_runtime::{create_worktree, expected_repository_mirror_path, managed_worktree_path},
     github::webhook_router,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
@@ -318,12 +325,197 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     assert!(job_payload.contains("0123456789012345678901234567890123456789"));
     assert!(!job_payload.contains("this-arbitrary-field-must-not-persist"));
 
+    let source_repository = temporary.path().join("publication-source");
+    fs::create_dir(&source_repository).expect("create publication source");
+    git(&source_repository, &["init", "--initial-branch=main"]);
+    fs::write(source_repository.join("known.txt"), "base\n")
+        .expect("write publication base fixture");
+    git(&source_repository, &["add", "known.txt"]);
+    git(
+        &source_repository,
+        &[
+            "-c",
+            "user.name=Agent Workspace Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "base",
+        ],
+    );
+    let mirror = expected_repository_mirror_path(&data_root, seed.repository_id)
+        .expect("managed publication mirror path");
+    git(
+        temporary.path(),
+        &[
+            "clone",
+            "--mirror",
+            source_repository.to_str().expect("UTF-8 source path"),
+            mirror.to_str().expect("UTF-8 mirror path"),
+        ],
+    );
+    let base_commit = git_output(&mirror, &["rev-parse", "refs/heads/main"], true);
+    let workspace_id = Uuid::now_v7();
+    let run_id = Uuid::now_v7();
+    let branch = format!(
+        "codex/run-m5-publish-{}",
+        &run_id.simple().to_string()[..12]
+    );
+    let worktree = managed_worktree_path(&data_root, seed.repository_id, workspace_id)
+        .expect("managed publication worktree path");
+    create_worktree(&mirror, &worktree, &branch, &base_commit)
+        .expect("create managed publication worktree");
+    fs::write(worktree.join("known.txt"), "published\n").expect("write publication change");
+    git(&worktree, &["add", "known.txt"]);
+    git(
+        &worktree,
+        &[
+            "-c",
+            "user.name=Agent Workspace Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "publication candidate",
+        ],
+    );
+    let intended_commit = git_output(&worktree, &["rev-parse", "HEAD"], false);
+    sqlx::query(
+        "UPDATE repositories SET mirror_path = $2, preparation_state = 'ready', prepared_at = now(), preparation_failure_category = NULL WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .bind(mirror.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .expect("point test Repository at managed mirror");
+    sqlx::query(
+        r#"
+        INSERT INTO repository_workspaces (
+            id, project_id, repository_id, conversation_id, branch_name,
+            base_commit, state
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'retained')
+        "#,
+    )
+    .bind(workspace_id)
+    .bind(seed.project_id)
+    .bind(seed.repository_id)
+    .bind(seed.thread_id)
+    .bind(&branch)
+    .bind(&base_commit)
+    .execute(&pool)
+    .await
+    .expect("insert publication Repository Workspace");
+    sqlx::query(
+        "INSERT INTO git_worktrees (id, repository_workspace_id, path, state) VALUES ($1, $2, $3, 'ready')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace_id)
+    .bind(worktree.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .expect("insert publication Git worktree");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            repository_workspace_id, state, prompt, authorization_snapshot,
+            started_at, finished_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, 'completed',
+            'M5 explicit publication fixture', '{}'::jsonb, now(), now()
+        )
+        "#,
+    )
+    .bind(run_id)
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .expect("insert terminal publication Agent Run");
+    let csrf = csrf_from_cookie(&owner_cookie);
+    let publish_uri = format!(
+        "/api/v1/projects/{}/agent-runs/{run_id}/publish",
+        seed.project_id
+    );
+    let publish = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&publish_uri)
+                .header("origin", "http://127.0.0.1:3100")
+                .header(header::COOKIE, &owner_cookie)
+                .header("x-csrf-token", &csrf)
+                .header("idempotency-key", "m5-explicit-publish")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("build M5 publish request"),
+        )
+        .await
+        .expect("M5 publish response");
+    let publish = response_json(publish).await;
+    assert_eq!(publish.0, StatusCode::ACCEPTED);
+    assert_eq!(publish.1["agentRunId"], run_id.to_string());
+    assert_eq!(publish.1["repositoryWorkspaceId"], workspace_id.to_string());
+    assert_eq!(publish.1["intendedCommit"], intended_commit);
+    let durable_publish = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String)>(
+        "SELECT agent_run_id, repository_workspace_id, requesting_actor_id, intended_commit FROM github_jobs WHERE kind = 'workspace_publish'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("durable workspace publication job");
+    assert_eq!(durable_publish.0, run_id);
+    assert_eq!(durable_publish.1, workspace_id);
+    assert_eq!(durable_publish.2, seed.human_actor_id);
+    assert_eq!(durable_publish.3, intended_commit);
+
     supervisors.shutdown_all().await;
     pool.close().await;
     administrative_pool
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
         .await
         .expect("drop isolated M5 GitHub schema");
+}
+
+fn csrf_from_cookie(cookie: &str) -> String {
+    cookie
+        .split("; ")
+        .find_map(|pair| pair.strip_prefix("agent_workspace_csrf="))
+        .expect("M5 CSRF cookie")
+        .to_owned()
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let status = Command::new("/usr/bin/git")
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .expect("run Git fixture command");
+    assert!(status.success(), "Git fixture command failed: {args:?}");
+}
+
+fn git_output(cwd: &Path, args: &[&str], bare: bool) -> String {
+    let mut command = Command::new("/usr/bin/git");
+    if bare {
+        command.arg("--git-dir").arg(cwd);
+    } else {
+        command.current_dir(cwd);
+    }
+    let output = command.args(args).output().expect("run Git fixture query");
+    assert!(
+        output.status.success(),
+        "Git fixture query failed: {args:?}"
+    );
+    String::from_utf8(output.stdout)
+        .expect("UTF-8 Git fixture output")
+        .trim()
+        .to_owned()
 }
 
 fn write_owner_only(path: &std::path::Path, bytes: &[u8]) {
