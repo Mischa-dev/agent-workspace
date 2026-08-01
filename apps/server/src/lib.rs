@@ -13,6 +13,7 @@ pub mod git_runtime;
 pub mod github;
 pub mod health;
 pub mod idempotency;
+pub mod mcp;
 pub mod message_content;
 pub mod migration_preflight;
 pub mod outbox;
@@ -72,6 +73,7 @@ pub fn router(state: AppState) -> Router {
         .merge(repositories::router())
         .merge(github::router())
         .merge(work_items::router())
+        .merge(mcp::router(state.clone()))
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(

@@ -1,15 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
-    AppState, bootstrap, config::AppConfig, github, migration_preflight,
+    AppState, bootstrap, config::AppConfig, github, mcp, migration_preflight,
     provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
     router, seed, shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -96,6 +97,72 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("seed development data")?;
             println!("{}", serde_json::to_string_pretty(&seeded)?);
+            return Ok(());
+        }
+        Some("mcp-credential-create") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(
+                &options,
+                &[
+                    "project-id",
+                    "actor-id",
+                    "client-name",
+                    "scopes",
+                    "expires-days",
+                ],
+            )?;
+            let issued = mcp::issue_credential(
+                &pool,
+                mcp::IssueCredentialCommand {
+                    project_id: required_uuid(&options, "project-id")?,
+                    actor_id: required_uuid(&options, "actor-id")?,
+                    client_name: required_option(&options, "client-name")?.to_owned(),
+                    scopes: parse_scopes(required_option(&options, "scopes")?)?,
+                    expires_in_days: optional_u16(&options, "expires-days", 30)?,
+                },
+            )
+            .await
+            .context("issue MCP credential")?;
+            println!("{}", serde_json::to_string_pretty(&issued)?);
+            return Ok(());
+        }
+        Some("mcp-credential-list") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["project-id"])?;
+            let credentials = mcp::list_credentials(&pool, required_uuid(&options, "project-id")?)
+                .await
+                .context("list MCP credentials")?;
+            println!("{}", serde_json::to_string_pretty(&credentials)?);
+            return Ok(());
+        }
+        Some("mcp-credential-revoke") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["credential-id", "expected-version"])?;
+            let credential = mcp::revoke_credential(
+                &pool,
+                required_uuid(&options, "credential-id")?,
+                required_i64(&options, "expected-version")?,
+            )
+            .await
+            .context("revoke MCP credential")?;
+            println!("{}", serde_json::to_string_pretty(&credential)?);
+            return Ok(());
+        }
+        Some("mcp-credential-replace") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(
+                &options,
+                &["credential-id", "expected-version", "expires-days"],
+            )?;
+            let issued = mcp::replace_credential(
+                &pool,
+                required_uuid(&options, "credential-id")?,
+                required_i64(&options, "expected-version")?,
+                optional_u16(&options, "expires-days", 30)?,
+            )
+            .await
+            .context("replace MCP credential")?;
+            println!("{}", serde_json::to_string_pretty(&issued)?);
             return Ok(());
         }
         Some(_) => bail!("unknown command"),
@@ -265,6 +332,91 @@ async fn main() -> anyhow::Result<()> {
     signal_task.abort();
     supervisors.shutdown_all().await;
     result
+}
+
+fn parse_options(
+    arguments: impl Iterator<Item = String>,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut options = BTreeMap::new();
+    let mut arguments = arguments;
+    while let Some(flag) = arguments.next() {
+        let Some(name) = flag.strip_prefix("--") else {
+            bail!("expected --name value arguments");
+        };
+        if name.is_empty() || options.contains_key(name) {
+            bail!("invalid or duplicate option --{name}");
+        }
+        let value = arguments
+            .next()
+            .with_context(|| format!("missing value for --{name}"))?;
+        options.insert(name.to_owned(), value);
+    }
+    Ok(options)
+}
+
+fn required_option<'a>(
+    options: &'a BTreeMap<String, String>,
+    name: &str,
+) -> anyhow::Result<&'a str> {
+    options
+        .get(name)
+        .map(String::as_str)
+        .with_context(|| format!("missing --{name}"))
+}
+
+fn reject_unknown_options(
+    options: &BTreeMap<String, String>,
+    allowed: &[&str],
+) -> anyhow::Result<()> {
+    if let Some(name) = options
+        .keys()
+        .find(|name| !allowed.contains(&name.as_str()))
+    {
+        bail!("unknown option --{name}");
+    }
+    Ok(())
+}
+
+fn required_uuid(options: &BTreeMap<String, String>, name: &str) -> anyhow::Result<Uuid> {
+    required_option(options, name)?
+        .parse()
+        .with_context(|| format!("invalid --{name}"))
+}
+
+fn required_i64(options: &BTreeMap<String, String>, name: &str) -> anyhow::Result<i64> {
+    let value = required_option(options, name)?
+        .parse::<i64>()
+        .with_context(|| format!("invalid --{name}"))?;
+    if value < 1 {
+        bail!("--{name} must be positive");
+    }
+    Ok(value)
+}
+
+fn optional_u16(
+    options: &BTreeMap<String, String>,
+    name: &str,
+    default: u16,
+) -> anyhow::Result<u16> {
+    options.get(name).map_or(Ok(default), |value| {
+        value
+            .parse::<u16>()
+            .with_context(|| format!("invalid --{name}"))
+    })
+}
+
+fn parse_scopes(value: &str) -> anyhow::Result<Vec<String>> {
+    let mut scopes = value
+        .split(',')
+        .map(str::trim)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    scopes.sort();
+    scopes.dedup();
+    if scopes.is_empty() || scopes.iter().any(String::is_empty) {
+        bail!("--scopes must be a comma-separated list");
+    }
+    Ok(scopes)
 }
 
 async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
