@@ -2,16 +2,33 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M2 satisfied; M3 active v0.12
+**Status:** M3 satisfied; M4 entry planning v0.13
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0, M1, and M2 are complete. Milestone M3 is authorized by the task-level criteria below; every later milestone remains subject to the entry checks defined in this document.
+**Implementation authorization:** Milestones M0 through M3 are complete. M4 remains unauthorized until its backlog is elaborated with the entry checks required below; every later milestone remains subject to the same gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.13 — M3 acceptance
+
+- accepted M3 against exact green commit
+  `0179ee6b2c60815b647b2312c9bd3509cd83aad5`, GitHub CI run
+  `30681247396`, and its immutable Red Hat release
+- recorded the browser-driven hosted run, two durable approvals, one
+  consolidated Worker Message, known-file-only dirty state, and exact
+  repository/base/branch/provider identity
+- recorded conservative systemd restart reconciliation of a real working turn
+  into an actionable terminal interruption with its worktree preserved
+- confirmed zero application-secret keys in the provider environment and zero
+  credential patterns, runtime paths, or disallowed control characters in the
+  inspected logs, durable rows, and browser output
+- recorded that the pinned hosted execution mode did not elect to expose the
+  experimental `request_user_input` tool while live command approvals worked
+- left M4 unauthorized until its Work Items backlog is elaborated
 
 ### v0.12 — M3 execution foundation hardening
 
@@ -5247,6 +5264,22 @@ repaired by guessing. Newly registered repositories continue to clone or
 perform a pruned remote update, while short-lived authenticated fetch and push
 remain M5 responsibilities. No GitHub credential enters the M3 service,
 provider environment, repository configuration, database, or logs.
+
+## D-040: M3 accepts live command blockers without requiring experimental questions
+
+**Status:** Accepted
+
+**Reason:** The pinned App Server schema includes the experimental
+`item/tool/requestUserInput` request and the application retains a bounded,
+typed, durable question path for compatibility. During exact-release M3
+acceptance, however, the hosted model reported that `request_user_input` was
+unavailable in its current execution mode and emitted an ordinary Message
+instead of that provider request. Live command approval requests did emit and
+completed the full durable browser blocker flow. M3 therefore requires one
+real supported provider blocker and deterministic coverage of both approval
+and question adapter shapes; it does not claim that every hosted model or
+execution mode can elect to emit the experimental question request. No raw
+experimental provider shape enters the domain or browser contract.
 
 ---
 
