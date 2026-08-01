@@ -6,12 +6,17 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { WorkItemsPage } from './WorkItemsPage'
 import {
   useAssignableActors,
+  useCreateAcceptanceCriterion,
   useCreateWorkItem,
+  useCreateWorkItemComment,
+  useRemoveAcceptanceCriterion,
   useSetWorkItemArchived,
+  useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
   useWorkItems,
   useWorkItemWorkflow,
+  useWorkItemTimeline,
 } from './hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
 import { ApiError } from '../api/errors'
@@ -27,12 +32,17 @@ vi.mock('../projects/useRememberProjectLocation', () => ({
 }))
 vi.mock('./hooks', () => ({
   useAssignableActors: vi.fn(),
+  useCreateAcceptanceCriterion: vi.fn(),
   useCreateWorkItem: vi.fn(),
+  useCreateWorkItemComment: vi.fn(),
+  useRemoveAcceptanceCriterion: vi.fn(),
   useSetWorkItemArchived: vi.fn(),
+  useUpdateAcceptanceCriterion: vi.fn(),
   useUpdateWorkItem: vi.fn(),
   useWorkItem: vi.fn(),
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
+  useWorkItemTimeline: vi.fn(),
 }))
 vi.mock('../shell/AppShell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
@@ -91,6 +101,7 @@ const workItem = {
   archivedAt: null,
   createdAt: '2026-07-31T00:00:00Z',
   updatedAt: '2026-07-31T00:00:00Z',
+  acceptanceCriteria: [],
   capabilities: { view: true, edit: true, archive: true },
 }
 
@@ -157,6 +168,24 @@ beforeEach(() => {
     isPending: false,
     isError: false,
   } as unknown as ReturnType<typeof useSetWorkItemArchived>)
+  for (const hook of [
+    useCreateAcceptanceCriterion,
+    useUpdateAcceptanceCriterion,
+    useRemoveAcceptanceCriterion,
+    useCreateWorkItemComment,
+  ]) {
+    vi.mocked(hook).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      isError: false,
+    } as never)
+  }
+  vi.mocked(useWorkItemTimeline).mockReturnValue({
+    data: [],
+    isPending: false,
+    isError: false,
+    isSuccess: true,
+  } as unknown as ReturnType<typeof useWorkItemTimeline>)
 })
 
 afterEach(() => {

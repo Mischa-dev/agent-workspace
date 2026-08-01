@@ -20,6 +20,8 @@ export const queryKeys = {
     ['project', projectId, 'work-items', 'workflow'] as const,
   workItemAssignees: (projectId: string, query: string) =>
     ['project', projectId, 'work-items', 'assignees', query] as const,
+  workItemTimeline: (projectId: string, workItemId: string) =>
+    ['project', projectId, 'work-items', 'timeline', workItemId] as const,
   timeline: (
     projectId: string,
     conversationId: string,

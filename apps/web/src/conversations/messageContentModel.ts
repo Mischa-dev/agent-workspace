@@ -36,6 +36,21 @@ function parseNode(value: unknown): MessageNode | null {
     return { type: 'mention', actorId: node.actorId }
   }
 
+  if (node.type === 'work_item_ref') {
+    const workItemId = node.workItemId ?? node.work_item_id
+    if (
+      Object.keys(node).some(
+        (key) =>
+          key !== 'type' && key !== 'workItemId' && key !== 'work_item_id',
+      ) ||
+      typeof workItemId !== 'string' ||
+      !UUID_PATTERN.test(workItemId)
+    ) {
+      return null
+    }
+    return { type: 'work_item_ref', workItemId }
+  }
+
   return null
 }
 
@@ -81,16 +96,23 @@ export function parseMessageContent(value: unknown): MessageContentV1 | null {
   const nodes: MessageNode[] = []
   let textCharacters = 0
   let mentions = 0
+  let workItemReferences = 0
   for (const rawNode of content.nodes) {
     const node = parseNode(rawNode)
     if (!node) return null
     if (node.type === 'text') {
       if (!isSafeMessageText(node.text)) return null
       textCharacters += messageTextScalarValues(node.text)
-    } else {
+    } else if (node.type === 'mention') {
       mentions += 1
+    } else {
+      workItemReferences += 1
     }
-    if (textCharacters > MAX_MESSAGE_TEXT_CHARACTERS || mentions > 32) {
+    if (
+      textCharacters > MAX_MESSAGE_TEXT_CHARACTERS ||
+      mentions > 32 ||
+      workItemReferences > 32
+    ) {
       return null
     }
     nodes.push(node)

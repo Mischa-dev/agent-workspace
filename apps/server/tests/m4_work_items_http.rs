@@ -425,6 +425,21 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         first_page.2["items"][0]["id"],
         second_page.2["items"][0]["id"]
     );
+    let references = get_json(
+        &application,
+        &cookie,
+        &format!(
+            "/api/v1/projects/{}/work-item-references?q=Work&limit=2",
+            seed.project_id
+        ),
+    )
+    .await;
+    assert_eq!(references.0, StatusCode::OK);
+    assert_eq!(
+        references.2["items"].as_array().expect("references").len(),
+        2
+    );
+    assert!(references.2["items"][0].get("description").is_none());
     let search = get_json(&application, &cookie, &format!("{base}?q=First")).await;
     assert_eq!(
         search.2["items"]
@@ -510,6 +525,211 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     assert_eq!(no_op_restore.0, StatusCode::OK);
     assert_eq!(no_op_restore.2["version"], 4);
 
+    let criteria_uri = format!(
+        "{base}/{}/acceptance-criteria",
+        created.2["id"].as_str().expect("created ID")
+    );
+    let first_criterion = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-criterion-one"),
+        &criteria_uri,
+        json!({"expectedVersion": 4, "text": "The browser renders the durable item"}),
+    )
+    .await;
+    assert_eq!(
+        first_criterion.0,
+        StatusCode::CREATED,
+        "{}",
+        first_criterion.1
+    );
+    assert_eq!(first_criterion.2["version"], 5);
+    assert_eq!(first_criterion.2["acceptanceCriteria"][0]["position"], 1);
+    let criterion_id = first_criterion.2["acceptanceCriteria"][0]["id"]
+        .as_str()
+        .expect("criterion ID")
+        .to_owned();
+    let second_criterion = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-criterion-two"),
+        &criteria_uri,
+        json!({"expectedVersion": 5, "text": "The conflict keeps the local draft"}),
+    )
+    .await;
+    assert_eq!(second_criterion.0, StatusCode::CREATED);
+    assert_eq!(second_criterion.2["version"], 6);
+    let second_criterion_id = second_criterion.2["acceptanceCriteria"][1]["id"]
+        .as_str()
+        .expect("second criterion ID")
+        .to_owned();
+    let completed_criterion = patch_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-criterion-complete",
+        &format!("{criteria_uri}/{criterion_id}"),
+        json!({"expectedVersion": 6, "completed": true, "position": 2}),
+    )
+    .await;
+    assert_eq!(
+        completed_criterion.0,
+        StatusCode::OK,
+        "{}",
+        completed_criterion.1
+    );
+    assert_eq!(completed_criterion.2["version"], 7);
+    assert_eq!(
+        completed_criterion.2["acceptanceCriteria"][1]["id"],
+        criterion_id
+    );
+    assert_eq!(
+        completed_criterion.2["acceptanceCriteria"][1]["completed"],
+        true
+    );
+    assert_eq!(
+        completed_criterion.2["acceptanceCriteria"][1]["completedBy"]["id"],
+        seed.human_actor_id.to_string()
+    );
+    let removed_criterion = delete_json(
+        &application,
+        &cookie,
+        &csrf,
+        "m4-criterion-remove",
+        &format!("{criteria_uri}/{second_criterion_id}"),
+        json!({"expectedVersion": 7}),
+    )
+    .await;
+    assert_eq!(
+        removed_criterion.0,
+        StatusCode::OK,
+        "{}",
+        removed_criterion.1
+    );
+    assert_eq!(removed_criterion.2["version"], 8);
+    assert_eq!(
+        removed_criterion.2["acceptanceCriteria"]
+            .as_array()
+            .expect("criteria")
+            .len(),
+        1
+    );
+    assert_eq!(removed_criterion.2["acceptanceCriteria"][0]["position"], 1);
+
+    let comment_uri = format!(
+        "{base}/{}/comments",
+        created.2["id"].as_str().expect("created ID")
+    );
+    let comment = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-comment-one"),
+        &comment_uri,
+        json!({
+            "content": {
+                "version": 1,
+                "nodes": [
+                    {"type": "text", "text": "Please review "},
+                    {"type": "mention", "actorId": seed.human_actor_id},
+                    {"type": "text", "text": " with "},
+                    {"type": "work_item_ref", "workItemId": second.2["id"]}
+                ]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(comment.0, StatusCode::CREATED, "{}", comment.1);
+    assert_eq!(comment.2["sequence"], 9);
+    assert_eq!(
+        comment.2["comment"]["mentionedActors"][0]["id"],
+        seed.human_actor_id.to_string()
+    );
+    assert_eq!(
+        comment.2["comment"]["referencedWorkItems"][0]["id"],
+        second.2["id"]
+    );
+    let comment_replay = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-comment-one"),
+        &comment_uri,
+        json!({
+            "content": {
+                "version": 1,
+                "nodes": [
+                    {"type": "text", "text": "Please review "},
+                    {"type": "mention", "actorId": seed.human_actor_id},
+                    {"type": "text", "text": " with "},
+                    {"type": "work_item_ref", "workItemId": second.2["id"]}
+                ]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        comment_replay.2["comment"]["id"],
+        comment.2["comment"]["id"]
+    );
+    let conversation_message = post_json(
+        &application,
+        &cookie,
+        Some(&csrf),
+        Some("m4-conversation-work-item-ref"),
+        &format!("/api/v1/channels/{}/messages", seed.channel_id),
+        json!({
+            "content": {
+                "version": 1,
+                "nodes": [
+                    {"type": "text", "text": "Track this in "},
+                    {"type": "work_item_ref", "work_item_id": second.2["id"]}
+                ]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        conversation_message.0,
+        StatusCode::CREATED,
+        "{}",
+        conversation_message.1
+    );
+    assert_eq!(
+        conversation_message.2["message"]["referencedWorkItems"][0]["id"],
+        second.2["id"]
+    );
+    let conversation_timeline = get_json(
+        &application,
+        &cookie,
+        &format!("/api/v1/conversations/{}/timeline", seed.channel_id),
+    )
+    .await;
+    assert_eq!(conversation_timeline.0, StatusCode::OK);
+    assert_eq!(
+        conversation_timeline.2["entries"]
+            .as_array()
+            .expect("Conversation timeline")
+            .last()
+            .expect("Conversation message")["message"]["referencedWorkItems"][0]["id"],
+        second.2["id"]
+    );
+    let timeline = get_json(
+        &application,
+        &cookie,
+        &format!(
+            "{base}/{}/timeline?limit=3",
+            created.2["id"].as_str().expect("created ID")
+        ),
+    )
+    .await;
+    assert_eq!(timeline.0, StatusCode::OK, "{}", timeline.1);
+    assert_eq!(timeline.2["entries"][0]["kind"], "comment");
+    assert_eq!(timeline.2["entries"][0]["sequence"], 9);
+    assert!(timeline.2["nextCursor"].is_string());
+
     let activity_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM work_item_activity WHERE project_id = $1",
     )
@@ -517,7 +737,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 activity");
-    assert_eq!(activity_count, 6);
+    assert_eq!(activity_count, 10);
     let outbox_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND resource_kind = 'work_item' AND conversation_id IS NULL",
     )
@@ -525,7 +745,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 outbox events");
-    assert_eq!(outbox_count, 6);
+    assert_eq!(outbox_count, 11);
     let counter = sqlx::query_scalar::<_, i64>(
         "SELECT next_work_item_number FROM project_counters WHERE project_id = $1",
     )
@@ -701,6 +921,35 @@ async fn patch_json(
         )
         .await
         .expect("M4 PATCH response");
+    response_json(response).await
+}
+
+async fn delete_json(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    idempotency_key: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("origin", "http://127.0.0.1:3100")
+                .header("x-csrf-token", csrf)
+                .header("idempotency-key", idempotency_key)
+                .body(Body::from(
+                    serde_json::to_vec(&body).expect("serialize M4 DELETE request"),
+                ))
+                .expect("build M4 DELETE request"),
+        )
+        .await
+        .expect("M4 DELETE response");
     response_json(response).await
 }
 
