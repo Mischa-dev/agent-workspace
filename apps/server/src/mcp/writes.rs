@@ -249,16 +249,16 @@ async fn set_status_inner(
         });
     }
     if status_id == current.status_id {
-        let result = applied(
+        return finalize_noop(
+            transaction,
+            principal,
+            &reservation,
             current.id,
             current.version,
-            Vec::new(),
-            None,
-            Uuid::now_v7(),
-        );
-        complete(&mut transaction, &reservation, StatusCode::OK, &result).await?;
-        transaction.commit().await?;
-        return Ok(result);
+            "work_item.mcp_status_unchanged",
+            &arguments.client_request_id,
+        )
+        .await;
     }
     sqlx::query(
         "UPDATE work_items SET status_id = $3, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $4",
@@ -414,10 +414,16 @@ async fn update_work_item_inner(
         changed.push("assignee".to_owned());
     }
     if changed.is_empty() {
-        let result = applied(current.id, current.version, changed, None, Uuid::now_v7());
-        complete(&mut transaction, &reservation, StatusCode::OK, &result).await?;
-        transaction.commit().await?;
-        return Ok(result);
+        return finalize_noop(
+            transaction,
+            principal,
+            &reservation,
+            current.id,
+            current.version,
+            "work_item.mcp_update_unchanged",
+            &arguments.client_request_id,
+        )
+        .await;
     }
     sqlx::query(
         r#"
@@ -847,10 +853,10 @@ pub async fn mark_blocked(
         let Some(current) = lock_work_item(&mut transaction, principal.project_id, work_item_id).await? else { return Ok(not_found()); };
         if let Some(conflict) = version_or_archive_conflict(&current, arguments.expected_version) { return Ok(conflict); }
         if current.blocked_reason.as_deref() == Some(&reason) {
-            let result = applied(work_item_id, current.version, Vec::new(), None, Uuid::now_v7());
-            complete(&mut transaction, &reservation, StatusCode::OK, &result).await?;
-            transaction.commit().await?;
-            return Ok(result);
+            return finalize_noop(
+                transaction, principal, &reservation, work_item_id, current.version,
+                "work_item.mcp_blocker_unchanged", &arguments.client_request_id,
+            ).await;
         }
         sqlx::query(
             "UPDATE work_items SET blocked_reason = $3, blocked_at = now(), blocked_by_actor_id = $4, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $5",
@@ -898,10 +904,10 @@ pub async fn mark_ready_for_review(
         if current.status_id != review_status_id { changed.push("status".to_owned()); }
         if current.blocked_reason.is_some() { changed.push("blockedReason".to_owned()); }
         if changed.is_empty() {
-            let result = applied(work_item_id, current.version, changed, None, Uuid::now_v7());
-            complete(&mut transaction, &reservation, StatusCode::OK, &result).await?;
-            transaction.commit().await?;
-            return Ok(result);
+            return finalize_noop(
+                transaction, principal, &reservation, work_item_id, current.version,
+                "work_item.mcp_review_unchanged", &arguments.client_request_id,
+            ).await;
         }
         sqlx::query(
             "UPDATE work_items SET status_id = $3, blocked_reason = NULL, blocked_at = NULL, blocked_by_actor_id = NULL, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $4",
@@ -1151,6 +1157,30 @@ async fn insert_mcp_audit(
     .execute(&mut **transaction)
     .await?;
     Ok(audit_id)
+}
+
+async fn finalize_noop(
+    mut transaction: Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    reservation: &crate::idempotency::IdempotencyReservation,
+    work_item_id: Uuid,
+    version: i64,
+    action: &str,
+    request_id: &str,
+) -> Result<WriteResult, AppError> {
+    let result_id = insert_mcp_audit(
+        &mut transaction,
+        principal,
+        action,
+        work_item_id,
+        request_id,
+        serde_json::json!({"changed": false}),
+    )
+    .await?;
+    let result = applied(work_item_id, version, Vec::new(), None, result_id);
+    complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
+    transaction.commit().await?;
+    Ok(result)
 }
 
 fn applied(

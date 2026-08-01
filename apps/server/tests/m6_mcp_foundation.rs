@@ -290,6 +290,25 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         );
     }
 
+    let unchanged = call_tool(
+        &application,
+        &token,
+        &session_id,
+        20,
+        "work_item_set_status",
+        json!({
+            "workItemId":work_item_id.to_string(),
+            "expectedVersion":1,
+            "status":"Backlog",
+            "clientRequestId":"m6-status-unchanged-1"
+        }),
+    )
+    .await;
+    assert_eq!(unchanged.pointer("/outcome"), Some(&json!("applied")));
+    assert_eq!(unchanged.pointer("/version"), Some(&json!(1)));
+    assert_eq!(unchanged.pointer("/changedFields"), Some(&json!([])));
+    assert!(unchanged.pointer("/resultId").is_some());
+
     let update_arguments = json!({
         "workItemId":work_item_id.to_string(),
         "expectedVersion":1,
@@ -451,7 +470,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await
     .expect("MCP audit count");
     assert_eq!(
-        mcp_audits, 7,
+        mcp_audits, 8,
         "exact replay and conflicts create no success audit"
     );
 
