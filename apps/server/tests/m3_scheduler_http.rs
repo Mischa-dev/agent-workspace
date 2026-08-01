@@ -268,6 +268,7 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     assert_eq!(explicit.0, StatusCode::ACCEPTED);
     assert_eq!(explicit.2["repositoryId"], seed.repository_id.to_string());
     assert!(explicit.2["repositoryWorkspaceId"].is_null());
+    let explicit_run_id = uuid_field(&explicit.2, "runId");
 
     sqlx::query(
         r#"
@@ -361,6 +362,113 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .await;
     assert_eq!(repeated_question.0, StatusCode::OK);
     wait_for_state(&pool, second_run_id, "completed").await;
+    agent_workspace_server::scheduler::drain_now(&state)
+        .await
+        .expect("promote explicit repository run after completion");
+    wait_for_state(&pool, explicit_run_id, "blocked").await;
+    assert_eq!(
+        interrupt(&application, &cookie, &csrf, explicit_run_id)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let second_worktree = Path::new(&worktree_path);
+    git(second_worktree, ["add", "KNOWN_FILE.txt"]);
+    git(
+        second_worktree,
+        [
+            "-c",
+            "user.name=Agent Workspace",
+            "-c",
+            "user.email=agent-workspace@example.invalid",
+            "commit",
+            "-m",
+            "make retry fixture clean",
+        ],
+    );
+
+    let retry = retry_run(
+        &application,
+        &cookie,
+        &csrf,
+        second_run_id,
+        "retry-second-run",
+    )
+    .await;
+    assert_eq!(retry.0, StatusCode::ACCEPTED);
+    let retry_run_id = uuid_field(&retry.2, "runId");
+    assert_ne!(retry_run_id, second_run_id);
+    let retry_replay = retry_run(
+        &application,
+        &cookie,
+        &csrf,
+        second_run_id,
+        "retry-second-run",
+    )
+    .await;
+    assert_eq!(retry_replay.0, StatusCode::ACCEPTED);
+    assert_eq!(uuid_field(&retry_replay.2, "runId"), retry_run_id);
+    wait_for_state(&pool, retry_run_id, "blocked").await;
+    let (predecessor, retry_workspace_id, preserved_dirty) =
+        sqlx::query_as::<_, (Option<Uuid>, Uuid, bool)>(
+            r#"
+            SELECT retry.predecessor_run_id, retry.repository_workspace_id, old_tree.dirty
+              FROM agent_runs retry
+              JOIN agent_runs old ON old.id = retry.predecessor_run_id
+              JOIN git_worktrees old_tree
+                ON old_tree.repository_workspace_id = old.repository_workspace_id
+             WHERE retry.id = $1
+            "#,
+        )
+        .bind(retry_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read explicit retry ownership");
+    assert_eq!(predecessor, Some(second_run_id));
+    assert_eq!(retry_workspace_id, workspace_id);
+    assert!(
+        !preserved_dirty,
+        "only a clean owned worktree may be reused"
+    );
+    assert_eq!(
+        interrupt(&application, &cookie, &csrf, retry_run_id)
+            .await
+            .0,
+        StatusCode::OK
+    );
+
+    fs::write(second_worktree.join("UNCOMMITTED.txt"), "preserve me\n")
+        .expect("dirty the retained retry worktree");
+    let unsafe_retry = retry_run(
+        &application,
+        &cookie,
+        &csrf,
+        retry_run_id,
+        "unsafe-dirty-retry",
+    )
+    .await;
+    assert_eq!(unsafe_retry.0, StatusCode::ACCEPTED);
+    let unsafe_retry_id = uuid_field(&unsafe_retry.2, "runId");
+    wait_for_state(&pool, unsafe_retry_id, "failed").await;
+    let (unsafe_workspace, unsafe_reason, dirty_preserved) =
+        sqlx::query_as::<_, (Option<Uuid>, Option<String>, bool)>(
+            r#"
+            SELECT failed.repository_workspace_id, failed.failure_reason, worktree.dirty
+              FROM agent_runs failed
+              JOIN agent_runs predecessor ON predecessor.id = failed.predecessor_run_id
+              JOIN git_worktrees worktree
+                ON worktree.repository_workspace_id = predecessor.repository_workspace_id
+             WHERE failed.id = $1
+            "#,
+        )
+        .bind(unsafe_retry_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read unsafe retry preservation result");
+    assert!(unsafe_workspace.is_none());
+    assert!(unsafe_reason.is_some_and(|reason| reason.contains("dirty, missing")));
+    assert!(dirty_preserved);
+    assert!(second_worktree.join("UNCOMMITTED.txt").is_file());
 
     wait_for_claim_release(&pool, second_run_id).await;
     supervisors.shutdown_all().await;
@@ -495,6 +603,34 @@ async fn respond_to_approval(
             )
             .await
             .expect("blocker response"),
+    )
+    .await
+}
+
+async fn retry_run(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    run_id: Uuid,
+    idempotency_key: &str,
+) -> (StatusCode, String, Value) {
+    response_json(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/agent-runs/{run_id}/retry"))
+                    .header("origin", ORIGIN)
+                    .header("cookie", cookie)
+                    .header("x-csrf-token", csrf)
+                    .header("idempotency-key", idempotency_key)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .expect("build retry request"),
+            )
+            .await
+            .expect("retry response"),
     )
     .await
 }

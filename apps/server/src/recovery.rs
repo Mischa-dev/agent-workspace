@@ -27,13 +27,29 @@ struct RecoverableRun {
 /// completion is provable. Any ambiguous state terminates as interrupted while
 /// retaining the exact worktree.
 pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppError> {
+    // Queued work has no provider or filesystem ownership yet. A process loss
+    // only invalidates its short scheduler lease; the owned scheduler will
+    // admit it normally after startup.
+    sqlx::query(
+        r#"
+        UPDATE agent_runs
+           SET scheduler_claim_id = NULL,
+               scheduler_claimed_at = NULL,
+               scheduler_lease_expires_at = NULL,
+               updated_at = now()
+         WHERE state IN ('created', 'queued')
+           AND scheduler_claim_id IS NOT NULL
+        "#,
+    )
+    .execute(&state.pool)
+    .await?;
     let runs = sqlx::query_as::<_, RecoverableRun>(
         r#"
         SELECT run.id, run.state AS previous_state, run.conversation_id,
                conversation.project_id
         FROM agent_runs run
         JOIN conversations conversation ON conversation.id = run.conversation_id
-        WHERE run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        WHERE run.state IN ('starting', 'working', 'blocked', 'recovering')
         ORDER BY run.created_at
         "#,
     )
@@ -52,12 +68,13 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         .await?;
         transition.commit().await?;
 
-        let worktree = sqlx::query_as::<_, (Uuid, String)>(
+        let worktree = sqlx::query_as::<_, (Uuid, String, String, String)>(
             r#"
-            SELECT gw.id, gw.path
+            SELECT gw.id, gw.path, repository.mirror_path, rw.branch_name
             FROM agent_runs ar
             JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
             JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
+            JOIN repositories repository ON repository.id = ar.repository_id
             WHERE ar.id = $1
               AND gw.state IN ('creating', 'ready', 'dirty', 'missing', 'failed')
             "#,
@@ -67,12 +84,14 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         .await?;
 
         let (worktree_path, worktree_state, dirty) = match worktree {
-            Some((worktree_id, path)) => {
+            Some((worktree_id, path, mirror, branch)) => {
                 let inspection_path = PathBuf::from(path.clone());
-                let (worktree_state, dirty) =
-                    tokio::task::spawn_blocking(move || inspect_worktree(&inspection_path))
-                        .await
-                        .map_err(|_| AppError::Internal("join recovery Git inspection"))?;
+                let mirror = PathBuf::from(mirror);
+                let (worktree_state, dirty) = tokio::task::spawn_blocking(move || {
+                    inspect_owned_worktree(&mirror, &inspection_path, &branch)
+                })
+                .await
+                .map_err(|_| AppError::Internal("join recovery Git inspection"))?;
                 sqlx::query(
                     r#"
                     UPDATE git_worktrees
@@ -92,7 +111,7 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         };
 
         let provider_outcome = match &worktree_path {
-            Some(path) if worktree_state != "missing" => {
+            Some(path) if matches!(worktree_state, "ready" | "dirty") => {
                 provider::inspect_provider_for_recovery(state, run.id, path.clone()).await
             }
             _ => ProviderRecovery::Unavailable,
@@ -282,6 +301,21 @@ fn inspect_worktree(path: &Path) -> (&'static str, bool) {
     }
 }
 
+fn inspect_owned_worktree(
+    mirror: &Path,
+    path: &Path,
+    expected_branch: &str,
+) -> (&'static str, bool) {
+    match crate::git_runtime::inspect_worktree(mirror, path) {
+        Ok(inspection) if inspection.branch == expected_branch && inspection.dirty => {
+            ("dirty", true)
+        }
+        Ok(inspection) if inspection.branch == expected_branch => ("ready", false),
+        Ok(_) => ("failed", false),
+        Err(_) => ("missing", false),
+    }
+}
+
 fn known_turn_status(status: &str) -> &'static str {
     match status {
         "completed" => "completed",
@@ -349,7 +383,7 @@ async fn insert_recovery_event(
     )
     .bind(event_id)
     .bind(run.id)
-    .bind(format!("startup-recovery:{event_id}"))
+    .bind(format!("startup-recovery:{result}"))
     .bind(summary)
     .bind(serde_json::json!({
         "previous_state": run.previous_state,
@@ -382,7 +416,7 @@ async fn insert_recovery_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_worktree, known_turn_status};
+    use super::{inspect_owned_worktree, inspect_worktree, known_turn_status};
     use std::path::Path;
 
     #[test]
@@ -397,5 +431,17 @@ mod tests {
     fn provider_status_is_bounded_to_known_values() {
         assert_eq!(known_turn_status("inProgress"), "in progress");
         assert_eq!(known_turn_status("secret provider text"), "unknown");
+    }
+
+    #[test]
+    fn owned_inspection_rejects_missing_or_foreign_git_state() {
+        assert_eq!(
+            inspect_owned_worktree(
+                Path::new("/definitely/not/a/mirror"),
+                Path::new("/definitely/not/a/worktree"),
+                "codex/run-aw-owned",
+            ),
+            ("missing", false)
+        );
     }
 }

@@ -1218,6 +1218,60 @@ describe('M1 authenticated shell', () => {
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
   })
 
+  it('retries the latest terminal run with a stable explicit command', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/projects/${projectAId}/threads/${threadId}`,
+    )
+    const terminalRun = {
+      ...timeline.activeRun,
+      state: 'interrupted',
+      failureReason: 'The service restarted; the worktree was preserved.',
+      capabilities: { interrupt: false, retry: true },
+    }
+    const terminalTimeline = {
+      ...timeline,
+      activeRun: null,
+      latestTerminalRun: terminalRun,
+      approvals: [],
+    }
+    const fetchMock = installStandardApi()
+    const standardImplementation = fetchMock.getMockImplementation()
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input)
+      if (path.includes(`/conversations/${threadId}/timeline`)) {
+        return jsonResponse(terminalTimeline)
+      }
+      if (path.includes('/agent-runs/run-1/retry')) {
+        return jsonResponse({
+          runId: 'run-2',
+          state: 'queued',
+          repositoryId: 'repo-1',
+          repositoryWorkspaceId: null,
+          branch: null,
+          baseCommit: null,
+          queuePosition: 1,
+        }, 202)
+      }
+      return standardImplementation?.(input, init) ?? Promise.reject()
+    })
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Retry last run' }),
+    )
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([path]) =>
+        String(path).includes('/agent-runs/run-1/retry'),
+      )
+      expect(new Headers(request?.[1]?.headers).get('idempotency-key')).toBe(
+        'retry-run-1',
+      )
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({})
+    })
+  })
+
   it('does not remember an active child while browsing archived-parent history', async () => {
     const archivedChildId = '019fb600-0000-7000-8000-000000000014'
     window.history.replaceState(

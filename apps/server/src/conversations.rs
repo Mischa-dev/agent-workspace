@@ -290,6 +290,7 @@ struct TimelineResponse {
     highest_sequence: i64,
     read_state: ReadStateView,
     active_run: Option<RunView>,
+    latest_terminal_run: Option<RunView>,
     approvals: Vec<ApprovalView>,
     capabilities: ConversationCapabilities,
 }
@@ -322,6 +323,7 @@ pub(crate) struct RunView {
 #[derive(Debug, Serialize)]
 pub(crate) struct RunCapabilities {
     pub(crate) interrupt: bool,
+    pub(crate) retry: bool,
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -1181,7 +1183,8 @@ async fn conversation_timeline(
         .map(timeline_entry_view)
         .collect::<Result<Vec<_>, _>>()?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
-    let (active_run, approvals) = fetch_run_projection(&state, &principal, &conversation).await?;
+    let (active_run, latest_terminal_run, approvals) =
+        fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
     Ok(Json(TimelineResponse {
         conversation: ConversationView::from(&conversation),
@@ -1190,6 +1193,7 @@ async fn conversation_timeline(
         highest_sequence: conversation.next_entry_sequence - 1,
         read_state,
         active_run,
+        latest_terminal_run,
         approvals,
         capabilities,
     }))
@@ -2335,9 +2339,9 @@ async fn fetch_run_projection(
     state: &AppState,
     principal: &AuthenticatedActor,
     conversation: &ConversationAccessRow,
-) -> Result<(Option<RunView>, Vec<ApprovalView>), AppError> {
+) -> Result<(Option<RunView>, Option<RunView>, Vec<ApprovalView>), AppError> {
     if conversation.kind != "thread" {
-        return Ok((None, Vec::new()));
+        return Ok((None, None, Vec::new()));
     }
     let active_run = sqlx::query_as::<_, RunRow>(
         r#"
@@ -2359,6 +2363,29 @@ async fn fetch_run_projection(
           ON workspace.id = run.repository_workspace_id
         WHERE run.conversation_id = $1
           AND run.state IN ('created', 'queued', 'starting', 'working', 'blocked', 'recovering')
+        ORDER BY run.created_at DESC, run.id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(conversation.id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let latest_terminal_run = sqlx::query_as::<_, RunRow>(
+        r#"
+        SELECT
+            run.id, run.state, run.repository_id, run.repository_workspace_id,
+            run.provider_session_id, run.provider_turn_id,
+            workspace.branch_name AS branch,
+            workspace.base_commit,
+            NULL::bigint AS queue_position,
+            run.failure_reason,
+            run.created_at::text AS created_at,
+            run.updated_at::text AS updated_at
+        FROM agent_runs run
+        LEFT JOIN repository_workspaces workspace
+          ON workspace.id = run.repository_workspace_id
+        WHERE run.conversation_id = $1
+          AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
         ORDER BY run.created_at DESC, run.id DESC
         LIMIT 1
         "#,
@@ -2409,7 +2436,34 @@ async fn fetch_run_projection(
         .unwrap_or(false);
         RunView {
             run,
-            capabilities: RunCapabilities { interrupt },
+            capabilities: RunCapabilities {
+                interrupt,
+                retry: false,
+            },
+        }
+    });
+    let latest_terminal_run = latest_terminal_run.map(|run| {
+        let retry = active_run.is_none()
+            && policy_allows(
+                principal,
+                &conversation.membership_role,
+                conversation.membership_enabled,
+                conversation.project_id,
+                Action::WorkerInvoke,
+                ProjectScope::run(
+                    conversation.project_id,
+                    conversation.id,
+                    run.id,
+                    run.repository_id,
+                ),
+            )
+            .unwrap_or(false);
+        RunView {
+            run,
+            capabilities: RunCapabilities {
+                interrupt: false,
+                retry,
+            },
         }
     });
     let subject = Subject::new(
@@ -2456,7 +2510,7 @@ async fn fetch_run_projection(
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    Ok((active_run, approvals))
+    Ok((active_run, latest_terminal_run, approvals))
 }
 
 async fn enqueue_event(
