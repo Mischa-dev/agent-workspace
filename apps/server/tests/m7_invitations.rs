@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use agent_workspace_server::{
     AppState,
+    auth::password,
     bootstrap::{BootstrapCommand, bootstrap_admin, bootstrap_development_member},
     config::AppConfig,
     provider::SupervisorRegistry,
@@ -386,6 +387,401 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .expect("drop isolated M7 schema");
 }
 
+#[tokio::test]
+async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("m7_acceptance_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create isolated M7 acceptance schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run M7 acceptance migrations");
+
+    let temporary = tempfile::tempdir().expect("temporary M7 acceptance root");
+    let config = AppConfig::from_values(&BTreeMap::from([
+        (
+            "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+            database_url.clone(),
+        ),
+        (
+            "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+            temporary.path().join("data").to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            temporary
+                .path()
+                .join("data/codex/profiles")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
+            "/usr/bin/false".to_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_WEB_ROOT".to_owned(),
+            temporary.path().join("web").to_string_lossy().into_owned(),
+        ),
+    ]))
+    .expect("M7 acceptance configuration");
+    let seed = dev_seed(&pool, &config)
+        .await
+        .expect("seed M7 acceptance fixture");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: OWNER_LOGIN.to_owned(),
+            display_name: "M7 Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        OWNER_PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap M7 acceptance owner");
+    let application = test_app(pool.clone(), config);
+    let (owner_cookie, owner_csrf) = login(&application, OWNER_LOGIN, OWNER_PASSWORD).await;
+    let invitations_uri = format!("/api/v1/projects/{}/invitations", seed.project_id);
+
+    let new_user_invitation = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            &invitations_uri,
+            &write_headers(&owner_cookie, &owner_csrf),
+            json!({"role":"viewer","expiresInHours":24}),
+        ))
+        .await
+        .expect("new-user invitation response");
+    assert_eq!(new_user_invitation.status(), StatusCode::CREATED);
+    let new_user_invitation = response_json(new_user_invitation).await;
+    let new_user_token = new_user_invitation["invitationUrl"]
+        .as_str()
+        .expect("new-user invitation URL")
+        .split_once("#token=")
+        .expect("new-user token fragment")
+        .1
+        .to_owned();
+    let new_user_invitation_id = new_user_invitation["id"]
+        .as_str()
+        .expect("new-user invitation ID")
+        .parse::<Uuid>()
+        .expect("new-user invitation UUID");
+
+    let resolved_response = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/project-invitations/resolve",
+            &[("origin", "http://127.0.0.1:3100")],
+            json!({"token":new_user_token}),
+        ))
+        .await
+        .expect("resolve invitation response");
+    assert_eq!(resolved_response.status(), StatusCode::OK);
+    let resolved = response_json(resolved_response).await;
+    assert_eq!(resolved["organizationName"], "Mischa Personal");
+    assert_eq!(resolved["projectName"], "Agent Workspace");
+    assert_eq!(resolved["role"], "viewer");
+    assert!(resolved.get("id").is_none());
+    assert!(resolved.get("tokenPrefix").is_none());
+
+    let new_password = "new human correct horse battery staple";
+    let accepted_new_response = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/project-invitations/accept-new",
+            &[("origin", "http://127.0.0.1:3100")],
+            json!({
+                "token":new_user_token,
+                "loginName":"new.human",
+                "displayName":"New Human",
+                "handle":"new_human",
+                "password":new_password,
+            }),
+        ))
+        .await
+        .expect("accept new-user invitation response");
+    assert_eq!(accepted_new_response.status(), StatusCode::OK);
+    let (new_user_cookie, new_user_csrf) = response_cookies(&accepted_new_response);
+    let accepted_new = response_json(accepted_new_response).await;
+    assert_eq!(accepted_new["authenticated"], true);
+    assert_eq!(accepted_new["user"]["loginName"], "new.human");
+    assert_eq!(accepted_new["organizations"][0]["role"], "member");
+    assert!(!new_user_cookie.is_empty());
+    assert!(!new_user_csrf.is_empty());
+
+    let accepted_shape =
+        sqlx::query_as::<_, (String, String, String, String, String, String, i64, String)>(
+            r#"
+        SELECT user_account.login_name, user_account.display_name,
+               organization_membership.role, project_membership.role,
+               project_membership.handle, invitation.status,
+               invitation.version, credential.password_phc
+        FROM users user_account
+        JOIN user_password_credentials credential ON credential.user_id = user_account.id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.actor_id = user_account.actor_id
+         AND organization_membership.organization_id = $1
+        JOIN project_memberships project_membership
+          ON project_membership.actor_id = user_account.actor_id
+         AND project_membership.project_id = $2
+        JOIN project_invitations invitation
+          ON invitation.accepted_by_actor_id = user_account.actor_id
+         AND invitation.id = $3
+        WHERE user_account.login_name = 'new.human'
+        "#,
+        )
+        .bind(seed.organization_id)
+        .bind(seed.project_id)
+        .bind(new_user_invitation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("accepted new-user shape");
+    assert_eq!(accepted_shape.0, "new.human");
+    assert_eq!(accepted_shape.1, "New Human");
+    assert_eq!(accepted_shape.2, "member");
+    assert_eq!(accepted_shape.3, "viewer");
+    assert_eq!(accepted_shape.4, "new_human");
+    assert_eq!(accepted_shape.5, "accepted");
+    assert_eq!(accepted_shape.6, 2);
+    assert!(
+        accepted_shape
+            .7
+            .starts_with("$argon2id$v=19$m=65536,t=3,p=1$")
+    );
+    assert!(!accepted_shape.7.contains(new_password));
+
+    for (uri, body) in [
+        (
+            "/api/v1/project-invitations/resolve",
+            json!({"token":new_user_token}),
+        ),
+        (
+            "/api/v1/project-invitations/accept-new",
+            json!({
+                "token":new_user_token,
+                "loginName":"duplicate.human",
+                "displayName":"Duplicate Human",
+                "handle":"duplicate_human",
+                "password":"duplicate correct horse battery staple",
+            }),
+        ),
+    ] {
+        let replay = application
+            .clone()
+            .oneshot(request(
+                "POST",
+                uri,
+                &[("origin", "http://127.0.0.1:3100")],
+                body,
+            ))
+            .await
+            .expect("consumed invitation response");
+        assert_eq!(replay.status(), StatusCode::NOT_FOUND);
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM users WHERE login_name LIKE '%.human'")
+            .fetch_one(&pool)
+            .await
+            .expect("invited User count"),
+        1
+    );
+
+    let existing_actor_id = Uuid::now_v7();
+    let existing_user_id = Uuid::now_v7();
+    let existing_password = "existing correct horse battery staple";
+    let existing_password_phc = password::hash_password(existing_password.to_owned())
+        .await
+        .expect("hash existing-user password");
+    let mut existing_transaction = pool.begin().await.expect("existing-user transaction");
+    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+        .bind(existing_actor_id)
+        .execute(&mut *existing_transaction)
+        .await
+        .expect("insert existing Actor");
+    sqlx::query(
+        "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, 'existing.human', 'Existing Human')",
+    )
+    .bind(existing_user_id)
+    .bind(existing_actor_id)
+    .execute(&mut *existing_transaction)
+    .await
+    .expect("insert existing User");
+    sqlx::query("INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)")
+        .bind(existing_user_id)
+        .bind(existing_password_phc)
+        .execute(&mut *existing_transaction)
+        .await
+        .expect("insert existing password credential");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(seed.organization_id)
+    .bind(existing_actor_id)
+    .execute(&mut *existing_transaction)
+    .await
+    .expect("insert existing Organization membership");
+    existing_transaction
+        .commit()
+        .await
+        .expect("commit existing User fixture");
+    let (existing_cookie, existing_csrf) =
+        login(&application, "existing.human", existing_password).await;
+
+    let existing_invitation_response = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            &invitations_uri,
+            &write_headers(&owner_cookie, &owner_csrf),
+            json!({"role":"admin","expiresInHours":24}),
+        ))
+        .await
+        .expect("existing-user invitation response");
+    assert_eq!(existing_invitation_response.status(), StatusCode::CREATED);
+    let existing_invitation = response_json(existing_invitation_response).await;
+    let existing_token = existing_invitation["invitationUrl"]
+        .as_str()
+        .expect("existing-user invitation URL")
+        .split_once("#token=")
+        .expect("existing-user token fragment")
+        .1
+        .to_owned();
+    let existing_invitation_id = existing_invitation["id"]
+        .as_str()
+        .expect("existing-user invitation ID")
+        .parse::<Uuid>()
+        .expect("existing-user invitation UUID");
+
+    let missing_csrf = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/project-invitations/accept-existing",
+            &[
+                ("origin", "http://127.0.0.1:3100"),
+                ("cookie", existing_cookie.as_str()),
+            ],
+            json!({"token":existing_token,"handle":"existing_human"}),
+        ))
+        .await
+        .expect("existing-user missing CSRF response");
+    assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+    let accepted_existing_response = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/project-invitations/accept-existing",
+            &write_headers(&existing_cookie, &existing_csrf),
+            json!({"token":existing_token,"handle":"existing_human"}),
+        ))
+        .await
+        .expect("accept existing-user invitation response");
+    assert_eq!(accepted_existing_response.status(), StatusCode::OK);
+    let (rotated_cookie, rotated_csrf) = response_cookies(&accepted_existing_response);
+    assert_ne!(rotated_cookie, existing_cookie);
+    assert_ne!(rotated_csrf, existing_csrf);
+    let accepted_existing = response_json(accepted_existing_response).await;
+    assert_eq!(accepted_existing["user"]["loginName"], "existing.human");
+    assert_eq!(accepted_existing["organizations"][0]["role"], "admin");
+
+    let existing_shape = sqlx::query_as::<_, (String, i64, String, String, i64, bool)>(
+        r#"
+        SELECT organization_membership.role, organization_membership.version,
+               project_membership.role, project_membership.handle,
+               invitation.version,
+               EXISTS (
+                   SELECT 1 FROM sessions prior_session
+                   JOIN sessions rotated_session
+                     ON rotated_session.rotated_from_session_id = prior_session.id
+                   WHERE prior_session.user_id = user_account.id
+                     AND prior_session.revoked_at IS NOT NULL
+               ) AS rotated
+        FROM users user_account
+        JOIN organization_memberships organization_membership
+          ON organization_membership.actor_id = user_account.actor_id
+         AND organization_membership.organization_id = $1
+        JOIN project_memberships project_membership
+          ON project_membership.actor_id = user_account.actor_id
+         AND project_membership.project_id = $2
+        JOIN project_invitations invitation
+          ON invitation.accepted_by_actor_id = user_account.actor_id
+         AND invitation.id = $3
+        WHERE user_account.id = $4
+        "#,
+    )
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .bind(existing_invitation_id)
+    .bind(existing_user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("accepted existing-user shape");
+    assert_eq!(existing_shape.0, "admin");
+    assert_eq!(existing_shape.1, 2);
+    assert_eq!(existing_shape.2, "admin");
+    assert_eq!(existing_shape.3, "existing_human");
+    assert_eq!(existing_shape.4, 2);
+    assert!(existing_shape.5);
+
+    let old_session = application
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/auth/session",
+            &[("cookie", existing_cookie.as_str())],
+            Value::Null,
+        ))
+        .await
+        .expect("old session response");
+    assert_eq!(response_json(old_session).await["authenticated"], false);
+    let rotated_session = application
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/auth/session",
+            &[("cookie", rotated_cookie.as_str())],
+            Value::Null,
+        ))
+        .await
+        .expect("rotated session response");
+    assert_eq!(response_json(rotated_session).await["authenticated"], true);
+
+    let acceptance_audits = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(*) FROM audit_events
+        WHERE action = 'project.invitation.accept'
+          AND target_id IN ($1, $2)
+          AND metadata::text NOT LIKE '%aw_inv_%'
+        "#,
+    )
+    .bind(new_user_invitation_id)
+    .bind(existing_invitation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("acceptance audit count");
+    assert_eq!(acceptance_audits, 2);
+
+    drop(application);
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&administrative_pool)
+        .await
+        .expect("drop isolated M7 acceptance schema");
+}
+
 fn test_app(pool: PgPool, config: AppConfig) -> axum::Router {
     let supervisors = SupervisorRegistry::new(&config).expect("M7 supervisor registry");
     router(AppState {
@@ -409,6 +805,12 @@ async fn login(application: &axum::Router, login_name: &str, password: &str) -> 
         .await
         .expect("login response");
     assert_eq!(response.status(), StatusCode::OK);
+    let cookies = response_cookies(&response);
+    let _ = response_json(response).await;
+    cookies
+}
+
+fn response_cookies(response: &axum::response::Response) -> (String, String) {
     let cookies = response
         .headers()
         .get_all(header::SET_COOKIE)
@@ -428,9 +830,7 @@ async fn login(application: &axum::Router, login_name: &str, password: &str) -> 
         .find_map(|cookie| cookie.strip_prefix("agent_workspace_csrf="))
         .expect("CSRF cookie")
         .to_owned();
-    let cookie = cookies.join("; ");
-    let _ = response_json(response).await;
-    (cookie, csrf)
+    (cookies.join("; "), csrf)
 }
 
 fn write_headers<'a>(cookie: &'a str, csrf: &'a str) -> [(&'a str, &'a str); 3] {

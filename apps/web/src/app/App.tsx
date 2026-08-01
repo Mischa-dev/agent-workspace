@@ -10,6 +10,7 @@ import {
 
 import { SessionBoundary } from '../auth/SessionBoundary'
 import { SignInPage } from '../auth/SignInPage'
+import { JoinPage } from '../invitations/JoinPage'
 import { useAuthenticatedSession } from '../auth/session'
 import { CreateProjectPage } from '../projects/CreateProjectPage'
 import { ChannelPage } from '../conversations/ChannelPage'
@@ -43,6 +44,7 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<SignInPage />} path="/sign-in" />
+          <Route element={<JoinPage />} path="/join" />
           <Route element={<SessionBoundary />}>
             <Route element={<Navigate replace to="/home" />} path="/" />
             <Route element={<HomePage />} path="/home" />

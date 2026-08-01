@@ -2,6 +2,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -9,11 +10,17 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::{
+        AuthenticatedActor, SessionIdentity, establish_session_in_transaction,
+        load_authenticated_actor, normalize_login_name, password, require_allowed_origin,
+        require_authenticated_write, respond_with_established_session,
+    },
     error::{ApiJson, ApiPath, AppError},
 };
 
@@ -35,6 +42,18 @@ pub fn router() -> Router<AppState> {
             "/api/v1/project-invitations/{invitation_id}/replace",
             post(replace_invitation),
         )
+        .route(
+            "/api/v1/project-invitations/resolve",
+            post(resolve_invitation),
+        )
+        .route(
+            "/api/v1/project-invitations/accept-new",
+            post(accept_new_user),
+        )
+        .route(
+            "/api/v1/project-invitations/accept-existing",
+            post(accept_existing_user),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +74,29 @@ struct RevokeInvitationRequest {
 struct ReplaceInvitationRequest {
     expected_version: i64,
     expires_in_hours: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResolveInvitationRequest {
+    token: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AcceptNewInvitationRequest {
+    token: String,
+    login_name: String,
+    display_name: String,
+    handle: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AcceptExistingInvitationRequest {
+    token: String,
+    handle: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -96,6 +138,19 @@ struct InvitationMutationRow {
     project_membership_enabled: bool,
 }
 
+#[derive(Debug, FromRow)]
+struct InvitationAcceptanceRow {
+    id: Uuid,
+    organization_id: Uuid,
+    organization_name: String,
+    project_id: Uuid,
+    project_name: String,
+    role: String,
+    token_digest: Vec<u8>,
+    issued_by_actor_id: Uuid,
+    expires_at: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InvitationView {
@@ -120,6 +175,15 @@ struct IssuedInvitation {
     #[serde(flatten)]
     invitation: InvitationView,
     invitation_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolvedInvitation {
+    organization_name: String,
+    project_name: String,
+    role: String,
+    expires_at: String,
 }
 
 async fn list_invitations(
@@ -418,6 +482,480 @@ async fn lock_invitation_for_mutation(
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?)
+}
+
+async fn resolve_invitation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(mut request): ApiJson<ResolveInvitationRequest>,
+) -> Result<Json<ResolvedInvitation>, AppError> {
+    let mut token = Zeroizing::new(std::mem::take(&mut request.token));
+    require_allowed_origin(&state.config, &headers)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    let row = fetch_valid_invitation(&state, &prefix)
+        .await?
+        .filter(|row| digest_matches(&row.token_digest, &digest))
+        .ok_or(AppError::NotFound("project_invitation"))?;
+    Ok(Json(ResolvedInvitation {
+        organization_name: row.organization_name,
+        project_name: row.project_name,
+        role: row.role,
+        expires_at: row.expires_at,
+    }))
+}
+
+async fn accept_new_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(mut request): ApiJson<AcceptNewInvitationRequest>,
+) -> Result<Response, AppError> {
+    let mut token = Zeroizing::new(std::mem::take(&mut request.token));
+    let mut submitted_password = Zeroizing::new(std::mem::take(&mut request.password));
+    require_allowed_origin(&state.config, &headers)?;
+    if load_authenticated_actor(&state, &headers).await?.is_some() {
+        return Err(AppError::Conflict(
+            "project_invitation",
+            "signed-in users must accept with their existing identity",
+        ));
+    }
+    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    let login_name = normalize_login_name(&request.login_name)
+        .map_err(|_| AppError::Validation("login name"))?;
+    let display_name = normalize_display_name(&request.display_name)?;
+    let handle = normalize_handle(&request.handle)?;
+    if !(12..=1024).contains(&submitted_password.len()) {
+        return Err(AppError::Validation("password"));
+    }
+    let _password_kdf_permit = state.rate_limits.try_acquire_password_kdf()?;
+    let password_phc = password::hash_password(std::mem::take(&mut *submitted_password)).await?;
+
+    let mut transaction = state.pool.begin().await?;
+    let invitation = lock_valid_invitation(&mut transaction, &prefix)
+        .await?
+        .filter(|row| digest_matches(&row.token_digest, &digest))
+        .ok_or(AppError::NotFound("project_invitation"))?;
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM users WHERE lower(login_name) = $1)",
+    )
+    .bind(&login_name)
+    .fetch_one(&mut *transaction)
+    .await?
+    {
+        return Err(AppError::Conflict("user", "login name already exists"));
+    }
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND lower(handle) = $2 AND enabled)",
+    )
+    .bind(invitation.project_id)
+    .bind(&handle)
+    .fetch_one(&mut *transaction)
+    .await?
+    {
+        return Err(AppError::Conflict(
+            "project_membership",
+            "handle already exists",
+        ));
+    }
+
+    let actor_id = Uuid::now_v7();
+    let user_id = Uuid::now_v7();
+    sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
+        .bind(actor_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_join_database_error)?;
+    sqlx::query(
+        "INSERT INTO users (id, actor_id, login_name, display_name) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(user_id)
+    .bind(actor_id)
+    .bind(&login_name)
+    .bind(&display_name)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_join_database_error)?;
+    sqlx::query("INSERT INTO user_password_credentials (user_id, password_phc) VALUES ($1, $2)")
+        .bind(user_id)
+        .bind(password_phc)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_join_database_error)?;
+    let organization_role = if invitation.role == "admin" {
+        "admin"
+    } else {
+        "member"
+    };
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, $3)",
+    )
+    .bind(invitation.organization_id)
+    .bind(actor_id)
+    .bind(organization_role)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_join_database_error)?;
+    sqlx::query(
+        r#"
+        INSERT INTO project_memberships (
+            id, project_id, actor_id, role, display_name, handle
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(invitation.project_id)
+    .bind(actor_id)
+    .bind(&invitation.role)
+    .bind(&display_name)
+    .bind(&handle)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_join_database_error)?;
+    mark_invitation_accepted(&mut transaction, invitation.id, actor_id).await?;
+    let established = establish_session_in_transaction(
+        &state.config,
+        &headers,
+        &mut transaction,
+        SessionIdentity {
+            user_id,
+            actor_id,
+            actor_kind: "human".to_owned(),
+            login_name,
+            display_name,
+            authentication_epoch: 1,
+        },
+    )
+    .await?;
+    insert_acceptance_audit(
+        &mut transaction,
+        &established.principal,
+        &invitation,
+        "invitation",
+        true,
+    )
+    .await?;
+    transaction.commit().await?;
+    respond_with_established_session(&state, established).await
+}
+
+async fn accept_existing_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiJson(mut request): ApiJson<AcceptExistingInvitationRequest>,
+) -> Result<Response, AppError> {
+    let mut token = Zeroizing::new(std::mem::take(&mut request.token));
+    require_authenticated_write(&state, &headers, &principal)?;
+    let (prefix, digest) = consume_invitation_token(&mut token, &state)?;
+    let handle = normalize_handle(&request.handle)?;
+    let mut transaction = state.pool.begin().await?;
+    let invitation = lock_valid_invitation(&mut transaction, &prefix)
+        .await?
+        .filter(|row| digest_matches(&row.token_digest, &digest))
+        .ok_or(AppError::NotFound("project_invitation"))?;
+    #[derive(FromRow)]
+    struct ExistingIdentity {
+        authentication_epoch: i64,
+        organization_role: String,
+    }
+    let identity = sqlx::query_as::<_, ExistingIdentity>(
+        r#"
+        SELECT user_account.authentication_epoch,
+               organization_membership.role AS organization_role
+        FROM users user_account
+        JOIN actors actor ON actor.id = user_account.actor_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.actor_id = actor.id
+         AND organization_membership.organization_id = $2
+         AND organization_membership.enabled
+        WHERE user_account.id = $1 AND user_account.status = 'active'
+          AND actor.status = 'active' AND actor.kind = 'human'
+        FOR UPDATE OF user_account, actor, organization_membership
+        "#,
+    )
+    .bind(principal.user_id)
+    .bind(invitation.organization_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("project_invitation"))?;
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2)",
+    )
+    .bind(invitation.project_id)
+    .bind(principal.actor_id)
+    .fetch_one(&mut *transaction)
+    .await?
+    {
+        return Err(AppError::Conflict(
+            "project_invitation",
+            "the user already has Project membership history",
+        ));
+    }
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND lower(handle) = $2 AND enabled)",
+    )
+    .bind(invitation.project_id)
+    .bind(&handle)
+    .fetch_one(&mut *transaction)
+    .await?
+    {
+        return Err(AppError::Conflict(
+            "project_membership",
+            "handle already exists",
+        ));
+    }
+    if invitation.role == "admin" && identity.organization_role != "owner" {
+        sqlx::query(
+            "UPDATE organization_memberships SET role = 'admin', version = version + 1, updated_at = now() WHERE organization_id = $1 AND actor_id = $2",
+        )
+        .bind(invitation.organization_id)
+        .bind(principal.actor_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO project_memberships (
+            id, project_id, actor_id, role, display_name, handle
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(invitation.project_id)
+    .bind(principal.actor_id)
+    .bind(&invitation.role)
+    .bind(&principal.display_name)
+    .bind(&handle)
+    .execute(&mut *transaction)
+    .await
+    .map_err(map_join_database_error)?;
+    mark_invitation_accepted(&mut transaction, invitation.id, principal.actor_id).await?;
+    let established = establish_session_in_transaction(
+        &state.config,
+        &headers,
+        &mut transaction,
+        SessionIdentity {
+            user_id: principal.user_id,
+            actor_id: principal.actor_id,
+            actor_kind: principal.actor_kind,
+            login_name: principal.login_name,
+            display_name: principal.display_name,
+            authentication_epoch: identity.authentication_epoch,
+        },
+    )
+    .await?;
+    insert_acceptance_audit(
+        &mut transaction,
+        &established.principal,
+        &invitation,
+        "password_session",
+        false,
+    )
+    .await?;
+    transaction.commit().await?;
+    respond_with_established_session(&state, established).await
+}
+
+async fn fetch_valid_invitation(
+    state: &AppState,
+    prefix: &str,
+) -> Result<Option<InvitationAcceptanceRow>, AppError> {
+    Ok(
+        sqlx::query_as::<_, InvitationAcceptanceRow>(valid_invitation_sql(false))
+            .bind(prefix)
+            .fetch_optional(&state.pool)
+            .await?,
+    )
+}
+
+async fn lock_valid_invitation(
+    transaction: &mut Transaction<'_, Postgres>,
+    prefix: &str,
+) -> Result<Option<InvitationAcceptanceRow>, AppError> {
+    Ok(
+        sqlx::query_as::<_, InvitationAcceptanceRow>(valid_invitation_sql(true))
+            .bind(prefix)
+            .fetch_optional(&mut **transaction)
+            .await?,
+    )
+}
+
+fn valid_invitation_sql(lock: bool) -> &'static str {
+    if lock {
+        r#"
+        SELECT invitation.id, invitation.organization_id,
+               organization.name AS organization_name,
+               invitation.project_id, project.name AS project_name,
+               invitation.role, invitation.token_digest,
+               invitation.issued_by_actor_id,
+               invitation.expires_at::text AS expires_at
+        FROM project_invitations invitation
+        JOIN organizations organization ON organization.id = invitation.organization_id
+        JOIN projects project ON project.id = invitation.project_id
+          AND project.organization_id = invitation.organization_id
+        JOIN actors issuer_actor ON issuer_actor.id = invitation.issued_by_actor_id
+          AND issuer_actor.kind = 'human' AND issuer_actor.status = 'active'
+        JOIN organization_memberships issuer_organization
+          ON issuer_organization.organization_id = invitation.organization_id
+         AND issuer_organization.actor_id = invitation.issued_by_actor_id
+         AND issuer_organization.enabled
+        JOIN project_memberships issuer_project
+          ON issuer_project.project_id = invitation.project_id
+         AND issuer_project.actor_id = invitation.issued_by_actor_id
+         AND issuer_project.enabled
+        WHERE invitation.token_prefix = $1 AND invitation.status = 'active'
+          AND invitation.expires_at > now() AND project.archived_at IS NULL
+          AND (issuer_organization.role = 'owner'
+               OR (issuer_organization.role = 'admin' AND invitation.role <> 'admin'))
+        FOR UPDATE OF invitation, project, issuer_actor,
+                      issuer_organization, issuer_project
+        "#
+    } else {
+        r#"
+        SELECT invitation.id, invitation.organization_id,
+               organization.name AS organization_name,
+               invitation.project_id, project.name AS project_name,
+               invitation.role, invitation.token_digest,
+               invitation.issued_by_actor_id,
+               invitation.expires_at::text AS expires_at
+        FROM project_invitations invitation
+        JOIN organizations organization ON organization.id = invitation.organization_id
+        JOIN projects project ON project.id = invitation.project_id
+          AND project.organization_id = invitation.organization_id
+        JOIN actors issuer_actor ON issuer_actor.id = invitation.issued_by_actor_id
+          AND issuer_actor.kind = 'human' AND issuer_actor.status = 'active'
+        JOIN organization_memberships issuer_organization
+          ON issuer_organization.organization_id = invitation.organization_id
+         AND issuer_organization.actor_id = invitation.issued_by_actor_id
+         AND issuer_organization.enabled
+        JOIN project_memberships issuer_project
+          ON issuer_project.project_id = invitation.project_id
+         AND issuer_project.actor_id = invitation.issued_by_actor_id
+         AND issuer_project.enabled
+        WHERE invitation.token_prefix = $1 AND invitation.status = 'active'
+          AND invitation.expires_at > now() AND project.archived_at IS NULL
+          AND (issuer_organization.role = 'owner'
+               OR (issuer_organization.role = 'admin' AND invitation.role <> 'admin'))
+        "#
+    }
+}
+
+fn consume_invitation_token(
+    token: &mut String,
+    state: &AppState,
+) -> Result<(String, [u8; 32]), AppError> {
+    let valid = token.len() == 50
+        && token.starts_with("aw_inv_")
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    let result = valid.then(|| {
+        (
+            token[..INVITATION_PREFIX_LENGTH].to_owned(),
+            Sha256::digest(token.as_bytes()).into(),
+        )
+    });
+    token.zeroize();
+    let Some((prefix, digest)) = result else {
+        state.rate_limits.check_invitation("invalid")?;
+        return Err(AppError::NotFound("project_invitation"));
+    };
+    state.rate_limits.check_invitation(&prefix)?;
+    Ok((prefix, digest))
+}
+
+fn digest_matches(stored: &[u8], candidate: &[u8; 32]) -> bool {
+    stored.len() == candidate.len() && bool::from(stored.ct_eq(candidate))
+}
+
+fn normalize_display_name(value: &str) -> Result<String, AppError> {
+    let normalized = value.trim();
+    if normalized.is_empty() || normalized.len() > 120 || normalized.chars().any(char::is_control) {
+        return Err(AppError::Validation("display name"));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn normalize_handle(value: &str) -> Result<String, AppError> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let bytes = normalized.as_bytes();
+    if !(2..=32).contains(&normalized.len())
+        || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        || !normalized
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(AppError::Validation("handle"));
+    }
+    Ok(normalized)
+}
+
+async fn mark_invitation_accepted(
+    transaction: &mut Transaction<'_, Postgres>,
+    invitation_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE project_invitations
+        SET status = 'accepted', accepted_by_actor_id = $2,
+            accepted_at = now(), version = version + 1, updated_at = now()
+        WHERE id = $1 AND status = 'active' AND expires_at > now()
+        "#,
+    )
+    .bind(invitation_id)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::NotFound("project_invitation"));
+    }
+    Ok(())
+}
+
+async fn insert_acceptance_audit(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    invitation: &InvitationAcceptanceRow,
+    authentication_class: &'static str,
+    created_user: bool,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, session_id, authentication_class,
+            action, target_kind, target_id, outcome, metadata, channel
+        ) VALUES ($1, $2, $3, $4, $5, 'project.invitation.accept',
+                  'project_invitation', $6, 'succeeded', $7, 'browser')
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(principal.actor_id)
+    .bind(invitation.project_id)
+    .bind(principal.session_id)
+    .bind(authentication_class)
+    .bind(invitation.id)
+    .bind(serde_json::json!({
+        "role": invitation.role,
+        "issuedByActorId": invitation.issued_by_actor_id,
+        "createdUser": created_user,
+    }))
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+fn map_join_database_error(error: sqlx::Error) -> AppError {
+    let constraint = match &error {
+        sqlx::Error::Database(database) => database.constraint(),
+        _ => None,
+    };
+    match constraint {
+        Some("users_login_name_unique") => AppError::Conflict("user", "login name already exists"),
+        Some("project_memberships_active_handle_unique") => {
+            AppError::Conflict("project_membership", "handle already exists")
+        }
+        _ => AppError::Database(error),
+    }
 }
 
 async fn invitation_access(

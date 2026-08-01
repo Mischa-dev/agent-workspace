@@ -17,7 +17,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -52,6 +52,22 @@ pub struct AuthenticatedActor {
     pub login_name: String,
     pub display_name: String,
     csrf_token_hash: Vec<u8>,
+}
+
+pub(crate) struct SessionIdentity {
+    pub user_id: Uuid,
+    pub actor_id: Uuid,
+    pub actor_kind: String,
+    pub login_name: String,
+    pub display_name: String,
+    pub authentication_epoch: i64,
+}
+
+pub(crate) struct EstablishedSession {
+    pub principal: AuthenticatedActor,
+    session_token: String,
+    csrf_token: String,
+    rotated_from_session_id: Option<Uuid>,
 }
 
 impl FromRequestParts<AppState> for AuthenticatedActor {
@@ -214,12 +230,53 @@ async fn login(
         return Err(AppError::InvalidCredentials);
     }
 
+    let mut transaction = state.pool.begin().await?;
+    let established = establish_session_in_transaction(
+        &state.config,
+        &headers,
+        &mut transaction,
+        SessionIdentity {
+            user_id: credential.user_id,
+            actor_id: credential.actor_id,
+            actor_kind: credential.actor_kind,
+            login_name: credential.login_name,
+            display_name: credential.display_name,
+            authentication_epoch: credential.authentication_epoch,
+        },
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, session_id, authentication_class, action,
+            target_kind, target_id, outcome, metadata
+        )
+        VALUES (
+            $1, $2, $3, 'password_session', 'authentication.login',
+            'session', $3, 'succeeded', '{}'::jsonb
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(established.principal.actor_id)
+    .bind(established.principal.session_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    respond_with_established_session(&state, established).await
+}
+
+pub(crate) async fn establish_session_in_transaction(
+    config: &AppConfig,
+    headers: &HeaderMap,
+    transaction: &mut Transaction<'_, Postgres>,
+    identity: SessionIdentity,
+) -> Result<EstablishedSession, AppError> {
     let session_token = random_token();
     let csrf_token = random_token();
     let session_id = Uuid::now_v7();
-    let mut transaction = state.pool.begin().await?;
     let mut rotated_from_session_id = None;
-    if let Some(existing_token) = cookie_value(&headers, session_cookie_name(&state.config))
+    if let Some(existing_token) = cookie_value(headers, session_cookie_name(config))
         && !existing_token.is_empty()
         && existing_token.len() <= MAX_COOKIE_VALUE_BYTES
     {
@@ -232,7 +289,7 @@ async fn login(
             "#,
         )
         .bind(hash_secret(&existing_token).to_vec())
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await?;
     }
     sqlx::query(
@@ -249,53 +306,45 @@ async fn login(
         "#,
     )
     .bind(session_id)
-    .bind(credential.user_id)
+    .bind(identity.user_id)
     .bind(hash_secret(&session_token).to_vec())
     .bind(hash_secret(&csrf_token).to_vec())
-    .bind(credential.authentication_epoch)
+    .bind(identity.authentication_epoch)
     .bind(rotated_from_session_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, session_id, authentication_class, action,
-            target_kind, target_id, outcome, metadata
-        )
-        VALUES (
-            $1, $2, $3, 'password_session', 'authentication.login',
-            'session', $3, 'succeeded', '{}'::jsonb
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(credential.actor_id)
-    .bind(session_id)
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-    if let Some(rotated_session_id) = rotated_from_session_id {
+    Ok(EstablishedSession {
+        principal: AuthenticatedActor {
+            session_id,
+            user_id: identity.user_id,
+            actor_id: identity.actor_id,
+            actor_kind: identity.actor_kind,
+            login_name: identity.login_name,
+            display_name: identity.display_name,
+            csrf_token_hash: hash_secret(&csrf_token).to_vec(),
+        },
+        session_token,
+        csrf_token,
+        rotated_from_session_id,
+    })
+}
+
+pub(crate) async fn respond_with_established_session(
+    state: &AppState,
+    established: EstablishedSession,
+) -> Result<Response, AppError> {
+    if let Some(rotated_session_id) = established.rotated_from_session_id {
         state.realtime.revoke_session(rotated_session_id);
     }
-
-    let principal = AuthenticatedActor {
-        session_id,
-        user_id: credential.user_id,
-        actor_id: credential.actor_id,
-        actor_kind: credential.actor_kind,
-        login_name: credential.login_name,
-        display_name: credential.display_name,
-        csrf_token_hash: hash_secret(&csrf_token).to_vec(),
-    };
-    let response = session_response(&state, Some(&principal)).await?;
+    let response = session_response(state, Some(&established.principal)).await?;
     let mut response_headers = HeaderMap::new();
     append_cookie(
         &mut response_headers,
-        session_cookie(&state.config, &session_token, false),
+        session_cookie(&state.config, &established.session_token, false),
     )?;
     append_cookie(
         &mut response_headers,
-        csrf_cookie(&state.config, &csrf_token, false),
+        csrf_cookie(&state.config, &established.csrf_token, false),
     )?;
     Ok((StatusCode::OK, response_headers, Json(response)).into_response())
 }
@@ -550,7 +599,7 @@ fn policy_membership_role(value: &str) -> Result<MembershipRole, AppError> {
     }
 }
 
-fn normalize_login_name(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_login_name(value: &str) -> Result<String, AppError> {
     let value = value.trim();
     let bytes = value.as_bytes();
     if !(3..=64).contains(&value.len())
