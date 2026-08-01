@@ -33,6 +33,9 @@ pub enum Action {
     OrganizationProjectCreate,
     ProjectView,
     ProjectManage,
+    InvitationManage,
+    MembershipView,
+    MembershipManage,
     NavigationRead,
     NavigationWrite,
     WorkerInvoke,
@@ -53,10 +56,13 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
+        Self::InvitationManage,
+        Self::MembershipView,
+        Self::MembershipManage,
         Self::NavigationRead,
         Self::NavigationWrite,
         Self::WorkerInvoke,
@@ -340,6 +346,9 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
         (
             Action::ProjectView
             | Action::ProjectManage
+            | Action::InvitationManage
+            | Action::MembershipView
+            | Action::MembershipManage
             | Action::NavigationRead
             | Action::NavigationWrite
             | Action::WorkerInvoke

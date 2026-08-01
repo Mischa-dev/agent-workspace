@@ -15,6 +15,7 @@ pub mod health;
 pub mod idempotency;
 pub mod invitations;
 pub mod mcp;
+pub mod memberships;
 pub mod message_content;
 pub mod migration_preflight;
 pub mod outbox;
@@ -74,6 +75,7 @@ pub fn router(state: AppState) -> Router {
         .merge(repositories::router())
         .merge(github::router())
         .merge(invitations::router())
+        .merge(memberships::router())
         .merge(work_items::router())
         .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
