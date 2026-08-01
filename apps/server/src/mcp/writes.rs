@@ -88,7 +88,11 @@ pub struct MarkReadyForReviewArguments {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
+#[serde(
+    tag = "outcome",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum WriteResult {
     Applied {
         work_item_id: String,
@@ -1203,7 +1207,10 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_text, parse_id};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use super::{WriteResult, normalize_text, parse_id};
 
     #[test]
     fn immutable_ids_and_text_bounds_are_fail_closed() {
@@ -1214,5 +1221,21 @@ mod tests {
         );
         assert_eq!(normalize_text("\u{0000}".to_owned(), 10, false), None);
         assert_eq!(normalize_text(String::new(), 10, false), None);
+    }
+
+    #[test]
+    fn write_results_use_the_camel_case_mcp_contract() {
+        let result = serde_json::to_value(WriteResult::Applied {
+            work_item_id: Uuid::nil().to_string(),
+            version: 2,
+            changed_fields: vec!["title".to_owned()],
+            activity_id: None,
+            result_id: Uuid::now_v7().to_string(),
+            idempotent_replay: false,
+        })
+        .expect("serialize write result");
+        assert_eq!(result["idempotentReplay"], json!(false));
+        assert_eq!(result["changedFields"], json!(["title"]));
+        assert!(result.get("idempotent_replay").is_none());
     }
 }
