@@ -344,6 +344,7 @@ struct ClaimedPullRequestSyncJob {
     head_ref: String,
     base_ref: String,
     external_created_at: DateTime<Utc>,
+    webhook_merge_commit_sha: Option<String>,
     scope_available: bool,
 }
 
@@ -2214,6 +2215,10 @@ async fn claim_pull_request_sync_job(
                pull_request.html_url, pull_request.head_ref,
                pull_request.base_ref,
                pull_request.external_created_at,
+               CASE
+                   WHEN (job.payload ->> 'merge_commit_sha') ~ '^[0-9a-f]{40}$'
+                   THEN job.payload ->> 'merge_commit_sha'
+               END AS webhook_merge_commit_sha,
                installation.enabled
                    AND installation.state = 'available'
                    AND access.access_state = 'selected'
@@ -3032,7 +3037,7 @@ async fn process_pull_request_sync_job(
             return fail_pull_request_sync_job(state, job, "github_token_unavailable", false).await;
         }
     };
-    let pull_request = match client
+    let mut pull_request = match client
         .pull_request(
             &token,
             &job.owner,
@@ -3048,6 +3053,14 @@ async fn process_pull_request_sync_job(
                 .await;
         }
     };
+    if let Err(error) = reconcile_merge_commit_identity(
+        &mut pull_request.merge_commit_sha,
+        job.webhook_merge_commit_sha.as_deref(),
+        pull_request.merged_at.is_some(),
+    ) {
+        drop(token);
+        return Err(error);
+    }
     if let Err(error) = validate_synced_pull_request(job, &pull_request) {
         drop(token);
         return Err(error);
@@ -3147,6 +3160,25 @@ fn validate_synced_pull_request(
     if let Some(merged_at) = pull_request.merged_at.as_deref() {
         DateTime::parse_from_rfc3339(merged_at)
             .map_err(|_| AppError::Conflict("github_pull_request", "external timestamp invalid"))?;
+    }
+    Ok(())
+}
+
+fn reconcile_merge_commit_identity(
+    provider_sha: &mut Option<String>,
+    webhook_sha: Option<&str>,
+    merged: bool,
+) -> Result<(), AppError> {
+    if let (Some(provider_sha), Some(webhook_sha)) = (provider_sha.as_deref(), webhook_sha)
+        && provider_sha != webhook_sha
+    {
+        return Err(AppError::Conflict(
+            "github_pull_request",
+            "merge commit identity mismatch",
+        ));
+    }
+    if merged && provider_sha.is_none() {
+        *provider_sha = webhook_sha.map(str::to_owned);
     }
     Ok(())
 }
@@ -4408,6 +4440,36 @@ async fn receive_webhook_inner(
         if existing.ct_eq(&checksum).unwrap_u8() != 1 {
             return Err(WebhookError::Conflict);
         }
+        let requeued = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            UPDATE github_jobs job
+            SET payload = $3, state = 'queued', attempts = 0,
+                lease_owner = NULL, lease_expires_at = NULL,
+                failure_category = NULL, next_attempt_at = now(),
+                completed_at = NULL, updated_at = now()
+            FROM github_webhook_deliveries delivery
+            WHERE delivery.github_installation_id = $1
+              AND delivery.delivery_id = $2
+              AND job.webhook_delivery_id = delivery.id
+              AND job.state IN ('failed', 'exhausted')
+            RETURNING delivery.id
+            "#,
+        )
+        .bind(registration.0)
+        .bind(&parsed.delivery_id)
+        .bind(&parsed.payload)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| WebhookError::Database)?;
+        if let Some(delivery_id) = requeued {
+            sqlx::query(
+                "UPDATE github_webhook_deliveries SET state = 'received', failure_category = NULL, processed_at = NULL, updated_at = now() WHERE id = $1",
+            )
+            .bind(delivery_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| WebhookError::Database)?;
+        }
         transaction
             .commit()
             .await
@@ -4566,6 +4628,7 @@ fn bounded_job_payload(
             ("head_sha", "/pull_request/head/sha"),
             ("head_ref", "/pull_request/head/ref"),
             ("base_ref", "/pull_request/base/ref"),
+            ("merge_commit_sha", "/pull_request/merge_commit_sha"),
         ]
         .as_slice(),
         "check_suite" => [
@@ -4692,6 +4755,50 @@ mod tests {
             _expires_at: "future".to_owned(),
         };
         assert!(!format!("{token:?}").contains(token.expose()));
+    }
+
+    #[test]
+    fn signed_webhook_merge_commit_recovers_a_missing_rest_projection() {
+        let merge_sha = "16abd896bc03495fad5e4be5851bc0862d059eca";
+        let mut provider_sha = None;
+        reconcile_merge_commit_identity(&mut provider_sha, Some(merge_sha), true)
+            .expect("signed webhook merge identity");
+        assert_eq!(provider_sha.as_deref(), Some(merge_sha));
+
+        let mut conflicting_provider_sha =
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
+        assert!(
+            reconcile_merge_commit_identity(&mut conflicting_provider_sha, Some(merge_sha), true,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pull_request_job_payload_keeps_only_bounded_merge_identity() {
+        let merge_sha = "16abd896bc03495fad5e4be5851bc0862d059eca";
+        let payload = bounded_job_payload(
+            "pull_request",
+            Some("closed"),
+            &json!({
+                "pull_request": {
+                    "number": 3,
+                    "node_id": "PR_kwDOTo2lks75Xg3O",
+                    "head": {
+                        "sha": "215b8b2b650c77a3dddbda917263f633fb6a3067",
+                        "ref": "codex/run-aw-acceptance"
+                    },
+                    "base": { "ref": "main" },
+                    "merge_commit_sha": merge_sha,
+                    "body": "must not be retained"
+                },
+                "repository": { "private": true },
+                "installation": { "token": "must not be retained" }
+            }),
+        )
+        .expect("bounded pull request payload");
+        assert_eq!(payload["merge_commit_sha"], merge_sha);
+        assert!(payload.get("body").is_none());
+        assert!(payload.get("installation").is_none());
     }
 
     #[test]

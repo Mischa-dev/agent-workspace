@@ -331,6 +331,44 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     assert_eq!(duplicate.0, StatusCode::OK);
     assert_eq!(duplicate.1["duplicate"], true);
 
+    sqlx::query(
+        r#"
+        UPDATE github_jobs
+        SET state = 'failed', attempts = 5, payload = '{}'::jsonb,
+            failure_category = 'job_processing_failed', next_attempt_at = now()
+        WHERE webhook_delivery_id IS NOT NULL
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("simulate failed legacy webhook job");
+    sqlx::query(
+        r#"
+        UPDATE github_webhook_deliveries
+        SET state = 'failed', failure_category = 'job_processing_failed',
+            processed_at = NULL
+        WHERE delivery_id = 'delivery-m5-1'
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("simulate failed legacy delivery");
+    let retried = send_webhook(&webhooks, "delivery-m5-1", "push", &body, WEBHOOK_SECRET).await;
+    assert_eq!(retried.0, StatusCode::OK);
+    assert_eq!(retried.1["duplicate"], true);
+    let retried_job = sqlx::query_as::<_, (String, i32, Value)>(
+        "SELECT state, attempts, payload FROM github_jobs WHERE webhook_delivery_id IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("requeued webhook job");
+    assert_eq!(retried_job.0, "queued");
+    assert_eq!(retried_job.1, 0);
+    assert_eq!(
+        retried_job.2["after"],
+        "0123456789012345678901234567890123456789"
+    );
+
     let changed_body = serde_json::to_vec(&json!({
         "installation": { "id": INSTALLATION_ID },
         "repository": {
