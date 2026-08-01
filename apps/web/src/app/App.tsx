@@ -19,6 +19,8 @@ import { ProjectOverviewPage } from '../projects/ProjectOverviewPage'
 import { ProjectSettingsPage } from '../projects/ProjectSettingsPage'
 import { AppShell } from '../shell/AppShell'
 import { ThreadPage } from '../threads/ThreadPage'
+import { WorkItemDetailPage } from '../work-items/WorkItemDetailPage'
+import { WorkItemsPage } from '../work-items/WorkItemsPage'
 
 function createQueryClient() {
   return new QueryClient({
@@ -52,6 +54,14 @@ export function App() {
             <Route
               element={<ProjectSettingsPage />}
               path="/projects/:projectId/settings"
+            />
+            <Route
+              element={<WorkItemsPage />}
+              path="/projects/:projectId/work-items"
+            />
+            <Route
+              element={<WorkItemDetailPage />}
+              path="/projects/:projectId/work-items/:workItemId"
             />
             <Route
               element={<ChannelPage />}

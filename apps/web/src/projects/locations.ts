@@ -4,6 +4,7 @@ const supportedKinds = new Set([
   'project_overview',
   'channel',
   'thread',
+  'work_items',
   'settings',
 ])
 
@@ -19,6 +20,7 @@ export function projectLocationHref(
     return `/projects/${project}/threads/${encodeURIComponent(location.conversationId)}`
   }
   if (location.kind === 'settings') return `/projects/${project}/settings`
+  if (location.kind === 'work_items') return `/projects/${project}/work-items`
   return `/projects/${project}`
 }
 
@@ -38,6 +40,12 @@ export function projectLocationFromPath(
   const projectRoot = `/projects/${encodeURIComponent(projectId)}`
   if (pathname === projectRoot) return { kind: 'project_overview' }
   if (pathname === `${projectRoot}/settings`) return { kind: 'settings' }
+  if (
+    pathname === `${projectRoot}/work-items` ||
+    pathname.startsWith(`${projectRoot}/work-items/`)
+  ) {
+    return { kind: 'work_items' }
+  }
   const channelPrefix = `${projectRoot}/channels/`
   if (pathname.startsWith(channelPrefix)) {
     const encodedId = pathname.slice(channelPrefix.length)
@@ -80,6 +88,7 @@ export function normalizeLocation(value: unknown): ProjectLocation {
     return { kind: candidate.kind, conversationId: candidate.conversationId }
   }
   if (candidate.kind === 'settings') return { kind: 'settings' }
+  if (candidate.kind === 'work_items') return { kind: 'work_items' }
   return { kind: 'project_overview' }
 }
 

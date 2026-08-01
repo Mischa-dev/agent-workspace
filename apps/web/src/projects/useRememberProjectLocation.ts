@@ -16,10 +16,12 @@ export function useRememberProjectLocation(
   location: ProjectLocation,
   enabled: boolean,
   navigation?: ProjectNavigation,
+  filters?: Record<string, unknown>,
 ) {
   const queryClient = useQueryClient()
   const desiredLocationKey = locationKey(location)
   const syncKey = `${projectId}:${desiredLocationKey}`
+  const filtersKey = JSON.stringify(filters ?? null)
   const [retryCount, setRetryCount] = useState(0)
   const [failure, setFailure] = useState<{
     key: string
@@ -34,6 +36,7 @@ export function useRememberProjectLocation(
       location,
       expectedVersion: navigation?.version ?? 0,
       navigation,
+      filters,
     })
       .then(() => {
         if (!active) return
@@ -56,6 +59,7 @@ export function useRememberProjectLocation(
   }, [
     desiredLocationKey,
     enabled,
+    filtersKey,
     projectId,
     queryClient,
     retryCount,

@@ -108,6 +108,28 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
 
     let cookie = login(&application).await;
     let csrf = csrf_from_cookie(&cookie);
+    let navigation_uri = format!("/api/v1/projects/{}/navigation", seed.project_id);
+    let current_navigation = get_json(&application, &cookie, &navigation_uri).await;
+    assert_eq!(current_navigation.0, StatusCode::OK);
+    let work_item_navigation = put_json(
+        &application,
+        &cookie,
+        &csrf,
+        &navigation_uri,
+        json!({
+            "location": { "kind": "work_items" },
+            "expectedVersion": current_navigation.2["version"],
+            "filters": { "priority": "high", "archived": false }
+        }),
+    )
+    .await;
+    assert_eq!(work_item_navigation.0, StatusCode::OK);
+    assert_eq!(work_item_navigation.2["location"]["kind"], "work_items");
+    assert_eq!(
+        work_item_navigation.2["href"],
+        format!("/projects/{}/work-items", seed.project_id)
+    );
+    assert_eq!(work_item_navigation.2["filters"]["priority"], "high");
     let workflow = get_json(
         &application,
         &cookie,
@@ -679,6 +701,33 @@ async fn patch_json(
         )
         .await
         .expect("M4 PATCH response");
+    response_json(response).await
+}
+
+async fn put_json(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("origin", "http://127.0.0.1:3100")
+                .header("x-csrf-token", csrf)
+                .body(Body::from(
+                    serde_json::to_vec(&body).expect("serialize M4 PUT request"),
+                ))
+                .expect("build M4 PUT request"),
+        )
+        .await
+        .expect("M4 PUT response");
     response_json(response).await
 }
 

@@ -10,6 +10,16 @@ export const queryKeys = {
     ['project', projectId, 'execution-profile', profileId, 'account'] as const,
   repositories: (projectId: string) =>
     ['project', projectId, 'repositories'] as const,
+  workItemsRoot: (projectId: string) =>
+    ['project', projectId, 'work-items'] as const,
+  workItems: (projectId: string, filters: Record<string, unknown>) =>
+    ['project', projectId, 'work-items', 'list', filters] as const,
+  workItem: (projectId: string, workItemId: string) =>
+    ['project', projectId, 'work-items', 'detail', workItemId] as const,
+  workItemWorkflow: (projectId: string) =>
+    ['project', projectId, 'work-items', 'workflow'] as const,
+  workItemAssignees: (projectId: string, query: string) =>
+    ['project', projectId, 'work-items', 'assignees', query] as const,
   timeline: (
     projectId: string,
     conversationId: string,

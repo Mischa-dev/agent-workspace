@@ -59,6 +59,15 @@ export function ProjectSidebar({
               Overview
             </NavLink>
           </li>
+          <li>
+            <NavLink
+              onClick={onNavigate}
+              to={`/projects/${encodeURIComponent(project.id)}/work-items`}
+            >
+              <span aria-hidden="true">◇</span>
+              Work Items
+            </NavLink>
+          </li>
           {sidebar.data?.channels.map((channel) => (
             <li className="channel-navigation" key={channel.id}>
               <NavLink
