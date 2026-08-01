@@ -4783,11 +4783,32 @@ mod tests {
 
     #[test]
     fn signed_webhook_merge_commit_recovers_a_missing_rest_projection() {
-        let merge_sha = "16abd896bc03495fad5e4be5851bc0862d059eca";
-        let mut provider_sha = None;
-        reconcile_merge_commit_identity(&mut provider_sha, Some(merge_sha), true)
-            .expect("signed webhook merge identity");
-        assert_eq!(provider_sha.as_deref(), Some(merge_sha));
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tools/github-spike/fixtures/merged-close-rest-null-sha.json"
+        ))
+        .expect("merged close compatibility fixture");
+        let signed_webhook = &fixture["signed_webhook"];
+        let payload = bounded_job_payload(
+            "pull_request",
+            signed_webhook["action"].as_str(),
+            signed_webhook,
+        )
+        .expect("bounded signed merged-close payload");
+        let merge_sha = payload["merge_commit_sha"]
+            .as_str()
+            .expect("signed merge commit identity");
+        let mut rest_projection: GitHubPullRequest =
+            serde_json::from_value(fixture["rest_response"].clone())
+                .expect("REST compatibility projection");
+        assert!(rest_projection.merged_at.is_some());
+        assert!(rest_projection.merge_commit_sha.is_none());
+        reconcile_merge_commit_identity(
+            &mut rest_projection.merge_commit_sha,
+            Some(merge_sha),
+            true,
+        )
+        .expect("signed webhook merge identity");
+        assert_eq!(rest_projection.merge_commit_sha.as_deref(), Some(merge_sha));
 
         let mut conflicting_provider_sha =
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());

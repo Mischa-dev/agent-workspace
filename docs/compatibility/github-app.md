@@ -108,6 +108,8 @@ review, check-suite, and check-run deliveries never supply a merge fallback,
 so a delayed event cannot promote GitHub's temporary test-merge SHA into the
 canonical record. A mismatch between non-null REST and signed merged-close
 identities remains a conflict.
+The redacted provider contract fixture is
+`tools/github-spike/fixtures/merged-close-rest-null-sha.json`.
 
 ## Work Item automation boundary
 
