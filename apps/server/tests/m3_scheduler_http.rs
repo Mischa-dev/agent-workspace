@@ -469,6 +469,65 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     assert!(unsafe_reason.is_some_and(|reason| reason.contains("dirty, missing")));
     assert!(dirty_preserved);
     assert!(second_worktree.join("UNCOMMITTED.txt").is_file());
+    let failure_event_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM agent_run_events WHERE agent_run_id = $1 AND kind = 'run_failed'",
+    )
+    .bind(unsafe_retry_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read durable unsafe retry failure event");
+    let acknowledgement = acknowledge_failure(
+        &application,
+        &cookie,
+        &csrf,
+        unsafe_retry_id,
+        failure_event_id,
+    )
+    .await;
+    assert_eq!(acknowledgement.0, StatusCode::OK);
+    assert_eq!(
+        acknowledge_failure(
+            &application,
+            &cookie,
+            &csrf,
+            unsafe_retry_id,
+            failure_event_id,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let acknowledgement_actors = sqlx::query_scalar::<_, Vec<Uuid>>(
+        "SELECT array_agg(actor_id ORDER BY actor_id) FROM agent_run_acknowledgements WHERE agent_run_id = $1",
+    )
+    .bind(unsafe_retry_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read per-Actor failure acknowledgement");
+    assert_eq!(acknowledgement_actors, vec![seed.human_actor_id]);
+    let reloaded_timeline = response_json(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/conversations/{second_thread_id}/timeline"))
+                    .header("cookie", &cookie)
+                    .body(Body::empty())
+                    .expect("build reloaded timeline request"),
+            )
+            .await
+            .expect("reloaded timeline response"),
+    )
+    .await;
+    assert_eq!(reloaded_timeline.0, StatusCode::OK);
+    assert_eq!(
+        reloaded_timeline.2["latestTerminalRun"]["id"],
+        unsafe_retry_id.to_string()
+    );
+    assert_eq!(
+        reloaded_timeline.2["latestTerminalRun"]["failureAcknowledged"], true,
+        "the current Actor's acknowledgement must survive timeline refetch"
+    );
 
     wait_for_claim_release(&pool, second_run_id).await;
     supervisors.shutdown_all().await;
@@ -631,6 +690,40 @@ async fn retry_run(
             )
             .await
             .expect("retry response"),
+    )
+    .await
+}
+
+async fn acknowledge_failure(
+    application: &axum::Router,
+    cookie: &str,
+    csrf: &str,
+    run_id: Uuid,
+    event_id: Uuid,
+) -> (StatusCode, String, Value) {
+    response_json(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/agent-runs/{run_id}/acknowledge-failure"))
+                    .header("origin", ORIGIN)
+                    .header("cookie", cookie)
+                    .header("x-csrf-token", csrf)
+                    .header(
+                        "idempotency-key",
+                        format!("acknowledge-{run_id}-{event_id}"),
+                    )
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"eventId": event_id}))
+                            .expect("serialize failure acknowledgement"),
+                    ))
+                    .expect("build failure acknowledgement"),
+            )
+            .await
+            .expect("failure acknowledgement response"),
     )
     .await
 }

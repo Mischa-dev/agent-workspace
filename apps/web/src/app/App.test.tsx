@@ -1226,7 +1226,7 @@ describe('M1 authenticated shell', () => {
     )
     const terminalRun = {
       ...timeline.activeRun,
-      state: 'interrupted',
+      state: 'failed',
       failureReason: 'The service restarted; the worktree was preserved.',
       capabilities: { interrupt: false, retry: true },
     }
@@ -1235,6 +1235,23 @@ describe('M1 authenticated shell', () => {
       activeRun: null,
       latestTerminalRun: terminalRun,
       approvals: [],
+      entries: [
+        ...timeline.entries,
+        {
+          id: 'entry-failed',
+          sequence: 3,
+          kind: 'worker_event',
+          createdAt: '2026-07-31T04:02:00Z',
+          message: null,
+          workerEvent: {
+            id: 'event-failed',
+            agentRunId: 'run-1',
+            kind: 'run_failed',
+            summary: 'The run failed and its worktree was preserved.',
+            payload: {},
+          },
+        },
+      ],
     }
     const fetchMock = installStandardApi()
     const standardImplementation = fetchMock.getMockImplementation()
@@ -1254,12 +1271,29 @@ describe('M1 authenticated shell', () => {
           queuePosition: 1,
         }, 202)
       }
+      if (path.includes('/agent-runs/run-1/acknowledge-failure')) {
+        return jsonResponse({})
+      }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })
     render(<App />)
 
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Retry last run' }),
+      await screen.findByRole('button', { name: 'Acknowledge failure' }),
+    )
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(([path]) =>
+        String(path).includes('/agent-runs/run-1/acknowledge-failure'),
+      )
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        eventId: 'event-failed',
+      })
+    })
+    expect(
+      screen.queryByRole('button', { name: 'Acknowledge failure' }),
+    ).toBeNull()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry last run' }),
     )
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>

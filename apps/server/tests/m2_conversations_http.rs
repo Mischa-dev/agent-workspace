@@ -45,6 +45,10 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         include_str!("../migrations/0008_m2_conversation_lock_boundaries.sql"),
         include_str!("../migrations/0009_m3_execution_foundation.sql"),
         include_str!("../migrations/0010_m3_execution_admission_hardening.sql"),
+        include_str!("../migrations/0011_m3_canonical_repository_mirrors.sql"),
+        include_str!("../migrations/0012_m3_agent_run_scheduler.sql"),
+        include_str!("../migrations/0013_m3_provider_event_idempotency.sql"),
+        include_str!("../migrations/0014_m3_run_acknowledgements.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)
@@ -472,8 +476,13 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         ))
         .await
         .expect("read Conversation sidebar");
-    assert_eq!(sidebar.status(), StatusCode::OK);
+    let sidebar_status = sidebar.status();
     let sidebar = response_json(sidebar).await;
+    assert_eq!(
+        sidebar_status,
+        StatusCode::OK,
+        "sidebar response: {sidebar}"
+    );
     assert_eq!(sidebar["channels"][0]["id"], channel_id.to_string());
     assert_eq!(
         sidebar["channels"][0]["threads"][0]["id"],

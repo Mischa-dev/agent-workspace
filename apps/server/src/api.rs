@@ -40,6 +40,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/agent-runs/{id}/retry", post(retry_agent_run))
         .route(
+            "/api/v1/agent-runs/{id}/acknowledge-failure",
+            post(acknowledge_run_failure),
+        )
+        .route(
             "/api/v1/agent-approvals/{id}/respond",
             post(respond_to_approval),
         )
@@ -541,6 +545,137 @@ async fn retry_agent_run(
     transaction.commit().await?;
     crate::scheduler::kick(state.clone());
     Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FailureAcknowledgementRequest {
+    event_id: Uuid,
+}
+
+async fn acknowledge_run_failure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(run_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<FailureAcknowledgementRequest>,
+) -> Result<Json<EmptyCommand>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let conversation_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound("agent_run"))?;
+    let conversation =
+        authorized_conversation(&state, &principal, conversation_id, Action::ReadStateUpdate)
+            .await?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let scope = idempotency::resource_bound_scope("agent_run", run_id, "acknowledge_failure")?;
+    let mut transaction = state.pool.begin().await?;
+    guard_conversation_mutation(
+        &mut transaction,
+        &principal,
+        conversation_id,
+        conversation.project_id,
+        Action::ReadStateUpdate,
+    )
+    .await?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let _: EmptyCommand = replay.decode()?;
+            transaction.commit().await?;
+            return Ok(Json(EmptyCommand {}));
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let valid_failure = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+              FROM agent_runs run
+              JOIN agent_run_events event ON event.agent_run_id = run.id
+              JOIN conversation_entries entry
+                ON entry.agent_run_event_id = event.id
+               AND entry.conversation_id = run.conversation_id
+             WHERE run.id = $1
+               AND run.project_id = $2
+               AND run.state = 'failed'
+               AND event.id = $3
+               AND event.kind = 'run_failed'
+        )
+        "#,
+    )
+    .bind(run_id)
+    .bind(conversation.project_id)
+    .bind(request.event_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !valid_failure {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "failure event is not acknowledgeable",
+        ));
+    }
+    let inserted = sqlx::query(
+        r#"
+        INSERT INTO agent_run_acknowledgements (
+            id, project_id, agent_run_id, actor_id, acknowledged_event_id
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (agent_run_id, actor_id) DO NOTHING
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(conversation.project_id)
+    .bind(run_id)
+    .bind(principal.actor_id)
+    .bind(request.event_id)
+    .execute(&mut *transaction)
+    .await?;
+    let created_acknowledgement = inserted.rows_affected() == 1;
+    if !created_acknowledgement {
+        let acknowledged_event_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT acknowledged_event_id FROM agent_run_acknowledgements WHERE agent_run_id = $1 AND actor_id = $2",
+        )
+        .bind(run_id)
+        .bind(principal.actor_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if acknowledged_event_id != request.event_id {
+            return Err(AppError::Conflict(
+                "agent_run_acknowledgement",
+                "a different failure event is already acknowledged",
+            ));
+        }
+    }
+    if created_acknowledgement {
+        outbox::enqueue_agent_run_updated(
+            &mut transaction,
+            conversation.project_id,
+            conversation_id,
+            run_id,
+        )
+        .await?;
+    }
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::OK,
+        &EmptyCommand {},
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(EmptyCommand {}))
 }
 
 async fn select_run_setup(
@@ -1847,6 +1982,7 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
     .ok_or(AppError::NotFound("agent_run"))?;
     Ok(RunView {
         run,
+        failure_acknowledged: false,
         capabilities: RunCapabilities {
             interrupt: false,
             retry: false,
