@@ -108,6 +108,12 @@ review, check-suite, and check-run deliveries never supply a merge fallback,
 so a delayed event cannot promote GitHub's temporary test-merge SHA into the
 canonical record. A mismatch between non-null REST and signed merged-close
 identities remains a conflict.
+After that signed identity has committed canonically, later authenticated
+manual refresh jobs may retain the same stored merge commit when REST again
+returns null. They never invent or replace it: a non-null REST mismatch remains
+a conflict, and an unmerged pull request never consumes the fallback. This
+keeps refresh and stale-lease recovery convergent after the remote head branch
+has been deleted without making an unsigned refresh a new source of identity.
 The redacted provider contract fixture is
 `tools/github-spike/fixtures/merged-close-rest-null-sha.json`.
 

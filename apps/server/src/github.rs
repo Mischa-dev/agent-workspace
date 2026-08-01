@@ -351,7 +351,7 @@ struct ClaimedPullRequestSyncJob {
     head_ref: String,
     base_ref: String,
     external_created_at: DateTime<Utc>,
-    webhook_merge_commit_sha: Option<String>,
+    known_merge_commit_sha: Option<String>,
     scope_available: bool,
 }
 
@@ -2225,13 +2225,15 @@ async fn claim_pull_request_sync_job(
                CASE
                    WHEN COALESCE(
                        job.payload ->> 'merge_commit_sha',
-                       delivery.redelivery_payload ->> 'merge_commit_sha'
+                       delivery.redelivery_payload ->> 'merge_commit_sha',
+                       pull_request.merge_commit_sha
                    ) ~ '^[0-9a-f]{40}$'
                    THEN COALESCE(
                        job.payload ->> 'merge_commit_sha',
-                       delivery.redelivery_payload ->> 'merge_commit_sha'
+                       delivery.redelivery_payload ->> 'merge_commit_sha',
+                       pull_request.merge_commit_sha
                    )
-               END AS webhook_merge_commit_sha,
+               END AS known_merge_commit_sha,
                installation.enabled
                    AND installation.state = 'available'
                    AND access.access_state = 'selected'
@@ -3071,7 +3073,7 @@ async fn process_pull_request_sync_job(
     };
     if let Err(error) = reconcile_merge_commit_identity(
         &mut pull_request.merge_commit_sha,
-        job.webhook_merge_commit_sha.as_deref(),
+        job.known_merge_commit_sha.as_deref(),
         pull_request.merged_at.is_some(),
     ) {
         drop(token);
@@ -4780,7 +4782,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_webhook_merge_commit_recovers_a_missing_rest_projection() {
+    fn signed_or_canonical_merge_commit_recovers_a_missing_rest_projection() {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../tools/github-spike/fixtures/merged-close-rest-null-sha.json"
         ))
@@ -4807,6 +4809,20 @@ mod tests {
         )
         .expect("signed webhook merge identity");
         assert_eq!(rest_projection.merge_commit_sha.as_deref(), Some(merge_sha));
+
+        let mut later_manual_refresh: GitHubPullRequest =
+            serde_json::from_value(fixture["rest_response"].clone())
+                .expect("later REST compatibility projection");
+        reconcile_merge_commit_identity(
+            &mut later_manual_refresh.merge_commit_sha,
+            Some(merge_sha),
+            true,
+        )
+        .expect("retained canonical merge identity");
+        assert_eq!(
+            later_manual_refresh.merge_commit_sha.as_deref(),
+            Some(merge_sha)
+        );
 
         let mut conflicting_provider_sha =
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
