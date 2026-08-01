@@ -15,7 +15,10 @@ const WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_ATTEMPTS_PER_WINDOW: u32 = 10;
 const GLOBAL_LOGIN_ATTEMPTS_PER_WINDOW: u32 = 60;
 const AUTHENTICATED_WRITES_PER_WINDOW: u32 = 240;
+const INVITATION_ATTEMPTS_PER_WINDOW: u32 = 20;
+const GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW: u32 = 120;
 const MAX_LOGIN_KEYS: usize = 4_096;
+const MAX_INVITATION_KEYS: usize = 4_096;
 const MAX_SESSION_KEYS: usize = 4_096;
 const CONCURRENT_PASSWORD_KDFS: usize = 2;
 
@@ -24,6 +27,8 @@ pub struct RateLimiters {
     login: FixedWindowLimiter<[u8; 32]>,
     global_login: FixedWindowLimiter<()>,
     authenticated_writes: FixedWindowLimiter<Uuid>,
+    invitation_attempts: FixedWindowLimiter<[u8; 32]>,
+    global_invitation_attempts: FixedWindowLimiter<()>,
     password_kdfs: Arc<Semaphore>,
 }
 
@@ -47,6 +52,16 @@ impl RateLimiters {
             .check(session_id)
             .map_err(AppError::rate_limited)
     }
+
+    pub fn check_invitation(&self, token_prefix: &str) -> Result<(), AppError> {
+        self.global_invitation_attempts
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let key: [u8; 32] = Sha256::digest(token_prefix.as_bytes()).into();
+        self.invitation_attempts
+            .check(key)
+            .map_err(AppError::rate_limited)
+    }
 }
 
 impl Default for RateLimiters {
@@ -58,6 +73,16 @@ impl Default for RateLimiters {
                 AUTHENTICATED_WRITES_PER_WINDOW,
                 WINDOW,
                 MAX_SESSION_KEYS,
+            ),
+            invitation_attempts: FixedWindowLimiter::new(
+                INVITATION_ATTEMPTS_PER_WINDOW,
+                WINDOW,
+                MAX_INVITATION_KEYS,
+            ),
+            global_invitation_attempts: FixedWindowLimiter::new(
+                GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW,
+                WINDOW,
+                1,
             ),
             password_kdfs: Arc::new(Semaphore::new(CONCURRENT_PASSWORD_KDFS)),
         }
@@ -253,5 +278,18 @@ mod tests {
         ));
         drop(permits);
         assert!(limiters.try_acquire_password_kdf().is_ok());
+    }
+
+    #[test]
+    fn invitation_attempts_are_token_scoped_and_globally_bounded() {
+        let limiters = RateLimiters::default();
+        for _ in 0..20 {
+            assert!(limiters.check_invitation("aw_inv_first").is_ok());
+        }
+        assert!(matches!(
+            limiters.check_invitation("aw_inv_first"),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_invitation("aw_inv_second").is_ok());
     }
 }
