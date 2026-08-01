@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M4 accepted; M5 authorized; source of truth v0.16
+**Status:** M4 accepted; M5 authorized; source of truth v0.17
 
 **Owner:** Mischa Nelson  
 **Date:** August 1, 2026
@@ -12,6 +12,18 @@
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.17 — GitHub installation subscription compatibility
+
+- corrected the M5 installation-verification assumption after the retained
+  GitHub App installation API reported the five explicitly consumed
+  push/pull-request/review/check subscriptions plus optional `repository`
+- recorded that GitHub's automatically delivered installation and repository
+  access events are webhook delivery types, not entries in the installation
+  response's explicit `events` subscription list
+- kept `repository` outside the webhook listener's accepted event allowlist,
+  so recognizing the retained App configuration does not broaden durable
+  payload ingestion
 
 ### v0.16 — M4 acceptance and M5 authorization
 
@@ -6085,6 +6097,20 @@ and bounded rank; list and Kanban query the same versioned record. Moving a
 Kanban card is therefore an ordinary optimistic status/rank command, not a
 mutation of a separate board model. M4 ships the default workflow read-only so
 future customization can be additive and measured.
+
+## D-043: GitHub installation verification distinguishes subscriptions from automatic events
+
+**Status:** Accepted
+
+**Reason:** The live GitHub installation response for App `4442593` reports
+`push`, `pull_request`, `pull_request_review`, `check_suite`, `check_run`, and
+the retained optional `repository` subscription. GitHub's installation and
+repository-access webhook deliveries are not enumerated in that explicit
+subscription array. Installation verification therefore requires the five
+consumed subscriptions, permits `repository` only as a documented retained
+compatibility value, and continues to reject `repository` deliveries at the
+isolated webhook listener. This preserves fail-closed ingestion without
+misclassifying automatic webhook types as missing App subscriptions.
 
 ---
 

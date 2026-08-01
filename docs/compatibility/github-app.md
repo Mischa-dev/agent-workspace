@@ -12,6 +12,14 @@
 - Events: installation/repository access, push, pull request, review, check
   suite, and check run only
 
+The installation API's explicit `events` array does not enumerate GitHub's
+automatically delivered installation and repository-access webhook types. The
+retained live installation reports `push`, `pull_request`,
+`pull_request_review`, `check_suite`, `check_run`, and an optional legacy
+`repository` subscription. M5 accepts that configuration but the webhook
+listener does not accept or persist `repository` deliveries; its payload
+allowlist remains limited to the product events above.
+
 The development App is installed only on
 `Mischa-dev/agent-workspace-m0-spike`. The private key and webhook secret are
 stored outside Git with owner-only permissions.
