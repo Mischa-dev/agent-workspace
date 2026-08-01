@@ -153,15 +153,39 @@ async fn register_client(
     }
 
     let client_id = Uuid::now_v7();
+    let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(68458762026001)")
+        .execute(&mut *transaction)
+        .await
+        .map_err(AppError::from)?;
+    sqlx::query(
+        r#"DELETE FROM mcp_oauth_clients client
+           WHERE client.created_at < now() - interval '1 day'
+             AND NOT EXISTS (SELECT 1 FROM mcp_oauth_authorization_codes code WHERE code.client_id = client.id)
+             AND NOT EXISTS (SELECT 1 FROM mcp_oauth_grants grant WHERE grant.client_id = client.id)"#,
+    )
+    .execute(&mut *transaction)
+    .await
+    .map_err(AppError::from)?;
+    let client_count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcp_oauth_clients")
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(AppError::from)?;
+    if client_count >= 1_024 {
+        return Err(OAuthError::invalid_client_metadata(
+            "the local client registration limit has been reached",
+        ));
+    }
     sqlx::query(
         "INSERT INTO mcp_oauth_clients (id, client_name, redirect_uris) VALUES ($1, $2, $3)",
     )
     .bind(client_id)
     .bind(&request.client_name)
     .bind(&request.redirect_uris)
-    .execute(&state.pool)
+    .execute(&mut *transaction)
     .await
     .map_err(AppError::from)?;
+    transaction.commit().await.map_err(AppError::from)?;
     Ok((
         StatusCode::CREATED,
         Json(RegistrationResponse {
@@ -448,18 +472,30 @@ async fn exchange_code(
     validate_verifier(verifier)?;
     let (prefix, digest) = secret_lookup(code, "aw_code_")?;
     let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
-    let row = sqlx::query_as::<_, CodeRow>(r#"
-        SELECT id, client_id, project_id, actor_id, redirect_uri, scopes, code_digest, code_challenge
-        FROM mcp_oauth_authorization_codes
-        WHERE code_prefix = $1 AND used_at IS NULL AND expires_at > now()
-        FOR UPDATE
-    "#)
+    let row = sqlx::query_as::<_, CodeRow>(
+        r#"
+        SELECT code.id, code.client_id, code.project_id, code.actor_id,
+               code.redirect_uri, code.scopes, code.code_digest, code.code_challenge
+        FROM mcp_oauth_authorization_codes code
+        JOIN mcp_oauth_clients client ON client.id = code.client_id
+        JOIN projects project ON project.id = code.project_id
+        JOIN actors actor ON actor.id = code.actor_id
+        JOIN project_memberships membership
+          ON membership.project_id = code.project_id AND membership.actor_id = code.actor_id
+        WHERE code.code_prefix = $1 AND code.used_at IS NULL AND code.expires_at > now()
+          AND client.status = 'active' AND project.archived_at IS NULL
+          AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
+        FOR UPDATE OF code
+    "#,
+    )
     .bind(prefix)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(AppError::from)?
     .filter(|row| digest_matches(&row.code_digest, &digest))
-    .ok_or_else(|| OAuthError::invalid_grant("authorization code is invalid, expired, or already used"))?;
+    .ok_or_else(|| {
+        OAuthError::invalid_grant("authorization code is invalid, expired, or already used")
+    })?;
     let expected_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     if row.client_id != client_id
         || row.redirect_uri != redirect_uri
@@ -512,8 +548,15 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
                token.token_digest, token.used_at, token.revoked_at
         FROM mcp_oauth_refresh_tokens token
         JOIN mcp_oauth_grants grant ON grant.id = token.grant_id
+        JOIN mcp_oauth_clients client ON client.id = grant.client_id
+        JOIN projects project ON project.id = grant.project_id
+        JOIN actors actor ON actor.id = grant.actor_id
+        JOIN project_memberships membership
+          ON membership.project_id = grant.project_id AND membership.actor_id = grant.actor_id
         WHERE token.token_prefix = $1 AND token.expires_at > now()
           AND grant.revoked_at IS NULL
+          AND client.status = 'active' AND project.archived_at IS NULL
+          AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
         FOR UPDATE OF token, grant
     "#,
     )
@@ -814,7 +857,9 @@ fn secret_lookup<'a>(
     if !token.starts_with(required_prefix)
         || token.len() > MAX_TOKEN
         || token.len() < 20
-        || token.bytes().any(|byte| byte.is_ascii_whitespace())
+        || token
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
     {
         return Err(OAuthError::invalid_grant("token is invalid"));
     }
@@ -1003,6 +1048,7 @@ mod tests {
         );
         assert!(parse_scopes(Some("write")).is_err());
         assert!(parse_scopes(Some("read admin")).is_err());
+        assert!(secret_lookup("aw_oauth_aaaaaaaéaaaa", "aw_oauth_").is_err());
     }
 
     #[test]
