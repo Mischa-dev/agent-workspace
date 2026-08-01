@@ -26,6 +26,8 @@ import {
   useWorkWithWorker,
 } from './hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
+import { buildOpenInCodexLink } from './codexDeepLink'
+import type { WorkItem } from './types'
 import { ApiError } from '../api/errors'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
@@ -319,6 +321,83 @@ describe('Work Items list', () => {
 })
 
 describe('Work Item detail', () => {
+  it('builds an exactly encoded, bounded Codex deep link without mutable content or secrets', () => {
+    const ready = {
+      ...workItem,
+      title: hostileTitle,
+      description: 'AGENT_WORKSPACE_MCP_TOKEN=secret-canary /var/lib/private',
+      linkedRepositories: [{
+        id: 'repository-a',
+        owner: 'Mischa-dev',
+        name: 'agent-workspace',
+        cloneUrl: 'https://github.com/Mischa-dev/agent-workspace.git',
+        role: 'primary' as const,
+        preparationState: 'ready',
+        trusted: true,
+        available: true,
+        archivedAt: null,
+        href: `/projects/${projectId}/settings`,
+      }],
+    } as WorkItem
+    const result = buildOpenInCodexLink(ready, 'http://127.0.0.1:3100')
+    expect(result.reason).toBeNull()
+    const prompt = [
+      'Use the Agent Workspace MCP server.',
+      `Project ID: ${projectId}`,
+      `Project URL: http://127.0.0.1:3100/projects/${projectId}`,
+      `Work Item ID: ${workItemId}`,
+      `Work Item URL: http://127.0.0.1:3100/projects/${projectId}/work-items/${workItemId}`,
+      'Work Item key: AW-1',
+      'Load the Work Item and related Project instructions through MCP before changing anything.',
+      'Work in the repository matched by this Git origin. Set the Work Item to In Progress only when meaningful work begins.',
+      'Post only useful progress or blocker updates. Respect the current version; refetch and make an informed retry after a version conflict.',
+      'When complete, link the canonical pull request through MCP and mark the Work Item ready for review.',
+    ].join('\n')
+    expect(result.href).toBe(
+      `codex://new?originUrl=${encodeURIComponent(ready.linkedRepositories[0].cloneUrl)}&prompt=${encodeURIComponent(prompt)}`,
+    )
+    expect(result.href).not.toContain(hostileTitle)
+    expect(result.href).not.toContain('secret-canary')
+    expect(result.href).not.toContain('/var/lib')
+    expect(prompt.length).toBeLessThanOrEqual(2_000)
+  })
+
+  it.each([
+    ['missing', [], 'Link one trusted repository'],
+    ['ambiguous', [
+      { id: 'repository-a', trusted: true, available: true, archivedAt: null, cloneUrl: 'https://github.com/a/a.git' },
+      { id: 'repository-b', trusted: true, available: true, archivedAt: null, cloneUrl: 'https://github.com/b/b.git' },
+    ], 'Keep exactly one linked repository'],
+    ['untrusted', [{ id: 'repository-a', trusted: false, available: false, archivedAt: null, cloneUrl: 'https://github.com/a/a.git' }], 'must be trusted'],
+    ['archived', [{ id: 'repository-a', trusted: true, available: false, archivedAt: '2026-07-31T00:00:00Z', cloneUrl: 'https://github.com/a/a.git' }], 'Restore the linked repository'],
+    ['unsupported', [{ id: 'repository-a', trusted: true, available: true, archivedAt: null, cloneUrl: 'ssh://git@github.com/a/a.git' }], 'supported canonical Git origin URL'],
+  ])('disables Open in Codex for a %s repository selection with an accessible reason', (_case, repositories, reason) => {
+    const linkedRepositories = repositories.map((repository) => ({
+      owner: 'owner',
+      name: repository.id,
+      role: 'primary' as const,
+      preparationState: 'ready',
+      href: '/settings',
+      ...repository,
+    }))
+    vi.mocked(useWorkItem).mockReturnValue({
+      data: { ...workItem, linkedRepositories },
+      isPending: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useWorkItem>)
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/work-items/${workItemId}`]}>
+          <Routes><Route element={<WorkItemDetailPage />} path="/projects/:projectId/work-items/:workItemId" /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const button = screen.getByRole('button', { name: 'Open in Codex' })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(new RegExp(reason))).toHaveAttribute('id', button.getAttribute('aria-describedby'))
+  })
+
   it('starts a linked Worker Thread with explicit user instructions', () => {
     vi.mocked(useProjectConversationSidebar).mockReturnValue({
       data: {
