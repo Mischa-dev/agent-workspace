@@ -599,6 +599,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .append_pair("state", "m6-state")
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256")
+        // Codex CLI 0.146.0 currently emits the same RFC 8707 resource twice.
+        // The authorization endpoint must accept identical duplicates while
+        // rejecting conflicting resource targets.
+        .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp")
         .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp");
     let consent_page = application
         .clone()
@@ -622,6 +626,27 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert!(consent_html.contains("Authorize codex-m6-oauth"));
     assert!(consent_html.contains("read write"));
     assert!(!consent_html.contains(OAUTH_PASSWORD));
+
+    let conflicting_authorize_uri = authorize_url.path().to_owned()
+        + "?"
+        + authorize_url.query().expect("query")
+        + "&resource=http%3A%2F%2F127.0.0.1%3A3100%2Fapi%2Fv1%2Fother";
+    let conflicting_resource = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(conflicting_authorize_uri)
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("conflicting resource request"),
+        )
+        .await
+        .expect("conflicting resource response");
+    assert_eq!(conflicting_resource.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_response(conflicting_resource).await["error"],
+        "invalid_request"
+    );
 
     let consent_body = serde_urlencoded::to_string([
         ("response_type", "code"),
