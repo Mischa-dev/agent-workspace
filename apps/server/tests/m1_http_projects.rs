@@ -38,17 +38,10 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .await
         .expect("create isolated HTTP schema");
     let pool = schema_pool(&database_url, &schema).await;
-    for migration in [
-        include_str!("../migrations/0001_foundation.sql"),
-        include_str!("../migrations/0002_walking_skeleton.sql"),
-        include_str!("../migrations/0003_m0_consistency.sql"),
-        include_str!("../migrations/0004_m1_identity_projects.sql"),
-    ] {
-        sqlx::raw_sql(migration)
-            .execute(&pool)
-            .await
-            .expect("apply migration");
-    }
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("apply current migrations");
     let bootstrapped = bootstrap_admin(
         &pool,
         BootstrapCommand {
@@ -712,10 +705,10 @@ async fn insert_active_run_fixture(pool: &PgPool, project_id: Uuid, owner_actor_
         r#"
         INSERT INTO repositories (
             id, project_id, owner, name, clone_url, default_branch,
-            mirror_path, trusted
+            mirror_path, trusted, preparation_state, prepared_at
         )
         VALUES ($1, $2, 'test', $3, 'https://example.invalid/test.git',
-                'main', $4, true)
+                'main', $4, true, 'ready', now())
         "#,
     )
     .bind(repository_id)
@@ -742,9 +735,9 @@ async fn insert_active_run_fixture(pool: &PgPool, project_id: Uuid, owner_actor_
         r#"
         INSERT INTO execution_profiles (
             id, project_id, provider_connection_id, owner_actor_id,
-            name, codex_home_path, status
+            name, codex_home_path, status, account_state
         )
-        VALUES ($1, $2, $3, $4, 'archive-guard', $5, 'available')
+        VALUES ($1, $2, $3, $4, 'archive-guard', $5, 'available', 'authenticated')
         "#,
     )
     .bind(execution_profile_id)
@@ -786,14 +779,15 @@ async fn insert_active_run_fixture(pool: &PgPool, project_id: Uuid, owner_actor_
     sqlx::query(
         r#"
         INSERT INTO conversations (
-            id, project_id, kind, parent_channel_id, name
+            id, project_id, kind, parent_channel_id, repository_id, name
         )
-        VALUES ($1, $2, 'thread', $3, 'Archive guard run')
+        VALUES ($1, $2, 'thread', $3, $4, 'Archive guard run')
         "#,
     )
     .bind(thread_id)
     .bind(project_id)
     .bind(channel_id)
+    .bind(repository_id)
     .execute(&mut *transaction)
     .await
     .expect("insert Thread");

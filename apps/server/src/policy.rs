@@ -44,10 +44,13 @@ pub enum Action {
     ConversationArchive,
     ReadStateUpdate,
     MentionSearch,
+    WorkItemView,
+    WorkItemCreate,
+    WorkItemEdit,
 }
 
 impl Action {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 17] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -62,6 +65,9 @@ impl Action {
         Self::ConversationArchive,
         Self::ReadStateUpdate,
         Self::MentionSearch,
+        Self::WorkItemView,
+        Self::WorkItemCreate,
+        Self::WorkItemEdit,
     ];
 }
 
@@ -115,6 +121,7 @@ pub struct ProjectScope {
     pub run_id: Option<Uuid>,
     pub repository_id: Option<Uuid>,
     pub approval_id: Option<Uuid>,
+    pub work_item_id: Option<Uuid>,
 }
 
 impl ProjectScope {
@@ -125,6 +132,7 @@ impl ProjectScope {
             run_id: None,
             repository_id: None,
             approval_id: None,
+            work_item_id: None,
         }
     }
 
@@ -135,6 +143,7 @@ impl ProjectScope {
             run_id: None,
             repository_id: None,
             approval_id: None,
+            work_item_id: None,
         }
     }
 
@@ -145,6 +154,7 @@ impl ProjectScope {
             run_id: Some(run_id),
             repository_id: Some(repository_id),
             approval_id: None,
+            work_item_id: None,
         }
     }
 
@@ -161,6 +171,18 @@ impl ProjectScope {
             run_id: Some(run_id),
             repository_id: Some(repository_id),
             approval_id: Some(approval_id),
+            work_item_id: None,
+        }
+    }
+
+    pub const fn work_item(project_id: Uuid, work_item_id: Uuid) -> Self {
+        Self {
+            project_id,
+            thread_id: None,
+            run_id: None,
+            repository_id: None,
+            approval_id: None,
+            work_item_id: Some(work_item_id),
         }
     }
 }
@@ -321,7 +343,10 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::ThreadCreate
             | Action::ConversationArchive
             | Action::ReadStateUpdate
-            | Action::MentionSearch,
+            | Action::MentionSearch
+            | Action::WorkItemView
+            | Action::WorkItemCreate
+            | Action::WorkItemEdit,
             Resource::Project(scope),
         ) => MembershipScope::Project(scope.project_id),
         (Action::ApprovalRespond, Resource::Approval { scope, .. }) => {
@@ -388,11 +413,17 @@ const fn ordinary_role_allows(role: MembershipRole, action: Action) -> bool {
                 | Action::ConversationArchive
                 | Action::ReadStateUpdate
                 | Action::MentionSearch
+                | Action::WorkItemView
+                | Action::WorkItemCreate
+                | Action::WorkItemEdit
         ),
         MembershipRole::Viewer => {
             matches!(
                 action,
-                Action::ProjectView | Action::NavigationRead | Action::ReadStateUpdate
+                Action::ProjectView
+                    | Action::NavigationRead
+                    | Action::ReadStateUpdate
+                    | Action::WorkItemView
             )
         }
         MembershipRole::Worker => false,
@@ -538,11 +569,17 @@ mod tests {
                             | Action::ConversationArchive
                             | Action::ReadStateUpdate
                             | Action::MentionSearch
+                            | Action::WorkItemView
+                            | Action::WorkItemCreate
+                            | Action::WorkItemEdit
                     ),
                     MembershipRole::Viewer => {
                         matches!(
                             action,
-                            Action::ProjectView | Action::NavigationRead | Action::ReadStateUpdate
+                            Action::ProjectView
+                                | Action::NavigationRead
+                                | Action::ReadStateUpdate
+                                | Action::WorkItemView
                         )
                     }
                     MembershipRole::Worker => matches!(
@@ -748,6 +785,10 @@ mod tests {
             },
             ProjectScope {
                 approval_id: Some(APPROVAL_ID),
+                ..delegated
+            },
+            ProjectScope {
+                work_item_id: Some(Uuid::from_u128(13)),
                 ..delegated
             },
             ProjectScope::project(PROJECT_ID),

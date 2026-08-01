@@ -26,6 +26,7 @@ pub mod repositories;
 pub mod scheduler;
 pub mod seed;
 pub mod telemetry;
+pub mod work_items;
 
 use std::sync::Arc;
 
@@ -68,6 +69,7 @@ pub fn router(state: AppState) -> Router {
         .merge(account::router())
         .merge(conversations::router())
         .merge(repositories::router())
+        .merge(work_items::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(
