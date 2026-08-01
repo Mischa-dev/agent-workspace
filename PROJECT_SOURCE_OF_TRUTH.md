@@ -2,16 +2,31 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M3 satisfied; M4 entry planning v0.13
+**Status:** M3 satisfied; M4 authorized v0.14
 
 **Owner:** Mischa Nelson  
 **Date:** July 31, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M3 are complete. M4 remains unauthorized until its backlog is elaborated with the entry checks required below; every later milestone remains subject to the same gate.
+**Implementation authorization:** Milestones M0 through M3 are complete. M4 is authorized by the task-level criteria below; every later milestone remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.14 — M4 Work Items entry
+
+- elaborated every M4 task with acceptance criteria, dependencies, expected
+  tests, and explicit exclusions
+- fixed one canonical optimistic-versioned Work Item, Project-owned workflow
+  definitions, stable semantic status categories, and list/Kanban projections
+- fixed M4 description, acceptance-criterion, comment, activity, assignment,
+  Conversation-link, Repository-link, and structured-reference boundaries
+- required all Work Item authorship and assignment to use server-resolved Actor
+  identity and the existing centralized Project policy
+- specified an idempotent Work-with-Worker handoff that creates and links a new
+  Thread before invoking the accepted M3 run path
+- authorized M4 implementation while retaining GitHub delivery, MCP exposure,
+  final workflow customization, and external agent connections for later gates
 
 ### v0.13 — M3 acceptance
 
@@ -4668,27 +4683,425 @@ repair as an acceptance step, and remote executor failover.
 
 ### M4-001 Work Item schema and readable keys
 
+Add the canonical Project-scoped Work Item and immutable readable identity.
+
+**Acceptance criteria**
+
+- add `work_item_types`, `work_item_statuses`, `work_items`, and the minimum
+  same-Project composite keys required by later M4 links; every internal ID is
+  application-generated UUIDv7
+- allocate the numeric portion under a transaction lock on the existing
+  `project_counters` row, store it separately from the Project key, and expose
+  the stable display key `<PROJECT-KEY>-<number>` without treating it as the
+  canonical foreign key
+- make Project key changes fail once the first number has been allocated;
+  concurrent creates receive distinct gap-free numbers for committed rows and
+  an idempotent replay returns the originally created Work Item
+- store bounded title, bounded plain-text description, type, status, optimistic
+  version, creating Actor, archive attribution, and timestamps; browser input
+  cannot supply Project, creator, key number, version, or audit identity
+- require enabled same-Project membership for reads and authorized create
+  policy for writes; missing, cross-Project, and unauthorized resources use the
+  existing non-disclosure boundary
+- archive rather than delete and retain all keys, links, activity, comments,
+  runs, and future artifacts
+
+**Dependencies:** accepted M1 Actor/Project policy, `project_counters`, UUIDv7
+and idempotency infrastructure, and the source-of-truth identity rules.
+
+**Expected tests:** M0-to-M4 migration, same-Project foreign keys, concurrent
+key allocation, transaction rollback without a consumed committed number,
+idempotent replay/payload mismatch, title/description/control bounds, Project
+key immutability, archive retention, Actor spoof rejection, and cross-Project
+non-disclosure.
+
+**Exclusions:** globally unique readable keys, deletion/retention UI, rich-text
+descriptions, subtask hierarchy, estimates, dates, labels, custom fields, and
+Work Item import.
+
 ### M4-002 Default Project workflow
+
+Create stable Project-owned type and status definitions for existing and new
+Projects.
+
+**Acceptance criteria**
+
+- seed Feature, Bug, Task, Request, Research, and Improvement types with stable
+  opaque IDs, bounded names, deterministic order, and one default type
+- seed Backlog, Ready, In Progress, Review, Verification, Done, and Canceled
+  statuses with stable opaque IDs, deterministic order, semantic categories,
+  and one default status
+- store allowed directed status transitions explicitly and seed the transition
+  graph from section 13.3; domain logic uses status IDs/categories rather than
+  editable display names
+- create the full default workflow in the same transaction as every new
+  Project and add it idempotently for retained Projects during migration/seed
+- require exactly one active default type and status per Project, reject
+  duplicate active names/order values, and prevent disabling a definition that
+  is referenced by active Work Items
+- keep the definitions read-only in the M4 browser; future customization can
+  evolve these rows without rewriting existing Work Items
+
+**Dependencies:** M4-001 Project-scoped schema, accepted Project creation and
+seed commands, and the default transition model in section 13.3.
+
+**Expected tests:** existing/new Project provisioning, repeated seed, exact
+defaults/order/categories/transitions, same-Project constraints, duplicate
+rejection, referenced-definition protection, invalid transition rejection,
+and display-name-independent behavior.
+
+**Exclusions:** workflow editor, custom type/status creation UI, conditional
+transitions, automation rules, per-type workflows, and GitHub-driven status
+changes.
 
 ### M4-003 Work Item list
 
+Provide the first durable Work surface as a paginated list projection.
+
+**Acceptance criteria**
+
+- implement Project-scoped list and create endpoints with opaque bounded
+  cursors, deterministic ordering, stable filter shapes, and a maximum page
+  size
+- filter by bounded search, type, status, semantic category, priority,
+  assignee, unassigned, and archived state; every supplied ID must belong to
+  the authorized Project
+- return only bounded card fields, display key, version, type/status semantic
+  metadata, assignee projection, and capabilities; never return internal audit
+  payloads or other Projects' filter matches
+- render a keyboard-reachable list with loading, empty, filtered-empty, error,
+  and pagination states inside the existing four-region shell
+- preserve the selected Work view and filters through the existing per-Actor
+  Project navigation state without making the browser cache authoritative
+- invalidate/refetch through the transactional outbox after create or mutation;
+  duplicate realtime invalidations must not duplicate cards
+
+**Dependencies:** M4-001/002 records, M2 outbox/realtime convergence, M1
+navigation state, and existing Project shell/query conventions.
+
+**Expected tests:** authorization/non-disclosure, each filter and combination,
+cursor bounds/order, create/replay/conflict, hostile text escaping, duplicate
+invalidation, reload restoration, keyboard/accessibility smoke, and narrow
+viewport behavior.
+
+**Exclusions:** saved/shared views, bulk editing, full-text search service,
+roadmap, grouping, sorting customization, CSV export, and offline creation.
+
 ### M4-004 Work Item detail
+
+Implement the canonical detail route and constrained optimistic edits.
+
+**Acceptance criteria**
+
+- implement lookup by immutable UUID and authorized Project-qualified readable
+  key; an unqualified key never resolves across all Organizations
+- render title, description, type, status, priority, assignee, acceptance
+  criteria, links, comments, activity, version, archive state, and capabilities
+  from one authorized detail response
+- add constrained update and archive/restore commands requiring exact Origin,
+  CSRF, expected version, centralized policy, and bounded idempotency where a
+  network retry could duplicate an append-only effect
+- apply every non-commutative field change with one compare-and-swap update;
+  return the authoritative current resource/version on conflict without
+  overwriting either edit
+- write a typed bounded activity row and outbox invalidation in the same
+  transaction as every successful mutation; no-op replay creates neither a
+  version bump nor duplicate activity
+- preserve an unsaved browser draft on conflict or retryable failure and offer
+  explicit reload/reapply behavior
+
+**Dependencies:** M4-001/002, centralized Work Item policy from M4-003,
+existing error/idempotency/outbox envelopes, and M4-006 through M4-009 detail
+projections as they land.
+
+**Expected tests:** UUID/key lookup, non-disclosure, field bounds, exact-version
+success/conflict, concurrent editors, no-op/replay behavior, archive/restore,
+activity/outbox atomicity, hostile rendering, draft preservation, and
+accessibility smoke.
+
+**Exclusions:** collaborative live editing, revision restore, rich-text editor,
+attachments, time tracking, custom fields, and destructive delete.
 
 ### M4-005 Actor-compatible assignment and priority
 
+Add explicit planning ownership without conflating users and Actors.
+
+**Acceptance criteria**
+
+- store nullable `assignee_actor_id` and a stable bounded priority value of
+  `no_priority`, `low`, `medium`, `high`, or `urgent`
+- permit assignment only to an active human or external-agent Actor with an
+  enabled membership in the same Project; Execution Workers, integrations,
+  systems, disabled Actors, and foreign members are rejected
+- resolve the mutating Actor from authentication and record assignee changes as
+  activity by that Actor; the client cannot submit authorship
+- expose a bounded assignable-Actor search using the same safe identity
+  projection/limits as mention search, with no email or credential metadata
+- require expected Work Item version for assignment or priority changes and
+  converge optimistic UI from the authoritative conflict response
+- retain historical assignee identity after membership disablement while
+  preventing a new assignment to it
+
+**Dependencies:** M4-004 mutation boundary, accepted Actor/membership schema,
+and centralized policy.
+
+**Expected tests:** human/external-agent parity, Worker/integration/system
+rejection, disabled/foreign Actor rejection, unassignment, every priority,
+concurrent conflict, spoofed author rejection, historical display, and search
+redaction/bounds.
+
+**Exclusions:** multiple assignees, teams as assignees, workload balancing,
+watchers, sponsors/reviewers, due dates, and notification delivery.
+
 ### M4-006 Acceptance criteria
+
+Model an ordered checklist as part of the Work Item rather than embedding an
+unvalidated document blob.
+
+**Acceptance criteria**
+
+- add UUIDv7 criterion rows with Work Item/Project identity, bounded plain
+  text, deterministic integer position, completion state, completing Actor,
+  and completion time
+- create, edit, reorder, complete, reopen, and remove criteria only through the
+  parent Work Item expected-version boundary; each successful command advances
+  the parent version once
+- serialize concurrent reorder/edit operations on the Work Item and preserve a
+  gap-free unique order after commit
+- validate completing Actor from the authenticated command and keep completion
+  attribution when rendered; reopening clears completion attribution through
+  an explicit activity
+- write one bounded activity item and one outbox invalidation per command,
+  while idempotent replay creates no duplicate criterion or activity
+- render the checklist with native controls, visible counts, keyboard support,
+  and inert hostile text
+
+**Dependencies:** M4-004 detail/version boundary, M4-007 activity, and Actor
+attribution.
+
+**Expected tests:** create/edit/reorder/remove, concurrent reorder, exact
+version conflict, completion/reopen attribution, row/project integrity,
+idempotent replay, text/control/quantity bounds, ordering after deletion, and
+accessible browser interaction.
+
+**Exclusions:** nested criteria, rich text, per-criterion discussions,
+criterion assignment, templates, automated completion, and AI-generated
+criteria.
 
 ### M4-007 Work Item comments and activity
 
+Provide append-only collaboration and a trustworthy mutation history.
+
+**Acceptance criteria**
+
+- store immutable Actor-authored comments with the existing version-one
+  structured content shape, derived plain text, bounded mentions/references,
+  and application-generated UUIDv7 IDs
+- post comments through an idempotent command; authentication supplies the
+  author and a client cannot edit, delete, backdate, or impersonate a comment
+- store typed activity separately from comments with Actor, kind, bounded safe
+  summary/payload, optional source idempotency identity, and timestamp
+- create activity in the same transaction as every Work Item mutation and
+  expose comments/activity as one deterministic paginated detail timeline
+- validate structured Actor mentions and Work Item references inside the same
+  Project and project them through dedicated relation rows
+- publish bounded invalidations through the existing outbox; realtime is never
+  the source of comment/activity truth
+
+**Dependencies:** M2 structured content, M4-004 detail, M4-010 Work Item
+references, Actor policy, idempotency, and outbox infrastructure.
+
+**Expected tests:** immutable comment/replay, author spoof rejection, rich
+content/control bounds, mention/reference scope, activity atomicity and type
+allowlist, deterministic pagination, concurrent comment/mutation order,
+reconnect/refetch, and hostile rendering.
+
+**Exclusions:** comment editing/deletion, reactions, attachments, email
+notifications, arbitrary audit JSON, and merging comments into Conversations.
+
 ### M4-008 Thread and Work Item many-to-many links
+
+Connect planning and discussion without turning either object into the other.
+
+**Acceptance criteria**
+
+- add a same-Project unique link table between Work Items and thread-kind
+  Conversations; Channels and cross-Project Conversations are rejected in the
+  database and domain command
+- implement authorized idempotent link/unlink commands from both detail
+  contexts with Actor attribution, activity, and outbox invalidation
+- return bounded linked-Thread cards with parent Channel, archive state, newest
+  run state, and href; return bounded linked-Work-Item cards in Thread context
+- preserve links when either side is archived and hide archived targets from
+  ordinary pickers unless explicitly requested
+- make unlink remove only the relation, never either object, Provider Session,
+  Agent Run, Message, or timeline history
+- keep one Thread linkable to several Work Items and one Work Item linkable to
+  several Threads without selecting a primary Conversation
+
+**Dependencies:** accepted M2 Conversations, M3 Thread/run projections,
+M4-004 detail/activity, and centralized Project policy.
+
+**Expected tests:** many-to-many cardinality, duplicate/replay, Channel and
+cross-Project rejection, unauthorized non-disclosure, archive preservation,
+unlink safety, activity/outbox atomicity, picker bounds, and Thread/detail UI.
+
+**Exclusions:** linking Channels, automatic link inference from plain text,
+Thread ownership by a Work Item, moving Messages, and inline Channel execution.
 
 ### M4-009 Work Item primary and related repository links
 
+Attach deterministic code context without weakening M3 repository trust.
+
+**Acceptance criteria**
+
+- add a same-Project Work Item/Repository link with role `primary` or
+  `related`, uniqueness per pair, and a partial uniqueness constraint allowing
+  at most one primary repository per Work Item
+- implement authorized optimistic link, unlink, and set-primary commands;
+  archived, disabled, untrusted, pending, failed, or foreign repositories are
+  not eligible for a new primary link
+- retain historical links when a repository or Work Item is archived and show
+  its unavailable state without making it selectable for new execution
+- update repository selection so an unbound Thread linked to exactly one Work
+  Item may use that Work Item's ready primary repository at the already defined
+  precedence position; ambiguity still requires an explicit choice
+- never change an existing Thread repository binding and never allow a Work
+  Item link command to move, reset, or delete a workspace
+- record Actor-attributed activity and outbox invalidation transactionally
+
+**Dependencies:** M3 trusted Repository and deterministic selection contracts,
+M4-004 detail, M4-008 Thread links, and optimistic policy boundary.
+
+**Expected tests:** one-primary constraint, related-to-primary swap, duplicate
+and concurrent commands, archived/unready/foreign rejection, historical
+display, every M3 precedence branch including ambiguous linked Work Items,
+immutable Thread binding, and no Git side effects.
+
+**Exclusions:** repository creation, GitHub App credentials, branch selection,
+cross-repository Agent Runs, submodule semantics, and push/pull-request work.
+
 ### M4-010 Work Item reference autocomplete
+
+Extend the version-one structured-content model with canonical Work Item
+references.
+
+**Acceptance criteria**
+
+- implement a bounded authorized Project autocomplete endpoint accepting safe
+  title/key search and returning immutable ID, display key, title, status
+  category, archive state, and href only
+- accept the already specified `work_item_ref` content node in new Messages and
+  Work Item comments, resolving every ID against the current authorized Project
+- persist a distinct Message/comment-to-Work-Item projection for query and
+  notification use while retaining every occurrence/order in the immutable AST
+- render references as safe links with a readable label resolved from durable
+  state; stale or archived references remain readable and cannot inject HTML
+- reject caller-supplied display labels as authority, cross-Project IDs,
+  unknown fields, excessive nodes/results, and unqualified global key lookup
+- keep plain-text strings such as `TRI-142` ordinary text; they never create a
+  structured link or automation implicitly
+
+**Dependencies:** accepted M2 content AST and composer, M4-001 identity,
+M4-007 comments, and centralized Project read policy.
+
+**Expected tests:** autocomplete search/bounds/non-disclosure, Message and
+comment references, duplicate AST occurrences with one projection, archived
+and stale rendering, hostile title escaping, unknown node/field rejection,
+plain-text non-conversion, and keyboard picker behavior.
+
+**Exclusions:** global cross-Project search, automatic text parsing, rich link
+previews, backlink notifications, slash commands, and external issue keys.
 
 ### M4-011 Kanban projection
 
+Render the same Work Items by status without creating a second planning model.
+
+**Acceptance criteria**
+
+- implement a paginated board projection grouped by active Project status ID
+  and ordered by a bounded per-status rank plus immutable tie-breaker
+- use the same filters, card DTO, policy, archive rules, and query invalidation
+  as the list; list and board must converge on the same Work Item version
+- move a card only through an expected-version status/rank command that verifies
+  an allowed workflow transition and returns the authoritative conflict on a
+  race
+- provide pointer drag-and-drop plus equivalent keyboard move controls and
+  status menus; status, position, and feedback are never color-only
+- use measured bounded rank allocation/rebalancing inside one status and avoid
+  rewriting unrelated columns or every Project row during an ordinary move
+- roll back the optimistic card on rejection and refetch after duplicate or
+  missed realtime invalidation
+
+**Dependencies:** M4-002 workflow transitions, M4-003 list filters/cards,
+M4-004 versioned mutation, and the existing realtime client.
+
+**Expected tests:** list/board parity, allowed/forbidden transitions, rank
+ordering/rebalance, concurrent move conflict, duplicate/missed invalidation,
+filter parity, archived status behavior, pointer and keyboard operation,
+screen-reader labels, and narrow viewport smoke.
+
+**Exclusions:** swimlanes, WIP limits, custom board views, multi-select/bulk
+drag, roadmap, timeline/Gantt, automation, and final visual polish.
+
 ### M4-012 Work with Worker action
+
+Connect one Work Item to the accepted M3 hosted Thread loop through an explicit
+human action.
+
+**Acceptance criteria**
+
+- add a Work Item detail action that requires an authorized Execution Worker,
+  a selected active parent Channel, a bounded prompt, and deterministic ready
+  repository context before invocation
+- create a new application Thread, link it to the Work Item, and record the
+  Actor-attributed activity idempotently before calling the existing M3 Agent
+  Run command; a replay returns the same Thread/run identities
+- default repository selection to the Work Item's ready primary repository,
+  then the existing sole-ready-Project rule; multiple/ambiguous repositories
+  require the human to choose before any run or worktree is created
+- derive a bounded Thread name and provider prompt containing the immutable Work
+  Item ID/key plus user instructions; never place arbitrary comment/activity
+  history, credentials, or browser state into the provider prompt implicitly
+- if run creation fails after the Thread/link transaction, preserve the linked
+  empty Thread with an actionable retry; never invent a hidden Thread or delete
+  discussion history as compensation
+- navigate to the created Thread and rely entirely on the M3 streamed timeline,
+  approvals, interrupt, retry, attention, and recovery behavior; Worker
+  completion never changes Work Item status automatically
+
+**Dependencies:** M4-008/009 links, M3 authenticated run path and repository
+selection, active Channels, default Worker/profile, and idempotency.
+
+**Expected tests:** authorized invocation, Channel/Worker/repository choice,
+idempotent replay, primary/sole/ambiguous repository cases, no worktree before
+admission, bounded prompt/name, partial failure with retryable linked Thread,
+browser navigation, full real hosted run, and no automatic status transition.
+
+**Exclusions:** inline Channel runs, autonomous/scheduled work, multi-Worker or
+multi-repository runs, GitHub push/PR creation, local Codex deep links, Work
+Item automation, and model-selected repositories.
+
+### M4 exit criteria
+
+- an authorized Actor can create, find, filter, open, edit, archive, and restore
+  a stable readable Work Item through the browser with optimistic conflict
+  handling and complete Actor attribution
+- retained and newly created Projects have the exact default types, statuses,
+  semantic categories, and transition graph; list and Kanban are consistent
+  projections of the same versioned rows
+- assignment, priority, ordered acceptance criteria, immutable comments,
+  activity, Thread links, repository links, and structured references enforce
+  same-Project identity in PostgreSQL and the application policy layer
+- two authenticated Actors can demonstrate a real edit conflict without lost
+  updates, forged authorship, cross-Project disclosure, or duplicate activity
+- Work with Worker creates one linked Thread and one M3 run, uses deterministic
+  repository context, completes one real browser-driven hosted flow, and never
+  changes Work Item status merely because the Worker finished
+- migrations, PostgreSQL concurrency/integrity, HTTP, outbox/realtime,
+  structured-content, hostile-output, frontend accessibility, Red Hat, and
+  browser-driven tests pass against one exact green commit
+- the M5 GitHub delivery backlog is elaborated before M5 implementation begins
 
 ## Milestone M5: GitHub delivery and review
 
@@ -5280,6 +5693,32 @@ real supported provider blocker and deterministic coverage of both approval
 and question adapter shapes; it does not claim that every hosted model or
 execution mode can elect to emit the experimental question request. No raw
 experimental provider shape enters the domain or browser contract.
+
+## D-041: M4 uses one versioned Work Item with normalized criteria and append-only collaboration
+
+**Status:** Accepted
+
+**Reason:** The Work Item is the canonical mutable planning record and owns one
+optimistic version across its non-commutative field and checklist commands.
+M4 descriptions remain bounded plain text. Acceptance criteria are ordered
+rows with explicit completion attribution rather than an opaque JSON document.
+Comments are immutable Actor-authored records that reuse the version-one
+structured content contract, while typed activity is a separate append-only
+mutation projection. This keeps concurrency, authorship, references, and
+auditing explicit without adopting a general rich-text editor or revision
+system.
+
+## D-042: Project workflow definitions are durable; list and Kanban are projections
+
+**Status:** Accepted
+
+**Reason:** Work Item types, statuses, semantic status categories, allowed
+transitions, and order belong to the Project and use stable IDs. Domain logic
+never depends on editable display names. A Work Item stores its current status
+and bounded rank; list and Kanban query the same versioned record. Moving a
+Kanban card is therefore an ordinary optimistic status/rank command, not a
+mutation of a separate board model. M4 ships the default workflow read-only so
+future customization can be additive and measured.
 
 ---
 
