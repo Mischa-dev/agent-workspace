@@ -21,7 +21,9 @@ pub use codex_app_server::{
     AccountSummary, LoginCeremonyError, LoginCeremonySnapshot, LoginKind, LoginReservation,
     LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, SupervisorRegistry,
 };
-use codex_app_server::{ApprovalKind, ItemKind, ProfileLease, ProviderAnswer, ProviderEvent};
+use codex_app_server::{
+    ApprovalKind, ItemKind, ProfileLease, ProviderAnswer, ProviderEvent, RecoveredTurn,
+};
 
 #[derive(Debug)]
 pub struct StartedProviderRun {
@@ -33,6 +35,8 @@ pub struct StartedProviderRun {
 pub(crate) enum ProviderRecovery {
     Completed { message: String },
     Resumed { latest_turn_status: String },
+    UnboundTurn,
+    MismatchedTurn,
     RejectedMessage,
     Unavailable,
 }
@@ -111,28 +115,68 @@ pub async fn start_run(
         (session_id, thread_id)
     };
 
+    // Persist the provider Thread ownership before starting a turn. If the
+    // process dies around the external turn/start side effect, recovery can
+    // distinguish an unbound turn from a durably identified one and must not
+    // mistake an older completed turn for this run.
+    let mut transaction = state.pool.begin().await?;
+    let bound = sqlx::query(
+        r#"
+        UPDATE agent_runs
+        SET provider_session_id = $2, updated_at = now()
+        WHERE id = $1
+          AND state = 'starting'
+          AND (provider_session_id IS NULL OR provider_session_id = $2)
+        "#,
+    )
+    .bind(run_id)
+    .bind(provider_session_id)
+    .execute(&mut *transaction)
+    .await?;
+    if bound.rows_affected() != 1 {
+        transaction.rollback().await?;
+        idle_unowned_provider_session(state, provider_session_id).await?;
+        return Err(AppError::Conflict(
+            "agent_run",
+            "provider Session binding is no longer available",
+        ));
+    }
+    sqlx::query("UPDATE provider_sessions SET state = 'active', updated_at = now() WHERE id = $1")
+        .bind(provider_session_id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
     let turn_id = provider
         .start_turn(&provider_thread_id, &worktree, &prompt)
         .await
         .map_err(|error| provider_error(run_id, "start turn", error))?;
 
     let mut transaction = state.pool.begin().await?;
-    sqlx::query(
+    let bound = sqlx::query(
         r#"
         UPDATE agent_runs
-        SET provider_session_id = $2, provider_turn_id = $3, updated_at = now()
+        SET provider_turn_id = $2, updated_at = now()
         WHERE id = $1
+          AND state = 'starting'
+          AND provider_session_id = $3
+          AND provider_turn_id IS NULL
         "#,
     )
     .bind(run_id)
-    .bind(provider_session_id)
     .bind(&turn_id)
+    .bind(provider_session_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("UPDATE provider_sessions SET state = 'active', updated_at = now() WHERE id = $1")
-        .bind(provider_session_id)
-        .execute(&mut *transaction)
-        .await?;
+    if bound.rows_affected() != 1 {
+        transaction.rollback().await?;
+        let _ = provider.interrupt_turn(&provider_thread_id, &turn_id).await;
+        idle_unowned_provider_session(state, provider_session_id).await?;
+        return Err(AppError::Conflict(
+            "agent_run",
+            "provider turn binding is no longer available",
+        ));
+    }
     transition_run(&mut transaction, run_id, RunState::Working, None).await?;
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
@@ -179,9 +223,10 @@ pub(crate) async fn inspect_provider_for_recovery(
     run_id: Uuid,
     worktree: PathBuf,
 ) -> ProviderRecovery {
-    let provider = sqlx::query_as::<_, (String, String, Uuid)>(
+    let provider = sqlx::query_as::<_, (String, String, Uuid, Option<String>)>(
         r#"
-        SELECT ps.provider_thread_id, ep.codex_home_path, ep.id
+        SELECT ps.provider_thread_id, ep.codex_home_path, ep.id,
+               ar.provider_turn_id
         FROM agent_runs ar
         JOIN provider_sessions ps ON ps.id = ar.provider_session_id
         JOIN execution_profiles ep ON ep.id = ar.execution_profile_id
@@ -191,8 +236,13 @@ pub(crate) async fn inspect_provider_for_recovery(
     .bind(run_id)
     .fetch_optional(&state.pool)
     .await;
-    let Ok(Some((provider_thread_id, codex_home, execution_profile_id))) = provider else {
+    let Ok(Some((provider_thread_id, codex_home, execution_profile_id, provider_turn_id))) =
+        provider
+    else {
         return ProviderRecovery::Unavailable;
+    };
+    let Some(provider_turn_id) = provider_turn_id else {
+        return ProviderRecovery::UnboundTurn;
     };
 
     let provider = state
@@ -213,6 +263,9 @@ pub(crate) async fn inspect_provider_for_recovery(
     let Ok(history) = history else {
         return ProviderRecovery::Unavailable;
     };
+    if !recovered_turn_has_identity(&history, &provider_turn_id) {
+        return ProviderRecovery::MismatchedTurn;
+    }
     let latest_turn_status = history.status;
     if latest_turn_status == "completed" {
         let message = history.final_message.unwrap_or_default();
@@ -228,6 +281,10 @@ pub(crate) async fn inspect_provider_for_recovery(
     ProviderRecovery::Resumed { latest_turn_status }
 }
 
+fn recovered_turn_has_identity(history: &RecoveredTurn, expected_turn_id: &str) -> bool {
+    history.id.as_deref() == Some(expected_turn_id)
+}
+
 async fn mark_profile_healthy(state: &AppState, profile_id: Uuid) -> Result<(), AppError> {
     sqlx::query(
         r#"
@@ -238,6 +295,31 @@ async fn mark_profile_healthy(state: &AppState, profile_id: Uuid) -> Result<(), 
         "#,
     )
     .bind(profile_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn idle_unowned_provider_session(
+    state: &AppState,
+    provider_session_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE provider_sessions session
+           SET state = 'idle', updated_at = now()
+         WHERE session.id = $1
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM agent_runs run
+                WHERE run.provider_session_id = session.id
+                  AND run.state IN (
+                      'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
+                  )
+           )
+        "#,
+    )
+    .bind(provider_session_id)
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -269,6 +351,9 @@ pub(crate) async fn complete_recovered_run(
     state: &AppState,
     run_id: Uuid,
     message: &str,
+    previous_state: &str,
+    worktree_state: &str,
+    dirty: bool,
 ) -> Result<(), AppError> {
     let (project_id, conversation_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
@@ -293,8 +378,19 @@ pub(crate) async fn complete_recovered_run(
         conversation_id,
         Uuid::now_v7(),
         message,
+        Some(RecoveryCompletion {
+            previous_state,
+            worktree_state,
+            dirty,
+        }),
     )
     .await
+}
+
+struct RecoveryCompletion<'a> {
+    previous_state: &'a str,
+    worktree_state: &'a str,
+    dirty: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -398,6 +494,7 @@ async fn drive_turn(
                             conversation_id,
                             message_stream_id,
                             message.as_str(),
+                            None,
                         ).await?;
                         return Ok(());
                     }
@@ -628,6 +725,7 @@ async fn complete_run(
     conversation_id: Uuid,
     worker_message_id: Uuid,
     message: &str,
+    recovery: Option<RecoveryCompletion<'_>>,
 ) -> Result<(), AppError> {
     let validated_message =
         validated_worker_message(message).map_err(|error| provider_message_error(run_id, error))?;
@@ -764,6 +862,33 @@ async fn complete_run(
     .await?;
     if let Some(event_id) = event_id {
         insert_entry(&mut transaction, conversation_id, event_id).await?;
+    }
+    if let Some(recovery) = recovery {
+        sqlx::query(
+            "UPDATE agent_approvals SET status = 'canceled' WHERE agent_run_id = $1 AND status = 'pending'",
+        )
+        .bind(run_id)
+        .execute(&mut *transaction)
+        .await?;
+        let recovery_event = insert_event(
+            &mut transaction,
+            run_id,
+            "startup-recovery:completed",
+            "recovery",
+            "Service restarted during a run. Provider history proved that the turn completed, so the durable run was reconciled as completed.",
+            json!({
+                "previous_state": recovery.previous_state,
+                "result": "completed",
+                "provider_resumed": true,
+                "worktree_preserved": true,
+                "worktree_state": recovery.worktree_state,
+                "dirty": recovery.dirty
+            }),
+        )
+        .await?;
+        if let Some(recovery_event) = recovery_event {
+            insert_entry(&mut transaction, conversation_id, recovery_event).await?;
+        }
     }
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
@@ -967,8 +1092,9 @@ fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError 
 
 #[cfg(test)]
 mod tests {
-    use super::validated_worker_message;
+    use super::{recovered_turn_has_identity, validated_worker_message};
     use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
+    use crate::provider::codex_app_server::RecoveredTurn;
 
     #[test]
     fn worker_messages_share_unicode_and_control_boundaries() {
@@ -990,5 +1116,24 @@ mod tests {
                 .expect("safe whitespace")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn recovery_requires_the_exact_durable_provider_turn_identity() {
+        let history = RecoveredTurn {
+            id: Some("turn-current".to_owned()),
+            status: "completed".to_owned(),
+            final_message: Some("proof".to_owned()),
+        };
+        assert!(recovered_turn_has_identity(&history, "turn-current"));
+        assert!(!recovered_turn_has_identity(&history, "turn-older"));
+        assert!(!recovered_turn_has_identity(
+            &RecoveredTurn {
+                id: None,
+                status: "missing".to_owned(),
+                final_message: None,
+            },
+            "turn-current"
+        ));
     }
 }

@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path, process::Command,
+    sync::Arc,
+};
 
 use agent_workspace_server::{
     AppState, config::AppConfig, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
@@ -24,6 +27,29 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
         .expect("run migrations");
 
     let temporary_root = tempfile::tempdir().expect("temporary recovery root");
+    let fake_codex = temporary_root.path().join("fake-codex");
+    fs::write(
+        &fake_codex,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r line; do
+  if [[ "$line" != *'"id"'* ]]; then
+    continue
+  fi
+  request_id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+  if [[ "$line" == *'"method":"initialize"'* ]]; then
+    printf '{"id":%s,"result":{"server":"fake"}}\n' "$request_id"
+  elif [[ "$line" == *'"method":"thread/read"'* ]]; then
+    printf '{"id":%s,"result":{"thread":{"turns":[{"id":"turn-recovered","status":"completed","items":[{"type":"agentMessage","text":"Recovered proof"}]}]}}}\n' "$request_id"
+  else
+    printf '{"id":%s,"result":{}}\n' "$request_id"
+  fi
+done
+"#,
+    )
+    .expect("write recovery fake Codex binary");
+    fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o700))
+        .expect("make recovery fake Codex executable");
     let config = AppConfig::from_values(&BTreeMap::from([
         ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
         ("AGENT_WORKSPACE_ENV".to_owned(), "development".to_owned()),
@@ -38,6 +64,14 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
                 .join("codex")
                 .to_string_lossy()
                 .into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
+            fake_codex.to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_REQUEST_TIMEOUT_SECONDS".to_owned(),
+            "2".to_owned(),
         ),
     ]))
     .expect("development config");
@@ -203,6 +237,199 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
     assert_eq!(reentered_session_state, "idle");
     assert_eq!(recorded_previous_state, "recovering");
 
+    let mirror_path =
+        sqlx::query_scalar::<_, String>("SELECT mirror_path FROM repositories WHERE id = $1")
+            .bind(seed.repository_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read recovery mirror path");
+    let mirror_path = Path::new(&mirror_path);
+    let base_commit = create_test_mirror(temporary_root.path(), mirror_path);
+    let recovered_workspace_id = Uuid::now_v7();
+    let recovered_worktree_id = Uuid::now_v7();
+    let recovered_worktree_parent = temporary_root.path().join("data/worktrees");
+    fs::create_dir_all(&recovered_worktree_parent).expect("create recovered worktree parent");
+    let recovered_worktree = recovered_worktree_parent
+        .canonicalize()
+        .expect("canonical recovered worktree parent")
+        .join("recovered-completion");
+    agent_workspace_server::git_runtime::create_worktree(
+        mirror_path,
+        &recovered_worktree,
+        "codex/run-recovered-completion",
+        &base_commit,
+    )
+    .expect("create exact recovery worktree");
+    sqlx::query(
+        r#"
+        INSERT INTO repository_workspaces (
+            id, repository_id, conversation_id, branch_name, base_commit
+        )
+        VALUES ($1, $2, $3, 'codex/run-recovered-completion', $4)
+        "#,
+    )
+    .bind(recovered_workspace_id)
+    .bind(seed.repository_id)
+    .bind(seed.thread_id)
+    .bind(&base_commit)
+    .execute(&pool)
+    .await
+    .expect("insert recovered Repository Workspace");
+    sqlx::query(
+        r#"
+        INSERT INTO git_worktrees (
+            id, repository_workspace_id, path, state
+        )
+        VALUES ($1, $2, $3, 'ready')
+        "#,
+    )
+    .bind(recovered_worktree_id)
+    .bind(recovered_workspace_id)
+    .bind(recovered_worktree.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .expect("insert recovered Git worktree");
+    sqlx::query("UPDATE provider_sessions SET state = 'active' WHERE id = $1")
+        .bind(provider_session_id)
+        .execute(&pool)
+        .await
+        .expect("activate exact completed-turn provider Session");
+    let completed_recovery_run_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, provider_session_id, provider_turn_id,
+            repository_id, repository_workspace_id, state, prompt,
+            authorization_snapshot, started_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, 'turn-recovered', $7, $8, 'working',
+            'exact completed recovery test', '{}'::jsonb, now()
+        )
+        "#,
+    )
+    .bind(completed_recovery_run_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(provider_session_id)
+    .bind(seed.repository_id)
+    .bind(recovered_workspace_id)
+    .execute(&pool)
+    .await
+    .expect("insert exact completed-turn recovery run");
+
+    assert_eq!(
+        recovery::reconcile_non_terminal_runs(&state)
+            .await
+            .expect("reconcile exact completed provider turn"),
+        1
+    );
+    let (completed_state, completed_session_state, message_text, recovery_result) =
+        sqlx::query_as::<_, (String, String, String, String)>(
+            r#"
+            SELECT run.state, session.state, message.plain_text,
+                   event.payload->>'result'
+              FROM agent_runs run
+              JOIN provider_sessions session ON session.id = run.provider_session_id
+              JOIN messages message ON message.agent_run_id = run.id
+              JOIN agent_run_events event
+                ON event.agent_run_id = run.id
+               AND event.kind = 'recovery'
+             WHERE run.id = $1
+            "#,
+        )
+        .bind(completed_recovery_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read exact completed-turn recovery result");
+    assert_eq!(completed_state, "completed");
+    assert_eq!(completed_session_state, "idle");
+    assert_eq!(message_text, "Recovered proof");
+    assert_eq!(recovery_result, "completed");
+    assert!(recovered_worktree.is_dir());
+    assert_eq!(
+        recovery::reconcile_non_terminal_runs(&state)
+            .await
+            .expect("repeat exact completed-turn reconciliation"),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages WHERE agent_run_id = $1",)
+            .bind(completed_recovery_run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count converged recovered Worker Message"),
+        1
+    );
+
+    sqlx::query("UPDATE repository_workspaces SET state = 'active' WHERE id = $1")
+        .bind(recovered_workspace_id)
+        .execute(&pool)
+        .await
+        .expect("reactivate workspace for mismatched-turn recovery");
+    sqlx::query("UPDATE provider_sessions SET state = 'active' WHERE id = $1")
+        .bind(provider_session_id)
+        .execute(&pool)
+        .await
+        .expect("reactivate provider Session for mismatched-turn recovery");
+    let mismatched_recovery_run_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, provider_session_id, provider_turn_id,
+            repository_id, repository_workspace_id, state, prompt,
+            authorization_snapshot, started_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, 'turn-different', $7, $8, 'working',
+            'mismatched completed recovery test', '{}'::jsonb, now()
+        )
+        "#,
+    )
+    .bind(mismatched_recovery_run_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(provider_session_id)
+    .bind(seed.repository_id)
+    .bind(recovered_workspace_id)
+    .execute(&pool)
+    .await
+    .expect("insert mismatched completed-turn recovery run");
+    assert_eq!(
+        recovery::reconcile_non_terminal_runs(&state)
+            .await
+            .expect("reconcile mismatched completed provider turn"),
+        1
+    );
+    let (mismatched_state, mismatched_reason, provider_resumed, message_count) =
+        sqlx::query_as::<_, (String, Option<String>, bool, i64)>(
+            r#"
+            SELECT run.state, run.failure_reason,
+                   (event.payload->>'provider_resumed')::boolean,
+                   (SELECT count(*) FROM messages WHERE agent_run_id = run.id)
+              FROM agent_runs run
+              JOIN agent_run_events event
+                ON event.agent_run_id = run.id
+               AND event.kind = 'recovery'
+             WHERE run.id = $1
+            "#,
+        )
+        .bind(mismatched_recovery_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read mismatched completed-turn recovery result");
+    assert_eq!(mismatched_state, "interrupted");
+    assert!(mismatched_reason.is_some_and(|reason| reason.contains("did not match")));
+    assert!(provider_resumed);
+    assert_eq!(message_count, 0, "an older completion cannot be inherited");
+    assert!(recovered_worktree.is_dir());
+
     let queued_run_id = Uuid::now_v7();
     let scheduler_claim_id = Uuid::now_v7();
     sqlx::query(
@@ -251,6 +478,72 @@ async fn startup_recovery_idles_the_provider_session_after_interrupting_its_run(
         .execute(&administrative_pool)
         .await
         .expect("drop isolated recovery schema");
+}
+
+fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) -> String {
+    let source = runtime_root.join("recovery-source");
+    fs::create_dir_all(&source).expect("create recovery source repository");
+    git(["init", "-b", "main", source.to_string_lossy().as_ref()]);
+    fs::write(source.join("KNOWN_FILE.txt"), "known\n").expect("write recovery fixture");
+    git([
+        "-C",
+        source.to_string_lossy().as_ref(),
+        "add",
+        "KNOWN_FILE.txt",
+    ]);
+    git([
+        "-C",
+        source.to_string_lossy().as_ref(),
+        "-c",
+        "user.name=Agent Workspace Test",
+        "-c",
+        "user.email=agent-workspace@example.invalid",
+        "commit",
+        "-m",
+        "recovery baseline",
+    ]);
+    fs::create_dir_all(mirror_path.parent().expect("recovery mirror parent"))
+        .expect("create recovery mirror parent");
+    git([
+        "clone",
+        "--mirror",
+        source.to_string_lossy().as_ref(),
+        mirror_path.to_string_lossy().as_ref(),
+    ]);
+    git_output([
+        "--git-dir",
+        mirror_path.to_string_lossy().as_ref(),
+        "rev-parse",
+        "refs/heads/main",
+    ])
+}
+
+fn git<const N: usize>(args: [&str; N]) {
+    let output = Command::new("/usr/bin/git")
+        .args(args)
+        .output()
+        .expect("run recovery Git command");
+    assert!(
+        output.status.success(),
+        "recovery Git command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_output<const N: usize>(args: [&str; N]) -> String {
+    let output = Command::new("/usr/bin/git")
+        .args(args)
+        .output()
+        .expect("run recovery Git output command");
+    assert!(
+        output.status.success(),
+        "recovery Git output command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("recovery Git output is UTF-8")
+        .trim()
+        .to_owned()
 }
 
 async fn integration_pool() -> Option<(String, PgPool)> {

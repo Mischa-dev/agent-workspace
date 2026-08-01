@@ -537,6 +537,7 @@ async fn fail_admission(
         return Ok(());
     }
     transition_run(&mut transaction, run.run_id, RunState::Failed, Some(reason)).await?;
+    provider::idle_provider_session_for_terminal_run(&mut transaction, run.run_id).await?;
     if let Some(worktree_id) = failed_worktree_id {
         sqlx::query("UPDATE git_worktrees SET state = 'failed', updated_at = now() WHERE id = $1")
             .bind(worktree_id)
