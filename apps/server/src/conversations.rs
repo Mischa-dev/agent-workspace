@@ -317,6 +317,7 @@ pub(crate) struct RunRow {
 pub(crate) struct RunView {
     #[serde(flatten)]
     pub(crate) run: RunRow,
+    pub(crate) failure_acknowledged: bool,
     pub(crate) capabilities: RunCapabilities,
 }
 
@@ -463,6 +464,7 @@ struct SidebarThreadRow {
     latest_run_state: Option<String>,
     latest_run_entry_sequence: Option<i64>,
     has_pending_response: bool,
+    failure_acknowledged: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1628,7 +1630,8 @@ async fn project_conversation_sidebar(
             ) AS latest_activity_sequence,
             latest_run.state AS latest_run_state,
             latest_run.entry_sequence AS latest_run_entry_sequence,
-            COALESCE(latest_run.has_pending_response, false) AS has_pending_response
+            COALESCE(latest_run.has_pending_response, false) AS has_pending_response,
+            COALESCE(latest_run.failure_acknowledged, false) AS failure_acknowledged
         FROM conversations thread
         JOIN conversations parent
           ON parent.project_id = thread.project_id
@@ -1662,7 +1665,13 @@ async fn project_conversation_sidebar(
                       AND approval.eligible_role = $3
                       AND $3 IN ('owner', 'admin', 'member')
                       AND (NOT approval.human_required OR $4 = 'human')
-                ) AS has_pending_response
+                ) AS has_pending_response,
+                EXISTS (
+                    SELECT 1
+                    FROM agent_run_acknowledgements acknowledgement
+                    WHERE acknowledgement.agent_run_id = run.id
+                      AND acknowledgement.actor_id = $2
+                ) AS failure_acknowledged
             FROM agent_runs run
             WHERE run.conversation_id = thread.id
             ORDER BY run.created_at DESC, run.id DESC
@@ -1817,16 +1826,10 @@ fn thread_attention(row: &SidebarThreadRow) -> ThreadAttention {
             kind: "active",
             label: "Run active",
         },
-        Some("failed")
-            if row
-                .latest_run_entry_sequence
-                .is_some_and(|sequence| sequence > row.highest_seen_sequence) =>
-        {
-            ThreadAttention {
-                kind: "failed",
-                label: "Run failed",
-            }
-        }
+        Some("failed") if !row.failure_acknowledged => ThreadAttention {
+            kind: "failed",
+            label: "Run failed",
+        },
         Some("completed")
             if row
                 .latest_run_entry_sequence
@@ -2393,6 +2396,25 @@ async fn fetch_run_projection(
     .bind(conversation.id)
     .fetch_optional(&state.pool)
     .await?;
+    let latest_failure_acknowledged = match latest_terminal_run.as_ref() {
+        Some(run) if run.state == "failed" => {
+            sqlx::query_scalar::<_, bool>(
+                r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM agent_run_acknowledgements acknowledgement
+                WHERE acknowledgement.agent_run_id = $1
+                  AND acknowledgement.actor_id = $2
+            )
+            "#,
+            )
+            .bind(run.id)
+            .bind(principal.actor_id)
+            .fetch_one(&state.pool)
+            .await?
+        }
+        _ => false,
+    };
     let approvals = sqlx::query_as::<_, ApprovalRow>(
         r#"
         SELECT
@@ -2436,6 +2458,7 @@ async fn fetch_run_projection(
         .unwrap_or(false);
         RunView {
             run,
+            failure_acknowledged: false,
             capabilities: RunCapabilities {
                 interrupt,
                 retry: false,
@@ -2460,6 +2483,7 @@ async fn fetch_run_projection(
             .unwrap_or(false);
         RunView {
             run,
+            failure_acknowledged: latest_failure_acknowledged,
             capabilities: RunCapabilities {
                 interrupt: false,
                 retry,
@@ -2723,6 +2747,7 @@ mod tests {
             latest_run_state: state.map(str::to_owned),
             latest_run_entry_sequence: run_sequence,
             has_pending_response: false,
+            failure_acknowledged: false,
         }
     }
 
@@ -2791,6 +2816,10 @@ mod tests {
             thread_attention(&sidebar_row(Some("failed"), Some(8))).kind,
             "failed"
         );
+        let mut acknowledged = sidebar_row(Some("failed"), Some(8));
+        acknowledged.failure_acknowledged = true;
+        acknowledged.highest_seen_sequence = acknowledged.highest_sequence;
+        assert_eq!(thread_attention(&acknowledged).kind, "settled");
         assert_eq!(
             thread_attention(&sidebar_row(Some("completed"), Some(8))).kind,
             "completed"

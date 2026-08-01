@@ -69,6 +69,7 @@ type Run = {
   baseCommit: string | null
   queuePosition: number | null
   failureReason: string | null
+  failureAcknowledged: boolean
   createdAt: string
   updatedAt: string
   capabilities: {
@@ -159,6 +160,7 @@ function normalizeTimeline(value: unknown): Timeline {
             typeof activeRunRecord.queuePosition === 'number'
               ? activeRunRecord.queuePosition
               : null,
+          failureAcknowledged: false,
           capabilities: {
             interrupt: explicitCapability(
               activeRunRecord.capabilities,
@@ -186,6 +188,8 @@ function normalizeTimeline(value: unknown): Timeline {
               ? latestTerminalRunRecord.baseCommit
               : null,
           queuePosition: null,
+          failureAcknowledged:
+            latestTerminalRunRecord.failureAcknowledged === true,
           capabilities: {
             interrupt: false,
             retry: explicitCapability(
@@ -277,6 +281,7 @@ export function ThreadPage() {
   )
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [acknowledgedRunId, setAcknowledgedRunId] = useState<string | null>(null)
   const [olderEntries, setOlderEntries] = useState<{
     threadId: string
     entries: ConversationTimelineEntry[]
@@ -314,6 +319,19 @@ export function ThreadPage() {
       (left, right) => left.sequence - right.sequence,
     )
   }, [olderEntries, threadId, verifiedTimeline?.entries])
+  const latestFailureEvent = useMemo(
+    () =>
+      latestTerminalRun?.state === 'failed'
+        ? [...entries]
+            .reverse()
+            .find(
+              (entry) =>
+                entry.workerEvent?.agentRunId === latestTerminalRun.id &&
+                entry.workerEvent.kind === 'run_failed',
+            )?.workerEvent ?? null
+        : null,
+    [entries, latestTerminalRun],
+  )
   const olderCursor =
     olderEntries.threadId === threadId
       ? olderEntries.nextCursor
@@ -438,6 +456,30 @@ export function ThreadPage() {
         json: {},
       }),
     )
+  }
+
+  const acknowledgeFailure = () => {
+    if (
+      !latestTerminalRun ||
+      !latestFailureEvent ||
+      latestTerminalRun.failureAcknowledged ||
+      acknowledgedRunId === latestTerminalRun.id
+    ) {
+      return
+    }
+    const runId = latestTerminalRun.id
+    void perform('acknowledge-failure', () =>
+      requestJson(
+        `/api/v1/agent-runs/${encodeURIComponent(runId)}/acknowledge-failure`,
+        {
+          method: 'POST',
+          idempotencyKey: `acknowledge-failure-${runId}-${latestFailureEvent.id}`,
+          json: { eventId: latestFailureEvent.id },
+        },
+      ),
+    ).then((succeeded) => {
+      if (succeeded) setAcknowledgedRunId(runId)
+    })
   }
 
   const loadOlder = async () => {
@@ -726,6 +768,20 @@ export function ThreadPage() {
                     {busyAction === 'retry' ? 'Retrying…' : 'Retry last run'}
                   </button>
                 )}
+                {latestFailureEvent &&
+                  !latestTerminalRun?.failureAcknowledged &&
+                  acknowledgedRunId !== latestTerminalRun?.id && (
+                    <button
+                      className="secondary-button"
+                      disabled={Boolean(busyAction)}
+                      onClick={acknowledgeFailure}
+                      type="button"
+                    >
+                      {busyAction === 'acknowledge-failure'
+                        ? 'Acknowledging…'
+                        : 'Acknowledge failure'}
+                    </button>
+                  )}
                 <button
                   className="primary-button"
                   disabled={
