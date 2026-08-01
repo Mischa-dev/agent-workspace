@@ -239,6 +239,7 @@ async fn mcp_request(
     let mut builder = Request::builder()
         .method("POST")
         .uri(MCP_PATH)
+        .header(header::HOST, "127.0.0.1")
         .header(header::ACCEPT, "application/json, text/event-stream")
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(token) = token {
