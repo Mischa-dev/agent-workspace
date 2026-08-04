@@ -1,15 +1,22 @@
-use axum::{Json, Router, extract::State, routing::get};
-use serde::Serialize;
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::AuthenticatedActor,
-    error::{ApiPath, AppError},
+    auth::{AuthenticatedActor, require_authenticated_write},
+    error::{ApiJson, ApiPath, AppError},
+    idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    profile_runtime::prepare_private_profile_directory,
     provider::ProfileHealth,
 };
 
@@ -27,13 +34,23 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{id}/execution-profiles",
-            get(list_execution_profiles),
+            get(list_execution_profiles).post(register_personal_execution_profile),
         )
 }
 
 #[derive(Debug, FromRow)]
 struct ProjectAccessRow {
     role: String,
+    handle: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyRequest {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ExecutionProfileCommandReference {
+    profile_id: Uuid,
 }
 
 #[derive(Debug, FromRow)]
@@ -47,11 +64,10 @@ struct ExecutionWorkerRow {
     handle: String,
     worker_enabled: bool,
     membership_enabled: bool,
-    execution_profile_id: Uuid,
-    profile_status: String,
-    profile_account_state: String,
-    profile_owner_actor_status: String,
-    profile_owner_membership_enabled: bool,
+    profile_status: Option<String>,
+    profile_account_state: Option<String>,
+    profile_owner_actor_status: Option<String>,
+    profile_owner_membership_enabled: Option<bool>,
     provider_kind: String,
     provider_enabled: bool,
     provider_version: i64,
@@ -96,7 +112,6 @@ struct ExecutionWorkerView {
     actor: ExecutionActorView,
     enabled: bool,
     status: ExecutionWorkerStatus,
-    default_execution_profile_id: Uuid,
     provider: ProviderView,
 }
 
@@ -213,7 +228,13 @@ async fn list_execution_workers(
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ExecutionWorkersResponse>, AppError> {
     let mut transaction = state.pool.begin().await?;
-    require_project_view(&mut transaction, &principal, project_id).await?;
+    require_project_action(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ProjectView,
+    )
+    .await?;
     let rows = sqlx::query_as::<_, ExecutionWorkerRow>(
         r#"
         SELECT
@@ -226,7 +247,6 @@ async fn list_execution_workers(
             membership.handle,
             worker.enabled AS worker_enabled,
             membership.enabled AS membership_enabled,
-            worker.execution_profile_id,
             profile.status AS profile_status,
             profile.account_state AS profile_account_state,
             profile_owner.status AS profile_owner_actor_status,
@@ -245,20 +265,30 @@ async fn list_execution_workers(
         JOIN provider_connections connection
           ON connection.project_id = worker.project_id
          AND connection.id = worker.provider_connection_id
-        JOIN execution_profiles profile
-          ON profile.project_id = worker.project_id
-         AND profile.id = worker.execution_profile_id
-         AND profile.provider_connection_id = connection.id
-        JOIN actors profile_owner ON profile_owner.id = profile.owner_actor_id
-        JOIN project_memberships profile_owner_membership
+        LEFT JOIN LATERAL (
+            SELECT candidate.*
+            FROM execution_profiles candidate
+            WHERE candidate.project_id = worker.project_id
+              AND candidate.provider_connection_id = connection.id
+              AND candidate.owner_actor_id = $2
+            ORDER BY
+                (candidate.status = 'available'
+                 AND candidate.account_state = 'authenticated') DESC,
+                candidate.created_at,
+                candidate.id
+            LIMIT 1
+        ) profile ON true
+        LEFT JOIN actors profile_owner ON profile_owner.id = profile.owner_actor_id
+        LEFT JOIN project_memberships profile_owner_membership
           ON profile_owner_membership.project_id = profile.project_id
          AND profile_owner_membership.actor_id = profile.owner_actor_id
         WHERE worker.project_id = $1
         ORDER BY lower(membership.handle), worker.id
-        LIMIT $2
+        LIMIT $3
         "#,
     )
     .bind(project_id)
+    .bind(principal.actor_id)
     .bind(MAX_EXECUTION_RESOURCES)
     .fetch_all(&mut *transaction)
     .await?;
@@ -277,7 +307,14 @@ async fn list_execution_profiles(
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ExecutionProfilesResponse>, AppError> {
     let mut transaction = state.pool.begin().await?;
-    require_project_view(&mut transaction, &principal, project_id).await?;
+    let access = require_project_action(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ExecutionProfileView,
+    )
+    .await?;
+    let can_view_team_readiness = matches!(access.role.as_str(), "owner" | "admin");
     let rows = sqlx::query_as::<_, ExecutionProfileRow>(
         r#"
         SELECT
@@ -309,11 +346,14 @@ async fn list_execution_profiles(
           ON connection.project_id = profile.project_id
          AND connection.id = profile.provider_connection_id
         WHERE profile.project_id = $1
+          AND ($3 OR profile.owner_actor_id = $2)
         ORDER BY lower(profile.name), profile.id
-        LIMIT $2
+        LIMIT $4
         "#,
     )
     .bind(project_id)
+    .bind(principal.actor_id)
+    .bind(can_view_team_readiness)
     .bind(MAX_EXECUTION_RESOURCES)
     .fetch_all(&mut *transaction)
     .await?;
@@ -327,14 +367,222 @@ async fn list_execution_profiles(
     Ok(Json(ExecutionProfilesResponse { profiles }))
 }
 
-async fn require_project_view(
+async fn register_personal_execution_profile(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<EmptyRequest>,
+) -> Result<(StatusCode, Json<ExecutionProfileView>), AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&request)?;
+    let scope =
+        idempotency::resource_bound_scope("project", project_id, "execution_profile_register")?;
+    let mut transaction = state.pool.begin().await?;
+    let access = require_project_action(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ExecutionProfileManage,
+    )
+    .await?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            let reference: ExecutionProfileCommandReference = replay.decode()?;
+            transaction.commit().await?;
+            let profile = fetch_owned_execution_profile(
+                &state,
+                project_id,
+                reference.profile_id,
+                principal.actor_id,
+            )
+            .await?;
+            return Ok((replay.status(), Json(profile)));
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "execution-profile:{project_id}:{}",
+            principal.actor_id
+        ))
+        .execute(&mut *transaction)
+        .await?;
+
+    let existing_profile_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT profile.id
+        FROM execution_profiles profile
+        JOIN provider_connections connection
+          ON connection.id = profile.provider_connection_id
+         AND connection.project_id = profile.project_id
+         AND connection.enabled
+        WHERE profile.project_id = $1
+          AND profile.owner_actor_id = $2
+        ORDER BY profile.created_at, profile.id
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(principal.actor_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let (status, profile_id) = if let Some(profile_id) = existing_profile_id {
+        let reference = ExecutionProfileCommandReference { profile_id };
+        idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
+        (StatusCode::OK, profile_id)
+    } else {
+        let provider_connection_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT connection.id
+            FROM execution_workers worker
+            JOIN project_memberships worker_membership
+              ON worker_membership.project_id = worker.project_id
+             AND worker_membership.actor_id = worker.actor_id
+             AND worker_membership.role = 'worker'
+             AND worker_membership.enabled
+            JOIN actors worker_actor
+              ON worker_actor.id = worker.actor_id
+             AND worker_actor.kind = 'execution_worker'
+             AND worker_actor.status = 'active'
+            JOIN provider_connections connection
+              ON connection.id = worker.provider_connection_id
+             AND connection.project_id = worker.project_id
+             AND connection.enabled
+            WHERE worker.project_id = $1 AND worker.enabled
+            ORDER BY worker.created_at, worker.id
+            LIMIT 1
+            FOR SHARE OF worker, worker_membership, worker_actor, connection
+            "#,
+        )
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::Conflict(
+            "execution_worker",
+            "no compatible local provider is available",
+        ))?;
+        let profile_id = Uuid::now_v7();
+        let project_key = project_id.simple().to_string();
+        let actor_key = principal.actor_id.simple().to_string();
+        let profile_key = format!("{project_key}-{}", &actor_key[..16]);
+        let data_root = state.config.data_root.clone();
+        let codex_home_root = state.config.codex_home_root.clone();
+        let profile_path = tokio::task::spawn_blocking(move || {
+            prepare_private_profile_directory(&data_root, &codex_home_root, &profile_key)
+        })
+        .await
+        .map_err(|_| AppError::Internal("prepare personal Execution Profile task"))??;
+        let profile_path = profile_path.to_str().ok_or(AppError::Internal(
+            "personal Execution Profile path encoding",
+        ))?;
+        let name = format!("Personal Codex · @{}", access.handle);
+        sqlx::query(
+            r#"
+            INSERT INTO execution_profiles (
+                id, project_id, provider_connection_id, owner_actor_id,
+                name, codex_home_path, status, account_state
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6,
+                'authentication_required', 'authentication_required'
+            )
+            "#,
+        )
+        .bind(profile_id)
+        .bind(project_id)
+        .bind(provider_connection_id)
+        .bind(principal.actor_id)
+        .bind(name)
+        .bind(profile_path)
+        .execute(&mut *transaction)
+        .await?;
+        let reference = ExecutionProfileCommandReference { profile_id };
+        idempotency::complete(
+            &mut transaction,
+            &reservation,
+            StatusCode::CREATED,
+            &reference,
+        )
+        .await?;
+        (StatusCode::CREATED, profile_id)
+    };
+    transaction.commit().await?;
+    let profile =
+        fetch_owned_execution_profile(&state, project_id, profile_id, principal.actor_id).await?;
+    Ok((status, Json(profile)))
+}
+
+async fn fetch_owned_execution_profile(
+    state: &AppState,
+    project_id: Uuid,
+    profile_id: Uuid,
+    owner_actor_id: Uuid,
+) -> Result<ExecutionProfileView, AppError> {
+    let row = sqlx::query_as::<_, ExecutionProfileRow>(
+        r#"
+        SELECT
+            profile.id,
+            profile.name,
+            profile.version,
+            profile.status,
+            profile.account_state,
+            profile.max_active_turns,
+            profile.last_health_at::text AS last_health_at,
+            profile.last_failure_category,
+            profile.owner_actor_id,
+            owner.kind AS owner_actor_kind,
+            owner_membership.display_name AS owner_display_name,
+            owner_membership.handle AS owner_handle,
+            owner.status AS owner_actor_status,
+            owner_membership.enabled AS owner_membership_enabled,
+            connection.kind AS provider_kind,
+            connection.enabled AS provider_enabled,
+            connection.version AS provider_version,
+            connection.binary_version,
+            connection.capabilities
+        FROM execution_profiles profile
+        JOIN actors owner ON owner.id = profile.owner_actor_id
+        JOIN project_memberships owner_membership
+          ON owner_membership.project_id = profile.project_id
+         AND owner_membership.actor_id = profile.owner_actor_id
+        JOIN provider_connections connection
+          ON connection.project_id = profile.project_id
+         AND connection.id = profile.provider_connection_id
+        WHERE profile.project_id = $1
+          AND profile.id = $2
+          AND profile.owner_actor_id = $3
+        "#,
+    )
+    .bind(project_id)
+    .bind(profile_id)
+    .bind(owner_actor_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound("execution_profile"))?;
+    let health = state.supervisors.health(row.id).await;
+    execution_profile_view(row, health)
+}
+
+async fn require_project_action(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &AuthenticatedActor,
     project_id: Uuid,
-) -> Result<(), AppError> {
+    action: Action,
+) -> Result<ProjectAccessRow, AppError> {
     let access = sqlx::query_as::<_, ProjectAccessRow>(
         r#"
-        SELECT membership.role
+        SELECT membership.role, membership.handle
         FROM projects project
         JOIN project_memberships membership
           ON membership.project_id = project.id
@@ -368,12 +616,12 @@ async fn require_project_view(
     );
     if authorize(
         &subject,
-        Action::ExecutionProfileView,
+        action,
         Resource::Project(ProjectScope::project(project_id)),
     )
     .is_allowed()
     {
-        Ok(())
+        Ok(access)
     } else {
         // Read endpoints deliberately make missing, foreign, disabled, and
         // unauthorized Projects indistinguishable.
@@ -383,27 +631,40 @@ async fn require_project_view(
 
 fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView, AppError> {
     let actor_status = parse_actor_status(&row.actor_status)?;
-    let profile_owner_status = parse_actor_status(&row.profile_owner_actor_status)?;
-    let profile_status = parse_profile_status(&row.profile_status)?;
-    let account_state = parse_account_state(&row.profile_account_state)?;
+    let profile_owner_status = row
+        .profile_owner_actor_status
+        .as_deref()
+        .map(parse_actor_status)
+        .transpose()?;
+    let profile_status = row
+        .profile_status
+        .as_deref()
+        .map(parse_profile_status)
+        .transpose()?;
+    let account_state = row
+        .profile_account_state
+        .as_deref()
+        .map(parse_account_state)
+        .transpose()?;
     let status = if !row.worker_enabled
         || !row.membership_enabled
         || actor_status == ActorStatus::Disabled
-        || profile_owner_status == ActorStatus::Disabled
-        || !row.profile_owner_membership_enabled
-        || profile_status == ExecutionProfileStatus::Disabled
+        || profile_owner_status == Some(ActorStatus::Disabled)
+        || row.profile_owner_membership_enabled == Some(false)
+        || profile_status == Some(ExecutionProfileStatus::Disabled)
     {
         ExecutionWorkerStatus::Disabled
-    } else if profile_status == ExecutionProfileStatus::AuthenticationRequired
+    } else if profile_status.is_none()
+        || profile_status == Some(ExecutionProfileStatus::AuthenticationRequired)
         || matches!(
             account_state,
-            AccountState::AuthenticationRequired | AccountState::LoggedOut
+            Some(AccountState::AuthenticationRequired | AccountState::LoggedOut)
         )
     {
         ExecutionWorkerStatus::AuthenticationRequired
     } else if !row.provider_enabled
-        || profile_status == ExecutionProfileStatus::Unavailable
-        || account_state == AccountState::Unknown
+        || profile_status == Some(ExecutionProfileStatus::Unavailable)
+        || account_state == Some(AccountState::Unknown)
     {
         ExecutionWorkerStatus::Unavailable
     } else {
@@ -422,7 +683,6 @@ fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView,
         )?,
         enabled: row.worker_enabled,
         status,
-        default_execution_profile_id: row.execution_profile_id,
         provider: provider_view(
             &row.provider_kind,
             row.provider_enabled,

@@ -5,6 +5,7 @@ import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import {
   cancelAccountLogin,
+  createPersonalExecutionProfile,
   getAccountStatus,
   listExecutionProfiles,
   loginWithApiKey,
@@ -21,15 +22,45 @@ export function ExecutionAccountSettings({
   actorId: string
   projectId: string
 }) {
+  const queryClient = useQueryClient()
   const profiles = useQuery({
     queryKey: queryKeys.executionProfiles(projectId),
     queryFn: () => listExecutionProfiles(projectId),
+  })
+  const createProfile = useMutation({
+    mutationFn: () =>
+      createPersonalExecutionProfile(projectId, crypto.randomUUID()),
+    onSuccess: (profile) => {
+      queryClient.setQueryData<Awaited<ReturnType<typeof listExecutionProfiles>>>(
+        queryKeys.executionProfiles(projectId),
+        (current = []) => [...current.filter((item) => item.id !== profile.id), profile],
+      )
+    },
   })
 
   if (profiles.isPending) return <p>Loading execution profiles…</p>
   if (profiles.isError) return <p role="alert">Execution profiles could not be loaded.</p>
   const owned = profiles.data.filter((profile) => profile.owner.id === actorId)
-  if (!owned.length) return <p>No personal execution profile is assigned to this account.</p>
+  if (!owned.length) {
+    return (
+      <div className="execution-profile-empty-state">
+        <p>
+          Connect an isolated personal profile before starting hosted runs. It
+          is never shared with another Project member.
+        </p>
+        {createProfile.isError && (
+          <p role="alert">Your personal execution profile could not be created.</p>
+        )}
+        <button
+          disabled={createProfile.isPending}
+          onClick={() => createProfile.mutate()}
+          type="button"
+        >
+          {createProfile.isPending ? 'Creating profile…' : 'Create personal profile'}
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="execution-profile-list">

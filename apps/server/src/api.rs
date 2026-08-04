@@ -764,7 +764,7 @@ pub(crate) async fn select_run_setup(
         r#"
         SELECT r.id AS repository_id,
                ew.id AS execution_worker_id,
-               ew.execution_profile_id
+               profile.id AS execution_profile_id
         FROM repositories r
         JOIN execution_workers ew
           ON ew.project_id = r.project_id AND ew.enabled
@@ -783,7 +783,6 @@ pub(crate) async fn select_run_setup(
          AND connection.enabled
         JOIN execution_profiles profile
           ON profile.project_id = ew.project_id
-         AND profile.id = ew.execution_profile_id
          AND profile.provider_connection_id = connection.id
          AND profile.owner_actor_id = $3
          AND profile.status = 'available'
@@ -798,7 +797,7 @@ pub(crate) async fn select_run_setup(
         WHERE r.project_id = $1 AND r.id = $2
           AND r.enabled AND r.trusted AND r.archived_at IS NULL
           AND r.preparation_state = 'ready'
-        ORDER BY ew.created_at, ew.id
+        ORDER BY ew.created_at, ew.id, profile.created_at, profile.id
         LIMIT 1
         "#,
     )
@@ -807,10 +806,7 @@ pub(crate) async fn select_run_setup(
     .bind(requesting_actor_id)
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(AppError::Conflict(
-        "execution_worker",
-        "an available personal Execution Profile is required",
-    ))
+    .ok_or(AppError::ExecutionProfileRequired)
 }
 
 #[cfg(any())]
@@ -2141,6 +2137,7 @@ async fn guard_conversation_mutation(
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
          AND pm.actor_id = $3
+         AND pm.enabled
         WHERE c.id = $1
           AND c.project_id = $2
         FOR SHARE OF c, p, pm
@@ -2222,6 +2219,7 @@ async fn authorized_conversation(
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
          AND pm.actor_id = $2
+         AND pm.enabled
         WHERE c.id = $1
         "#,
     )

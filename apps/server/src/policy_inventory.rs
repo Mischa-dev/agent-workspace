@@ -111,6 +111,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         CredentialManage
     ),
     policy_route!(
+        "execution",
+        Post,
+        "/api/v1/projects/{id}/execution-profiles",
+        ExecutionProfileManage
+    ),
+    policy_route!(
         "conversations",
         Post,
         "/api/v1/projects/{id}/channels",
