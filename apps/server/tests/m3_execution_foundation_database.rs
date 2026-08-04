@@ -351,7 +351,7 @@ async fn m2_to_m3_execution_foundation_adopts_rows_and_enforces_scope() {
     .await;
     assert!(
         substituted_profile_run.is_err(),
-        "Agent Runs cannot substitute a Profile not assigned to their Worker"
+        "M3 Agent Runs cannot substitute a Profile not assigned to their Worker"
     );
 
     let transition_thread = insert_thread(

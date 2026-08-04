@@ -6999,6 +6999,24 @@ on one client version's cleanup behavior while preserving standards-based
 refresh rotation, token-reuse compromise handling, and future clients that do
 invoke revocation themselves.
 
+## D-052: A Project Worker selects the invoker's compatible personal profile
+
+**Status:** Accepted
+
+**Reason:** M3 safely bound the solo Worker's bootstrap profile into its
+durable identity, but retaining that equality in M7 would make every invited
+human permanently unable to run even after connecting a separate personal
+account. A Project Execution Worker is the shared attributable capability;
+each Agent Run now binds that Worker to one active same-Project Profile using
+the same Provider Connection and owned by the requesting human. The legacy
+Worker profile reference remains only as an upgrade/bootstrap default and is
+never an authorization fallback. PostgreSQL revalidates Worker, provider,
+profile ownership, membership, and readiness on admission and active-state
+transitions. Personal profile registration creates an owner-only directory
+beneath the configured data root, and missing or unready setup fails before
+Messages, runs, workspaces, Provider Sessions, approvals, audit success, or
+outbox effects are committed.
+
 ---
 
 # 32. Open decisions

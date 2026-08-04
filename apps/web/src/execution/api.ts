@@ -55,6 +55,16 @@ export async function listExecutionProfiles(
   return Array.isArray(response.profiles) ? response.profiles : []
 }
 
+export function createPersonalExecutionProfile(
+  projectId: string,
+  idempotencyKey: string,
+) {
+  return requestJson<ExecutionProfile>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/execution-profiles`,
+    { method: 'POST', idempotencyKey, json: {} },
+  )
+}
+
 export function getAccountStatus(projectId: string, profileId: string) {
   return requestJson<AccountStatus>(accountPath(projectId, profileId))
 }

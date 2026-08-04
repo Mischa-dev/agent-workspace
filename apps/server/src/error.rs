@@ -108,6 +108,8 @@ pub enum AppError {
     RepositoryChoiceRequired { repository_ids: Vec<Uuid> },
     #[error("the selected repository conflicts with the Thread binding")]
     RepositoryBindingConflict,
+    #[error("a personal execution profile must be connected before starting a run")]
+    ExecutionProfileRequired,
     #[error("request rate limit exceeded; retry after {retry_after_seconds} seconds")]
     RateLimited { retry_after_seconds: u64 },
     #[error("development authentication is unavailable")]
@@ -141,6 +143,7 @@ impl AppError {
             Self::ProjectArchived => "project_archived",
             Self::RepositoryChoiceRequired { .. } => "repository_choice_required",
             Self::RepositoryBindingConflict => "repository_binding_conflict",
+            Self::ExecutionProfileRequired => "execution_profile_required",
             Self::RateLimited { .. } => "rate_limited",
             Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
             Self::Internal(_) => "internal",
@@ -209,6 +212,9 @@ impl IntoResponse for AppError {
             }
             Self::RepositoryBindingConflict => Some(ErrorDetails::Action {
                 action: "start_new_thread",
+            }),
+            Self::ExecutionProfileRequired => Some(ErrorDetails::Action {
+                action: "connect_personal_codex_account",
             }),
             _ => None,
         };
@@ -301,6 +307,12 @@ impl IntoResponse for AppError {
                 StatusCode::CONFLICT,
                 "repository_binding_conflict",
                 "This Thread is already bound to another repository. Start a new Thread.",
+                None,
+            ),
+            Self::ExecutionProfileRequired => (
+                StatusCode::CONFLICT,
+                "execution_profile_required",
+                "Connect your personal Codex account before starting a run.",
                 None,
             ),
             Self::RateLimited {

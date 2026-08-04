@@ -13,6 +13,40 @@ afterEach(() => {
 })
 
 describe('ExecutionAccountSettings', () => {
+  it('creates one isolated personal profile when none is assigned', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.endsWith('/execution-profiles') && method === 'GET') {
+        return jsonResponse({ profiles: [] })
+      }
+      if (url.endsWith('/execution-profiles') && method === 'POST') {
+        expect(new Headers(init?.headers).get('idempotency-key')).toBe(
+          'test-idempotency-key',
+        )
+        expect(init?.body).toBe(JSON.stringify({}))
+        return jsonResponse(profile('Personal Codex', actorId))
+      }
+      if (url.endsWith('/account')) return jsonResponse(accountStatus())
+      throw new Error(`unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('crypto', { randomUUID: () => 'test-idempotency-key' })
+
+    renderSettings()
+    expect(
+      await screen.findByText(/never shared with another Project member/i),
+    ).toBeVisible()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create personal profile' }),
+    )
+
+    expect(
+      await screen.findByRole('heading', { name: 'Personal Codex' }),
+    ).toBeVisible()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('shows only the Actor-owned profile and completes a device-code ceremony', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
