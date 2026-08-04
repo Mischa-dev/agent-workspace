@@ -148,6 +148,55 @@ async fn websocket_upgrade_delivery_isolation_logout_revocation_and_lag_resync()
         "the cross-Project event must be suppressed"
     );
 
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(fixture.own_project_id)
+    .bind(fixture.actor_id)
+    .execute(&pool)
+    .await
+    .expect("disable realtime Project membership");
+    realtime.publish(RealtimeEvent {
+        event_id: Uuid::now_v7(),
+        kind: "message.delta",
+        project_id: fixture.own_project_id,
+        conversation_id: Some(fixture.own_conversation_id),
+        payload: serde_json::json!({"scope": "disabled"}),
+    });
+    assert!(
+        timeout(Duration::from_millis(300), socket.next())
+            .await
+            .is_err(),
+        "a disabled member must stop receiving invalidations on an existing socket"
+    );
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = true WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(fixture.own_project_id)
+    .bind(fixture.actor_id)
+    .execute(&pool)
+    .await
+    .expect("re-enable realtime Project membership");
+    let resumed_event_id = Uuid::now_v7();
+    realtime.publish(RealtimeEvent {
+        event_id: resumed_event_id,
+        kind: "message.delta",
+        project_id: fixture.own_project_id,
+        conversation_id: Some(fixture.own_conversation_id),
+        payload: serde_json::json!({"scope": "re-enabled"}),
+    });
+    let resumed = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("re-enabled realtime deadline")
+        .expect("open re-enabled WebSocket stream")
+        .expect("valid re-enabled WebSocket message");
+    let ClientMessage::Text(resumed) = resumed else {
+        panic!("expected a re-enabled realtime text event");
+    };
+    let resumed: serde_json::Value =
+        serde_json::from_str(resumed.as_str()).expect("decode re-enabled realtime event");
+    assert_eq!(resumed["event_id"], resumed_event_id.to_string());
+
     let logout_response = reqwest::Client::new()
         .post(format!("http://{address}/api/v1/auth/logout"))
         .header(ORIGIN, ALLOWED_ORIGIN)
@@ -285,6 +334,7 @@ fn websocket_request(
 struct Fixture {
     session_id: Uuid,
     user_id: Uuid,
+    actor_id: Uuid,
     own_project_id: Uuid,
     own_conversation_id: Uuid,
     foreign_project_id: Uuid,
@@ -410,6 +460,7 @@ async fn insert_fixture(pool: &PgPool) -> Fixture {
     Fixture {
         session_id,
         user_id,
+        actor_id,
         own_project_id,
         own_conversation_id,
         foreign_project_id,

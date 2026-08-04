@@ -16,6 +16,10 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     idempotency::IdempotencyKey,
+    policy::{
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        authorize,
+    },
     provider::{
         AccountSummary, LoginCeremonyError, LoginCeremonySnapshot, LoginKind, LoginReservation,
         LoginStart, RateLimitSummary,
@@ -55,6 +59,7 @@ struct ProfileAccess {
     codex_home_path: String,
     status: String,
     account_state: String,
+    role: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -453,9 +458,10 @@ async fn require_profile_owner(
     project_id: Uuid,
     profile_id: Uuid,
 ) -> Result<ProfileAccess, AppError> {
-    sqlx::query_as::<_, ProfileAccess>(
+    let access = sqlx::query_as::<_, ProfileAccess>(
         r#"
-        SELECT profile.codex_home_path, profile.status, profile.account_state
+        SELECT profile.codex_home_path, profile.status, profile.account_state,
+               membership.role
         FROM execution_profiles profile
         JOIN projects project ON project.id = profile.project_id
         JOIN project_memberships membership
@@ -470,7 +476,6 @@ async fn require_profile_owner(
           AND profile.project_id = $2
           AND profile.owner_actor_id = $3
           AND project.archived_at IS NULL
-          AND membership.role IN ('owner', 'editor')
         "#,
     )
     .bind(profile_id)
@@ -478,7 +483,32 @@ async fn require_profile_owner(
     .bind(principal.actor_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::NotFound("execution_profile"))
+    .ok_or(AppError::NotFound("execution_profile"))?;
+    let role = match access.role.as_str() {
+        "owner" => MembershipRole::Owner,
+        "admin" => MembershipRole::Admin,
+        "member" => MembershipRole::Member,
+        "viewer" => MembershipRole::Viewer,
+        _ => return Err(AppError::NotFound("execution_profile")),
+    };
+    if matches!(
+        authorize(
+            &Subject::new(
+                principal.actor_id,
+                ActorKind::Human,
+                true,
+                Some(Membership::project(project_id, role, true)),
+                None,
+            ),
+            Action::ExecutionProfileManage,
+            Resource::Project(ProjectScope::project(project_id)),
+        ),
+        Decision::Allow
+    ) {
+        Ok(access)
+    } else {
+        Err(AppError::NotFound("execution_profile"))
+    }
 }
 
 async fn persist_account_state(

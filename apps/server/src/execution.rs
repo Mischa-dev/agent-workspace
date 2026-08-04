@@ -364,7 +364,7 @@ async fn require_project_view(
     );
     if authorize(
         &subject,
-        Action::ProjectView,
+        Action::ExecutionProfileView,
         Resource::Project(ProjectScope::project(project_id)),
     )
     .is_allowed()

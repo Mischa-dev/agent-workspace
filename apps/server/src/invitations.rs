@@ -22,6 +22,10 @@ use crate::{
         require_authenticated_write, respond_with_established_session,
     },
     error::{ApiJson, ApiPath, AppError},
+    policy::{
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        authorize,
+    },
 };
 
 const INVITATION_TOKEN_BYTES: usize = 32;
@@ -105,6 +109,7 @@ struct InvitationAccess {
     project_archived: bool,
     organization_role: String,
     organization_membership_enabled: bool,
+    project_role: String,
     project_membership_enabled: bool,
 }
 
@@ -135,6 +140,7 @@ struct InvitationMutationRow {
     project_archived: bool,
     organization_role: String,
     organization_membership_enabled: bool,
+    project_role: String,
     project_membership_enabled: bool,
 }
 
@@ -192,7 +198,7 @@ async fn list_invitations(
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<Vec<InvitationView>>, AppError> {
     let access = invitation_access(&state, principal.actor_id, project_id).await?;
-    authorize_manage(&access, None)?;
+    authorize_manage(principal.actor_id, project_id, &access, None)?;
     let rows = sqlx::query_as::<_, InvitationRow>(
         r#"
         SELECT invitation.id, invitation.project_id, invitation.role,
@@ -240,7 +246,7 @@ async fn issue_invitation(
     let access = lock_invitation_access(&mut transaction, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    authorize_manage(&access, Some(&request.role))?;
+    authorize_manage(principal.actor_id, project_id, &access, Some(&request.role))?;
     sqlx::query(
         r#"
         INSERT INTO project_invitations (
@@ -305,9 +311,10 @@ async fn revoke_invitation(
         project_archived: row.project_archived,
         organization_role: row.organization_role,
         organization_membership_enabled: row.organization_membership_enabled,
+        project_role: row.project_role,
         project_membership_enabled: row.project_membership_enabled,
     };
-    authorize_manage(&access, Some(&row.role))?;
+    authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
     if row.status == "revoked" {
         transaction.commit().await?;
         return Ok(Json(
@@ -378,9 +385,10 @@ async fn replace_invitation(
         project_archived: row.project_archived,
         organization_role: row.organization_role,
         organization_membership_enabled: row.organization_membership_enabled,
+        project_role: row.project_role,
         project_membership_enabled: row.project_membership_enabled,
     };
-    authorize_manage(&access, Some(&row.role))?;
+    authorize_manage(principal.actor_id, row.project_id, &access, Some(&row.role))?;
     if row.status != "active" {
         return Err(AppError::Conflict(
             "project_invitation",
@@ -464,6 +472,7 @@ async fn lock_invitation_for_mutation(
                project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
+               project_membership.role AS project_role,
                project_membership.enabled AS project_membership_enabled
         FROM project_invitations invitation
         JOIN projects project ON project.id = invitation.project_id
@@ -975,6 +984,7 @@ async fn invitation_access(
                project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
+               project_membership.role AS project_role,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1004,6 +1014,7 @@ async fn lock_invitation_access(
                project.archived_at IS NOT NULL AS project_archived,
                organization_membership.role AS organization_role,
                organization_membership.enabled AS organization_membership_enabled,
+               project_membership.role AS project_role,
                project_membership.enabled AS project_membership_enabled
         FROM projects project
         JOIN organization_memberships organization_membership
@@ -1023,6 +1034,8 @@ async fn lock_invitation_access(
 }
 
 fn authorize_manage(
+    actor_id: Uuid,
+    project_id: Uuid,
     access: &InvitationAccess,
     invitation_role: Option<&str>,
 ) -> Result<(), AppError> {
@@ -1032,13 +1045,42 @@ fn authorize_manage(
     {
         return Err(AppError::NotFound("project"));
     }
-    let manager = matches!(access.organization_role.as_str(), "owner" | "admin");
+    let manager = matches!(access.organization_role.as_str(), "owner" | "admin")
+        && matches!(
+            authorize(
+                &Subject::new(
+                    actor_id,
+                    ActorKind::Human,
+                    true,
+                    Some(Membership::project(
+                        project_id,
+                        parse_membership_role(&access.project_role)?,
+                        access.project_membership_enabled,
+                    )),
+                    None,
+                ),
+                Action::InvitationManage,
+                Resource::Project(ProjectScope::project(project_id)),
+            ),
+            Decision::Allow
+        );
     let admin_invite_requires_owner =
         invitation_role == Some("admin") && access.organization_role != "owner";
     if !manager || admin_invite_requires_owner {
         return Err(AppError::Forbidden);
     }
     Ok(())
+}
+
+fn parse_membership_role(role: &str) -> Result<MembershipRole, AppError> {
+    match role {
+        "owner" => Ok(MembershipRole::Owner),
+        "admin" => Ok(MembershipRole::Admin),
+        "member" => Ok(MembershipRole::Member),
+        "viewer" => Ok(MembershipRole::Viewer),
+        "worker" => Ok(MembershipRole::Worker),
+        _ => Err(AppError::Internal("invalid membership role")),
+    }
 }
 
 fn validate_invitation_role(role: &str) -> Result<(), AppError> {
@@ -1167,25 +1209,31 @@ mod tests {
             project_archived: false,
             organization_role: "owner".to_owned(),
             organization_membership_enabled: true,
+            project_role: "owner".to_owned(),
             project_membership_enabled: true,
         };
-        assert!(authorize_manage(&access, Some("admin")).is_ok());
+        let actor_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        assert!(authorize_manage(actor_id, project_id, &access, Some("admin")).is_ok());
 
         access.organization_role = "admin".to_owned();
-        assert!(authorize_manage(&access, Some("member")).is_ok());
-        assert!(authorize_manage(&access, Some("admin")).is_err());
+        access.project_role = "admin".to_owned();
+        assert!(authorize_manage(actor_id, project_id, &access, Some("member")).is_ok());
+        assert!(authorize_manage(actor_id, project_id, &access, Some("admin")).is_err());
 
         access.organization_role = "member".to_owned();
-        assert!(authorize_manage(&access, Some("viewer")).is_err());
+        access.project_role = "member".to_owned();
+        assert!(authorize_manage(actor_id, project_id, &access, Some("viewer")).is_err());
 
         access.organization_role = "owner".to_owned();
+        access.project_role = "owner".to_owned();
         access.organization_membership_enabled = false;
-        assert!(authorize_manage(&access, Some("viewer")).is_err());
+        assert!(authorize_manage(actor_id, project_id, &access, Some("viewer")).is_err());
         access.organization_membership_enabled = true;
         access.project_membership_enabled = false;
-        assert!(authorize_manage(&access, Some("viewer")).is_err());
+        assert!(authorize_manage(actor_id, project_id, &access, Some("viewer")).is_err());
         access.project_membership_enabled = true;
         access.project_archived = true;
-        assert!(authorize_manage(&access, Some("viewer")).is_err());
+        assert!(authorize_manage(actor_id, project_id, &access, Some("viewer")).is_err());
     }
 }

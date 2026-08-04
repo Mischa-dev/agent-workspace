@@ -343,7 +343,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     assert_eq!(viewer_project["capabilities"]["manage"], false);
     assert_eq!(viewer_project["capabilities"]["archive"], false);
     assert_eq!(
-        viewer_project["capabilities"]["navigationWrite"], false,
+        viewer_project["capabilities"]["navigationWrite"], true,
         "idempotent replay returns capabilities from current Project authority"
     );
     sqlx::query(

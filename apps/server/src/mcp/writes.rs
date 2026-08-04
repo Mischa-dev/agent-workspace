@@ -13,6 +13,10 @@ use crate::{
     },
     message_content::MessageContent,
     outbox::{OutboxEventPayload, WorkItemUpdatedPayload, enqueue_typed},
+    policy::{
+        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
+        authorize,
+    },
     work_items::insert_work_item_activity,
 };
 
@@ -991,12 +995,37 @@ async fn authorize_write(
             retry_category: "do_not_retry".to_owned(),
         }));
     }
-    if !matches!(membership.role.as_str(), "owner" | "admin" | "member") {
+    let Some(role) = parse_membership_role(&membership.role) else {
+        return Ok(Some(not_found()));
+    };
+    let decision = authorize(
+        &Subject::new(
+            principal.actor_id,
+            ActorKind::Human,
+            true,
+            Some(Membership::project(principal.project_id, role, true)),
+            None,
+        ),
+        Action::McpWrite,
+        Resource::Project(ProjectScope::project(principal.project_id)),
+    );
+    if !matches!(decision, Decision::Allow) {
         return Ok(Some(WriteResult::PermissionDenied {
             retry_category: "ask_project_owner".to_owned(),
         }));
     }
     Ok(None)
+}
+
+fn parse_membership_role(role: &str) -> Option<MembershipRole> {
+    match role {
+        "owner" => Some(MembershipRole::Owner),
+        "admin" => Some(MembershipRole::Admin),
+        "member" => Some(MembershipRole::Member),
+        "viewer" => Some(MembershipRole::Viewer),
+        "worker" => Some(MembershipRole::Worker),
+        _ => None,
+    }
 }
 
 async fn lock_work_item(

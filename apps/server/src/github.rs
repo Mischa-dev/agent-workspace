@@ -944,7 +944,7 @@ async fn github_status(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::GithubIntegrationManage,
     )
     .await?;
     let installation = load_installation(&mut transaction, project_id).await?;
@@ -976,7 +976,7 @@ async fn github_automation_settings(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::GithubIntegrationManage,
     )
     .await?;
     let settings = fetch_github_automation_settings(&mut transaction, project_id).await?;
@@ -1003,7 +1003,7 @@ async fn update_github_automation_settings(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::GithubIntegrationManage,
     )
     .await?;
     let reservation = match reserve(
@@ -1138,7 +1138,7 @@ async fn sync_installation(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::GithubIntegrationManage,
     )
     .await?;
     let repositories =
@@ -1182,7 +1182,7 @@ async fn sync_installation(
         &mut transaction,
         &principal,
         project_id,
-        Action::ProjectManage,
+        Action::GithubIntegrationManage,
     )
     .await?;
     let current_repositories =
