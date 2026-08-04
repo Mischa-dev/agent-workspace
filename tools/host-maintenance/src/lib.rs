@@ -966,6 +966,9 @@ fn assign_restored_data_owner(program: &Path, target_data_root: &Path) -> Result
 }
 
 fn safe_archive_entry(value: &str) -> bool {
+    if value == "." || value == "./" {
+        return true;
+    }
     let trimmed = value.strip_prefix("./").unwrap_or(value);
     !trimmed.is_empty()
         && !Path::new(trimmed).is_absolute()
@@ -1043,9 +1046,9 @@ mod tests {
     use super::{
         ARCHIVE_FORMAT, ArtifactRecord, BACKUP_FORMAT_VERSION, BackupManifest, EXCLUDED_TABLE_DATA,
         INCLUDED_DATA_ENTRIES, MigrationRecord, PRESERVED_UNIQUE_ENTRIES,
-        REBUILDABLE_CACHE_ENTRIES, SourceLayout, read_database_name_file, read_secret_file,
-        run_from_file, run_to_file, safe_archive_entry, validate_backup, validate_manifest,
-        validate_new_destination,
+        REBUILDABLE_CACHE_ENTRIES, SourceLayout, create_release_archive, read_database_name_file,
+        read_secret_file, run_from_file, run_to_file, safe_archive_entry, validate_archive,
+        validate_backup, validate_manifest, validate_new_destination,
     };
 
     fn fixture_manifest() -> BackupManifest {
@@ -1217,11 +1220,24 @@ mod tests {
 
     #[test]
     fn archive_paths_reject_absolute_and_parent_traversal() {
+        assert!(safe_archive_entry("./"));
         assert!(safe_archive_entry("./worktrees/example/file"));
         assert!(safe_archive_entry("repositories/mirror.git/HEAD"));
         assert!(!safe_archive_entry("/etc/passwd"));
         assert!(!safe_archive_entry("../escape"));
         assert!(!safe_archive_entry("worktrees/../../escape"));
+    }
+
+    #[test]
+    fn release_archive_root_entry_validates() {
+        let temporary = temporary_directory();
+        let release = temporary.path().join("release");
+        fs::create_dir(&release).expect("release fixture");
+        fs::write(release.join("artifact"), b"exact release").expect("release artifact");
+        let archive = temporary.path().join("release.tar");
+        create_release_archive(Path::new("/usr/bin/tar"), &release, &archive)
+            .expect("create release archive");
+        validate_archive(Path::new("/usr/bin/tar"), &archive).expect("validate release archive");
     }
 
     #[test]
