@@ -85,6 +85,20 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .bind(human_actor_id)
     .execute(&mut *transaction)
     .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO organization_memberships (
+            organization_id, actor_id, role, enabled
+        )
+        VALUES ($1, $2, 'owner', true)
+        ON CONFLICT (organization_id, actor_id)
+        DO UPDATE SET role = 'owner', enabled = true, updated_at = now()
+        "#,
+    )
+    .bind(organization_id)
+    .bind(human_actor_id)
+    .execute(&mut *transaction)
+    .await?;
 
     let existing_collaborator_actor = sqlx::query_scalar::<_, Uuid>(
         r#"

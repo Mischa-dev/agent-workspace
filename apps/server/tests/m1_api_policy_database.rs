@@ -270,6 +270,14 @@ async fn insert_fixture(pool: &PgPool) -> Fixture {
     .await
     .expect("insert Organization");
     sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(organization_id)
+    .bind(actor_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert Organization membership");
+    sqlx::query(
         r#"
         INSERT INTO projects (id, organization_id, project_key, name)
         VALUES

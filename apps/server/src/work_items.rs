@@ -3616,6 +3616,10 @@ async fn project_membership(
                membership.role, membership.enabled AS membership_enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = membership.actor_id
+         AND organization_membership.enabled
         WHERE project.id = $1 AND membership.actor_id = $2
         "#,
     )
@@ -3637,8 +3641,13 @@ async fn lock_project_membership(
                membership.role, membership.enabled AS membership_enabled
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = membership.actor_id
+         AND organization_membership.enabled
         WHERE project.id = $1 AND membership.actor_id = $2
         FOR UPDATE OF project, membership
+        FOR SHARE OF organization_membership
         "#,
     )
     .bind(project_id)

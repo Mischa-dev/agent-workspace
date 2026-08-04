@@ -2020,6 +2020,10 @@ async fn authorized_project(
             membership.role AS membership_role,
             membership.enabled AS membership_enabled
         FROM projects project
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
         JOIN project_memberships membership
           ON membership.project_id = project.id
          AND membership.actor_id = $2
@@ -2056,11 +2060,15 @@ async fn lock_project_access(
             membership.role AS membership_role,
             membership.enabled AS membership_enabled
         FROM projects project
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
         JOIN project_memberships membership
           ON membership.project_id = project.id
          AND membership.actor_id = $2
         WHERE project.id = $1
-        FOR SHARE OF project, membership
+        FOR SHARE OF project, organization_membership, membership
         "#,
     )
     .bind(project_id)
@@ -2116,6 +2124,10 @@ async fn fetch_conversation_access(
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
         JOIN project_memberships membership
           ON membership.project_id = conversation.project_id
          AND membership.actor_id = $2
@@ -2154,13 +2166,17 @@ async fn lock_conversation_access(
             membership.enabled AS membership_enabled
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
         JOIN project_memberships membership
           ON membership.project_id = conversation.project_id
          AND membership.actor_id = $2
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.id = $1
         FOR UPDATE OF conversation
-        FOR SHARE OF project, membership
+        FOR SHARE OF project, organization_membership, membership
         "#,
     )
     .bind(conversation_id)

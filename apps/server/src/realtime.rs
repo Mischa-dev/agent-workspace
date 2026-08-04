@@ -429,8 +429,14 @@ async fn event_is_authorized(
         r#"
         SELECT pm.role, pm.enabled
         FROM project_memberships pm
+        JOIN projects p ON p.id = pm.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = pm.actor_id
+         AND om.enabled
         WHERE pm.actor_id = $1
           AND pm.project_id = $2
+          AND p.archived_at IS NULL
           AND (
               $3::uuid IS NULL
               OR EXISTS (

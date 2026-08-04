@@ -973,10 +973,15 @@ async fn authorize_write(
         SELECT pm.role, p.archived_at IS NOT NULL AS project_archived
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = pm.actor_id
+         AND om.enabled
         JOIN actors a ON a.id = pm.actor_id
+        JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
         WHERE pm.project_id = $1 AND pm.actor_id = $2
           AND pm.enabled AND a.kind = 'human' AND a.status = 'active'
-        FOR SHARE OF pm, p, a
+        FOR SHARE OF pm, p, om, a, u
         "#,
     )
     .bind(principal.project_id)

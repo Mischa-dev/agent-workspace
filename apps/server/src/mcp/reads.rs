@@ -535,7 +535,12 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
         SELECT pm.role
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = pm.actor_id
+         AND om.enabled
         JOIN actors a ON a.id = pm.actor_id
+        JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
         WHERE pm.project_id = $1
           AND pm.actor_id = $2
           AND pm.enabled

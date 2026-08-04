@@ -420,6 +420,46 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
     assert_eq!(resumed_thread["highestSeenSequence"], 1);
     assert_eq!(resumed_thread["attention"]["kind"], "unread");
 
+    sqlx::query(
+        "UPDATE organization_memberships SET enabled = false WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(fixture.organization_id)
+    .bind(fixture.actor_b.actor_id)
+    .execute(&pool)
+    .await
+    .expect("disable Actor B Organization membership");
+    let (_, organization_revoked_event_id) = append_message_with_outbox(
+        &pool,
+        fixture.shared_project_id,
+        fixture.shared_conversation_id,
+        fixture.actor_a.actor_id,
+        "organization membership revocation fails closed",
+    )
+    .await;
+    let actor_a_organization_event = receive_event(&mut reconnected_actor_a).await;
+    assert_eq!(
+        actor_a_organization_event["event_id"],
+        organization_revoked_event_id.to_string()
+    );
+    assert_no_delivery(
+        &mut resumed_actor_b,
+        "disabled Organization member Project invalidation",
+    )
+    .await;
+    let organization_revoked_timeline = client
+        .get(format!(
+            "{base_url}/api/v1/conversations/{}/timeline",
+            fixture.shared_conversation_id
+        ))
+        .header(COOKIE, fixture.actor_b.cookie_header())
+        .send()
+        .await
+        .expect("request timeline after Organization membership revocation");
+    assert_eq!(
+        organization_revoked_timeline.status(),
+        StatusCode::NOT_FOUND
+    );
+
     let logout = client
         .post(format!("{base_url}/api/v1/auth/logout"))
         .header(ORIGIN, ALLOWED_ORIGIN)
@@ -753,6 +793,7 @@ impl ActorSession {
 struct Fixture {
     actor_a: ActorSession,
     actor_b: ActorSession,
+    organization_id: Uuid,
     shared_project_id: Uuid,
     shared_parent_channel_id: Uuid,
     shared_conversation_id: Uuid,
@@ -832,6 +873,18 @@ async fn insert_fixture(pool: &PgPool) -> Fixture {
         .expect("insert Organization");
     sqlx::query(
         r#"
+        INSERT INTO organization_memberships (organization_id, actor_id, role)
+        VALUES ($1, $2, 'owner'), ($1, $3, 'member')
+        "#,
+    )
+    .bind(organization_id)
+    .bind(actor_a.actor_id)
+    .bind(actor_b.actor_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("insert Organization memberships");
+    sqlx::query(
+        r#"
         INSERT INTO projects (id, organization_id, project_key, name)
         VALUES
             ($1, $2, 'SHR', 'Shared Project'),
@@ -909,6 +962,7 @@ async fn insert_fixture(pool: &PgPool) -> Fixture {
     Fixture {
         actor_a,
         actor_b,
+        organization_id,
         shared_project_id,
         shared_parent_channel_id,
         shared_conversation_id,
