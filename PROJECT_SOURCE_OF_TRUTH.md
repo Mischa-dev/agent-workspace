@@ -2,18 +2,38 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M6 accepted; M7 authorized; source of truth v0.25
+**Status:** M7 accepted; M8 pending entry elaboration; source of truth v0.26
 
 **Owner:** Mischa Nelson  
-**Date:** August 1, 2026
+**Date:** August 4, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M6 are complete. M7 is
-elaborated and authorized; every later milestone remains subject to the same
-entry gate.
+**Implementation authorization:** Milestones M0 through M7 are complete. M8
+remains unauthorized until its entry backlog is merged; every later milestone
+remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.26 — M7 acceptance
+
+- accepted M7 against exact green commit
+  `286ea301bb9bf67cc85484771d353df80c03bf34`, GitHub CI run
+  `30949517976`, and its immutable Red Hat release
+- recorded owner and invited-member browser sessions, one-time invitation
+  consumption and replay denial, separate Actor attribution, Work Item
+  collaboration, per-Actor attention, and deterministic logout
+- proved owner-to-viewer downgrade, restoration, membership disable and
+  re-enable, immediate HTTP/MCP denial, credential revocation, and preservation
+  of historical authorship and read state
+- proved missing-profile admission has zero run/workspace/provider side effects
+  and a separately authenticated invoker-owned profile completes a hosted run
+  without exposing provider identity or credentials to Project managers
+- recorded restart reconciliation with dirty worktree preservation, bounded
+  two-profile host capacity, migration checksums, structured-log redaction, and
+  disposable-account cleanup
+- declared the M7 exit criteria satisfied; M8 remains subject to its ordinary
+  elaboration and authorization entry gate
 
 ### v0.25 — M6 acceptance and M7 authorization
 
@@ -6015,8 +6035,9 @@ credentials reserved for M9.
 
 ## Milestone M7: Teams
 
-**Status:** Elaborated and authorized by accepted M6 evidence against exact
-green commit `d825c3ca267ce7ea2831b396feddedbf9c9b2793`.
+**Status:** Accepted against exact green commit
+`286ea301bb9bf67cc85484771d353df80c03bf34` and the immutable Red Hat release
+recorded in `docs/acceptance/m7.md`.
 
 ### M7-001 Invitation links
 
