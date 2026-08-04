@@ -344,7 +344,8 @@ async fn team_runs_use_only_invoker_owned_profiles_and_missing_setup_has_no_effe
     .expect("disable member Organization membership before admission");
     let organization_disabled_thread_id =
         insert_thread(&pool, &seed, "Organization-disabled member proof").await;
-    let effects_before_organization_disabled = effect_counts(&pool).await;
+    let effects_before_organization_disabled =
+        conversation_effect_counts(&pool, organization_disabled_thread_id).await;
     let organization_disabled_run = post_json(
         &application,
         &member_cookie,
@@ -356,7 +357,7 @@ async fn team_runs_use_only_invoker_owned_profiles_and_missing_setup_has_no_effe
     .await;
     assert_eq!(organization_disabled_run.0, StatusCode::NOT_FOUND);
     assert_eq!(
-        effect_counts(&pool).await,
+        conversation_effect_counts(&pool, organization_disabled_thread_id).await,
         effects_before_organization_disabled
     );
     sqlx::query(
@@ -515,6 +516,36 @@ async fn effect_counts(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64, i64) {
     .fetch_one(pool)
     .await
     .expect("count execution side effects")
+}
+
+async fn conversation_effect_counts(
+    pool: &PgPool,
+    conversation_id: Uuid,
+) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
+    sqlx::query_as(
+        r#"
+        SELECT
+            (SELECT count(*) FROM agent_runs WHERE conversation_id = $1),
+            (SELECT count(*) FROM repository_workspaces WHERE conversation_id = $1),
+            (SELECT count(*)
+               FROM git_worktrees worktree
+               JOIN repository_workspaces workspace
+                 ON workspace.id = worktree.repository_workspace_id
+              WHERE workspace.conversation_id = $1),
+            (SELECT count(*) FROM provider_sessions WHERE conversation_id = $1),
+            (SELECT count(*)
+               FROM agent_approvals approval
+               JOIN agent_runs run ON run.id = approval.agent_run_id
+              WHERE run.conversation_id = $1),
+            (SELECT count(*) FROM messages WHERE conversation_id = $1),
+            (SELECT count(*) FROM conversation_entries WHERE conversation_id = $1),
+            (SELECT count(*) FROM outbox_events WHERE conversation_id = $1)
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_one(pool)
+    .await
+    .expect("count conversation-scoped execution side effects")
 }
 
 async fn login(application: &axum::Router, login_name: &str) -> (String, String) {
