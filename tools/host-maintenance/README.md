@@ -21,8 +21,8 @@ connect as the `agent_workspace` database role, and preserve the existing
       --release-root /opt/agent-workspace/releases/<full-git-sha> \
       --release-commit <full-git-sha> \
       --database-name-file /etc/agent-workspace/maintenance-database \
-      --pg-dump /opt/agent-workspace/current/bin/agent-workspace-pg-dump \
-      --psql /opt/agent-workspace/current/bin/agent-workspace-psql \
+      --pg-dump /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-pg-dump \
+      --psql /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-psql \
       --tar /usr/bin/tar
 
     agent-workspace-host-maintenance validate \
@@ -34,8 +34,8 @@ connect as the `agent_workspace` database role, and preserve the existing
       --target-release-root /opt/agent-workspace-restore-drill \
       --target-database-name-file /etc/agent-workspace/restore-database \
       --active-database-name-file /etc/agent-workspace/maintenance-database \
-      --pg-restore /opt/agent-workspace/current/bin/agent-workspace-pg-restore \
-      --psql /opt/agent-workspace/current/bin/agent-workspace-psql \
+      --pg-restore /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-pg-restore \
+      --psql /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-psql \
       --tar /usr/bin/tar \
       --chown /usr/bin/chown
 

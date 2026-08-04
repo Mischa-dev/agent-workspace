@@ -497,13 +497,21 @@ fn ensure_regular_file(path: &Path, label: &str) -> Result<()> {
 }
 
 fn reject_symlink_components(path: &Path) -> Result<()> {
-    if path.exists() {
-        let metadata = fs::symlink_metadata(path)
-            .with_context(|| format!("inspect path {}", path.display()))?;
-        ensure!(
-            !metadata.file_type().is_symlink(),
-            "symlink paths are not accepted"
-        );
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        resolved.push(component.as_os_str());
+        match fs::symlink_metadata(&resolved) {
+            Ok(metadata) => ensure!(
+                !metadata.file_type().is_symlink(),
+                "symlink path component is not accepted: {}",
+                resolved.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspect path component {}", resolved.display()));
+            }
+        }
     }
     Ok(())
 }
@@ -1049,6 +1057,16 @@ mod tests {
         }
     }
 
+    fn temporary_directory() -> TempDir {
+        TempDir::new_in(
+            std::env::current_dir()
+                .expect("current directory")
+                .canonicalize()
+                .expect("canonical current directory"),
+        )
+        .expect("temporary directory")
+    }
+
     #[test]
     fn manifest_requires_exact_credential_exclusions_and_artifacts() {
         let manifest = fixture_manifest();
@@ -1069,7 +1087,7 @@ mod tests {
 
     #[test]
     fn destination_must_be_new_owner_only_and_outside_sources() {
-        let temporary = TempDir::new().expect("temporary directory");
+        let temporary = temporary_directory();
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
             .expect("secure temporary directory");
         let source = temporary.path().join("source");
@@ -1088,11 +1106,21 @@ mod tests {
         assert!(validate_new_destination(&source.join("backup"), &[source.as_path()]).is_err());
         fs::create_dir(&sibling).expect("existing destination");
         assert!(validate_new_destination(&sibling, &[source.as_path()]).is_err());
+
+        let real_parent = temporary.path().join("real-parent");
+        fs::create_dir(&real_parent).expect("real destination parent");
+        fs::set_permissions(&real_parent, fs::Permissions::from_mode(0o700))
+            .expect("secure real destination parent");
+        let linked_parent = temporary.path().join("linked-parent");
+        symlink(&real_parent, &linked_parent).expect("linked destination parent");
+        assert!(
+            validate_new_destination(&linked_parent.join("backup"), &[source.as_path()]).is_err()
+        );
     }
 
     #[test]
     fn secret_file_rejects_permissions_symlinks_and_multiple_values() {
-        let temporary = TempDir::new().expect("temporary directory");
+        let temporary = temporary_directory();
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
             .expect("secure temporary directory");
         let secret = temporary.path().join("database-url");
@@ -1121,7 +1149,7 @@ mod tests {
 
     #[test]
     fn database_name_file_rejects_urls_and_credentials() {
-        let temporary = TempDir::new().expect("temporary directory");
+        let temporary = temporary_directory();
         let target = temporary.path().join("database-name");
         fs::write(&target, "agent_workspace_restore").expect("database name fixture");
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
@@ -1149,7 +1177,7 @@ mod tests {
 
     #[test]
     fn validation_detects_artifact_tampering() {
-        let temporary = TempDir::new().expect("temporary directory");
+        let temporary = temporary_directory();
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
             .expect("secure backup fixture");
         for file in ["data.tar", "database.dump", "release.tar"] {
@@ -1185,7 +1213,7 @@ mod tests {
 
     #[test]
     fn command_streaming_keeps_host_paths_outside_the_child() {
-        let temporary = TempDir::new().expect("temporary directory");
+        let temporary = temporary_directory();
         let producer = temporary.path().join("producer");
         fs::write(&producer, "#!/bin/sh\nprintf 'database-dump'\n").expect("producer fixture");
         fs::set_permissions(&producer, fs::Permissions::from_mode(0o700))
