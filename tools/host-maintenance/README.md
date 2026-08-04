@@ -49,7 +49,10 @@ incomplete credential-table exclusion set, a non-empty target database, and a
 target database matching the active connection are rejected.
 
 Ordinary backups include the immutable application release and the registered
-artifact, attachment, repository, and worktree roots. They exclude browser
+artifact, attachment, repository, and worktree roots. The manifest classifies
+repository mirrors as rebuildable caches and artifacts, attachments, and
+worktrees as preserved data; dirty and unpushed worktrees are never pruned by
+this command. Ordinary backups exclude browser
 sessions, password credentials, MCP bearer credentials, OAuth grants and token
 rows, Codex profile contents, and external file-backed secrets. A restored
 instance starts with all human passwords absent, sessions absent, MCP/OAuth

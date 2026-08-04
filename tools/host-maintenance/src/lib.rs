@@ -29,6 +29,8 @@ pub const EXCLUDED_TABLE_DATA: &[&str] = &[
 ];
 pub const INCLUDED_DATA_ENTRIES: &[&str] =
     &["artifacts", "attachments", "repositories", "worktrees"];
+pub const REBUILDABLE_CACHE_ENTRIES: &[&str] = &["repositories"];
+pub const PRESERVED_UNIQUE_ENTRIES: &[&str] = &["artifacts", "attachments", "worktrees"];
 pub const RESTORED_DATA_OWNER: &str = "agent-workspace:agent-workspace";
 
 const MAX_SECRET_FILE_BYTES: u64 = 8 * 1024;
@@ -80,6 +82,8 @@ pub struct SourceLayout {
     pub data_layout: String,
     pub release_layout: String,
     pub included_data_entries: Vec<String>,
+    pub rebuildable_cache_entries: Vec<String>,
+    pub preserved_unique_entries: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -175,6 +179,14 @@ pub fn create_backup(options: &BackupOptions) -> Result<BackupResult> {
             data_layout: "agent-workspace-data-root-v1".to_owned(),
             release_layout: "immutable-release-v1".to_owned(),
             included_data_entries: INCLUDED_DATA_ENTRIES
+                .iter()
+                .map(|entry| (*entry).to_owned())
+                .collect(),
+            rebuildable_cache_entries: REBUILDABLE_CACHE_ENTRIES
+                .iter()
+                .map(|entry| (*entry).to_owned())
+                .collect(),
+            preserved_unique_entries: PRESERVED_UNIQUE_ENTRIES
                 .iter()
                 .map(|entry| (*entry).to_owned())
                 .collect(),
@@ -362,6 +374,22 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
                 .map(|entry| (*entry).to_owned())
                 .collect::<Vec<_>>(),
         "backup data-entry set is unsupported"
+    );
+    ensure!(
+        manifest.source_layout.rebuildable_cache_entries
+            == REBUILDABLE_CACHE_ENTRIES
+                .iter()
+                .map(|entry| (*entry).to_owned())
+                .collect::<Vec<_>>(),
+        "backup rebuildable-cache classification is unsupported"
+    );
+    ensure!(
+        manifest.source_layout.preserved_unique_entries
+            == PRESERVED_UNIQUE_ENTRIES
+                .iter()
+                .map(|entry| (*entry).to_owned())
+                .collect::<Vec<_>>(),
+        "backup preserved-data classification is unsupported"
     );
     ensure!(!manifest.migrations.is_empty(), "backup has no migrations");
     let mut previous_version = None;
@@ -1009,9 +1037,10 @@ mod tests {
 
     use super::{
         ARCHIVE_FORMAT, ArtifactRecord, BACKUP_FORMAT_VERSION, BackupManifest, EXCLUDED_TABLE_DATA,
-        INCLUDED_DATA_ENTRIES, MigrationRecord, SourceLayout, read_database_name_file,
-        read_secret_file, run_from_file, run_to_file, safe_archive_entry, validate_backup,
-        validate_manifest, validate_new_destination,
+        INCLUDED_DATA_ENTRIES, MigrationRecord, PRESERVED_UNIQUE_ENTRIES,
+        REBUILDABLE_CACHE_ENTRIES, SourceLayout, read_database_name_file, read_secret_file,
+        run_from_file, run_to_file, safe_archive_entry, validate_backup, validate_manifest,
+        validate_new_destination,
     };
 
     fn fixture_manifest() -> BackupManifest {
@@ -1025,6 +1054,14 @@ mod tests {
                 data_layout: "agent-workspace-data-root-v1".to_owned(),
                 release_layout: "immutable-release-v1".to_owned(),
                 included_data_entries: INCLUDED_DATA_ENTRIES
+                    .iter()
+                    .map(|entry| (*entry).to_owned())
+                    .collect(),
+                rebuildable_cache_entries: REBUILDABLE_CACHE_ENTRIES
+                    .iter()
+                    .map(|entry| (*entry).to_owned())
+                    .collect(),
+                preserved_unique_entries: PRESERVED_UNIQUE_ENTRIES
                     .iter()
                     .map(|entry| (*entry).to_owned())
                     .collect(),
@@ -1075,6 +1112,13 @@ mod tests {
         let mut incomplete = manifest.clone();
         incomplete.excluded_table_data.pop();
         assert!(validate_manifest(&incomplete).is_err());
+
+        let mut misclassified = manifest.clone();
+        misclassified
+            .source_layout
+            .rebuildable_cache_entries
+            .push("worktrees".to_owned());
+        assert!(validate_manifest(&misclassified).is_err());
 
         let mut extra_artifact = manifest;
         extra_artifact.artifacts.push(ArtifactRecord {
