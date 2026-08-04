@@ -29,6 +29,7 @@ pub const EXCLUDED_TABLE_DATA: &[&str] = &[
 ];
 pub const INCLUDED_DATA_ENTRIES: &[&str] =
     &["artifacts", "attachments", "repositories", "worktrees"];
+pub const RESTORED_DATA_OWNER: &str = "agent-workspace:agent-workspace";
 
 const MAX_SECRET_FILE_BYTES: u64 = 8 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -56,6 +57,7 @@ pub struct RestoreOptions {
     pub pg_restore: PathBuf,
     pub psql: PathBuf,
     pub tar: PathBuf,
+    pub chown: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -241,7 +243,12 @@ pub fn validate_backup(source: &Path) -> Result<BackupManifest> {
 pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
     let source = validate_existing_owner_directory(&options.source, "backup source")?;
     let manifest = validate_backup(&source)?;
-    for executable in [&options.pg_restore, &options.psql, &options.tar] {
+    for executable in [
+        &options.pg_restore,
+        &options.psql,
+        &options.tar,
+        &options.chown,
+    ] {
         validate_executable(executable)?;
     }
     let active_database_name = read_database_name_file(&options.active_database_name_file)?;
@@ -284,7 +291,7 @@ pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
             target_release_root.display()
         )
     })?;
-    fs::set_permissions(&target_release_root, fs::Permissions::from_mode(0o700)).with_context(
+    fs::set_permissions(&target_release_root, fs::Permissions::from_mode(0o755)).with_context(
         || {
             format!(
                 "secure restore release root {}",
@@ -309,6 +316,7 @@ pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
         &source.join("release.tar"),
         &target_release_root,
     )?;
+    assign_restored_data_owner(&options.chown, &target_data_root)?;
     let credential_rows_restored =
         credential_row_count(&options.psql, target_database_name.as_str())?;
     ensure!(
@@ -899,6 +907,21 @@ fn extract_archive(program: &Path, archive: &Path, destination: &Path) -> Result
         OsString::from("--no-same-permissions"),
     ];
     run_status(program, &args, None, "extract backup archive")
+}
+
+fn assign_restored_data_owner(program: &Path, target_data_root: &Path) -> Result<()> {
+    let args = vec![
+        OsString::from("--recursive"),
+        OsString::from("--no-dereference"),
+        OsString::from(RESTORED_DATA_OWNER),
+        target_data_root.as_os_str().to_owned(),
+    ];
+    run_status(
+        program,
+        &args,
+        None,
+        "assign restored application data owner",
+    )
 }
 
 fn safe_archive_entry(value: &str) -> bool {

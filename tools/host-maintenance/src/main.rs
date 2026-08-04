@@ -67,6 +67,7 @@ fn main() -> Result<()> {
                     "pg-restore",
                     "psql",
                     "tar",
+                    "chown",
                 ],
             )?;
             let result = restore_backup(&RestoreOptions {
@@ -78,6 +79,7 @@ fn main() -> Result<()> {
                 pg_restore: path(&options, "pg-restore")?,
                 psql: path(&options, "psql")?,
                 tar: path(&options, "tar")?,
+                chown: path(&options, "chown")?,
             })?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }

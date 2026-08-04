@@ -36,7 +36,8 @@ connect as the `agent_workspace` database role, and preserve the existing
       --active-database-name-file /etc/agent-workspace/maintenance-database \
       --pg-restore /opt/agent-workspace/current/bin/agent-workspace-pg-restore \
       --psql /opt/agent-workspace/current/bin/agent-workspace-psql \
-      --tar /usr/bin/tar
+      --tar /usr/bin/tar \
+      --chown /usr/bin/chown
 
 The destination parent and backup source must deny group and other access.
 Run the command as root through the existing passwordless `bot` operator path;
@@ -53,4 +54,6 @@ sessions, password credentials, MCP bearer credentials, OAuth grants and token
 rows, Codex profile contents, and external file-backed secrets. A restored
 instance starts with all human passwords absent, sessions absent, MCP/OAuth
 grants absent, authentication epochs advanced, and Execution Profiles logged
-out. Host-local credential reset and provider reauthentication are mandatory.
+out. Restored data is assigned to the locked `agent-workspace` service account
+while the restored release stays root-owned and readable. Host-local credential
+reset and provider reauthentication are mandatory.
