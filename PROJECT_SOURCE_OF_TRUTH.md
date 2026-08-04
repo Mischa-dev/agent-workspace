@@ -2,18 +2,34 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M7 accepted; M8 pending entry elaboration; source of truth v0.26
+**Status:** M7 accepted; M8 elaborated and authorized; source of truth v0.27
 
 **Owner:** Mischa Nelson  
 **Date:** August 4, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M7 are complete. M8
-remains unauthorized until its entry backlog is merged; every later milestone
+**Implementation authorization:** Milestones M0 through M7 are complete. M8 is
+elaborated and authorized by accepted M7 evidence; every later milestone
 remains subject to the same entry gate.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.27 — M8 hardening entry backlog and authorization
+
+- elaborated every M8 task with acceptance criteria, dependencies, expected
+  tests, exclusions, and an exact private-beta exit gate
+- fixed ordinary backups around a consistent PostgreSQL dump, checksummed
+  non-secret runtime state, and preserved dirty or unpushed work while keeping
+  provider caches and application credentials outside the normal archive
+- defined private-host abuse classes, bounded in-process enforcement, safe
+  secret-rotation ceremonies, dry-run-first retention, and disk admission
+  watermarks without pretending to provide public-SaaS defenses
+- set WCAG 2.2 AA as the accessibility review target and established concrete
+  bundle, API, realtime, startup, and recovery performance budgets
+- scoped the deployment guide and private-beta checklist around one clean
+  install, one retained-host upgrade, one restore drill, and one exact green
+  commit, and authorized M8 from the accepted M7 exit evidence
 
 ### v0.26 — M7 acceptance
 
@@ -6317,21 +6333,387 @@ more than one Organization host, external agent members, and shared profiles.
 
 ## Milestone M8: Hardening
 
+**Status:** Elaborated and authorized by accepted M7 evidence against exact
+green commit `286ea301bb9bf67cc85484771d353df80c03bf34`.
+
 ### M8-001 Backup and restore
+
+Build a host-local, checksum-bound ordinary backup and a conservative restore
+drill for the private single-host deployment.
+
+**Acceptance criteria**
+
+- create an owner-only backup directory outside the application data, release,
+  checkout, and PostgreSQL volume roots; reject symlinks, unsafe permissions,
+  non-empty output targets, unresolved paths, and destinations beneath a
+  captured source
+- capture a consistent custom-format PostgreSQL dump with credential/session
+  table data explicitly excluded plus a versioned manifest containing the
+  exact release commit, successful migration versions and checksums, archive
+  format, creation time, source layout identifiers, the named exclusion set,
+  and a checksum for every backup artifact; the manifest contains no
+  environment values or credential material
+- capture application-owned attachments and generated artifacts plus every
+  dirty or unpushed managed worktree and the Git object data required to
+  recover it; repository mirrors and clean merged worktrees may be included
+  conservatively but are identified as rebuildable caches
+- exclude browser sessions, password material, MCP/OAuth bearer and refresh
+  tokens, GitHub private keys and webhook secrets, database passwords, Codex
+  authentication caches, and provider profile contents from ordinary backups;
+  a normal restore explicitly requires host-local credential reset,
+  credential re-entry, or reauthentication
+- restore only into a new database and empty test data root after validating
+  manifest version, checksums, paths, PostgreSQL compatibility, and migration
+  history; never overwrite the active database, current release, or a dirty
+  destination and never guess how to repair an unknown layout
+- complete a Red Hat drill using alternate loopback ports and a clean test
+  root, start the exact backed-up application artifact, run reconciliation,
+  verify durable Project/Conversation/Work Item/run identity and one preserved
+  dirty worktree, then remove only the explicitly created drill resources
+
+**Dependencies:** accepted M7 state, the M3 canonical mirror/worktree layout,
+applied-migration checksums, PostgreSQL 18 tooling, the immutable release
+layout, and the backup contract in section 23.5.
+
+**Expected tests:** manifest determinism and redaction, the exact database-table
+exclusion set, restored login/token failure before credential reset,
+source/destination containment, symlinks and permissions, checksum tampering,
+incomplete archive, non-empty restore target, incompatible migration history,
+dirty and clean Git fixtures, interrupted backup cleanup, restore idempotency
+rejection, and one real clean-location Red Hat drill.
+
+**Exclusions:** browser backup UI, scheduled cloud upload, continuous
+point-in-time recovery, cross-region replication, backing up ordinary secrets,
+automatic in-place restore, and recovery promises for files outside registered
+application roots.
 
 ### M8-002 Rate limits and abuse controls
 
+Complete bounded abuse controls for the actual private-host entry points and
+document the limits of a single-process loopback deployment.
+
+**Acceptance criteria**
+
+- inventory every HTTP, WebSocket, MCP, OAuth, invitation, login, GitHub
+  webhook, provider-process, Git, and background-job entry point into one
+  explicit abuse class with a body/frame/output limit, concurrency limit,
+  request or attempt budget where appropriate, and a defined rejection shape
+- retain digest-keyed per-login and per-invitation limits, the global password
+  KDF semaphore, and per-session write limits; add bounded per-MCP credential
+  or OAuth grant budgets, OAuth ceremony budgets, invalid-webhook budgets, and
+  caps for expensive searches or exports without storing plaintext secrets as
+  limiter keys
+- return bounded `429` responses with `Retry-After` where the protocol permits;
+  reject before expensive parsing, hashing, database work, Git execution, or
+  provider spawning and keep limiter storage itself capacity-bounded
+- preserve explicit database-pool, Codex host/profile, Git subprocess,
+  WebSocket frame, outbox batch/lease, webhook body, and provider JSONL limits;
+  one exhausted subsystem cannot mark collaboration reads unhealthy
+- configure conservative values for the private Red Hat host, expose only safe
+  limit metadata in documentation and structured logs, and prove that no
+  token, login attempt value, raw IP-derived identifier, or request body is
+  logged by the limiter
+- document that process-local counters reset on restart and are not a public
+  multi-tenant defense; the private beta remains loopback/SSH-forwarded and a
+  future public service requires a new distributed abuse-control design
+
+**Dependencies:** M1 session and password limits, M5 webhook bounds, M6 MCP and
+OAuth credentials, M7 mutation inventory, provider/Git process limits, and the
+private loopback deployment boundary.
+
+**Expected tests:** exact limit and one-over-limit behavior, independent and
+global keys, retry timing, expired-key reclamation, capacity exhaustion,
+parallel KDF/provider/Git attempts, oversized bodies/frames/outputs, MCP bearer
+and OAuth grant isolation, webhook invalid-signature floods, restart semantics,
+and redacted logs.
+
+**Exclusions:** CAPTCHAs, IP reputation, public edge WAF/CDN configuration,
+distributed counters, billing quotas, model-usage metering, autoscaling, and
+claims that private-host limits secure a public SaaS deployment.
+
 ### M8-003 Secret rotation
+
+Document and prove rotation or revocation for every secret class without
+placing plaintext material in repository files, browser responses, or logs.
+
+**Acceptance criteria**
+
+- maintain a secret inventory naming the owner, storage boundary, consumers,
+  restart requirement, overlap capability, revocation signal, and verification
+  command for database credentials, GitHub App keys/webhook secrets, browser
+  sessions, password credentials, MCP bearer credentials, OAuth clients/grants,
+  Codex profiles, and any operator-owned backup encryption material
+- rotate file-backed secrets through owner-only temporary files, validation,
+  atomic rename, service reload/restart, and removal of the superseded file;
+  configuration and diagnostics expose paths and categories, never values
+- support a bounded current-plus-previous verification window where the
+  external protocol needs overlap, especially GitHub webhook secret rotation;
+  new outbound operations use only the current secret and the previous secret
+  is removed immediately after the external cutover is proven
+- use the existing optimistic MCP replacement, OAuth grant-family revocation,
+  per-User authentication epoch/session revocation, and provider logout/login
+  paths rather than silently editing credential rows or copying a `CODEX_HOME`
+- provide a coordinated PostgreSQL password change procedure that verifies a
+  new connection before the old credential is removed and never prints the
+  connection URL; failed rotation leaves one known-good path and an actionable
+  rollback step
+- run redaction canaries before and after each live drill and prove revoked or
+  superseded material fails closed after the documented overlap ends and after
+  a controlled service restart
+
+**Dependencies:** root-owned `/etc/agent-workspace` files, M1 session epochs,
+M3 isolated profiles, M5 GitHub App configuration, M6 credential/grant
+lifecycle, atomic release operations, and structured-log redaction.
+
+**Expected tests:** file mode/symlink/size checks, atomic replacement failure,
+current/previous webhook signatures, expired overlap, MCP optimistic replace
+and old-token rejection, OAuth refresh-reuse family revocation, session epoch
+invalidation, provider logout, database connection cutover, restart, and
+secret-canary scans across logs/database/browser/provider environments.
+
+**Exclusions:** managed KMS/HSM integration, automatic certificate issuance,
+password recovery UI, exporting provider caches, rotating third-party account
+passwords, storing recovery secrets in Git, and zero-downtime guarantees for
+protocols that provide no overlap mechanism.
 
 ### M8-004 Retention and disk quotas
 
+Add observable, dry-run-first retention and disk admission controls that never
+trade recoverable work for free space.
+
+**Acceptance criteria**
+
+- define a versioned private-beta retention policy for expired idempotency
+  reservations, used or expired invitation capabilities, expired/revoked OAuth
+  access material, published outbox rows, completed temporary jobs, disposable
+  generated files, and eligible clean worktrees; preserve Actor attribution,
+  audit history, Messages, Work Items, approvals, Agent Runs, provider-session
+  identity, and other durable product history
+- provide a host-local report that measures PostgreSQL, attachments/artifacts,
+  repositories, mirrors, worktrees, profiles, temporary files, releases, and
+  backup roots without following symlinks or exposing names/content that may be
+  sensitive; classify reclaimable caches separately from unique work
+- make cleanup dry-run by default and require an explicit apply flag, exact
+  owned paths, repository-scoped locks, current database revalidation, and an
+  audit summary; retry is idempotent and a concurrent re-dirty or non-terminal
+  transition cancels deletion
+- never automatically remove, reset, move, or prune a dirty worktree, an
+  unpushed branch, a non-terminal run, an active provider session, or an
+  ambiguous Git relationship; those remain preserved for explicit operator
+  repair even when a quota is exceeded
+- block only new disk-growing operations when the configured data-root quota
+  or minimum-free-space watermark is crossed; existing reads, interruption,
+  cleanup reporting, backup, and recovery remain available with a bounded,
+  actionable status
+- resolve O-005 for version one: attachment upload remains disabled; any later
+  attachment entry point must start with a 25 MiB object limit, a configurable
+  2 GiB per-Project aggregate, MIME/content validation, and the same admission
+  watermark before broader limits are reconsidered
+
+**Dependencies:** M3/M5 worktree ownership and cleanup preconditions, existing
+archive semantics, idempotency expiries, outbox leases, registered runtime
+roots, and the M8 backup set.
+
+**Expected tests:** size accounting and symlinks, dry-run/apply equivalence,
+retention cutoffs, locked/concurrent cleanup, dirty/unpushed/non-terminal
+preservation, eligible clean removal and repair/prune, quota/watermark
+admission, read and interrupt availability while full, audit redaction, and
+repeated cleanup.
+
+**Exclusions:** domain-record hard deletion, user-configurable legal holds,
+compliance retention, attachment upload UI, automatic deletion of unique work,
+filesystem deduplication, storage billing, and managing host logs or unrelated
+Podman volumes.
+
 ### M8-005 Accessibility review
+
+Audit the complete version-one critical path against WCAG 2.2 AA and correct
+blocking issues without beginning a visual redesign.
+
+**Acceptance criteria**
+
+- cover sign-in/join, Project rail and switching, Channels/Threads, structured
+  composer and mentions, Work Item list/board/detail/editor, hosted runs and
+  approvals, GitHub state, MCP handoff, Team settings, personal profile setup,
+  errors, empty/loading states, narrow drawers, and archived/read-only views
+- run automated axe checks over representative route fixtures and retain
+  semantic Testing Library assertions; zero serious or critical automated
+  violations are accepted and every suppressed rule requires a bounded written
+  justification
+- complete keyboard-only traversal with visible focus, logical order, no trap,
+  focus restoration, skip/main landmarks, accessible names/descriptions,
+  announced errors/status, and operable dialogs, menus, boards, approval, and
+  invitation controls
+- verify that attention, run state, priority, conflicts, checks, and errors do
+  not rely on color alone; meet contrast targets in normal and forced colors,
+  honor reduced motion, and remain usable at 200% zoom and phone-width layout
+- complete a macOS VoiceOver smoke pass on the critical two-user workflow and
+  record browser/OS, route, finding, correction, and residual limitation in
+  the acceptance evidence
+- keep hostile Messages/provider output inert and readable to assistive
+  technology; no accessibility fix may reintroduce HTML authority or unbounded
+  announcements
+
+**Dependencies:** the complete M1-M7 UI, stable semantic state labels,
+existing axe-core and Testing Library setup, responsive drawers, and the exact
+private-host browser path.
+
+**Expected tests:** route-level axe suite, keyboard/focus tests, reduced-motion
+and forced-color assertions, accessible error and optimistic-conflict states,
+viewer/disabled controls, streamed-message coalescing, narrow layout, 200%
+zoom, hostile output, and manual Chrome plus VoiceOver evidence.
+
+**Exclusions:** a WCAG conformance claim or VPAT, full assistive-technology
+matrix, localization/right-to-left support, final branding, polished visual
+redesign, touch-gesture-only interactions, and accessibility for excluded
+features.
 
 ### M8-006 Performance budgets and profiling
 
+Set measurable private-host budgets, add deterministic regression gates, and
+profile the critical path on the Red Hat validation host.
+
+**Acceptance criteria**
+
+- keep the production web artifact at or below 500 KiB raw JavaScript, 160 KiB
+  gzip JavaScript, and 60 KiB raw CSS for the initial version-one shell; report
+  every emitted asset and fail CI on budget regression, with route splitting
+  preferred before raising a limit
+- against a deterministic retained-scale fixture, keep loopback p95 under 250
+  ms for ordinary Project/Conversation/Work Item reads and under 500 ms for
+  ordinary non-provider writes at 25 sequential warm samples; record query
+  count and plan for endpoints whose p95 exceeds half the budget
+- keep authenticated realtime connect plus first authorized invalidation under
+  two seconds, ordinary startup readiness under ten seconds when no migration
+  or run recovery is pending, and bounded service shutdown under the existing
+  twenty-second systemd limit
+- measure hosted-run admission separately from provider/model latency: database
+  reservation plus owned worktree setup must remain bounded and provider time
+  is reported, not misrepresented as application latency
+- provide a deterministic measurement command that records exact commit,
+  host architecture, fixture cardinality, warmup/sample count, min/median/p95/
+  max, asset compression method, and failures without recording response
+  content or credentials
+- profile and correct demonstrated hot paths before adding caches; any cache
+  must retain Project/Actor authorization, bounded memory, invalidation, and
+  restart correctness
+
+**Dependencies:** production frontend build, structured request IDs, real
+PostgreSQL integration fixtures, Red Hat exact-commit deployment, realtime
+refetch semantics, and current concurrency limits.
+
+**Expected tests:** asset-budget script, deterministic percentile calculation,
+fixture-size bounds, cold/warm distinction, key list/timeline/Work Item routes,
+ordinary writes, WebSocket connect/invalidation, startup/shutdown, run
+admission, malformed measurement output, and redaction.
+
+**Exclusions:** provider/model response-time SLOs, internet latency guarantees,
+multi-host load tests, autoscaling, public availability SLOs, synthetic vanity
+scores, premature application caches, and Prometheus infrastructure before a
+demonstrated operational need.
+
 ### M8-007 Deployment guide
 
+Publish and prove the self-hosted installation, upgrade, rollback, recovery,
+and maintenance guide for the supported Red Hat boundary.
+
+**Acceptance criteria**
+
+- document prerequisites, the `bot` operator and non-login
+  `agent-workspace` service account, project-local pinned toolchains, rootless
+  Podman PostgreSQL, owner-only configuration, exact ports, SSH forwarding,
+  immutable releases, systemd hardening, and coexistence boundaries
+- provide copyable commands for clean bootstrap, configuration validation,
+  database start/health, administrator bootstrap, seed policy, credential-free
+  Git bundle transfer, exact-commit build/deploy, migrations, health/readiness,
+  logs, controlled restart, and verification; placeholders never resemble real
+  secrets and no step uses unpinned `curl | shell`
+- specify pre-upgrade backup, migration checksum verification, minimum disk
+  space, current/previous release discovery, filesystem rollback, and the
+  precise cases where a forward database migration makes old-code rollback
+  unsafe and requires restore or a forward fix
+- integrate backup/restore, secret rotation, retention/quota reports, worktree
+  inspection/repair, provider reauthentication, GitHub diagnostics, MCP/OAuth
+  cleanup, and incident response with explicit destructive-action warnings
+- prove the guide once from a clean test location and once as an upgrade of the
+  retained Red Hat deployment; the active release, listeners, service user,
+  Podman project, system Node, global Codex, Tailscale routes, and unrelated
+  workloads remain unmodified outside the documented boundary
+- include troubleshooting keyed to bounded error categories and verification
+  commands, not secret dumping or manual database edits
+
+**Dependencies:** checked-in Red Hat scripts/unit, M8 backup/restore, rotation,
+quota, and performance commands, immutable releases, and every compatibility
+and acceptance note through M7.
+
+**Expected tests:** shell syntax/static checks, placeholder/secret scans,
+clean-location walkthrough, retained-host upgrade, failed-health rollback,
+migration incompatibility stop, configuration permissions, listener/service
+identity, PostgreSQL persistence, restart/reconcile, and command drift against
+checked-in paths/pins.
+
+**Exclusions:** support guarantees for other Linux distributions or
+architectures, Kubernetes/Helm, public ingress/TLS, permanent tunnels, managed
+PostgreSQL, Tailscale changes, automatic DNS, package repositories, and
+modifying existing global Node or Codex installations.
+
 ### M8-008 Private beta checklist
+
+Compose hardening into one exact-commit private-beta gate rather than accepting
+isolated scripts or audits.
+
+**Acceptance criteria**
+
+- deploy one exact green commit as an immutable Red Hat release after a
+  successful pre-upgrade backup; apply migrations, run the idempotent seed only
+  where explicitly intended, and verify both clean install and retained upgrade
+- restore that backup into the clean drill location, reconcile it, compare
+  safe counts/identities/checksums, and prove one preserved dirty worktree
+  without touching the active instance
+- exercise representative abuse budgets, all supported secret rotations or
+  revocations, quota watermark and dry-run/apply cleanup, worktree repair,
+  service restart, failed-health rollback boundary, and incident diagnostics
+- complete the keyboard, automated accessibility, Chrome/VoiceOver, narrow/
+  zoom, asset, API, realtime, startup/shutdown, and hosted-admission gates on
+  the exact commit and record results plus bounded residual risks
+- repeat the two-human critical path after hardening and confirm historical
+  Actor attribution, sessions, MCP/OAuth revocation, provider profiles, GitHub
+  integration, branches, worktrees, and restored durable state remain
+  consistent
+- scan repository, bundles, archives, manifests, logs, database projections,
+  browser responses, provider environments, and temporary files for canaries,
+  control characters, unsafe permissions, and unbounded payloads; remove all
+  disposable credentials and drill resources
+
+**Dependencies:** M8-001 through M8-007, accepted M7 exact-host state, private
+GitHub CI/ruleset, separate browser storage, and the retained Red Hat Project.
+
+**Expected tests:** every M8 automated suite plus the clean restore drill,
+fresh-install/upgrade walkthroughs, controlled rollback stop, live rotation,
+quota/cleanup races, accessibility and performance measurements, two-user
+regression, restart, and final redaction/permission scans.
+
+**Exclusions:** public launch, uptime or support SLA, multi-tenant exposure,
+billing, external agent members, permanent public webhooks, production
+backup-provider selection, and features excluded by M0-M7.
+
+### M8 exit criteria
+
+- one exact green commit is deployed and accepted as the immutable private-beta
+  release on Red Hat, with required `rust` and `web` checks still enforced on
+  strict up-to-date `main`
+- the ordinary backup and clean-location restore drill reconcile without
+  manual database edits, unknown-path repair, secret inclusion, or loss of the
+  preserved dirty/unpushed fixture
+- documented abuse, secret rotation/revocation, retention, disk admission,
+  worktree preservation, accessibility, and performance gates pass against the
+  same commit with no high-severity unresolved private-beta finding
+- the self-hosted guide reproduces one clean install and one retained upgrade,
+  and every disposable archive, credential, test database, temporary root, and
+  measurement process is removed after evidence is captured
+- the version-one definition of done is satisfied; M9 remains a separate
+  post-version-one milestone and is elaborated, O-007 is resolved, and explicit
+  authorization is recorded before any external-agent implementation begins
 
 ## Milestone M9: External agent members
 
