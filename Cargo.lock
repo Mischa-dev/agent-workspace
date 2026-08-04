@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "agent-workspace-host-maintenance"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "agent-workspace-server"
 version = "0.0.1"
 dependencies = [

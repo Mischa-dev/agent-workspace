@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+if [[ -z ${PGDATABASE+x} ]]; then
+  echo "PGDATABASE is required" >&2
+  exit 64
+fi
+
+exec /usr/bin/podman exec --user postgres --env PGDATABASE agent-workspace_postgres_1 pg_restore "$@"
