@@ -86,6 +86,10 @@ async fn development_bootstrap(
         FROM conversations thread
         JOIN conversations parent ON parent.id = thread.parent_channel_id
         JOIN projects p ON p.id = thread.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $1
+         AND om.enabled
         JOIN project_memberships pm
           ON pm.project_id = thread.project_id
          AND pm.actor_id = $1
@@ -1379,6 +1383,11 @@ async fn respond_to_approval(
         FROM agent_approvals aa
         JOIN agent_runs ar ON ar.id = aa.agent_run_id
         JOIN conversations c ON c.id = ar.conversation_id
+        JOIN projects p ON p.id = c.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $2
+         AND om.enabled
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
          AND pm.actor_id = $2
@@ -1790,6 +1799,11 @@ async fn interrupt_agent_run(
             ar.state
         FROM agent_runs ar
         JOIN conversations c ON c.id = ar.conversation_id
+        JOIN projects p ON p.id = c.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $2
+         AND om.enabled
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
          AND pm.actor_id = $2
@@ -2120,6 +2134,10 @@ async fn guard_conversation_mutation(
         JOIN projects p
           ON p.id = c.project_id
          AND p.id = $2
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $3
+         AND om.enabled
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
          AND pm.actor_id = $3
@@ -2197,6 +2215,10 @@ async fn authorized_conversation(
           ON parent.project_id = c.project_id
          AND parent.id = c.parent_channel_id
         JOIN projects p ON p.id = c.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $2
+         AND om.enabled
         JOIN project_memberships pm
           ON pm.project_id = c.project_id
          AND pm.actor_id = $2

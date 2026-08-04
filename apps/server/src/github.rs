@@ -4710,8 +4710,12 @@ async fn require_project_access(
           ON membership.project_id = project.id
          AND membership.actor_id = $2
          AND membership.enabled
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
         WHERE project.id = $1 AND project.archived_at IS NULL
-        FOR SHARE OF project, membership
+        FOR SHARE OF project, membership, organization_membership
         "#,
     )
     .bind(project_id)

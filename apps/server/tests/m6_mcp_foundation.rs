@@ -939,6 +939,36 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let family_revoked = mcp_request(&application, Some(refreshed_access), None, &initialize).await;
     assert_eq!(family_revoked.status(), StatusCode::UNAUTHORIZED);
 
+    let user_status_credential = mcp::issue_credential(
+        &pool,
+        IssueCredentialCommand {
+            project_id: seed.project_id,
+            actor_id: seed.human_actor_id,
+            client_name: "m7-user-status-proof".to_owned(),
+            scopes: vec!["read".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential before disabling User");
+    sqlx::query("UPDATE users SET status = 'disabled' WHERE actor_id = $1")
+        .bind(seed.human_actor_id)
+        .execute(&pool)
+        .await
+        .expect("disable MCP resource owner User");
+    let disabled_user = mcp_request(
+        &application,
+        Some(&user_status_credential.token),
+        None,
+        &initialize,
+    )
+    .await;
+    assert_eq!(
+        disabled_user.status(),
+        StatusCode::UNAUTHORIZED,
+        "an active credential cannot bypass a disabled human User"
+    );
+
     let after_conversations = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversations")
         .fetch_one(&pool)
         .await

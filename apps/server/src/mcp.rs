@@ -168,7 +168,12 @@ impl McpServer {
             FROM projects p
             JOIN project_memberships pm
               ON pm.project_id = p.id AND pm.actor_id = $2
+            JOIN organization_memberships om
+              ON om.organization_id = p.organization_id
+             AND om.actor_id = $2
+             AND om.enabled
             JOIN actors a ON a.id = pm.actor_id
+            JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
             WHERE p.id = $1
               AND p.archived_at IS NULL
               AND pm.enabled
@@ -607,9 +612,14 @@ async fn resolve_bearer_principal(
             c.scopes
         FROM mcp_client_credentials c
         JOIN actors a ON a.id = c.actor_id
+        JOIN users u ON u.actor_id = c.actor_id AND u.status = 'active'
         JOIN projects p ON p.id = c.project_id
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = c.actor_id
+         AND om.enabled
         WHERE c.token_prefix = $1
           AND c.status = 'active'
           AND c.revoked_at IS NULL
@@ -951,7 +961,12 @@ async fn validate_issue_command(
         SELECT pm.role
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = pm.actor_id
+         AND om.enabled
         JOIN actors a ON a.id = pm.actor_id
+        JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
         WHERE pm.project_id = $1
           AND pm.actor_id = $2
           AND pm.enabled

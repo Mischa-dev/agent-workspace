@@ -220,6 +220,10 @@ async fn list_projects(
             pns.version AS navigation_version
         FROM project_memberships pm
         JOIN projects p ON p.id = pm.project_id
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = pm.actor_id
+         AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = pm.actor_id
         LEFT JOIN conversations navc
@@ -829,6 +833,10 @@ async fn fetch_project_row(
         FROM projects p
         JOIN project_memberships pm
           ON pm.project_id = p.id AND pm.actor_id = $2 AND pm.enabled
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $2
+         AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = $2
         LEFT JOIN conversations navc
@@ -889,6 +897,10 @@ async fn fetch_project_row_in_transaction(
         FROM projects p
         JOIN project_memberships pm
           ON pm.project_id = p.id AND pm.actor_id = $2 AND pm.enabled
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $2
+         AND om.enabled
         LEFT JOIN project_navigation_states pns
           ON pns.project_id = p.id AND pns.actor_id = $2
         LEFT JOIN conversations navc
@@ -898,7 +910,7 @@ async fn fetch_project_row_in_transaction(
          AND pns.location_kind IN ('channel', 'thread')
          AND navc.archived_at IS NULL
         WHERE p.id = $1
-        FOR SHARE OF p, pm
+        FOR SHARE OF p, pm, om
         "#,
     )
     .bind(project_id)
@@ -922,8 +934,13 @@ async fn lock_project_membership(
         FROM projects p
         JOIN project_memberships pm
           ON pm.project_id = p.id AND pm.actor_id = $2 AND pm.enabled
+        JOIN organization_memberships om
+          ON om.organization_id = p.organization_id
+         AND om.actor_id = $2
+         AND om.enabled
         WHERE p.id = $1
         FOR UPDATE OF p, pm
+        FOR SHARE OF om
         "#,
     )
     .bind(project_id)

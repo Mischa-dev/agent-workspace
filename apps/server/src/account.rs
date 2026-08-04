@@ -468,6 +468,10 @@ async fn require_profile_owner(
           ON membership.project_id = profile.project_id
          AND membership.actor_id = profile.owner_actor_id
          AND membership.enabled
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = profile.owner_actor_id
+         AND organization_membership.enabled
         JOIN provider_connections connection
           ON connection.id = profile.provider_connection_id
          AND connection.project_id = profile.project_id

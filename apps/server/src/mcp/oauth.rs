@@ -365,7 +365,12 @@ async fn consent(
         r#"SELECT EXISTS(
             SELECT 1 FROM projects p
             JOIN project_memberships pm ON pm.project_id = p.id
+            JOIN organization_memberships om
+              ON om.organization_id = p.organization_id
+             AND om.actor_id = pm.actor_id
+             AND om.enabled
             JOIN actors a ON a.id = pm.actor_id
+            JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
             WHERE p.id = $1 AND pm.actor_id = $2 AND p.archived_at IS NULL
               AND pm.enabled AND a.kind = 'human' AND a.status = 'active'
         )"#,
@@ -529,8 +534,15 @@ async fn exchange_code(
         JOIN mcp_oauth_clients client ON client.id = code.client_id
         JOIN projects project ON project.id = code.project_id
         JOIN actors actor ON actor.id = code.actor_id
+        JOIN users user_account
+          ON user_account.actor_id = code.actor_id
+         AND user_account.status = 'active'
         JOIN project_memberships membership
           ON membership.project_id = code.project_id AND membership.actor_id = code.actor_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = code.actor_id
+         AND organization_membership.enabled
         WHERE code.code_prefix = $1 AND code.used_at IS NULL AND code.expires_at > now()
           AND client.status = 'active' AND project.archived_at IS NULL
           AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
@@ -600,8 +612,15 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
         JOIN projects project ON project.id = grant_row.project_id
         JOIN actors actor ON actor.id = grant_row.actor_id
+        JOIN users user_account
+          ON user_account.actor_id = grant_row.actor_id
+         AND user_account.status = 'active'
         JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = grant_row.actor_id
+         AND organization_membership.enabled
         WHERE token.token_prefix = $1 AND token.expires_at > now()
           AND grant_row.revoked_at IS NULL
           AND client.status = 'active' AND project.archived_at IS NULL
@@ -750,8 +769,15 @@ pub async fn resolve_access_token(
         JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
         JOIN projects project ON project.id = grant_row.project_id
         JOIN actors actor ON actor.id = grant_row.actor_id
+        JOIN users user_account
+          ON user_account.actor_id = grant_row.actor_id
+         AND user_account.status = 'active'
         JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = grant_row.actor_id
+         AND organization_membership.enabled
         WHERE access.token_prefix = $1 AND access.revoked_at IS NULL
           AND access.expires_at > now() AND grant_row.revoked_at IS NULL
           AND client.status = 'active' AND project.archived_at IS NULL
@@ -790,6 +816,13 @@ async fn project_choices(
         SELECT project.id, project.name, project.project_key
         FROM projects project
         JOIN project_memberships membership ON membership.project_id = project.id
+        JOIN users user_account
+          ON user_account.actor_id = membership.actor_id
+         AND user_account.status = 'active'
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = membership.actor_id
+         AND organization_membership.enabled
         WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
         ORDER BY project.name, project.id LIMIT 100
     "#,
