@@ -6,4 +6,17 @@ if [[ -z ${PGDATABASE+x} ]]; then
   exit 64
 fi
 
-exec /usr/bin/podman exec --user postgres --env PGDATABASE agent-workspace_postgres_1 pg_restore "$@"
+readonly podman_command=(
+  /usr/bin/podman exec
+  --user postgres
+  --env PGDATABASE
+  --env PGUSER=agent_workspace
+  agent-workspace_postgres_1
+  pg_restore
+)
+
+if (( EUID == 0 )); then
+  exec /usr/bin/sudo -n -u bot --preserve-env=PGDATABASE "${podman_command[@]}" "$@"
+fi
+
+exec "${podman_command[@]}" "$@"

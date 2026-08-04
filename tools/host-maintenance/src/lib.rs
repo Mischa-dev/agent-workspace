@@ -40,7 +40,7 @@ pub struct BackupOptions {
     pub data_root: PathBuf,
     pub release_root: PathBuf,
     pub release_commit: String,
-    pub database_url_file: PathBuf,
+    pub database_name_file: PathBuf,
     pub pg_dump: PathBuf,
     pub psql: PathBuf,
     pub tar: PathBuf,
@@ -51,8 +51,8 @@ pub struct RestoreOptions {
     pub source: PathBuf,
     pub target_data_root: PathBuf,
     pub target_release_root: PathBuf,
-    pub target_database_url_file: PathBuf,
-    pub active_database_url_file: PathBuf,
+    pub target_database_name_file: PathBuf,
+    pub active_database_name_file: PathBuf,
     pub pg_restore: PathBuf,
     pub psql: PathBuf,
     pub tar: PathBuf,
@@ -130,7 +130,7 @@ pub fn create_backup(options: &BackupOptions) -> Result<BackupResult> {
     for executable in [&options.pg_dump, &options.psql, &options.tar] {
         validate_executable(executable)?;
     }
-    let database_url = read_secret_file(&options.database_url_file)?;
+    let database_name = read_database_name_file(&options.database_name_file)?;
     let destination = validate_new_destination(
         &options.destination,
         &[data_root.as_path(), release_root.as_path()],
@@ -143,13 +143,13 @@ pub fn create_backup(options: &BackupOptions) -> Result<BackupResult> {
     let mut cleanup = CleanupDirectory::new(staging.clone());
 
     let database_dump = staging.join("database.dump");
-    create_database_dump(&options.pg_dump, database_url.as_str(), &database_dump)?;
-    let migrations = read_migrations(&options.psql, database_url.as_str())?;
+    create_database_dump(&options.pg_dump, database_name.as_str(), &database_dump)?;
+    let migrations = read_migrations(&options.psql, database_name.as_str())?;
     ensure!(
         !migrations.is_empty(),
         "database has no successful migrations"
     );
-    let postgres_major = read_postgres_major(&options.psql, database_url.as_str())?;
+    let postgres_major = read_postgres_major(&options.psql, database_name.as_str())?;
 
     let data_archive = staging.join("data.tar");
     create_data_archive(&options.tar, &data_root, &data_archive)?;
@@ -244,24 +244,24 @@ pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
     for executable in [&options.pg_restore, &options.psql, &options.tar] {
         validate_executable(executable)?;
     }
-    let active_database_url = read_secret_file(&options.active_database_url_file)?;
-    let target_database_url = read_secret_file(&options.target_database_url_file)?;
+    let active_database_name = read_database_name_file(&options.active_database_name_file)?;
+    let target_database_name = read_database_name_file(&options.target_database_name_file)?;
     ensure!(
-        active_database_url.as_str() != target_database_url.as_str(),
+        active_database_name.as_str() != target_database_name.as_str(),
         "restore target database must differ from the active database"
     );
-    let active_database_identity = database_identity(&options.psql, active_database_url.as_str())?;
-    let target_database_identity = database_identity(&options.psql, target_database_url.as_str())?;
+    let active_database_identity = database_identity(&options.psql, active_database_name.as_str())?;
+    let target_database_identity = database_identity(&options.psql, target_database_name.as_str())?;
     ensure!(
         active_database_identity != target_database_identity,
         "restore target database resolves to the active database"
     );
     ensure!(
-        read_postgres_major(&options.psql, target_database_url.as_str())?
+        read_postgres_major(&options.psql, target_database_name.as_str())?
             == manifest.postgres_major,
         "restore target PostgreSQL major is incompatible with the backup"
     );
-    ensure_database_empty(&options.psql, target_database_url.as_str())?;
+    ensure_database_empty(&options.psql, target_database_name.as_str())?;
 
     let target_data_root = validate_new_destination(&options.target_data_root, &[&source])?;
     let target_release_root =
@@ -295,14 +295,14 @@ pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
 
     restore_database(
         &options.pg_restore,
-        target_database_url.as_str(),
+        target_database_name.as_str(),
         &source.join("database.dump"),
     )?;
     ensure!(
-        read_migrations(&options.psql, target_database_url.as_str())? == manifest.migrations,
+        read_migrations(&options.psql, target_database_name.as_str())? == manifest.migrations,
         "restored migration history does not match the backup manifest"
     );
-    reset_restored_credentials(&options.psql, target_database_url.as_str())?;
+    reset_restored_credentials(&options.psql, target_database_name.as_str())?;
     extract_archive(&options.tar, &source.join("data.tar"), &target_data_root)?;
     extract_archive(
         &options.tar,
@@ -310,7 +310,7 @@ pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
         &target_release_root,
     )?;
     let credential_rows_restored =
-        credential_row_count(&options.psql, target_database_url.as_str())?;
+        credential_row_count(&options.psql, target_database_name.as_str())?;
     ensure!(
         credential_rows_restored == 0,
         "credential-bearing rows were present after restore"
@@ -530,6 +530,18 @@ fn read_secret_file(path: &Path) -> Result<Zeroizing<String>> {
     ensure!(
         !value.contains(['\n', '\r', '\0']),
         "secret file must contain exactly one bounded value"
+    );
+    Ok(value)
+}
+
+fn read_database_name_file(path: &Path) -> Result<Zeroizing<String>> {
+    let value = read_secret_file(path)?;
+    ensure!(
+        value.len() <= 63
+            && value
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_'),
+        "maintenance database file must contain only a PostgreSQL database name"
     );
     Ok(value)
 }
@@ -966,9 +978,9 @@ mod tests {
 
     use super::{
         ARCHIVE_FORMAT, ArtifactRecord, BACKUP_FORMAT_VERSION, BackupManifest, EXCLUDED_TABLE_DATA,
-        INCLUDED_DATA_ENTRIES, MigrationRecord, SourceLayout, read_secret_file, run_from_file,
-        run_to_file, safe_archive_entry, validate_backup, validate_manifest,
-        validate_new_destination,
+        INCLUDED_DATA_ENTRIES, MigrationRecord, SourceLayout, read_database_name_file,
+        read_secret_file, run_from_file, run_to_file, safe_archive_entry, validate_backup,
+        validate_manifest, validate_new_destination,
     };
 
     fn fixture_manifest() -> BackupManifest {
@@ -1082,6 +1094,25 @@ mod tests {
         let link = temporary.path().join("link");
         symlink(&target, &link).expect("secret symlink");
         assert!(read_secret_file(&link).is_err());
+    }
+
+    #[test]
+    fn database_name_file_rejects_urls_and_credentials() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let target = temporary.path().join("database-name");
+        fs::write(&target, "agent_workspace_restore").expect("database name fixture");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("secure database name fixture");
+        assert_eq!(
+            read_database_name_file(&target)
+                .expect("valid database name")
+                .as_str(),
+            "agent_workspace_restore"
+        );
+
+        fs::write(&target, "postgres://user:password@example/database")
+            .expect("credential URL fixture");
+        assert!(read_database_name_file(&target).is_err());
     }
 
     #[test]
