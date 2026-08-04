@@ -367,6 +367,59 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
         .expect("request timeline after membership revocation");
     assert_eq!(revoked_timeline.status(), StatusCode::NOT_FOUND);
 
+    let _ = actor_b_socket.close(None).await;
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = true WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(fixture.shared_project_id)
+    .bind(fixture.actor_b.actor_id)
+    .execute(&pool)
+    .await
+    .expect("re-enable Actor B membership");
+    let mut resumed_actor_b = connect(&websocket_url, &fixture.actor_b).await;
+    let resumed_timeline = timeline(
+        &client,
+        &base_url,
+        &fixture.actor_b,
+        fixture.shared_conversation_id,
+    )
+    .await;
+    assert_eq!(resumed_timeline["highestSequence"], 4);
+    assert_eq!(
+        resumed_timeline["readState"]["highestSeenSequence"], 1,
+        "re-enable resumes the Actor's durable prior cursor"
+    );
+    let (_, resumed_event_id) = append_message_with_outbox(
+        &pool,
+        fixture.shared_project_id,
+        fixture.shared_conversation_id,
+        fixture.actor_a.actor_id,
+        "re-enabled member resumes authorized invalidations",
+    )
+    .await;
+    let actor_a_resumed_event = receive_event(&mut reconnected_actor_a).await;
+    let actor_b_resumed_event = receive_event(&mut resumed_actor_b).await;
+    assert_eq!(
+        actor_a_resumed_event["event_id"],
+        resumed_event_id.to_string()
+    );
+    assert_eq!(
+        actor_b_resumed_event["event_id"],
+        resumed_event_id.to_string()
+    );
+    let resumed_sidebar = sidebar(
+        &client,
+        &base_url,
+        &fixture.actor_b,
+        fixture.shared_project_id,
+        fixture.shared_parent_channel_id,
+    )
+    .await;
+    let resumed_thread = sidebar_thread(&resumed_sidebar, fixture.shared_conversation_id);
+    assert_eq!(resumed_thread["highestSequence"], 5);
+    assert_eq!(resumed_thread["highestSeenSequence"], 1);
+    assert_eq!(resumed_thread["attention"]["kind"], "unread");
+
     let logout = client
         .post(format!("{base_url}/api/v1/auth/logout"))
         .header(ORIGIN, ALLOWED_ORIGIN)
@@ -378,7 +431,7 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
     assert_eq!(logout.status(), StatusCode::NO_CONTENT);
     assert_socket_closed(&mut reconnected_actor_a, "revoked browser session").await;
 
-    let _ = actor_b_socket.close(None).await;
+    let _ = resumed_actor_b.close(None).await;
     let _ = outbox_shutdown_sender.send(true);
     timeout(Duration::from_secs(3), outbox_publisher)
         .await

@@ -20,6 +20,7 @@ pub mod message_content;
 pub mod migration_preflight;
 pub mod outbox;
 pub mod policy;
+pub mod policy_inventory;
 pub mod profile_runtime;
 pub mod projects;
 pub mod provider;
