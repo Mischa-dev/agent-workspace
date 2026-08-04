@@ -906,7 +906,7 @@ fn restore_database(program: &Path, database_url: &str, dump: &Path) -> Result<(
 }
 
 fn reset_restored_credentials(program: &Path, database_url: &str) -> Result<()> {
-    let query = "BEGIN; UPDATE users SET authentication_epoch=authentication_epoch+1; UPDATE execution_profiles SET status='authentication_required', account_state='logged_out', version=version+1, updated_at=now(); COMMIT;";
+    let query = "BEGIN; UPDATE users SET authentication_epoch=authentication_epoch+1; UPDATE project_invitations SET status='revoked', revoked_at=now(), version=version+1, updated_at=now() WHERE status='active'; UPDATE execution_profiles SET status='authentication_required', account_state='logged_out', version=version+1, updated_at=now(); COMMIT;";
     let _ = run_psql(program, database_url, query)?;
     Ok(())
 }

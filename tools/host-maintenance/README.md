@@ -61,7 +61,8 @@ this command. Ordinary backups exclude browser
 sessions, password credentials, MCP bearer credentials, OAuth grants and token
 rows, Codex profile contents, and external file-backed secrets. A restored
 instance starts with all human passwords absent, sessions absent, MCP/OAuth
-grants absent, authentication epochs advanced, and Execution Profiles logged
-out. Restored data is assigned to the locked `agent-workspace` service account
-while the restored release stays root-owned and readable. Host-local credential
-reset and provider reauthentication are mandatory.
+grants absent, authentication epochs advanced, active invitation capabilities
+revoked, and Execution Profiles logged out. Restored data is assigned to the
+locked `agent-workspace` service account while the restored release stays
+root-owned and readable. Host-local credential reset and provider
+reauthentication are mandatory.
