@@ -597,8 +597,9 @@ async fn accept_new_user(
     sqlx::query(
         r#"
         INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+            id, project_id, actor_id, role, display_name, handle,
+            invited_by_actor_id, accepted_invitation_id, accepted_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
         "#,
     )
     .bind(Uuid::now_v7())
@@ -607,6 +608,8 @@ async fn accept_new_user(
     .bind(&invitation.role)
     .bind(&display_name)
     .bind(&handle)
+    .bind(invitation.issued_by_actor_id)
+    .bind(invitation.id)
     .execute(&mut *transaction)
     .await
     .map_err(map_join_database_error)?;
@@ -715,8 +718,9 @@ async fn accept_existing_user(
     sqlx::query(
         r#"
         INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+            id, project_id, actor_id, role, display_name, handle,
+            invited_by_actor_id, accepted_invitation_id, accepted_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
         "#,
     )
     .bind(Uuid::now_v7())
@@ -725,6 +729,8 @@ async fn accept_existing_user(
     .bind(&invitation.role)
     .bind(&principal.display_name)
     .bind(&handle)
+    .bind(invitation.issued_by_actor_id)
+    .bind(invitation.id)
     .execute(&mut *transaction)
     .await
     .map_err(map_join_database_error)?;

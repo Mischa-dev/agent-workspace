@@ -108,6 +108,14 @@ pub struct WorkItemUpdatedPayload {
     pub version: i64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectMembershipUpdatedPayload {
+    pub project_id: Uuid,
+    pub actor_id: Uuid,
+    pub version: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -116,6 +124,7 @@ pub enum OutboxEventPayload {
     ReadStateUpdated(ReadStateUpdatedPayload),
     AgentRunUpdated(AgentRunUpdatedPayload),
     WorkItemUpdated(WorkItemUpdatedPayload),
+    ProjectMembershipUpdated(ProjectMembershipUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -127,6 +136,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
             Self::WorkItemUpdated(_) => "work_item.updated",
+            Self::ProjectMembershipUpdated(_) => "project.membership.updated",
         }
     }
 
@@ -137,7 +147,7 @@ impl OutboxEventPayload {
             Self::MessageCreated(payload) => Some(payload.conversation_id),
             Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
             Self::AgentRunUpdated(payload) => Some(payload.conversation_id),
-            Self::WorkItemUpdated(_) => None,
+            Self::WorkItemUpdated(_) | Self::ProjectMembershipUpdated(_) => None,
         }
     }
 
@@ -160,6 +170,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(_) => OutboxResourceKind::ReadState,
             Self::AgentRunUpdated(_) => OutboxResourceKind::AgentRun,
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
+            Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
         }
     }
 
@@ -173,6 +184,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(payload) => payload.actor_id,
             Self::AgentRunUpdated(payload) => payload.agent_run_id,
             Self::WorkItemUpdated(payload) => payload.work_item_id,
+            Self::ProjectMembershipUpdated(payload) => payload.project_id,
         }
     }
 
@@ -205,6 +217,11 @@ impl OutboxEventPayload {
             {
                 Err(OutboxEventError::MalformedPayload)
             }
+            Self::ProjectMembershipUpdated(payload)
+                if payload.actor_id.is_nil() || payload.version < 1 =>
+            {
+                Err(OutboxEventError::MalformedPayload)
+            }
             _ => Ok(()),
         }
     }
@@ -218,6 +235,7 @@ impl OutboxEventPayload {
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
+            Self::ProjectMembershipUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -243,6 +261,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "work_item.updated" => Self::WorkItemUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "project.membership.updated" => Self::ProjectMembershipUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -711,7 +732,8 @@ mod tests {
         AgentRunUpdatedPayload, ClaimedOutboxEvent, ConversationCreatedPayload,
         MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS, MessageCreatedPayload, OUTBOX_SCHEMA_VERSION,
         OutboxConversationKind, OutboxEventError, OutboxEventPayload, OutboxFailureKind,
-        OutboxResourceKind, ReadStateUpdatedPayload, WorkItemUpdatedPayload, retry_delay,
+        OutboxResourceKind, ProjectMembershipUpdatedPayload, ReadStateUpdatedPayload,
+        WorkItemUpdatedPayload, retry_delay,
     };
     use std::time::Duration;
     use uuid::Uuid;
@@ -828,6 +850,18 @@ mod tests {
         assert_eq!(work_item.resource_id(), id(6));
         assert_eq!(work_item.conversation_id(), None);
         assert!(work_item.to_json().is_ok());
+
+        let membership =
+            OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+                project_id: id(1),
+                actor_id: id(7),
+                version: 4,
+            });
+        assert_eq!(membership.event_type(), "project.membership.updated");
+        assert_eq!(membership.resource_kind(), OutboxResourceKind::Project);
+        assert_eq!(membership.resource_id(), id(1));
+        assert_eq!(membership.conversation_id(), None);
+        assert!(membership.to_json().is_ok());
 
         let legacy_run = OutboxEventPayload::from_json(
             "conversation.agent_run.updated",
