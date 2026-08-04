@@ -23,15 +23,25 @@ cd "${checkout_root}"
 corepack prepare pnpm@11.18.0 --activate
 pnpm install --frozen-lockfile
 pnpm build
-cargo build --release --locked -p agent-workspace-server
+cargo build --release --locked \
+  -p agent-workspace-server \
+  -p agent-workspace-host-maintenance
 
 sudo install -d -m 0755 "${release_root}/bin" "${release_root}/web"
 sudo install -m 0755 \
   target/release/agent-workspace-server \
   "${release_root}/bin/agent-workspace-server"
 sudo install -m 0755 \
+  target/release/agent-workspace-host-maintenance \
+  "${release_root}/bin/agent-workspace-host-maintenance"
+sudo install -m 0755 \
   deploy/redhat/agent-workspace-service-command \
   "${release_root}/bin/agent-workspace-service-command"
+sudo install -m 0755 \
+  deploy/redhat/agent-workspace-pg-dump \
+  deploy/redhat/agent-workspace-pg-restore \
+  deploy/redhat/agent-workspace-psql \
+  "${release_root}/bin/"
 sudo cp -R apps/web/dist/. "${release_root}/web/"
 sudo chown -R root:root "${release_root}"
 

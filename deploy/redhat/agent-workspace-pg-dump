@@ -1,0 +1,22 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+if [[ -z ${PGDATABASE+x} ]]; then
+  echo "PGDATABASE is required" >&2
+  exit 64
+fi
+
+readonly podman_command=(
+  /usr/bin/podman exec
+  --user postgres
+  --env PGDATABASE
+  --env PGUSER=agent_workspace
+  agent-workspace_postgres_1
+  pg_dump
+)
+
+if (( EUID == 0 )); then
+  exec /usr/bin/sudo -n -u bot --preserve-env=PGDATABASE "${podman_command[@]}" "$@"
+fi
+
+exec "${podman_command[@]}" "$@"
