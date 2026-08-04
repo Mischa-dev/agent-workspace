@@ -1,6 +1,6 @@
 use axum::{
     Form, Json, Router,
-    extract::{RawQuery, State},
+    extract::{DefaultBodyLimit, RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -27,6 +27,7 @@ const MAX_CLIENT_NAME: usize = 80;
 const MAX_REDIRECT_URI: usize = 512;
 const MAX_STATE: usize = 512;
 const MAX_TOKEN: usize = 128;
+const MAX_OAUTH_BODY_BYTES: usize = 64 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -42,6 +43,7 @@ pub fn router() -> Router<AppState> {
         .route("/oauth/authorize", get(authorize).post(consent))
         .route("/oauth/token", post(token))
         .route("/oauth/revoke", post(revoke))
+        .layer(DefaultBodyLimit::max(MAX_OAUTH_BODY_BYTES))
 }
 
 fn public_origin(state: &AppState) -> String {
@@ -124,6 +126,10 @@ async fn register_client(
     State(state): State<AppState>,
     ApiJson(request): ApiJson<RegistrationRequest>,
 ) -> Result<(StatusCode, Json<RegistrationResponse>), OAuthError> {
+    state
+        .rate_limits
+        .check_oauth_ceremony(&request.client_name)
+        .map_err(OAuthError::from)?;
     validate_client_name(&request.client_name)?;
     if request.redirect_uris.is_empty() || request.redirect_uris.len() > 8 {
         return Err(OAuthError::invalid_client_metadata(
@@ -281,6 +287,10 @@ async fn authorize(
     RawQuery(raw_query): RawQuery,
 ) -> Result<Html<String>, OAuthError> {
     let request = parse_authorize_query(raw_query)?;
+    state
+        .rate_limits
+        .check_oauth_ceremony(&request.client_id)
+        .map_err(OAuthError::from)?;
     let (client, scopes) = validate_authorize_request(&state, &request).await?;
     let projects = project_choices(&state, principal.actor_id).await?;
     if projects.is_empty() {
@@ -334,6 +344,10 @@ async fn consent(
     mut headers: HeaderMap,
     Form(form): Form<ConsentRequest>,
 ) -> Result<Response, OAuthError> {
+    state
+        .rate_limits
+        .check_oauth_ceremony(&form.client_id)
+        .map_err(OAuthError::from)?;
     let header = HeaderValue::from_str(&form.csrf_token)
         .map_err(|_| OAuthError::access_denied("invalid CSRF state"))?;
     headers.insert("x-csrf-token", header);
@@ -479,6 +493,10 @@ async fn token(
     State(state): State<AppState>,
     Form(request): Form<TokenRequest>,
 ) -> Result<Response, OAuthError> {
+    state
+        .rate_limits
+        .check_oauth_ceremony(&request.client_id)
+        .map_err(OAuthError::from)?;
     let response = match request.grant_type.as_str() {
         "authorization_code" => exchange_code(&state, request).await?,
         "refresh_token" => refresh(&state, request).await?,
@@ -701,6 +719,10 @@ async fn revoke(
     State(state): State<AppState>,
     Form(request): Form<RevokeRequest>,
 ) -> Result<StatusCode, OAuthError> {
+    state
+        .rate_limits
+        .check_oauth_ceremony(&request.client_id)
+        .map_err(OAuthError::from)?;
     let client_id = parse_client_id(&request.client_id)?;
     if request.token.len() > MAX_TOKEN {
         return Ok(StatusCode::OK);
@@ -1025,6 +1047,7 @@ pub struct OAuthError {
     status: StatusCode,
     error: &'static str,
     description: &'static str,
+    retry_after_seconds: Option<u64>,
 }
 
 impl OAuthError {
@@ -1033,6 +1056,7 @@ impl OAuthError {
             status,
             error,
             description,
+            retry_after_seconds: None,
         }
     }
     fn invalid_request(description: &'static str) -> Self {
@@ -1075,6 +1099,17 @@ impl OAuthError {
 
 impl From<AppError> for OAuthError {
     fn from(error: AppError) -> Self {
+        if let AppError::RateLimited {
+            retry_after_seconds,
+        } = error
+        {
+            return Self {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                error: "slow_down",
+                description: "the local authorization attempt budget is exhausted",
+                retry_after_seconds: Some(retry_after_seconds),
+            };
+        }
         let (database_code, database_constraint) = error.database_log_fields();
         tracing::error!(
             category = error.log_category(),
@@ -1100,6 +1135,11 @@ impl IntoResponse for OAuthError {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        if let Some(retry_after_seconds) = self.retry_after_seconds
+            && let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
         response
     }
 }
@@ -1156,6 +1196,20 @@ mod tests {
                 "{unsafe_uri}"
             );
         }
+    }
+
+    #[test]
+    fn oauth_rate_limit_is_bounded_and_retryable() {
+        let response = OAuthError::from(AppError::rate_limited(17)).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&HeaderValue::from_static("17"))
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
     }
 
     #[test]

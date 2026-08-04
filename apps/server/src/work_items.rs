@@ -917,6 +917,9 @@ async fn list_work_items(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<WorkItemListQuery>,
 ) -> Result<Json<WorkItemListResponse>, AppError> {
+    state
+        .rate_limits
+        .check_expensive_read(principal.session_id)?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2247,6 +2250,9 @@ async fn search_assignable_actors(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<AssigneeSearchQuery>,
 ) -> Result<Json<AssigneeSearchResponse>, AppError> {
+    state
+        .rate_limits
+        .check_expensive_read(principal.session_id)?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
@@ -2301,6 +2307,9 @@ async fn search_work_item_references(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<WorkItemReferenceSearchQuery>,
 ) -> Result<Json<WorkItemReferenceSearchResponse>, AppError> {
+    state
+        .rate_limits
+        .check_expensive_read(principal.session_id)?;
     let membership = project_membership(&state.pool, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;

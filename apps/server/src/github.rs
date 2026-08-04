@@ -8,9 +8,10 @@ use std::{
 
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -105,7 +106,22 @@ pub fn webhook_router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/integrations/github/webhook", post(receive_webhook))
         .layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            limit_webhook_attempts,
+        ))
         .with_state(state)
+}
+
+async fn limit_webhook_attempts(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Err(error) = state.rate_limits.check_webhook_attempt() {
+        return error.into_response();
+    }
+    next.run(request).await
 }
 
 pub fn kick_jobs(state: AppState) {

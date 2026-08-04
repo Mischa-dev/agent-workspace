@@ -1632,6 +1632,9 @@ async fn search_mentionable_actors(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<MentionSearchQuery>,
 ) -> Result<Json<MentionActorResponse>, AppError> {
+    state
+        .rate_limits
+        .check_expensive_read(principal.session_id)?;
     let access = authorized_project(&state, &principal, project_id, Action::MentionSearch).await?;
     if access.project_archived {
         return Err(AppError::NotFound("project"));
