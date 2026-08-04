@@ -1110,6 +1110,12 @@ describe('M1 authenticated shell', () => {
           if (path.endsWith(`/projects/${projectBId}/navigation`)) {
             return jsonResponse(viewerProject.navigation)
           }
+          if (
+            path.endsWith(`/projects/${projectBId}/repositories`) &&
+            method === 'GET'
+          ) {
+            return jsonResponse({ canManage: false, repositories: [] })
+          }
           throw new Error(`Unexpected request: ${method} ${path}`)
         },
       ),
@@ -1123,6 +1129,14 @@ describe('M1 authenticated shell', () => {
       screen.queryByRole('button', { name: 'Archive Project' }),
     ).not.toBeInTheDocument()
     expect(screen.getByText('viewer')).toBeVisible()
+    expect(screen.getByRole('note')).toHaveTextContent('Viewer access is read-only')
+    expect(
+      screen.queryByRole('heading', { name: 'Codex account' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'GitHub delivery' }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Repositories' })).toBeVisible()
   })
 
   it('preserves the hosted Thread timeline, hostile-output escaping, and approval flow', async () => {

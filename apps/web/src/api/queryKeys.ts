@@ -10,6 +10,9 @@ export const queryKeys = {
     ['project', projectId, 'execution-profile', profileId, 'account'] as const,
   repositories: (projectId: string) =>
     ['project', projectId, 'repositories'] as const,
+  members: (projectId: string) => ['project', projectId, 'members'] as const,
+  invitations: (projectId: string) =>
+    ['project', projectId, 'invitations'] as const,
   githubIntegration: (projectId: string) =>
     ['project', projectId, 'github-integration'] as const,
   githubAutomation: (projectId: string) =>

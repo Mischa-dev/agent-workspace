@@ -2488,6 +2488,67 @@ p {
   }
 }
 
+.team-settings,
+.team-member-list,
+.team-invitation-list {
+  display: grid;
+  gap: 12px;
+}
+
+.team-invite-form,
+.team-member,
+.team-invitation,
+.one-shot-secret {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-raised);
+}
+
+.team-member > div:first-child,
+.team-invitation > div:first-child,
+.one-shot-secret {
+  display: grid;
+  gap: 4px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.one-shot-secret code {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .team-invite-form,
+  .team-member,
+  .team-invitation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

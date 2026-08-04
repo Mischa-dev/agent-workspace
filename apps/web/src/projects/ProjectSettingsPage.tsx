@@ -6,6 +6,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { ExecutionAccountSettings } from '../execution/ExecutionAccountSettings'
 import { GitHubIntegrationSettings } from '../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../repositories/RepositorySettings'
+import { TeamSettings } from '../team/TeamSettings'
 import { AppShell } from '../shell/AppShell'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import { ProjectContextDrawer } from './ProjectContextDrawer'
@@ -39,6 +40,9 @@ export function ProjectSettingsPage() {
       project.data.capabilities.navigationWrite,
     project.data?.navigation,
   )
+  const organizationRole = session.organizations.find(
+    (organization) => organization.id === project.data?.organizationId,
+  )?.role
 
   if (project.isPending) {
     return (
@@ -137,18 +141,42 @@ export function ProjectSettingsPage() {
           </dl>
         </section>
 
-        <section aria-labelledby="execution-account-heading" className="page-section">
-          <h2 id="execution-account-heading">Codex account</h2>
-          <p>
-            Connect the personal Execution Profile used for hosted runs. Provider
-            credentials are handled by the isolated Codex profile and are never
-            returned to this page.
+        {project.data.capabilities.manage && organizationRole && (
+          <section aria-labelledby="team-heading" className="page-section">
+            <h2 id="team-heading">Team</h2>
+            <p>
+              Invite human collaborators and manage Project roles without exposing
+              credentials or provider accounts.
+            </p>
+            <TeamSettings
+              organizationRole={organizationRole}
+              projectId={project.data.id}
+            />
+          </section>
+        )}
+
+        {project.data.role === 'viewer' && (
+          <p className="compact-note" role="note">
+            Viewer access is read-only. You can inspect Project and repository
+            details, but account, integration, and team management controls are
+            unavailable.
           </p>
-          <ExecutionAccountSettings
-            actorId={session.user.actorId}
-            projectId={project.data.id}
-          />
-        </section>
+        )}
+
+        {project.data.role !== 'viewer' && (
+          <section aria-labelledby="execution-account-heading" className="page-section">
+            <h2 id="execution-account-heading">Codex account</h2>
+            <p>
+              Connect the personal Execution Profile used for hosted runs. Provider
+              credentials are handled by the isolated Codex profile and are never
+              returned to this page.
+            </p>
+            <ExecutionAccountSettings
+              actorId={session.user.actorId}
+              projectId={project.data.id}
+            />
+          </section>
+        )}
 
         <section aria-labelledby="repositories-heading" className="page-section">
           <h2 id="repositories-heading">Repositories</h2>
@@ -159,15 +187,17 @@ export function ProjectSettingsPage() {
           <RepositorySettings projectId={project.data.id} />
         </section>
 
-        <section aria-labelledby="github-integration-heading" className="page-section">
-          <h2 id="github-integration-heading">GitHub delivery</h2>
-          <p>
-            View the Project-scoped GitHub App installation, selected
-            repositories, least-privilege permissions, and synchronization
-            health. External App installation remains an operator action.
-          </p>
-          <GitHubIntegrationSettings projectId={project.data.id} />
-        </section>
+        {project.data.capabilities.manage && (
+          <section aria-labelledby="github-integration-heading" className="page-section">
+            <h2 id="github-integration-heading">GitHub delivery</h2>
+            <p>
+              View the Project-scoped GitHub App installation, selected
+              repositories, least-privilege permissions, and synchronization
+              health. External App installation remains an operator action.
+            </p>
+            <GitHubIntegrationSettings projectId={project.data.id} />
+          </section>
+        )}
 
         {project.data.capabilities.archive && !project.data.archivedAt && (
           <section
