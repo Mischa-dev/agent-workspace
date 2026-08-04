@@ -43,6 +43,11 @@ The destination parent and backup source must deny group and other access.
 Run the command as root through the existing passwordless `bot` operator path;
 the database-name files contain only `agent_workspace` or the explicitly
 created drill database name and use mode `0600`.
+The supported source data root is exactly `/var/lib/agent-workspace`. Database
+path identities remain canonical to that logical root. A clean drill therefore
+starts its separate service in a private mount namespace that bind-mounts the
+restored test root over `/var/lib/agent-workspace` for that service only; it
+must never rewrite path identity rows or expose the active data tree.
 Symlinks, existing destinations, source/destination containment, unknown
 archive paths, checksum mismatches, PostgreSQL versions other than 18, an
 incomplete credential-table exclusion set, a non-empty target database, and a

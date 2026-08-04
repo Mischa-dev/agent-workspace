@@ -32,6 +32,7 @@ pub const INCLUDED_DATA_ENTRIES: &[&str] =
 pub const REBUILDABLE_CACHE_ENTRIES: &[&str] = &["repositories"];
 pub const PRESERVED_UNIQUE_ENTRIES: &[&str] = &["artifacts", "attachments", "worktrees"];
 pub const RESTORED_DATA_OWNER: &str = "agent-workspace:agent-workspace";
+pub const SUPPORTED_DATA_ROOT: &str = "/var/lib/agent-workspace";
 
 const MAX_SECRET_FILE_BYTES: u64 = 8 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -124,6 +125,10 @@ pub struct RestoreResult {
 pub fn create_backup(options: &BackupOptions) -> Result<BackupResult> {
     validate_release_commit(&options.release_commit)?;
     let data_root = validate_source_root(&options.data_root, "data root")?;
+    ensure!(
+        data_root == Path::new(SUPPORTED_DATA_ROOT),
+        "backup data root does not match the supported Red Hat layout"
+    );
     let release_root = validate_source_root(&options.release_root, "release root")?;
     ensure!(
         release_root.file_name().and_then(OsStr::to_str) == Some(options.release_commit.as_str()),
