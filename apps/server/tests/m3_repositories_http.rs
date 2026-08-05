@@ -44,7 +44,7 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
 
     let temporary = tempfile::tempdir().expect("temporary repository runtime root");
     let data_root = temporary.path().join("data");
-    let config = AppConfig::from_values(&BTreeMap::from([
+    let mut config = AppConfig::from_values(&BTreeMap::from([
         (
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
             database_url.clone(),
@@ -70,6 +70,10 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         ),
     ]))
     .expect("repository test configuration");
+    // Repository preparation semantics are covered independently from host capacity.
+    // Keep this temporary mirror fixture deterministic as CI disk usage changes.
+    config.data_quota_bytes = u64::MAX;
+    config.minimum_free_bytes = 0;
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed repository fixture");

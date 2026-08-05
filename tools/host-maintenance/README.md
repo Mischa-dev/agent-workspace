@@ -39,6 +39,25 @@ connect as the `agent_workspace` database role, and preserve the existing
       --tar /usr/bin/tar \
       --chown /usr/bin/chown
 
+    agent-workspace-host-maintenance storage-report \
+      --data-root /var/lib/agent-workspace \
+      --releases-root /opt/agent-workspace/releases \
+      --backups-root /var/backups/agent-workspace \
+      --database-name-file /etc/agent-workspace/maintenance-database \
+      --psql /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-psql \
+      --data-quota-bytes 21474836480 \
+      --minimum-free-bytes 5368709120
+
+    # Dry run is the default. Mutation requires the literal opt-in below.
+    agent-workspace-host-maintenance retention-cleanup \
+      --database-name-file /etc/agent-workspace/maintenance-database \
+      --psql /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-psql
+
+    agent-workspace-host-maintenance retention-cleanup \
+      --database-name-file /etc/agent-workspace/maintenance-database \
+      --psql /opt/agent-workspace/releases/<full-git-sha>/bin/agent-workspace-psql \
+      --apply true
+
 The destination parent and backup source must deny group and other access.
 Run the command as root through the existing passwordless `bot` operator path;
 the database-name files contain only `agent_workspace` or the explicitly
@@ -52,6 +71,26 @@ Symlinks, existing destinations, source/destination containment, unknown
 archive paths, checksum mismatches, PostgreSQL versions other than 18, an
 incomplete credential-table exclusion set, a non-empty target database, and a
 target database matching the active connection are rejected.
+
+The storage report returns only aggregate allocated bytes and entry counts; it
+does not print paths below the registered roots. Registered roots and their
+path components may not be symlinks. Internal symlinks are counted and skipped,
+never followed. The report separately identifies the
+PostgreSQL database, unique application data, rebuildable repository mirrors,
+provider profiles, temporary files, immutable releases, and backup archives.
+Each category labels unique preserved data, rebuildable cache, sensitive or
+reclaimable operational data, rollback artifacts, and recovery artifacts.
+The report rejects symlinks and reports whether both the data quota and
+minimum-free-space watermark admit new growth.
+
+Retention cleanup uses policy version 1. It reports eligible row counts unless
+`--apply true` is present. Apply runs under a transaction-level advisory lock
+and emits the same category-only summary. It removes only expired operational
+reservations and sufficiently old OAuth token material, published outbox rows,
+and completed GitHub jobs. An active expired invitation is revoked in place so
+its issuer, Actor attribution, and membership history remain intact. Durable
+audit events, Messages, Work Items, approvals, Agent Runs, and provider-session
+identity are never deleted by this command.
 
 Ordinary backups include the immutable application release and the registered
 artifact, attachment, repository, and worktree roots. The manifest classifies

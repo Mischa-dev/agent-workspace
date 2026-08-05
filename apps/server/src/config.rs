@@ -80,6 +80,8 @@ pub struct AppConfig {
     pub database_url: SecretString,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
+    pub data_quota_bytes: u64,
+    pub minimum_free_bytes: u64,
     pub web_root: PathBuf,
     pub codex_binary: PathBuf,
     pub codex_home_root: PathBuf,
@@ -147,6 +149,8 @@ impl AppConfig {
         let database_url = required(values, "DATABASE_URL")?;
         let database_max_connections = parse(values, "DATABASE_MAX_CONNECTIONS", "5")?;
         let data_root = PathBuf::from(optional(values, "DATA_ROOT", ".agent-workspace"));
+        let data_quota_bytes = parse(values, "DATA_QUOTA_BYTES", "21474836480")?;
+        let minimum_free_bytes = parse(values, "MINIMUM_FREE_BYTES", "5368709120")?;
         let web_root = PathBuf::from(optional(values, "WEB_ROOT", "apps/web/dist"));
         let codex_binary = PathBuf::from(optional(values, "CODEX_BINARY", "codex"));
         let codex_home_root = PathBuf::from(optional(
@@ -184,6 +188,18 @@ impl AppConfig {
             return Err(ConfigError::Invalid {
                 key: format!("{PREFIX}DATA_ROOT"),
                 reason: "runtime paths cannot be empty".into(),
+            });
+        }
+        if data_quota_bytes < 1024 * 1024 * 1024 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}DATA_QUOTA_BYTES"),
+                reason: "must be at least 1073741824".into(),
+            });
+        }
+        if minimum_free_bytes < 1024 * 1024 * 1024 {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}MINIMUM_FREE_BYTES"),
+                reason: "must be at least 1073741824".into(),
             });
         }
         if !(1..=16).contains(&codex_host_concurrency_limit) {
@@ -237,6 +253,8 @@ impl AppConfig {
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,
+            data_quota_bytes,
+            minimum_free_bytes,
             web_root,
             codex_binary,
             codex_home_root,
@@ -597,6 +615,29 @@ mod tests {
         values.insert(
             "AGENT_WORKSPACE_CODEX_REQUEST_TIMEOUT_SECONDS".to_owned(),
             "601".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn storage_watermarks_are_bounded_and_have_private_host_defaults() {
+        let config = AppConfig::from_values(&base_values()).expect("valid config");
+        assert_eq!(config.data_quota_bytes, 20 * 1024 * 1024 * 1024);
+        assert_eq!(config.minimum_free_bytes, 5 * 1024 * 1024 * 1024);
+
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_DATA_QUOTA_BYTES".to_owned(),
+            "1073741823".to_owned(),
+        );
+        assert!(AppConfig::from_values(&values).is_err());
+        values.insert(
+            "AGENT_WORKSPACE_DATA_QUOTA_BYTES".to_owned(),
+            "1073741824".to_owned(),
+        );
+        values.insert(
+            "AGENT_WORKSPACE_MINIMUM_FREE_BYTES".to_owned(),
+            "0".to_owned(),
         );
         assert!(AppConfig::from_values(&values).is_err());
     }

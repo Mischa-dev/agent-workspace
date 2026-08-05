@@ -312,7 +312,11 @@ impl TestHarness {
                 fake_codex.to_string_lossy().into_owned(),
             );
         }
-        let config = AppConfig::from_values(&values).expect("development configuration");
+        let mut config = AppConfig::from_values(&values).expect("development configuration");
+        // This integration test exercises Provider Session terminal state, not host capacity.
+        // Keep its tiny temporary data root independent of the CI runner's remaining disk.
+        config.data_quota_bytes = u64::MAX;
+        config.minimum_free_bytes = 0;
         let seed = dev_seed(&pool, &config)
             .await
             .expect("seed Provider Session fixture");

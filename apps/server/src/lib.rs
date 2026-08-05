@@ -28,8 +28,10 @@ pub mod rate_limit;
 pub mod realtime;
 pub mod recovery;
 pub mod repositories;
+pub mod retention;
 pub mod scheduler;
 pub mod seed;
+pub mod storage_admission;
 pub mod telemetry;
 pub mod work_items;
 
