@@ -2,18 +2,43 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M7 accepted; M8 elaborated and authorized; source of truth v0.27
+**Status:** M8 accepted; M9 elaborated and authorized; source of truth v0.28
 
 **Owner:** Mischa Nelson  
 **Date:** August 4, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M7 are complete. M8 is
-elaborated and authorized by accepted M7 evidence; every later milestone
-remains subject to the same entry gate.
+**Implementation authorization:** Milestones M0 through M8 are complete. M9 is
+elaborated and authorized by accepted M8 evidence and the owner's explicit
+August 4, 2026 instruction to continue through M9.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.28 — M8 acceptance and M9 authorization
+
+- accepted M8 against exact green commit
+  `6d59f81b42fc66c0e134130cdf79b3a9871b7114`, GitHub CI run
+  `30982081305`, and its immutable Red Hat release
+- recorded the checksummed ordinary backup and clean-location restore, bounded
+  retention apply, dirty-worktree preservation, secret/revocation drills,
+  accessibility and retained-scale performance gates, and exact service,
+  listener, lifecycle, migration, and redaction evidence
+- recorded the browser-driven hosted Codex run using the personal
+  `mischa.nelson07@gmail.com` Execution Profile, including the two fail-closed
+  admission discoveries, their fixes, fresh retry allocation, durable events,
+  consolidated Worker Message, exact file, branch, base commit, provider
+  identities, and preserved dirty worktree
+- resolved O-005 through D-053 by keeping attachments disabled for version one
+  and fixing the first future storage limits
+- resolved O-007 through D-054: M9 uses the existing Streamable HTTP MCP
+  boundary, Project-scoped digest-only external-agent bearers, and bounded
+  polling; Hermes Agent `0.20.0` is the first pinned compatibility runtime
+- extended invoker-owned execution through D-055: external Worker requests
+  require a human sponsor's explicit approval and eligible personal profile
+- elaborated every M9 task with acceptance criteria, dependencies, tests, and
+  exclusions, and authorized M9 from accepted M8 evidence plus the owner's
+  explicit instruction
 
 ### v0.27 — M8 hardening entry backlog and authorization
 
@@ -6333,8 +6358,10 @@ more than one Organization host, external agent members, and shared profiles.
 
 ## Milestone M8: Hardening
 
-**Status:** Elaborated and authorized by accepted M7 evidence against exact
-green commit `286ea301bb9bf67cc85484771d353df80c03bf34`.
+**Status:** Accepted against exact green commit
+`6d59f81b42fc66c0e134130cdf79b3a9871b7114`, GitHub CI run `30982081305`,
+and the matching immutable Red Hat release. Evidence is in
+`docs/acceptance/m8.md`.
 
 ### M8-001 Backup and restore
 
@@ -6717,29 +6744,317 @@ backup-provider selection, and features excluded by M0-M7.
 
 ## Milestone M9: External agent members
 
-**Status:** Deferred until after version one. Not authorized by the current implementation approval.
+**Status:** Elaborated and authorized by accepted M8 evidence plus the owner's
+explicit August 4, 2026 instruction to continue through M9. The external
+runtime remains separately owned and M9 does not weaken the private-host
+boundary.
 
 ### M9-001 External agent connection threat model and protocol decision
 
-Resolve O-007 before implementation.
+Resolve O-007 before behavior changes and pin one real connector.
+
+**Acceptance criteria**
+
+- adopt `docs/operations/external-agent-threat-model.md` as the connection
+  boundary and keep browser sessions, database access, GitHub credentials,
+  provider caches, personal Execution Profiles, and repository contents out of
+  the connector contract
+- use the existing MCP `2025-06-18` Streamable HTTP endpoint over an
+  operator-controlled SSH tunnel; do not add permanent public ingress,
+  runtime-specific database access, or a second domain-command stack
+- pin Hermes Agent `0.20.0`, tag `v2026.8.3`, commit
+  `3c27eb6234bf91b8ceee9e9071591b31e9b148cb`, plus its resolved dependency
+  lock, in an isolated Red Hat installation and profile
+- keep the existing default Hermes installation and profile unchanged; use a
+  separate `HERMES_HOME`, `terminal.home_mode: profile`, and an owner-only
+  profile secret file
+- fix tool allowlists, bearer handling, polling semantics, cursor expiry,
+  presence diagnostics, approval routing, rate limits, sampling/elicitation
+  policy, and fail-closed protocol/version behavior before live connection
+
+**Dependencies:** accepted M6 MCP boundary, M7 centralized policy, M8 secret
+and abuse controls, O-007/D-054, and the checked-in threat model.
+
+**Expected tests:** threat enumeration, cross-Project and impersonation denial,
+stolen/replayed/revoked credential behavior, cursor substitution/expiry,
+disable races, oversized payloads, rate limits, and exact Hermes fixture
+compatibility.
+
+**Exclusions:** A2A, hosted Hermes, public webhooks, OAuth for external agents,
+multi-runtime abstraction, shared human credentials, runtime memory/schedule
+management, and public multi-tenant exposure.
 
 ### M9-002 External-agent credential registration, rotation, and revocation
 
+Add a durable Project-scoped external connection and extend the digest-only MCP
+bearer lifecycle without weakening the human OAuth path.
+
+**Acceptance criteria**
+
+- add `external_agent_connections` with application-generated UUIDv7 identity,
+  Project and external Actor ownership, runtime kind/version, status, explicit
+  scopes, optimistic version, creator Actor, throttled last-used diagnostics,
+  and bounded non-secret failure category
+- add an optional connection foreign key to MCP credentials; external
+  credentials use a distinct safe token prefix, 256 bits of entropy, one-time
+  plaintext delivery, SHA-256 digest-only storage, bounded expiry, and exact
+  Project/Actor/connection scope
+- create, list, rotate, revoke, disable, and remove through authorized
+  server-side commands; rotation atomically replaces the predecessor and
+  uncertain output is recovered by another replacement or revocation, never
+  plaintext retrieval
+- transactionally revalidate active Actor, membership, connection, credential,
+  Project, scopes, and ordinary policy on every request and write
+- disable/removal immediately revokes all connection credentials and pending
+  delivery leases while preserving historical Actor attribution and audit rows
+
+**Dependencies:** M6 credential schema and rate limits, M7 membership lifecycle,
+M8 rotation procedures, D-048, and D-054.
+
+**Expected tests:** entropy/prefix/digest storage, one-time output, duplicate
+prefix candidates and constant-time digest comparison, optimistic rotation,
+expiry/revocation, disable race, scope downgrade, membership disable, audit
+redaction, and concurrent single-winner mutation.
+
+**Exclusions:** client secrets in browser responses after creation, token
+recovery, shared credentials, refresh tokens, agent OAuth, mTLS, API keys in
+Git, and automatic credential distribution to remote machines.
+
 ### M9-003 External Agent Member onboarding and Project membership
+
+Make an external teammate a first-class Actor without creating a User or
+password credential.
+
+**Acceptance criteria**
+
+- an owner or admin creates one external-agent Actor, Project membership, and
+  connection atomically with normalized display name/handle and `member` or
+  `viewer` role; external agents can never be owner or admin
+- expose bounded browser management in Project settings: create, copy the
+  one-time bearer, view status/last activity/runtime, change allowed role,
+  rotate, disable/re-enable, and remove
+- clients cannot choose Actor kind or authorship outside this onboarding
+  command; the database prevents User/password rows for non-human Actors and
+  prevents an active-handle collision
+- disable and removal reject new reads/writes immediately, revoke credentials,
+  cancel pending external execution requests, and preserve Messages, Work Item
+  history, approvals, audit events, and completed runs
+- re-enable requires an explicit authorized optimistic command and a newly
+  issued credential; removed identities are never silently resurrected
+
+**Dependencies:** Actor schema, M7 member management and last-owner rules,
+M9-002 connections, and centralized policy.
+
+**Expected tests:** atomic rollback, handle normalization/collision, role
+allowlist, no User/password row, cross-Project non-disclosure, owner/admin-only
+management, disable/re-enable/remove, sessionless identity, audit provenance,
+and hostile labels rendered inert.
+
+**Exclusions:** email invitations, public signup, self-registration, custom
+roles, external-agent organization ownership, identity federation, and moving
+one external Actor between Projects.
 
 ### M9-004 Actor-authored Messages, mentions, and activity through the integration surface
 
+Expose bounded conversation reads and Message sending through MCP with
+server-resolved external authorship.
+
+**Acceptance criteria**
+
+- add bounded tools to list accessible Channels/Threads, read one timeline by
+  opaque cursor, search mentionable Actors, and send one immutable version-one
+  Message to an existing active Conversation
+- reuse the exact Message AST, mention/reference resolution, Actor attribution,
+  project scope, archive rules, idempotency key/request hash, transactional
+  conversation sequence, audit, outbox, and realtime invalidation paths used by
+  the browser
+- never accept `author_actor_id`; it always comes from `McpPrincipal`
+- return canonical IDs/versions and safe conflict or not-found categories,
+  without absolute paths, arbitrary provider JSON, raw HTML, or unauthorized
+  Conversation existence
+- record throttled connection activity and create addressed events for useful
+  mentions/replies without treating every poll as visible presence
+
+**Dependencies:** M2 Message AST and Conversations, M6 MCP authorization,
+M7 attention isolation, M9 connection principal, and M9 polling store.
+
+**Expected tests:** external authorship, forged author rejection, hostile text,
+mention and Work Item references, gap-free concurrent sequences, archived and
+cross-Project denial, idempotent replay/conflict, bounded pagination, audit,
+outbox, and browser convergence.
+
+**Exclusions:** Message editing/deletion, attachments, arbitrary rich text,
+new Channel creation, inline agent execution, typing indicators, and runtime
+memory synchronization.
+
 ### M9-005 Work Item reads, writes, and assignment
+
+Allow the external Actor to use the existing canonical Work Item MCP tools.
+
+**Acceptance criteria**
+
+- refactor MCP principals and read/write authorization to carry actual Actor
+  kind; remove human-only joins only where the ordinary policy explicitly
+  permits `external_agent`
+- retain the same Project membership, role matrix, archive rules, optimistic
+  `expectedVersion`, stable `clientRequestId`, authoritative conflict payload,
+  immutable ID/URL resolution, audit, and outbox paths as human Codex use
+- allow create/update, status transition, bounded collaboration update,
+  assignment to an active human or external-agent member, blocker/review
+  helpers, and linked canonical pull-request reads when policy permits
+- reject assignment to disabled, Worker, integration, system, cross-Project,
+  or unknown Actors without disclosure
+- keep GitHub publication/integration management and repository mutation
+  outside the external connector allowlist
+
+**Dependencies:** M4 Work Items, M6 MCP tools, M7 policy matrix, M9 principal
+kind, and M9-003 membership lifecycle.
+
+**Expected tests:** parity between equal-role human/external Actors, viewer
+denial, create/update/assignment, conflict and idempotent replay, disabled
+assignee, concurrent versions, audit Actor attribution, and no Thread/run side
+effect from ordinary Work Item calls.
+
+**Exclusions:** custom workflows, bulk mutation, delete, automatic Done,
+arbitrary GitHub actions, and bypassing Project policy through connection
+scopes.
 
 ### M9-006 Approval request routing and decision policy
 
+Expose addressed approvals while preserving human-required and separation-of-
+duty rules.
+
+**Acceptance criteria**
+
+- poll bounded approval-request events and read only approvals for which the
+  external Actor is an eligible active Project member
+- permit an external Actor to answer only when ordinary `ApprovalRespond`
+  policy allows, `human_required` is false, eligibility matches, separation of
+  duty passes, the run/request is active, and the decision version is current
+- never expose provider question content or arbitrary command/file details
+  beyond the existing bounded approval projection
+- human-required approvals, including external Worker sponsorship, can be
+  answered only through a human browser Actor; a connector response fails
+  closed and is audited
+- disable/revocation removes pending delivery and decision authority without
+  rewriting historical approval requests or responses
+
+**Dependencies:** M1 approval state, M3 blockers, M7 centralized approval
+policy, M9 polling, and D-055.
+
+**Expected tests:** Actor/role eligibility, human-required denial, separation
+of duty, stale version, duplicate decision, disable race, cross-Project
+non-disclosure, bounded question projection, event redelivery, and audit.
+
+**Exclusions:** automatic approval by Hermes, connector-defined policy,
+provider-native raw approval payloads, remote browser callbacks, and weakening
+the existing command safety boundary.
+
 ### M9-007 Execution Worker invocation by an external Actor
+
+Add a sponsored two-step request rather than allowing an external Actor to
+consume a personal provider account directly.
+
+**Acceptance criteria**
+
+- an authorized external member can request a bounded Worker action for an
+  existing Thread and registered repository with an idempotency key, prompt,
+  exact Project scope, and selected human sponsor
+- create a durable pending external execution request and human-required,
+  separation-of-duty approval; create no Agent Run, workspace, worktree,
+  Provider Session, or Worker Message before approval
+- the sponsor must be an active human member with `WorkerInvoke` permission and
+  an eligible same-Project personal Execution Profile; approval revalidates all
+  identities and selects only that sponsor-owned profile
+- after approval, create the Agent Run transactionally with the external Actor
+  as originating requester, the human as sponsor/approver, and the same one-
+  active-run, repository, admission, provider, recovery, and worktree rules
+- denial, expiry, sponsor/profile disable, archive, storage watermark, or
+  concurrency conflict produces a bounded terminal request with no credential
+  fallback and preserves any already-created work
+
+**Dependencies:** M3 scheduler/provider recovery, M7 invoker-owned profiles,
+M9 approvals, and D-055.
+
+**Expected tests:** zero-effect preapproval, sponsor ownership, forged sponsor,
+self-approval, stale approval, one-active-run race, idempotent request, disabled
+member/profile, storage denial, run Actor attribution, provider environment
+redaction, interrupt/recovery, and preserved dirty worktree.
+
+**Exclusions:** pooled/service profiles, automatic sponsor selection, external
+provider credentials, direct Codex App Server access, inline Channel execution,
+cost allocation, and unattended human approval.
 
 ### M9-008 Event delivery or polling, cursors, idempotency, and connection diagnostics
 
+Implement bounded durable polling as the first runtime-neutral activity path.
+
+**Acceptance criteria**
+
+- add connection-addressed durable events with transactionally allocated
+  monotonic sequence, bounded kind/summary/resource IDs, creation/expiry, and
+  no Message body, prompt, provider reasoning, secret, path, or arbitrary JSON
+- expose `external_event_poll(afterCursor, limit, waitSeconds)` with an opaque
+  signed connection/Project-bound cursor, limit 1..100, wait 0..30 seconds,
+  at-least-once replay, explicit expired-cursor response, and canonical refetch
+  URLs/IDs
+- enqueue useful mentions/replies, Work Item assignment/change, approval
+  request/result, external execution request, and Agent Run terminal-state
+  invalidations in the same transaction as their source change
+- apply per-credential poll/read/write budgets, one outstanding long poll per
+  connection, bounded connection diagnostics, and safe last-seen/error
+  categories; reconnect and server restart do not skip committed events
+- define retention separately from canonical history; expiry may require
+  bounded resynchronization but never changes domain records or read state
+
+**Dependencies:** outbox/realtime invalidation model, M8 abuse/retention,
+M9 connection identity, and ordinary canonical read tools.
+
+**Expected tests:** cursor tampering/cross-connection reuse, sequence
+concurrency, at-least-once retry, long-poll cancellation/restart, expiry and
+resync, rate limit, disabled connection, payload redaction/bounds, event-source
+atomicity, and two-connection isolation.
+
+**Exclusions:** WebSocket requirement for external runtimes, push webhooks,
+exactly-once delivery, unbounded event archive, global event search, and using
+presence as authorization.
+
 ### M9-009 One-runtime end-to-end connector
 
-Choose one runtime, such as Hermes or OpenClaw. Do not generalize across several runtimes until one real connector proves the contract.
+Prove the complete contract with the pinned isolated Hermes runtime. Do not
+generalize across several runtimes until this connector is accepted.
+
+**Acceptance criteria**
+
+- install Hermes `0.20.0` from the exact release commit and lock into a new
+  user-owned Red Hat path without changing the default Hermes `0.18.2`, global
+  Codex, system Node, application service, or unrelated profiles
+- create a new isolated profile with `HERMES_HOME`, `home_mode: profile`, a
+  separate model login using the approved personal account ceremony, and an
+  owner-only MCP bearer file; do not clone the default profile
+- connect through an SSH-forwarded loopback port, negotiate the expected MCP
+  protocol, discover only the exact allowlisted tools, and record redacted
+  fixtures plus version/dependency checksums in `docs/compatibility/hermes-agent.md`
+- from Hermes, poll an addressed event, read and send a Message as its own
+  Actor, read/create/update/assign a Work Item, request sponsored `@agent`
+  execution, receive a human approval, observe terminal run state, rotate its
+  bearer, prove the old bearer fails, disable/re-enable, and remove the member
+- prove no application Thread is created by connecting or ordinary reads, no
+  human/provider authorship is impersonated, and Agent Workspace never hosts
+  or edits Hermes memory, schedules, model, skills, sessions, gateway, or
+  autonomy loop
+
+**Dependencies:** M9-001 through M9-008, exact-host tunnel, personal interactive
+model authentication, retained spike repository, and accepted main CI.
+
+**Expected tests:** automated fixtures and policy suites plus one real Red Hat
+Hermes session, browser sponsor decision, credential rotation/revocation,
+service and Hermes restart, event replay, audit inspection, filesystem/profile
+isolation, and redaction scan.
+
+**Exclusions:** a second runtime, permanent gateway, unattended cron proof,
+public ingress, runtime hosting UI, production account migration, and deletion
+of the retained compatibility profile without separate authorization.
 
 ### M9 exit criteria
 
@@ -6749,6 +7064,11 @@ Choose one runtime, such as Hermes or OpenClaw. Do not generalize across several
 - it can create or update a Work Item and invoke an Execution Worker when permitted
 - approvals, revocation, retries, messages, and audit attribution pass the focused security test suite
 - Agent Workspace does not host or assume control of the external runtime's memory, schedules, model, or autonomy loop
+- the exact accepted commit is green in required CI, deployed immutably on Red
+  Hat, and reconciles after controlled application and Hermes restarts without
+  manual database or filesystem repair
+- the default Hermes profile, system Node, global Codex, existing Tailscale
+  routes, unrelated Podman projects, and retained dirty worktrees are unchanged
 
 ---
 
@@ -7420,6 +7740,54 @@ beneath the configured data root, and missing or unready setup fails before
 Messages, runs, workspaces, Provider Sessions, approvals, audit success, or
 outbox effects are committed.
 
+## D-053: Version-one attachments remain disabled with fixed future entry limits
+
+**Status:** Accepted
+
+**Reason:** M8 must not imply that an absent upload surface has an undefined or
+unbounded storage contract. Version one therefore keeps attachment upload
+disabled. Any later attachment implementation starts with a 25 MiB per-object
+limit and a configurable 2 GiB per-Project aggregate, plus MIME/content
+validation, ordinary authorization, storage-watermark admission, checksum and
+malware policy, inert rendering, backup/restore treatment, and explicit
+retention. Raising those limits or enabling uploads requires a new accepted
+design; the values do not silently authorize a feature.
+
+## D-054: External agents connect through scoped MCP bearer and bounded polling
+
+**Status:** Accepted
+
+**Reason:** The existing Streamable HTTP MCP endpoint already exposes
+client-neutral Project domain operations through digest-only credentials,
+centralized policy, optimistic concurrency, audit, and bounded results. M9
+therefore extends that boundary to a distinct external-agent Actor and durable
+connection instead of creating runtime-specific HTTP endpoints or database
+access. The first runtime is Hermes Agent `0.20.0` at exact release commit
+`3c27eb6234bf91b8ceee9e9071591b31e9b148cb`, running in an isolated externally
+owned profile. It uses a Project/Actor/connection-scoped high-entropy bearer
+over the existing loopback endpoint reached by SSH forwarding. Initial event
+delivery is bounded at-least-once polling with an opaque connection-bound
+cursor and canonical refetch, not a permanent public webhook. Sampling,
+elicitation, resources, prompts, and parallel tool calls remain disabled for
+the first contract. Agent Workspace does not own the runtime's model, memory,
+schedules, skills, sessions, terminal, gateway, or autonomy loop.
+
+## D-055: External Worker invocation is human-sponsored and remains profile-owned
+
+**Status:** Accepted
+
+**Reason:** An external agent is a useful originating Actor but cannot own or
+select a human's personal Codex authentication, cost boundary, or provider
+history. Its Worker invocation therefore creates a durable request and a
+human-required, separation-of-duty approval addressed to an explicitly chosen
+eligible sponsor. No Agent Run or workspace exists before approval. The human
+sponsor's server-side decision revalidates membership and selects only that
+sponsor's active same-Project personal Execution Profile. The resulting run
+retains the external Actor as originating requester and the human as sponsor
+and approver. Denial, expiry, disable, missing profile, or conflict has no
+fallback to another account. Pooled/service profiles and automatic sponsor
+selection remain future decisions.
+
 ---
 
 # 32. Open decisions
@@ -7459,7 +7827,11 @@ Passkeys and OIDC are deferred additive options.
 
 ## O-005: Attachment storage limits
 
-Set during hardening.
+**Status:** Resolved by D-053.
+
+Attachment upload remains disabled for version one. Any later entry point
+starts at 25 MiB per object and a configurable 2 GiB per Project with the
+additional safety gates in D-053.
 
 **Decision required before:** M8 private-beta exit.
 
@@ -7471,11 +7843,12 @@ Not part of version one. A hostile multi-tenant execution platform requires a ne
 
 ## O-007: External agent connection protocol
 
-Choose the first supported runtime and specify registration, authentication, credential storage, rotation, revocation, MCP or HTTP operations, event delivery or polling, cursors, presence, rate limits, approval routing, and diagnostics through a focused threat model.
+**Status:** Resolved by D-054 and `docs/operations/external-agent-threat-model.md`.
 
-The design must preserve the external ownership boundary and use the ordinary Actor authorization and domain command layers.
-
-**Decision required before:** M9 entry. It does not block version one.
+The first runtime is pinned Hermes Agent `0.20.0`. It connects as its own
+Project Actor through the existing Streamable HTTP MCP endpoint with a
+digest-only scoped bearer, bounded polling cursor, ordinary policy, explicit
+approval routing, and connection diagnostics. It remains externally owned.
 
 ## O-008: Commercial provider and authentication model
 
@@ -7555,6 +7928,13 @@ These references should be rechecked when implementing the related integration b
 
 9. OpenAI Services Agreement: current service terms must be rechecked before a paid or broadly distributed integration.  
    https://cdn.openai.com/osa/openai-services-agreement.pdf
+
+10. Hermes Agent `v2026.8.3` release and official configuration/MCP
+    references: pinned first M9 runtime, isolated profiles, remote Streamable
+    HTTP MCP, secret expansion, tool filtering, and profile-scoped home mode.
+    https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.3
+    https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/mcp-config-reference.md
+    https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/configuration.md
 
 ---
 
@@ -7636,4 +8016,6 @@ Agent member invokes @agent when bounded repository work is needed
 Permissions, approvals, results, and audit history remain inside Agent Workspace
 ```
 
-The version-one architecture must make this later loop additive. The version-one implementation must not attempt to build it.
+The version-one architecture made this later loop additive. M9 now implements
+and proves it with one pinned externally owned Hermes runtime before any
+multi-runtime generalization.
