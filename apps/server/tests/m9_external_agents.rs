@@ -74,7 +74,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "displayName":"Hermes teammate",
                 "handle":"Hermes Teammate",
                 "role":"member",
-                "scopes":["read","write"]
+                "scopes":["read","write","events"]
             }),
         ))
         .await
@@ -155,6 +155,188 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(safe_list["connections"].as_array().map(Vec::len), Some(1));
 
     assert_mcp_auth(&application, &first_token, StatusCode::OK).await;
+    let session_id = initialize_mcp(&application, &first_token).await;
+    let conversations = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "conversation_list",
+        json!({"projectId":seed.project_id.to_string(),"limit":1}),
+    )
+    .await;
+    assert_eq!(conversations["outcome"], "found");
+    assert_eq!(
+        conversations["value"]["conversations"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert!(conversations["value"]["nextCursor"].is_string());
+    let mentionable = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "mentionable_actor_search",
+        json!({"query":"Hermes","limit":10}),
+    )
+    .await;
+    assert_eq!(mentionable["outcome"], "found");
+    assert_eq!(
+        mentionable["value"]["actors"][0]["id"],
+        actor_id.to_string()
+    );
+
+    let sent = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "conversation_message_send",
+        json!({
+            "conversationId":seed.thread_id.to_string(),
+            "clientRequestId":"m9-external-message-1",
+            "content":{"version":1,"nodes":[
+                {"type":"text","text":"<script>alert('inert')</script> hello "},
+                {"type":"mention","actorId":seed.human_actor_id}
+            ]}
+        }),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "applied");
+    assert_eq!(sent["idempotentReplay"], false);
+    assert_eq!(
+        sent["result"]["message"]["author"]["id"],
+        actor_id.to_string()
+    );
+    assert_eq!(
+        sent["result"]["message"]["author"]["kind"],
+        "external_agent"
+    );
+    let external_message_id = sent["result"]["message"]["id"]
+        .as_str()
+        .expect("external Message id")
+        .to_owned();
+    let replayed_message = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "conversation_message_send",
+        json!({
+            "conversationId":seed.thread_id.to_string(),
+            "clientRequestId":"m9-external-message-1",
+            "content":{"version":1,"nodes":[
+                {"type":"text","text":"<script>alert('inert')</script> hello "},
+                {"type":"mention","actorId":seed.human_actor_id}
+            ]}
+        }),
+    )
+    .await;
+    assert_eq!(replayed_message["outcome"], "applied");
+    assert_eq!(replayed_message["idempotentReplay"], true);
+    assert_eq!(
+        replayed_message["result"]["message"]["id"],
+        external_message_id
+    );
+    let conflicting_message = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "conversation_message_send",
+        json!({
+            "conversationId":seed.thread_id.to_string(),
+            "clientRequestId":"m9-external-message-1",
+            "content":{"version":1,"nodes":[{"type":"text","text":"different"}]}
+        }),
+    )
+    .await;
+    assert_eq!(conflicting_message["outcome"], "conflict");
+
+    let timeline = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "conversation_timeline_get",
+        json!({"conversationId":seed.thread_id.to_string(),"limit":10}),
+    )
+    .await;
+    assert_eq!(timeline["outcome"], "found");
+    assert_eq!(
+        timeline["value"]["entries"][0]["message"]["id"],
+        external_message_id
+    );
+    let browser_timeline = application
+        .clone()
+        .oneshot(read_request(
+            &format!("/api/v1/conversations/{}/timeline", seed.thread_id),
+            &cookie,
+        ))
+        .await
+        .expect("browser timeline response");
+    assert_eq!(browser_timeline.status(), StatusCode::OK);
+    let browser_timeline = response_json(browser_timeline).await;
+    assert_eq!(
+        browser_timeline["entries"][0]["message"]["author"]["kind"],
+        "external_agent"
+    );
+    assert_eq!(
+        browser_timeline["entries"][0]["message"]["plainText"],
+        "<script>alert('inert')</script> hello @mischa"
+    );
+
+    let human_mention = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/threads/{}/messages", seed.thread_id),
+            &cookie,
+            &csrf,
+            "m9-human-mention-1",
+            json!({"content":{"version":1,"nodes":[
+                {"type":"text","text":"Please inspect this, "},
+                {"type":"mention","actorId":actor_id}
+            ]}}),
+        ))
+        .await
+        .expect("human mention response");
+    assert_eq!(human_mention.status(), StatusCode::CREATED);
+    let first_poll = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "external_event_poll",
+        json!({"limit":10,"waitSeconds":0}),
+    )
+    .await;
+    assert_eq!(first_poll["outcome"], "events");
+    assert_eq!(first_poll["events"][0]["kind"], "connection.created");
+    assert_eq!(
+        first_poll["events"][0]["resourceId"],
+        connection_id.to_string()
+    );
+    assert_eq!(first_poll["events"][1]["kind"], "message.mentioned");
+    assert!(first_poll["events"][1].get("body").is_none());
+    let first_cursor = first_poll["nextCursor"]
+        .as_str()
+        .expect("external event cursor")
+        .to_owned();
+    let replayed = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "external_event_poll",
+        json!({"limit":10,"waitSeconds":0}),
+    )
+    .await;
+    assert_eq!(replayed["events"][0]["id"], first_poll["events"][0]["id"]);
+    let empty = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "external_event_poll",
+        json!({"afterCursor":first_cursor,"limit":10,"waitSeconds":0}),
+    )
+    .await;
+    assert_eq!(empty["events"], json!([]));
+    terminate_mcp(&application, &first_token, &session_id).await;
     let connection_uri = format!("{base}/{connection_id}");
     let rotated = application
         .clone()
@@ -189,6 +371,17 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     );
     assert_mcp_auth(&application, &first_token, StatusCode::UNAUTHORIZED).await;
     assert_mcp_auth(&application, &second_token, StatusCode::OK).await;
+    let second_session = initialize_mcp(&application, &second_token).await;
+    let old_cursor_after_rotation = call_mcp_tool(
+        &application,
+        &second_token,
+        &second_session,
+        "external_event_poll",
+        json!({"afterCursor":first_poll["nextCursor"],"limit":10,"waitSeconds":0}),
+    )
+    .await;
+    assert_eq!(old_cursor_after_rotation["outcome"], "invalid_request");
+    terminate_mcp(&application, &second_token, &second_session).await;
 
     let disabled = application
         .clone()
@@ -226,7 +419,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .to_owned();
     assert_eq!(enabled["connection"]["version"], 4);
     assert_eq!(enabled["connection"]["role"], "viewer");
-    assert_eq!(enabled["connection"]["scopes"], json!(["read"]));
+    assert_eq!(enabled["connection"]["scopes"], json!(["events", "read"]));
     assert_mcp_auth(&application, &third_token, StatusCode::OK).await;
 
     let removed = application
@@ -264,7 +457,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        5
+        6
     );
 
     drop(application);
@@ -372,6 +565,22 @@ fn write_request(method: &str, uri: &str, cookie: &str, csrf: &str, body: Value)
         .expect("write request")
 }
 
+fn write_request_with_idempotency(
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    csrf: &str,
+    idempotency_key: &str,
+    body: Value,
+) -> Request<Body> {
+    let mut request = write_request(method, uri, cookie, csrf, body);
+    request.headers_mut().insert(
+        "idempotency-key",
+        idempotency_key.parse().expect("Idempotency-Key header"),
+    );
+    request
+}
+
 fn read_request(uri: &str, cookie: &str) -> Request<Body> {
     Request::builder()
         .uri(uri)
@@ -423,6 +632,132 @@ async fn assert_mcp_auth(application: &axum::Router, token: &str, status: Status
         .await
         .expect("initialize response");
     assert_eq!(response.status(), status);
+}
+
+async fn initialize_mcp(application: &axum::Router, token: &str) -> String {
+    let response = mcp_request(
+        application,
+        token,
+        None,
+        json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":"2025-06-18",
+                "capabilities":{},
+                "clientInfo":{"name":"hermes","version":"0.20.0"}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let session_id = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("MCP session id")
+        .to_owned();
+    let initialized = mcp_request(
+        application,
+        token,
+        Some(&session_id),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+    )
+    .await;
+    assert_eq!(initialized.status(), StatusCode::ACCEPTED);
+    session_id
+}
+
+async fn call_mcp_tool(
+    application: &axum::Router,
+    token: &str,
+    session_id: &str,
+    name: &str,
+    arguments: Value,
+) -> Value {
+    let response = mcp_request(
+        application,
+        token,
+        Some(session_id),
+        json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{"name":name,"arguments":arguments}
+        }),
+    )
+    .await;
+    let response = protocol_json(response).await;
+    response
+        .pointer("/result/structuredContent")
+        .cloned()
+        .unwrap_or_else(|| panic!("missing MCP structured content: {response}"))
+}
+
+async fn terminate_mcp(application: &axum::Router, token: &str, session_id: &str) {
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(MCP_PATH)
+                .header(header::HOST, "127.0.0.1")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header("mcp-session-id", session_id)
+                .header("mcp-protocol-version", "2025-06-18")
+                .body(Body::empty())
+                .expect("MCP termination request"),
+        )
+        .await
+        .expect("MCP termination response");
+    assert!(
+        [StatusCode::OK, StatusCode::ACCEPTED, StatusCode::NO_CONTENT].contains(&response.status()),
+        "unexpected MCP termination status {}",
+        response.status()
+    );
+}
+
+async fn mcp_request(
+    application: &axum::Router,
+    token: &str,
+    session_id: Option<&str>,
+    payload: Value,
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(MCP_PATH)
+        .header(header::HOST, "127.0.0.1")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(session_id) = session_id {
+        request = request
+            .header("mcp-session-id", session_id)
+            .header("mcp-protocol-version", "2025-06-18");
+    }
+    application
+        .clone()
+        .oneshot(
+            request
+                .body(Body::from(serde_json::to_vec(&payload).expect("MCP JSON")))
+                .expect("MCP request"),
+        )
+        .await
+        .expect("MCP response")
+}
+
+async fn protocol_json(response: axum::response::Response) -> Value {
+    let body = to_bytes(response.into_body(), 1_000_000)
+        .await
+        .expect("read MCP response");
+    let text = String::from_utf8(body.to_vec()).expect("MCP UTF-8");
+    let json = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&text);
+    serde_json::from_str(json).expect("MCP response JSON")
 }
 
 async fn integration_pool() -> Option<(String, PgPool)> {
