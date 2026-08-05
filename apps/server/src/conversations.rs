@@ -1375,6 +1375,17 @@ async fn enqueue_external_message_events(
     if mentioned_actor_ids.is_empty() {
         return Ok(());
     }
+    // Historical migration tests intentionally exercise this command path on
+    // pre-M9 schemas. The durable Message is still valid there; external-agent
+    // delivery begins only once the M9 connection table has been installed.
+    let external_connections_available = sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('external_agent_connections') IS NOT NULL",
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !external_connections_available {
+        return Ok(());
+    }
     let connections = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         SELECT connection.id, connection.actor_id
