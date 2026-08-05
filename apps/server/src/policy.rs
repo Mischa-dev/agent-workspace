@@ -36,6 +36,7 @@ pub enum Action {
     InvitationManage,
     MembershipView,
     MembershipManage,
+    ExternalAgentManage,
     RealtimeSubscribe,
     McpRead,
     McpWrite,
@@ -65,13 +66,14 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
         Self::InvitationManage,
         Self::MembershipView,
         Self::MembershipManage,
+        Self::ExternalAgentManage,
         Self::RealtimeSubscribe,
         Self::McpRead,
         Self::McpWrite,
@@ -367,6 +369,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::InvitationManage
             | Action::MembershipView
             | Action::MembershipManage
+            | Action::ExternalAgentManage
             | Action::RealtimeSubscribe
             | Action::McpRead
             | Action::McpWrite
@@ -402,6 +405,10 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
 
     if membership.scope != resource_scope {
         return Decision::Deny(DenyReason::MembershipScopeMismatch);
+    }
+
+    if action == Action::ExternalAgentManage && subject.actor_kind != ActorKind::Human {
+        return Decision::Deny(DenyReason::HumanRequired);
     }
 
     if membership.role == MembershipRole::Worker {
@@ -765,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn human_and_external_agent_with_the_same_role_have_identical_authority() {
+    fn human_and_external_agent_with_the_same_role_have_identical_ordinary_authority() {
         for role in [
             MembershipRole::Owner,
             MembershipRole::Admin,
@@ -773,6 +780,9 @@ mod tests {
             MembershipRole::Viewer,
         ] {
             for action in Action::ALL {
+                if action == Action::ExternalAgentManage {
+                    continue;
+                }
                 let resource = project_resource(action, role);
                 let human = subject(ActorKind::Human, action, role, true, true, None);
                 let external_agent =
@@ -784,6 +794,37 @@ mod tests {
                     "{role:?} performing {action:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn only_a_human_owner_or_admin_can_manage_external_connections() {
+        for role in [MembershipRole::Owner, MembershipRole::Admin] {
+            let resource = Resource::Project(ProjectScope::project(PROJECT_ID));
+            let human = subject(
+                ActorKind::Human,
+                Action::ExternalAgentManage,
+                role,
+                true,
+                true,
+                None,
+            );
+            let external = subject(
+                ActorKind::ExternalAgent,
+                Action::ExternalAgentManage,
+                role,
+                true,
+                true,
+                None,
+            );
+            assert_eq!(
+                authorize(&human, Action::ExternalAgentManage, resource),
+                Decision::Allow
+            );
+            assert_eq!(
+                authorize(&external, Action::ExternalAgentManage, resource),
+                Decision::Deny(DenyReason::HumanRequired)
+            );
         }
     }
 

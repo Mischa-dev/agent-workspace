@@ -254,6 +254,30 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/members/{actor_id}",
         MembershipManage
     ),
+    policy_route!(
+        "external_agents",
+        Post,
+        "/api/v1/projects/{project_id}/external-agents",
+        ExternalAgentManage
+    ),
+    policy_route!(
+        "external_agents",
+        Patch,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}",
+        ExternalAgentManage
+    ),
+    policy_route!(
+        "external_agents",
+        Post,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/credentials/rotate",
+        ExternalAgentManage
+    ),
+    policy_route!(
+        "external_agents",
+        Post,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
+        ExternalAgentManage
+    ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/token", OAuthProtocol),
@@ -394,6 +418,7 @@ mod tests {
         ("repositories", include_str!("repositories.rs")),
         ("work_items", include_str!("work_items.rs")),
         ("execution", include_str!("execution.rs")),
+        ("external_agents", include_str!("external_agents.rs")),
     ];
 
     #[test]

@@ -9,6 +9,7 @@ pub mod conversations;
 pub mod domain;
 pub mod error;
 pub mod execution;
+pub mod external_agents;
 pub mod git_runtime;
 pub mod github;
 pub mod health;
@@ -76,6 +77,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api::router())
         .merge(account::router())
         .merge(conversations::router())
+        .merge(external_agents::router())
         .merge(repositories::router())
         .merge(github::router())
         .merge(invitations::router())

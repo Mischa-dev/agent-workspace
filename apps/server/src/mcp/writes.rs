@@ -14,8 +14,7 @@ use crate::{
     message_content::MessageContent,
     outbox::{OutboxEventPayload, WorkItemUpdatedPayload, enqueue_typed},
     policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-        authorize,
+        Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
     work_items::insert_work_item_activity,
 };
@@ -978,10 +977,9 @@ async fn authorize_write(
          AND om.actor_id = pm.actor_id
          AND om.enabled
         JOIN actors a ON a.id = pm.actor_id
-        JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
         WHERE pm.project_id = $1 AND pm.actor_id = $2
-          AND pm.enabled AND a.kind = 'human' AND a.status = 'active'
-        FOR SHARE OF pm, p, om, a, u
+          AND pm.enabled AND a.kind IN ('human', 'external_agent') AND a.status = 'active'
+        FOR SHARE OF pm, p, om, a
         "#,
     )
     .bind(principal.project_id)
@@ -1006,7 +1004,7 @@ async fn authorize_write(
     let decision = authorize(
         &Subject::new(
             principal.actor_id,
-            ActorKind::Human,
+            principal.actor_kind,
             true,
             Some(Membership::project(principal.project_id, role, true)),
             None,
