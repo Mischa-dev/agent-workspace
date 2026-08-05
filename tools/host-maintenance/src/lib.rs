@@ -22,6 +22,7 @@ pub const EXCLUDED_TABLE_DATA: &[&str] = &[
     "public.sessions",
     "public.user_password_credentials",
     "public.mcp_client_credentials",
+    "public.mcp_oauth_clients",
     "public.mcp_oauth_authorization_codes",
     "public.mcp_oauth_grants",
     "public.mcp_oauth_access_tokens",
@@ -319,6 +320,7 @@ pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
 
     restore_database(
         &options.pg_restore,
+        &options.psql,
         target_database_name.as_str(),
         &source.join("database.dump"),
     )?;
@@ -890,7 +892,27 @@ fn ensure_database_empty(program: &Path, database_url: &str) -> Result<()> {
     Ok(())
 }
 
-fn restore_database(program: &Path, database_url: &str, dump: &Path) -> Result<()> {
+fn restore_database(program: &Path, psql: &Path, database_url: &str, dump: &Path) -> Result<()> {
+    for section in ["pre-data", "data"] {
+        restore_database_section(program, database_url, dump, section)?;
+    }
+    // Browser session rows are intentionally absent from ordinary backups.
+    // Audit history remains durable, but its optional session correlation must
+    // be cleared before post-data foreign keys are installed.
+    let _ = run_psql(
+        psql,
+        database_url,
+        "UPDATE audit_events SET session_id = NULL WHERE session_id IS NOT NULL",
+    )?;
+    restore_database_section(program, database_url, dump, "post-data")
+}
+
+fn restore_database_section(
+    program: &Path,
+    database_url: &str,
+    dump: &Path,
+    section: &str,
+) -> Result<()> {
     let args = vec![
         // pg_restore requires an explicit destination selector. An empty
         // dbname delegates connection resolution to libpq's cleared
@@ -899,6 +921,7 @@ fn restore_database(program: &Path, database_url: &str, dump: &Path) -> Result<(
         OsString::from("--exit-on-error"),
         OsString::from("--no-owner"),
         OsString::from("--no-privileges"),
+        OsString::from(format!("--section={section}")),
     ];
     run_from_file(
         program,
@@ -916,7 +939,7 @@ fn reset_restored_credentials(program: &Path, database_url: &str) -> Result<()> 
 }
 
 fn credential_row_count(program: &Path, database_url: &str) -> Result<u64> {
-    let query = "SELECT (SELECT count(*) FROM sessions) + (SELECT count(*) FROM user_password_credentials) + (SELECT count(*) FROM mcp_client_credentials) + (SELECT count(*) FROM mcp_oauth_authorization_codes) + (SELECT count(*) FROM mcp_oauth_grants) + (SELECT count(*) FROM mcp_oauth_access_tokens) + (SELECT count(*) FROM mcp_oauth_refresh_tokens)";
+    let query = "SELECT (SELECT count(*) FROM sessions) + (SELECT count(*) FROM user_password_credentials) + (SELECT count(*) FROM mcp_client_credentials) + (SELECT count(*) FROM mcp_oauth_clients) + (SELECT count(*) FROM mcp_oauth_authorization_codes) + (SELECT count(*) FROM mcp_oauth_grants) + (SELECT count(*) FROM mcp_oauth_access_tokens) + (SELECT count(*) FROM mcp_oauth_refresh_tokens)";
     run_psql(program, database_url, query)?
         .trim()
         .parse()
@@ -1316,19 +1339,38 @@ mod tests {
     #[test]
     fn restore_selects_the_environment_database_and_streams_the_dump() {
         let temporary = temporary_directory();
+        let order = temporary.path().join("restore-order");
         let consumer = temporary.path().join("pg-restore-fixture");
         fs::write(
             &consumer,
-            "#!/bin/sh\n[ \"$PGDATABASE\" = 'target_database' ]\n[ \"$1\" = '--dbname=' ]\n[ \"$2\" = '--exit-on-error' ]\n[ \"$3\" = '--no-owner' ]\n[ \"$4\" = '--no-privileges' ]\n[ \"$(/bin/cat)\" = 'database-dump' ]\n",
+            format!(
+                "#!/bin/sh\n[ \"$PGDATABASE\" = 'target_database' ]\n[ \"$1\" = '--dbname=' ]\n[ \"$2\" = '--exit-on-error' ]\n[ \"$3\" = '--no-owner' ]\n[ \"$4\" = '--no-privileges' ]\ncase \"$5\" in --section=*) ;; *) exit 1 ;; esac\n[ \"$(/bin/cat)\" = 'database-dump' ]\nprintf '%s\\n' \"${{5#--section=}}\" >> '{}'\n",
+                order.display()
+            ),
         )
         .expect("restore consumer fixture");
         fs::set_permissions(&consumer, fs::Permissions::from_mode(0o700))
             .expect("restore consumer executable");
         let dump = temporary.path().join("database.dump");
         fs::write(&dump, b"database-dump").expect("restore dump fixture");
+        let psql = temporary.path().join("psql-fixture");
+        fs::write(
+            &psql,
+            format!(
+                "#!/bin/sh\n[ \"$PGDATABASE\" = 'target_database' ]\n[ \"$5\" = '--command' ]\n[ \"$6\" = 'UPDATE audit_events SET session_id = NULL WHERE session_id IS NOT NULL' ]\nprintf 'sanitize\\n' >> '{}'\n",
+                order.display()
+            ),
+        )
+        .expect("psql fixture");
+        fs::set_permissions(&psql, fs::Permissions::from_mode(0o700))
+            .expect("psql fixture executable");
 
-        restore_database(&consumer, "target_database", &dump)
+        restore_database(&consumer, &psql, "target_database", &dump)
             .expect("restore uses the environment-selected database");
+        assert_eq!(
+            fs::read_to_string(order).expect("restore order"),
+            "pre-data\ndata\nsanitize\npost-data\n"
+        );
     }
 
     #[test]

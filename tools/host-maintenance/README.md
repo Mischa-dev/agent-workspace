@@ -59,7 +59,10 @@ repository mirrors as rebuildable caches and artifacts, attachments, and
 worktrees as preserved data; dirty and unpushed worktrees are never pruned by
 this command. Ordinary backups exclude browser
 sessions, password credentials, MCP bearer credentials, OAuth grants and token
-rows, Codex profile contents, and external file-backed secrets. A restored
+rows, OAuth client registrations, Codex profile contents, and external
+file-backed secrets. Because browser session rows are absent, retained audit
+events keep their Actor and action history but clear the optional session
+correlation before post-data foreign keys are installed. A restored
 instance starts with all human passwords absent, sessions absent, MCP/OAuth
 grants absent, authentication epochs advanced, active invitation capabilities
 revoked, and Execution Profiles logged out. Restored data is assigned to the
