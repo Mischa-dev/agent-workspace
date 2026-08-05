@@ -29,6 +29,19 @@ pub struct BootstrapResult {
     pub adopted_existing_actor: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PasswordRotationCommand {
+    pub login_name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordRotationResult {
+    pub user_id: Uuid,
+    pub authentication_epoch: i64,
+    pub revoked_sessions: u64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
     #[error("{0}")]
@@ -49,6 +62,8 @@ pub enum BootstrapError {
     InteractiveTerminalRequired,
     #[error("the password entries did not match")]
     PasswordMismatch,
+    #[error("the active User or password credential does not exist")]
+    PasswordCredentialUnavailable,
     #[error("bootstrap application operation failed")]
     Application(#[from] AppError),
     #[error("bootstrap database operation failed")]
@@ -138,11 +153,32 @@ pub fn parse_member_command(
     Ok(command)
 }
 
+pub fn parse_password_rotation_command(
+    arguments: impl IntoIterator<Item = String>,
+) -> Result<PasswordRotationCommand, BootstrapError> {
+    let mut arguments = arguments.into_iter();
+    let mut login_name = None;
+    while let Some(argument) = arguments.next() {
+        let value = arguments.next().ok_or(BootstrapError::Usage(
+            "every password rotation option requires a value",
+        ))?;
+        match argument.as_str() {
+            "--login-name" => login_name = Some(value),
+            _ => return Err(BootstrapError::Usage("unknown password rotation option")),
+        }
+    }
+    Ok(PasswordRotationCommand {
+        login_name: normalize_login_name(
+            login_name.ok_or(BootstrapError::Usage("--login-name is required"))?,
+        )?,
+    })
+}
+
 pub fn read_password_interactively() -> Result<String, BootstrapError> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(BootstrapError::InteractiveTerminalRequired);
     }
-    let mut password = rpassword::prompt_password("Administrator password: ")
+    let mut password = rpassword::prompt_password("Password: ")
         .map_err(|_| BootstrapError::InteractiveTerminalRequired)?;
     let mut confirmation = match rpassword::prompt_password("Confirm password: ") {
         Ok(confirmation) => confirmation,
@@ -162,6 +198,91 @@ pub fn read_password_interactively() -> Result<String, BootstrapError> {
         return Err(error);
     }
     Ok(password)
+}
+
+pub async fn rotate_password(
+    pool: &PgPool,
+    command: PasswordRotationCommand,
+    mut password: String,
+) -> Result<PasswordRotationResult, BootstrapError> {
+    if let Err(error) = validate_password(&password) {
+        password.zeroize();
+        return Err(error);
+    }
+    let password_phc = password::hash_password(password).await?;
+    let mut transaction = pool.begin().await?;
+    let user = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT id, actor_id
+        FROM users
+        WHERE login_name = $1 AND status = 'active'
+        FOR UPDATE
+        "#,
+    )
+    .bind(&command.login_name)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(BootstrapError::PasswordCredentialUnavailable)?;
+    let credential = sqlx::query(
+        r#"
+        UPDATE user_password_credentials
+        SET password_phc = $2, version = version + 1, updated_at = now()
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user.0)
+    .bind(password_phc)
+    .execute(&mut *transaction)
+    .await?;
+    if credential.rows_affected() != 1 {
+        return Err(BootstrapError::PasswordCredentialUnavailable);
+    }
+    let authentication_epoch = sqlx::query_scalar::<_, i64>(
+        r#"
+        UPDATE users
+        SET authentication_epoch = authentication_epoch + 1, updated_at = now()
+        WHERE id = $1 AND status = 'active'
+        RETURNING authentication_epoch
+        "#,
+    )
+    .bind(user.0)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let revoked_sessions = sqlx::query(
+        r#"
+        UPDATE sessions
+        SET revoked_at = now(), updated_at = now()
+        WHERE user_id = $1 AND revoked_at IS NULL
+        "#,
+    )
+    .bind(user.0)
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, authentication_class, action, target_kind,
+            target_id, outcome, metadata
+        ) VALUES (
+            $1, $2, 'host_local_rotation', 'identity.password.rotate',
+            'user', $3, 'succeeded', $4
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(user.1)
+    .bind(user.0)
+    .bind(serde_json::json!({ "revokedSessions": revoked_sessions }))
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+
+    Ok(PasswordRotationResult {
+        user_id: user.0,
+        authentication_epoch,
+        revoked_sessions,
+    })
 }
 
 pub async fn bootstrap_admin(
@@ -521,7 +642,10 @@ fn normalize_organization_slug(value: String) -> Result<String, BootstrapError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{BootstrapError, parse_command, parse_member_command, validate_password};
+    use super::{
+        BootstrapError, parse_command, parse_member_command, parse_password_rotation_command,
+        validate_password,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -564,6 +688,23 @@ mod tests {
         assert!(validate_password("short").is_err());
         assert!(validate_password("correct horse battery staple").is_ok());
         assert!(validate_password(&"x".repeat(1025)).is_err());
+    }
+
+    #[test]
+    fn password_rotation_accepts_only_a_normalized_login_name() {
+        let command = parse_password_rotation_command([
+            "--login-name".to_owned(),
+            " Mischa.Nelson07 ".to_owned(),
+        ])
+        .expect("valid rotation command");
+        assert_eq!(command.login_name, "mischa.nelson07");
+        assert!(matches!(
+            parse_password_rotation_command([
+                "--password".to_owned(),
+                "must-never-be-an-argument".to_owned(),
+            ]),
+            Err(BootstrapError::Usage(_))
+        ));
     }
 
     #[test]

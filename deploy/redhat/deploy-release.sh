@@ -41,6 +41,7 @@ sudo install -m 0755 \
   deploy/redhat/agent-workspace-pg-dump \
   deploy/redhat/agent-workspace-pg-restore \
   deploy/redhat/agent-workspace-psql \
+  deploy/redhat/install-file-secret.sh \
   "${release_root}/bin/"
 sudo cp -R apps/web/dist/. "${release_root}/web/"
 sudo chown -R root:root "${release_root}"

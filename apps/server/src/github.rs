@@ -4381,15 +4381,18 @@ async fn receive_webhook_inner(
         return Err(WebhookError::Invalid);
     }
     let signature = required_unique_header(headers, "x-hub-signature-256", 80)?;
-    let mut secret = read_secret_file(&config.webhook_secret_path, 4096)
-        .map_err(|_| WebhookError::Unavailable)?;
-    while secret.last().is_some_and(|byte| byte.is_ascii_whitespace()) {
-        secret.pop();
-    }
-    if secret.len() < 32 {
-        return Err(WebhookError::Unavailable);
-    }
-    verify_signature(&secret, body, &signature)?;
+    let current_secret = read_webhook_secret(&config.webhook_secret_path)?;
+    let previous_secret = config
+        .webhook_previous_secret_path
+        .as_ref()
+        .map(|path| read_webhook_secret(path))
+        .transpose()?;
+    verify_signature_with_overlap(
+        &current_secret,
+        previous_secret.as_ref().map(|secret| secret.as_slice()),
+        body,
+        &signature,
+    )?;
     let parsed = parse_webhook(headers, body)?;
     let checksum = Sha256::digest(body).to_vec();
 
@@ -4565,6 +4568,34 @@ fn verify_signature(secret: &[u8], body: &[u8], signature: &str) -> Result<(), W
         return Err(WebhookError::Signature);
     }
     Ok(())
+}
+
+fn read_webhook_secret(path: &Path) -> Result<Zeroizing<Vec<u8>>, WebhookError> {
+    let mut secret = read_secret_file(path, 4096).map_err(|_| WebhookError::Unavailable)?;
+    while secret.last().is_some_and(|byte| byte.is_ascii_whitespace()) {
+        secret.pop();
+    }
+    if secret.len() < 32 {
+        return Err(WebhookError::Unavailable);
+    }
+    Ok(secret)
+}
+
+fn verify_signature_with_overlap(
+    current_secret: &[u8],
+    previous_secret: Option<&[u8]>,
+    body: &[u8],
+    signature: &str,
+) -> Result<(), WebhookError> {
+    let current_matches = verify_signature(current_secret, body, signature).is_ok();
+    let previous_matches = previous_secret
+        .map(|secret| verify_signature(secret, body, signature).is_ok())
+        .unwrap_or(false);
+    if current_matches || previous_matches {
+        Ok(())
+    } else {
+        Err(WebhookError::Signature)
+    }
 }
 
 fn parse_webhook(headers: &HeaderMap, body: &[u8]) -> Result<ParsedWebhook, WebhookError> {
@@ -5060,12 +5091,33 @@ mod tests {
     #[test]
     fn webhook_signature_and_action_allowlist_are_strict() {
         let secret = b"a-high-entropy-development-webhook-secret";
+        let previous_secret = b"the-previous-high-entropy-webhook-secret";
         let body = br#"{"installation":{"id":1},"repository":{"id":2,"full_name":"owner/repository"},"after":"0123456789012345678901234567890123456789"}"#;
         let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC key");
         mac.update(body);
         let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
         assert!(verify_signature(secret, body, &signature).is_ok());
         assert!(verify_signature(secret, b"changed", &signature).is_err());
+        assert!(
+            verify_signature_with_overlap(secret, Some(previous_secret), body, &signature).is_ok()
+        );
+        let mut previous_mac =
+            Hmac::<Sha256>::new_from_slice(previous_secret).expect("previous HMAC key");
+        previous_mac.update(body);
+        let previous_signature = format!(
+            "sha256={}",
+            hex::encode(previous_mac.finalize().into_bytes())
+        );
+        assert!(
+            verify_signature_with_overlap(
+                secret,
+                Some(previous_secret),
+                body,
+                &previous_signature,
+            )
+            .is_ok()
+        );
+        assert!(verify_signature_with_overlap(secret, None, body, &previous_signature).is_err());
         assert!(allowed_webhook_action("push", None));
         assert!(!allowed_webhook_action("push", Some("created")));
         assert!(allowed_webhook_action("pull_request", Some("opened")));
@@ -5093,6 +5145,7 @@ mod tests {
             app_id: 4_442_593,
             private_key_path: "/outside/private-key".into(),
             webhook_secret_path: "/outside/webhook-secret".into(),
+            webhook_previous_secret_path: None,
             api_base_url: "https://api.github.com".to_owned(),
             api_version: GITHUB_API_VERSION.to_owned(),
         };

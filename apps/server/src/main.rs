@@ -99,6 +99,17 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&seeded)?);
             return Ok(());
         }
+        Some("user-password-rotate") => {
+            let command = bootstrap::parse_password_rotation_command(arguments)
+                .context("parse host-local password rotation command")?;
+            let password =
+                bootstrap::read_password_interactively().context("read replacement password")?;
+            let rotated = bootstrap::rotate_password(&pool, command, password)
+                .await
+                .context("rotate User password and sessions")?;
+            println!("{}", serde_json::to_string_pretty(&rotated)?);
+            return Ok(());
+        }
         Some("mcp-credential-create") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(

@@ -99,6 +99,7 @@ pub struct GitHubConfig {
     pub app_id: u64,
     pub private_key_path: PathBuf,
     pub webhook_secret_path: PathBuf,
+    pub webhook_previous_secret_path: Option<PathBuf>,
     pub api_base_url: String,
     pub api_version: String,
 }
@@ -110,6 +111,13 @@ impl fmt::Debug for GitHubConfig {
             .field("app_id", &self.app_id)
             .field("private_key_path", &"[REDACTED]")
             .field("webhook_secret_path", &"[REDACTED]")
+            .field(
+                "webhook_previous_secret_path",
+                &self
+                    .webhook_previous_secret_path
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
             .field("api_base_url", &self.api_base_url)
             .field("api_version", &self.api_version)
             .finish()
@@ -253,11 +261,14 @@ fn github_config(
     let app_id = values.get(&format!("{PREFIX}GITHUB_APP_ID"));
     let private_key = values.get(&format!("{PREFIX}GITHUB_PRIVATE_KEY_PATH"));
     let webhook_secret = values.get(&format!("{PREFIX}GITHUB_WEBHOOK_SECRET_PATH"));
+    let webhook_previous_secret = values
+        .get(&format!("{PREFIX}GITHUB_WEBHOOK_PREVIOUS_SECRET_PATH"))
+        .filter(|value| !value.trim().is_empty());
     let configured = [app_id, private_key, webhook_secret]
         .iter()
         .filter(|value| value.is_some_and(|value| !value.trim().is_empty()))
         .count();
-    if configured == 0 {
+    if configured == 0 && webhook_previous_secret.is_none() {
         return Ok(None);
     }
     if configured != 3 {
@@ -287,13 +298,31 @@ fn github_config(
         &private_key_path,
         data_root,
         web_root,
+        64 * 1024,
     )?;
     validate_secret_file(
         "GITHUB_WEBHOOK_SECRET_PATH",
         &webhook_secret_path,
         data_root,
         web_root,
+        4096,
     )?;
+    let webhook_previous_secret_path = webhook_previous_secret.map(PathBuf::from);
+    if let Some(previous_path) = &webhook_previous_secret_path {
+        validate_secret_file(
+            "GITHUB_WEBHOOK_PREVIOUS_SECRET_PATH",
+            previous_path,
+            data_root,
+            web_root,
+            4096,
+        )?;
+        if previous_path == &webhook_secret_path || previous_path == &private_key_path {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}GITHUB_WEBHOOK_PREVIOUS_SECRET_PATH"),
+                reason: "must be distinct from every current GitHub secret path".into(),
+            });
+        }
+    }
 
     let api_base_url = optional(values, "GITHUB_API_BASE_URL", "https://api.github.com");
     if api_base_url != "https://api.github.com" {
@@ -314,6 +343,7 @@ fn github_config(
         app_id,
         private_key_path,
         webhook_secret_path,
+        webhook_previous_secret_path,
         api_base_url,
         api_version,
     }))
@@ -324,6 +354,7 @@ fn validate_secret_file(
     path: &Path,
     data_root: &Path,
     web_root: &Path,
+    maximum_bytes: u64,
 ) -> Result<(), ConfigError> {
     if !path.is_absolute() || path.starts_with(data_root) || path.starts_with(web_root) {
         return Err(ConfigError::Invalid {
@@ -339,6 +370,12 @@ fn validate_secret_file(
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}{key}"),
             reason: "secret must be a regular owner-only file".into(),
+        });
+    }
+    if metadata.len() == 0 || metadata.len() > maximum_bytes {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}{key}"),
+            reason: format!("secret file must contain between 1 and {maximum_bytes} bytes"),
         });
     }
     Ok(())
@@ -577,11 +614,16 @@ mod tests {
         let directory = tempfile::tempdir().expect("secret directory");
         let private_key = directory.path().join("github-app.pem");
         let webhook_secret = directory.path().join("github-webhook-secret");
+        let previous_webhook_secret = directory.path().join("github-webhook-secret.previous");
         for (path, bytes) in [
             (&private_key, b"private-key-placeholder".as_slice()),
             (
                 &webhook_secret,
                 b"high-entropy-webhook-secret-placeholder".as_slice(),
+            ),
+            (
+                &previous_webhook_secret,
+                b"previous-high-entropy-webhook-secret".as_slice(),
             ),
         ] {
             let mut file = OpenOptions::new()
@@ -600,11 +642,22 @@ mod tests {
             "AGENT_WORKSPACE_GITHUB_WEBHOOK_SECRET_PATH".to_owned(),
             webhook_secret.to_string_lossy().into_owned(),
         );
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_WEBHOOK_PREVIOUS_SECRET_PATH".to_owned(),
+            previous_webhook_secret.to_string_lossy().into_owned(),
+        );
         let config = AppConfig::from_values(&values).expect("complete GitHub config");
         let debug = format!("{config:?}");
-        assert!(config.github.is_some());
+        assert!(
+            config
+                .github
+                .as_ref()
+                .and_then(|github| github.webhook_previous_secret_path.as_ref())
+                .is_some()
+        );
         assert!(!debug.contains(private_key.to_string_lossy().as_ref()));
         assert!(!debug.contains(webhook_secret.to_string_lossy().as_ref()));
+        assert!(!debug.contains(previous_webhook_secret.to_string_lossy().as_ref()));
         assert!(debug.contains("[REDACTED]"));
     }
 
@@ -648,5 +701,27 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("symlink must fail");
         assert!(error.to_string().contains("regular owner-only file"));
+
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_WEBHOOK_SECRET_PATH".to_owned(),
+            webhook_secret.to_string_lossy().into_owned(),
+        );
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_WEBHOOK_PREVIOUS_SECRET_PATH".to_owned(),
+            webhook_secret.to_string_lossy().into_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("overlap paths must differ");
+        assert!(error.to_string().contains("must be distinct"));
+
+        let oversized = directory.path().join("oversized-webhook-secret");
+        std::fs::write(&oversized, vec![b'x'; 4097]).expect("oversized secret");
+        std::fs::set_permissions(&oversized, std::fs::Permissions::from_mode(0o600))
+            .expect("owner-only oversized secret");
+        values.insert(
+            "AGENT_WORKSPACE_GITHUB_WEBHOOK_PREVIOUS_SECRET_PATH".to_owned(),
+            oversized.to_string_lossy().into_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("oversized secret must fail");
+        assert!(error.to_string().contains("between 1 and 4096 bytes"));
     }
 }
