@@ -15,8 +15,15 @@ const WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_ATTEMPTS_PER_WINDOW: u32 = 10;
 const GLOBAL_LOGIN_ATTEMPTS_PER_WINDOW: u32 = 60;
 const AUTHENTICATED_WRITES_PER_WINDOW: u32 = 240;
+const EXPENSIVE_READS_PER_WINDOW: u32 = 120;
 const INVITATION_ATTEMPTS_PER_WINDOW: u32 = 20;
 const GLOBAL_INVITATION_ATTEMPTS_PER_WINDOW: u32 = 120;
+const MCP_REQUESTS_PER_WINDOW: u32 = 600;
+const MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 600;
+const GLOBAL_MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 900;
+const OAUTH_CEREMONIES_PER_WINDOW: u32 = 30;
+const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
+const WEBHOOK_ATTEMPTS_PER_WINDOW: u32 = 300;
 const MAX_LOGIN_KEYS: usize = 4_096;
 const MAX_INVITATION_KEYS: usize = 4_096;
 const MAX_SESSION_KEYS: usize = 4_096;
@@ -27,8 +34,15 @@ pub struct RateLimiters {
     login: FixedWindowLimiter<[u8; 32]>,
     global_login: FixedWindowLimiter<()>,
     authenticated_writes: FixedWindowLimiter<Uuid>,
+    expensive_reads: FixedWindowLimiter<Uuid>,
     invitation_attempts: FixedWindowLimiter<[u8; 32]>,
     global_invitation_attempts: FixedWindowLimiter<()>,
+    mcp_requests: FixedWindowLimiter<Uuid>,
+    mcp_auth_attempts: FixedWindowLimiter<[u8; 32]>,
+    global_mcp_auth_attempts: FixedWindowLimiter<()>,
+    oauth_ceremonies: FixedWindowLimiter<[u8; 32]>,
+    global_oauth_ceremonies: FixedWindowLimiter<()>,
+    webhook_attempts: FixedWindowLimiter<()>,
     password_kdfs: Arc<Semaphore>,
 }
 
@@ -53,6 +67,12 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)
     }
 
+    pub fn check_expensive_read(&self, session_id: Uuid) -> Result<(), AppError> {
+        self.expensive_reads
+            .check(session_id)
+            .map_err(AppError::rate_limited)
+    }
+
     pub fn check_invitation(&self, token_prefix: &str) -> Result<(), AppError> {
         self.global_invitation_attempts
             .check(())
@@ -60,6 +80,38 @@ impl RateLimiters {
         let key: [u8; 32] = Sha256::digest(token_prefix.as_bytes()).into();
         self.invitation_attempts
             .check(key)
+            .map_err(AppError::rate_limited)
+    }
+
+    pub fn check_mcp_request(&self, credential_id: Uuid) -> Result<(), AppError> {
+        self.mcp_requests
+            .check(credential_id)
+            .map_err(AppError::rate_limited)
+    }
+
+    pub fn check_mcp_auth(&self, untrusted_token: &str) -> Result<(), AppError> {
+        self.global_mcp_auth_attempts
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let key: [u8; 32] = Sha256::digest(untrusted_token.as_bytes()).into();
+        self.mcp_auth_attempts
+            .check(key)
+            .map_err(AppError::rate_limited)
+    }
+
+    pub fn check_oauth_ceremony(&self, untrusted_key: &str) -> Result<(), AppError> {
+        self.global_oauth_ceremonies
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let key: [u8; 32] = Sha256::digest(untrusted_key.as_bytes()).into();
+        self.oauth_ceremonies
+            .check(key)
+            .map_err(AppError::rate_limited)
+    }
+
+    pub fn check_webhook_attempt(&self) -> Result<(), AppError> {
+        self.webhook_attempts
+            .check(())
             .map_err(AppError::rate_limited)
     }
 }
@@ -74,6 +126,11 @@ impl Default for RateLimiters {
                 WINDOW,
                 MAX_SESSION_KEYS,
             ),
+            expensive_reads: FixedWindowLimiter::new(
+                EXPENSIVE_READS_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
             invitation_attempts: FixedWindowLimiter::new(
                 INVITATION_ATTEMPTS_PER_WINDOW,
                 WINDOW,
@@ -84,6 +141,32 @@ impl Default for RateLimiters {
                 WINDOW,
                 1,
             ),
+            mcp_requests: FixedWindowLimiter::new(
+                MCP_REQUESTS_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
+            mcp_auth_attempts: FixedWindowLimiter::new(
+                MCP_AUTH_ATTEMPTS_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
+            global_mcp_auth_attempts: FixedWindowLimiter::new(
+                GLOBAL_MCP_AUTH_ATTEMPTS_PER_WINDOW,
+                WINDOW,
+                1,
+            ),
+            oauth_ceremonies: FixedWindowLimiter::new(
+                OAUTH_CEREMONIES_PER_WINDOW,
+                WINDOW,
+                MAX_SESSION_KEYS,
+            ),
+            global_oauth_ceremonies: FixedWindowLimiter::new(
+                GLOBAL_OAUTH_CEREMONIES_PER_WINDOW,
+                WINDOW,
+                1,
+            ),
+            webhook_attempts: FixedWindowLimiter::new(WEBHOOK_ATTEMPTS_PER_WINDOW, WINDOW, 1),
             password_kdfs: Arc::new(Semaphore::new(CONCURRENT_PASSWORD_KDFS)),
         }
     }
@@ -185,7 +268,11 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{CONCURRENT_PASSWORD_KDFS, FixedWindowLimiter, RateLimiters};
+    use super::{
+        CONCURRENT_PASSWORD_KDFS, EXPENSIVE_READS_PER_WINDOW, FixedWindowLimiter,
+        MCP_AUTH_ATTEMPTS_PER_WINDOW, MCP_REQUESTS_PER_WINDOW, OAUTH_CEREMONIES_PER_WINDOW,
+        RateLimiters, WEBHOOK_ATTEMPTS_PER_WINDOW,
+    };
     use crate::error::AppError;
 
     #[test]
@@ -291,5 +378,53 @@ mod tests {
             Err(AppError::RateLimited { .. })
         ));
         assert!(limiters.check_invitation("aw_inv_second").is_ok());
+    }
+
+    #[test]
+    fn mcp_oauth_webhook_and_expensive_read_budgets_are_bounded() {
+        let limiters = RateLimiters::default();
+        let credential_id = Uuid::now_v7();
+        for _ in 0..MCP_REQUESTS_PER_WINDOW {
+            assert!(limiters.check_mcp_request(credential_id).is_ok());
+        }
+        assert!(matches!(
+            limiters.check_mcp_request(credential_id),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_mcp_request(Uuid::now_v7()).is_ok());
+        for _ in 0..MCP_AUTH_ATTEMPTS_PER_WINDOW {
+            assert!(limiters.check_mcp_auth("bearer-token-a").is_ok());
+        }
+        assert!(matches!(
+            limiters.check_mcp_auth("bearer-token-a"),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_mcp_auth("bearer-token-b").is_ok());
+
+        for _ in 0..OAUTH_CEREMONIES_PER_WINDOW {
+            assert!(limiters.check_oauth_ceremony("client-a").is_ok());
+        }
+        assert!(matches!(
+            limiters.check_oauth_ceremony("client-a"),
+            Err(AppError::RateLimited { .. })
+        ));
+        assert!(limiters.check_oauth_ceremony("client-b").is_ok());
+
+        for _ in 0..WEBHOOK_ATTEMPTS_PER_WINDOW {
+            assert!(limiters.check_webhook_attempt().is_ok());
+        }
+        assert!(matches!(
+            limiters.check_webhook_attempt(),
+            Err(AppError::RateLimited { .. })
+        ));
+
+        let session_id = Uuid::now_v7();
+        for _ in 0..EXPENSIVE_READS_PER_WINDOW {
+            assert!(limiters.check_expensive_read(session_id).is_ok());
+        }
+        assert!(matches!(
+            limiters.check_expensive_read(session_id),
+            Err(AppError::RateLimited { .. })
+        ));
     }
 }

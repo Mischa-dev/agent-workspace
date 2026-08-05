@@ -190,6 +190,11 @@ async fn list_projects(
     if search.is_some_and(|value| value.len() > MAX_SEARCH_BYTES) {
         return Err(AppError::Validation("project search is too long"));
     }
+    if search.is_some() {
+        state
+            .rate_limits
+            .check_expensive_read(principal.session_id)?;
+    }
     let search_pattern = search.map(|value| format!("%{value}%"));
     let rows = sqlx::query_as::<_, ProjectRow>(
         r#"

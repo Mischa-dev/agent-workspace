@@ -5,6 +5,7 @@ use std::{
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::atomic::{AtomicUsize, Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -21,6 +22,11 @@ use crate::{
 const MAX_GIT_ERROR_BYTES: usize = 8 * 1024;
 const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(90);
+#[cfg(not(test))]
+const MAX_CONCURRENT_GIT_PROCESSES: usize = 4;
+#[cfg(test)]
+const MAX_CONCURRENT_GIT_PROCESSES: usize = 64;
+static ACTIVE_GIT_PROCESSES: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug)]
 pub struct RegisteredRepository {
@@ -417,6 +423,7 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), AppError>
         "{}:refs/heads/{}",
         request.intended_commit, request.expected_branch
     );
+    let _process_permit = GitProcessPermit::try_acquire()?;
     let mut command = Command::new("/usr/bin/git");
     command
         .args([
@@ -669,6 +676,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _process_permit = GitProcessPermit::try_acquire()?;
     let mut command = Command::new("/usr/bin/git");
     command
         .args(arguments)
@@ -727,6 +735,32 @@ where
         "bounded Git command failed"
     );
     Err(AppError::Conflict("repository", "Git operation failed"))
+}
+
+struct GitProcessPermit;
+
+impl GitProcessPermit {
+    fn try_acquire() -> Result<Self, AppError> {
+        reserve_process_slot(&ACTIVE_GIT_PROCESSES, MAX_CONCURRENT_GIT_PROCESSES)
+            .then_some(())
+            .ok_or_else(|| AppError::rate_limited(1))?;
+        Ok(Self)
+    }
+}
+
+fn reserve_process_slot(counter: &AtomicUsize, limit: usize) -> bool {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            (active < limit).then_some(active + 1)
+        })
+        .is_ok()
+}
+
+impl Drop for GitProcessPermit {
+    fn drop(&mut self) {
+        let previous = ACTIVE_GIT_PROCESSES.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0);
+    }
 }
 
 fn bounded_read(mut input: impl Read, maximum: usize) -> Result<Vec<u8>, AppError> {
@@ -801,10 +835,13 @@ mod tests {
         RegisteredRepository, RepositoryPreparationMode, TemporaryAskpass, create_worktree,
         expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
         managed_worktree_path, prepare_repository, remove_clean_worktree,
-        repair_and_prune_worktrees, unique_run_branch, validate_branch, validate_ref,
-        worktree_is_dirty,
+        repair_and_prune_worktrees, reserve_process_slot, unique_run_branch, validate_branch,
+        validate_ref, worktree_is_dirty,
     };
-    use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, thread};
+    use std::{
+        fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,
+        thread,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -824,6 +861,14 @@ mod tests {
         }
         assert!(validate_branch("main").is_err());
         assert!(validate_branch("codex/run-aw-safe").is_ok());
+    }
+
+    #[test]
+    fn git_process_slots_reject_one_over_the_limit() {
+        let counter = AtomicUsize::new(0);
+        assert!(reserve_process_slot(&counter, 2));
+        assert!(reserve_process_slot(&counter, 2));
+        assert!(!reserve_process_slot(&counter, 2));
     }
 
     #[test]

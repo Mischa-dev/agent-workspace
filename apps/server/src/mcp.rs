@@ -562,8 +562,15 @@ async fn authenticate_mcp(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let authentication_key = exact_bearer_token(request.headers()).unwrap_or("invalid");
+    if let Err(error) = state.rate_limits.check_mcp_auth(authentication_key) {
+        return error.into_response();
+    }
     match resolve_bearer_principal(&state, request.headers()).await {
         Ok(Some(principal)) => {
+            if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
+                return error.into_response();
+            }
             request.extensions_mut().insert(principal);
             next.run(request).await
         }

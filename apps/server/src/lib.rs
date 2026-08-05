@@ -35,7 +35,7 @@ pub mod work_items;
 
 use std::sync::Arc;
 
-use axum::{Router, routing::any};
+use axum::{Router, extract::DefaultBodyLimit, routing::any};
 use http::{HeaderName, HeaderValue, Request};
 use sqlx::PgPool;
 use tower_http::{
@@ -51,6 +51,7 @@ use crate::realtime::RealtimeHub;
 use crate::{config::AppConfig, health::HealthState};
 
 pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+pub const MAX_APPLICATION_BODY_BYTES: usize = 256 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -88,6 +89,7 @@ pub fn router(state: AppState) -> Router {
                 .fallback(ServeFile::new(index)),
         )
         .with_state(state)
+        .layer(DefaultBodyLimit::max(MAX_APPLICATION_BODY_BYTES))
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
                 let request_id = request
@@ -187,7 +189,7 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
-    use super::{AppState, router};
+    use super::{AppState, MAX_APPLICATION_BODY_BYTES, router};
     use crate::{config::AppConfig, rate_limit::RateLimiters, realtime::RealtimeHub};
 
     #[tokio::test]
@@ -312,6 +314,7 @@ mod tests {
         );
 
         let malformed = application
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -337,6 +340,27 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&malformed_body)
                 .expect("JSON error envelope")["error"]["code"],
             "invalid_request"
+        );
+
+        let oversized = application
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(vec![b'x'; MAX_APPLICATION_BODY_BYTES + 1]))
+                    .expect("oversized request"),
+            )
+            .await
+            .expect("oversized response");
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let oversized_body = to_bytes(oversized.into_body(), 16_384)
+            .await
+            .expect("oversized JSON body");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&oversized_body)
+                .expect("JSON error envelope")["error"]["code"],
+            "payload_too_large"
         );
     }
 }

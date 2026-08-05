@@ -25,7 +25,13 @@ where
         Json::<T>::from_request(request, state)
             .await
             .map(|Json(value)| Self(value))
-            .map_err(|_| AppError::Invalid("JSON request body"))
+            .map_err(|rejection| {
+                if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                    AppError::PayloadTooLarge
+                } else {
+                    AppError::Invalid("JSON request body")
+                }
+            })
     }
 }
 
@@ -112,6 +118,8 @@ pub enum AppError {
     ExecutionProfileRequired,
     #[error("request rate limit exceeded; retry after {retry_after_seconds} seconds")]
     RateLimited { retry_after_seconds: u64 },
+    #[error("request payload is too large")]
+    PayloadTooLarge,
     #[error("development authentication is unavailable")]
     DevelopmentAuthUnavailable,
     #[error("internal invariant failed: {0}")]
@@ -145,6 +153,7 @@ impl AppError {
             Self::RepositoryBindingConflict => "repository_binding_conflict",
             Self::ExecutionProfileRequired => "execution_profile_required",
             Self::RateLimited { .. } => "rate_limited",
+            Self::PayloadTooLarge => "payload_too_large",
             Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
             Self::Internal(_) => "internal",
         }
@@ -322,6 +331,12 @@ impl IntoResponse for AppError {
                 "rate_limited",
                 "Too many attempts. Try again later.",
                 Some(retry_after_seconds),
+            ),
+            Self::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "The request payload is too large.",
+                None,
             ),
             Self::DevelopmentAuthUnavailable => (
                 StatusCode::FORBIDDEN,
