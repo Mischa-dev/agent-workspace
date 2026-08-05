@@ -104,6 +104,17 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(created["connection"]["handle"], "hermes_teammate");
     assert_eq!(created["connection"]["runtimeVersion"], "0.20.0");
     assert_eq!(created["connection"]["version"], 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(seed.project_id)
+        .bind(actor_id)
+        .fetch_one(&pool)
+        .await
+        .expect("initial external membership version"),
+        1
+    );
 
     let stored = sqlx::query_as::<_, (Vec<u8>, String, Option<Uuid>)>(
         "SELECT token_digest, token_prefix, external_agent_connection_id FROM mcp_client_credentials WHERE id = $1",
@@ -164,6 +175,18 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .to_owned();
     assert_ne!(first_token, second_token);
     assert_eq!(rotated["connection"]["version"], 2);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(seed.project_id)
+        .bind(actor_id)
+        .fetch_one(&pool)
+        .await
+        .expect("membership version after bearer rotation"),
+        1,
+        "credential rotation must not create an unrelated membership conflict"
+    );
     assert_mcp_auth(&application, &first_token, StatusCode::UNAUTHORIZED).await;
     assert_mcp_auth(&application, &second_token, StatusCode::OK).await;
 
