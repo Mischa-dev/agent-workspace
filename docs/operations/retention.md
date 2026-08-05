@@ -49,6 +49,8 @@ and executable paths shown in the host-maintenance README. The report uses
 allocated filesystem blocks, PostgreSQL's current database size, and the
 filesystem's available blocks. It does not follow symlinks and reports only
 aggregate categories.
+Registered root path components must not be symlinks. Internal symlinks are
+reported only as a count and are never traversed or resolved.
 
 New disk-growing operations are admitted only while both conditions hold:
 

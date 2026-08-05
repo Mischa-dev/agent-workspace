@@ -151,6 +151,7 @@ pub struct StorageCategory {
     pub allocated_bytes: u64,
     pub regular_files: u64,
     pub directories: u64,
+    pub skipped_symlinks: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -920,6 +921,7 @@ fn scan_storage_category(category: &str, root: &Path) -> Result<StorageCategory>
             allocated_bytes: 0,
             regular_files: 0,
             directories: 0,
+            skipped_symlinks: 0,
         });
     }
     reject_symlink_components(root)?;
@@ -927,14 +929,14 @@ fn scan_storage_category(category: &str, root: &Path) -> Result<StorageCategory>
     let mut allocated_bytes = 0_u64;
     let mut regular_files = 0_u64;
     let mut directories = 0_u64;
+    let mut skipped_symlinks = 0_u64;
     while let Some(path) = pending.pop() {
         let metadata = fs::symlink_metadata(&path)
             .with_context(|| format!("inspect storage category {category}"))?;
-        ensure!(
-            !metadata.file_type().is_symlink(),
-            "storage category contains a symlink"
-        );
-        if metadata.is_dir() {
+        if metadata.file_type().is_symlink() {
+            skipped_symlinks = skipped_symlinks.saturating_add(1);
+            continue;
+        } else if metadata.is_dir() {
             directories = directories.saturating_add(1);
             for entry in
                 fs::read_dir(&path).with_context(|| format!("read storage category {category}"))?
@@ -957,6 +959,7 @@ fn scan_storage_category(category: &str, root: &Path) -> Result<StorageCategory>
         allocated_bytes,
         regular_files,
         directories,
+        skipped_symlinks,
     })
 }
 
@@ -1384,7 +1387,9 @@ mod tests {
         assert!(report.allocated_bytes >= 512);
 
         symlink(nested.join("artifact"), directory.path().join("link")).expect("fixture symlink");
-        assert!(scan_storage_category("fixture", directory.path()).is_err());
+        let report = scan_storage_category("fixture", directory.path()).expect("skip symlink");
+        assert_eq!(report.skipped_symlinks, 1);
+        assert_eq!(report.regular_files, 1);
     }
 
     #[test]

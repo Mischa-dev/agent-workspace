@@ -73,7 +73,9 @@ incomplete credential-table exclusion set, a non-empty target database, and a
 target database matching the active connection are rejected.
 
 The storage report returns only aggregate allocated bytes and entry counts; it
-does not print paths below the registered roots. It separately identifies the
+does not print paths below the registered roots. Registered roots and their
+path components may not be symlinks. Internal symlinks are counted and skipped,
+never followed. The report separately identifies the
 PostgreSQL database, unique application data, rebuildable repository mirrors,
 provider profiles, temporary files, immutable releases, and backup archives.
 The report rejects symlinks and reports whether both the data quota and
