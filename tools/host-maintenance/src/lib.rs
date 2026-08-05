@@ -171,7 +171,9 @@ pub struct StorageReport {
 #[serde(rename_all = "camelCase")]
 pub struct RetentionCategory {
     pub category: String,
+    #[serde(alias = "eligible_rows")]
     pub eligible_rows: u64,
+    #[serde(alias = "affected_rows")]
     pub affected_rows: u64,
 }
 
@@ -1408,6 +1410,16 @@ mod tests {
         assert!(!apply.contains("DELETE FROM audit_events"));
         assert!(!apply.contains("DELETE FROM messages"));
         assert!(!apply.contains("DELETE FROM agent_runs"));
+
+        let decoded: Vec<super::RetentionCategory> = serde_json::from_str(
+            r#"[{"category":"expired_idempotency","eligible_rows":2,"affected_rows":0}]"#,
+        )
+        .expect("decode PostgreSQL retention summary");
+        assert_eq!(decoded[0].eligible_rows, 2);
+        assert_eq!(decoded[0].affected_rows, 0);
+        let encoded = serde_json::to_string(&decoded).expect("encode public retention summary");
+        assert!(encoded.contains("\"eligibleRows\":2"));
+        assert!(!encoded.contains("eligible_rows"));
     }
 
     fn temporary_directory() -> TempDir {
