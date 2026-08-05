@@ -22,6 +22,12 @@ const PROVIDER_START_FAILURE_REASON: &str =
     "Codex App Server could not start. The worktree was preserved.";
 const UNSAFE_RETRY_REASON: &str = "The previous worktree is dirty, missing, or no longer has its owned branch. It was preserved; start a new Thread or inspect it before retrying.";
 
+enum RetryWorkspace {
+    FreshAllocation,
+    Reuse(Uuid, Uuid, std::path::PathBuf),
+    Unsafe,
+}
+
 #[derive(Debug, FromRow)]
 struct ClaimedRun {
     run_id: Uuid,
@@ -250,7 +256,7 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
 
     if let Some(predecessor_run_id) = run.predecessor_run_id {
         match reusable_retry_workspace(state, &run, predecessor_run_id, &mirror).await? {
-            Some((workspace_id, worktree_id, worktree)) => {
+            RetryWorkspace::Reuse(workspace_id, worktree_id, worktree) => {
                 let mut transaction = state.pool.begin().await?;
                 let owned = sqlx::query_scalar::<_, bool>(
                     r#"
@@ -294,7 +300,8 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
                 clear_claim(state, run.run_id, run.claim_id).await?;
                 return Ok(());
             }
-            None => {
+            RetryWorkspace::FreshAllocation => {}
+            RetryWorkspace::Unsafe => {
                 fail_admission(state, &run, UNSAFE_RETRY_REASON, None).await?;
                 return Err(AppError::Conflict(
                     "git_worktree",
@@ -432,22 +439,32 @@ async fn reusable_retry_workspace(
     run: &ClaimedRun,
     predecessor_run_id: Uuid,
     mirror: &Path,
-) -> Result<Option<(Uuid, Uuid, std::path::PathBuf)>, AppError> {
-    let workspace = sqlx::query_as::<_, (Uuid, String, Uuid, String)>(
+) -> Result<RetryWorkspace, AppError> {
+    let workspace = sqlx::query_as::<
+        _,
+        (
+            Option<Uuid>,
+            Option<Uuid>,
+            Option<String>,
+            Option<Uuid>,
+            Option<String>,
+        ),
+    >(
         r#"
-        SELECT workspace.id, workspace.branch_name, worktree.id, worktree.path
+        SELECT predecessor.repository_workspace_id,
+               workspace.id, workspace.branch_name, worktree.id, worktree.path
           FROM agent_runs predecessor
-          JOIN repository_workspaces workspace
+          LEFT JOIN repository_workspaces workspace
             ON workspace.id = predecessor.repository_workspace_id
-          JOIN git_worktrees worktree
+           AND workspace.state = 'retained'
+          LEFT JOIN git_worktrees worktree
             ON worktree.repository_workspace_id = workspace.id
+           AND worktree.state IN ('ready', 'dirty', 'missing', 'failed')
          WHERE predecessor.id = $1
            AND predecessor.project_id = $2
            AND predecessor.conversation_id = $3
            AND predecessor.repository_id = $4
            AND predecessor.state IN ('completed', 'failed', 'canceled', 'interrupted')
-           AND workspace.state = 'retained'
-           AND worktree.state IN ('ready', 'dirty', 'missing', 'failed')
         "#,
     )
     .bind(predecessor_run_id)
@@ -456,8 +473,19 @@ async fn reusable_retry_workspace(
     .bind(run.repository_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((workspace_id, branch, worktree_id, path)) = workspace else {
-        return Ok(None);
+    let Some(workspace) = workspace else {
+        return Ok(RetryWorkspace::Unsafe);
+    };
+    let (workspace_id, branch, worktree_id, path) = match workspace {
+        (None, None, None, None, None) => return Ok(RetryWorkspace::FreshAllocation),
+        (
+            Some(predecessor_workspace_id),
+            Some(workspace_id),
+            Some(branch),
+            Some(worktree_id),
+            Some(path),
+        ) if predecessor_workspace_id == workspace_id => (workspace_id, branch, worktree_id, path),
+        _ => return Ok(RetryWorkspace::Unsafe),
     };
     let mirror = mirror.to_path_buf();
     let worktree = std::path::PathBuf::from(path);
@@ -474,7 +502,7 @@ async fn reusable_retry_workspace(
         .bind(worktree_id)
         .execute(&state.pool)
         .await?;
-        return Ok(None);
+        return Ok(RetryWorkspace::Unsafe);
     };
     if inspection.dirty || inspection.branch != branch {
         sqlx::query(
@@ -485,9 +513,9 @@ async fn reusable_retry_workspace(
         .bind(inspection.dirty)
         .execute(&state.pool)
         .await?;
-        return Ok(None);
+        return Ok(RetryWorkspace::Unsafe);
     }
-    Ok(Some((workspace_id, worktree_id, worktree)))
+    Ok(RetryWorkspace::Reuse(workspace_id, worktree_id, worktree))
 }
 
 async fn prepare_demo_blocker(state: &AppState, run: &ClaimedRun) -> Result<(), AppError> {
