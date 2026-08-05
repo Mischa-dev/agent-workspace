@@ -892,6 +892,10 @@ fn ensure_database_empty(program: &Path, database_url: &str) -> Result<()> {
 
 fn restore_database(program: &Path, database_url: &str, dump: &Path) -> Result<()> {
     let args = vec![
+        // pg_restore requires an explicit destination selector. An empty
+        // dbname delegates connection resolution to libpq's cleared
+        // PGDATABASE environment without copying the database name into argv.
+        OsString::from("--dbname="),
         OsString::from("--exit-on-error"),
         OsString::from("--no-owner"),
         OsString::from("--no-privileges"),
@@ -1047,8 +1051,8 @@ mod tests {
         ARCHIVE_FORMAT, ArtifactRecord, BACKUP_FORMAT_VERSION, BackupManifest, EXCLUDED_TABLE_DATA,
         INCLUDED_DATA_ENTRIES, MigrationRecord, PRESERVED_UNIQUE_ENTRIES,
         REBUILDABLE_CACHE_ENTRIES, SourceLayout, create_release_archive, read_database_name_file,
-        read_secret_file, run_from_file, run_to_file, safe_archive_entry, validate_archive,
-        validate_backup, validate_manifest, validate_new_destination,
+        read_secret_file, restore_database, run_from_file, run_to_file, safe_archive_entry,
+        validate_archive, validate_backup, validate_manifest, validate_new_destination,
     };
 
     fn fixture_manifest() -> BackupManifest {
@@ -1307,5 +1311,31 @@ mod tests {
             "consume fixture",
         )
         .expect("stream command input");
+    }
+
+    #[test]
+    fn restore_selects_the_environment_database_and_streams_the_dump() {
+        let temporary = temporary_directory();
+        let consumer = temporary.path().join("pg-restore-fixture");
+        fs::write(
+            &consumer,
+            "#!/bin/sh\n[ \"$PGDATABASE\" = 'target_database' ]\n[ \"$1\" = '--dbname=' ]\n[ \"$2\" = '--exit-on-error' ]\n[ \"$3\" = '--no-owner' ]\n[ \"$4\" = '--no-privileges' ]\n[ \"$(/bin/cat)\" = 'database-dump' ]\n",
+        )
+        .expect("restore consumer fixture");
+        fs::set_permissions(&consumer, fs::Permissions::from_mode(0o700))
+            .expect("restore consumer executable");
+        let dump = temporary.path().join("database.dump");
+        fs::write(&dump, b"database-dump").expect("restore dump fixture");
+
+        restore_database(&consumer, "target_database", &dump)
+            .expect("restore uses the environment-selected database");
+    }
+
+    #[test]
+    fn red_hat_restore_wrapper_forwards_standard_input() {
+        let wrapper = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../deploy/redhat/agent-workspace-pg-restore");
+        let source = fs::read_to_string(wrapper).expect("read Red Hat restore wrapper");
+        assert!(source.contains("/usr/bin/podman exec\n  --interactive\n"));
     }
 }
