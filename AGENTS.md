@@ -12,6 +12,7 @@ architecture. It is canonical.
 - Start PostgreSQL with Docker: `corepack pnpm db:up`
 - Start PostgreSQL on Red Hat: `podman-compose -f docker-compose.dev.yml up -d`
 - Bootstrap the first browser administrator: `cargo run -p agent-workspace-server -- bootstrap-admin --login-name <name> --display-name <name> --organization-name <name> --organization-slug <slug>` (interactive terminal only)
+- Rotate one User password and revoke their sessions: `cargo run -p agent-workspace-server -- user-password-rotate --login-name <name>` (interactive terminal only)
 
 ## Verification
 

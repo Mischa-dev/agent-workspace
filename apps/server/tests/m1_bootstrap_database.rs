@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
-use agent_workspace_server::bootstrap::{BootstrapCommand, BootstrapError, bootstrap_admin};
+use agent_workspace_server::{
+    auth::password,
+    bootstrap::{
+        BootstrapCommand, BootstrapError, PasswordRotationCommand, bootstrap_admin, rotate_password,
+    },
+};
 use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
@@ -169,6 +174,84 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
         persisted_counts,
         (1, 1, 1, 1, 1),
         "a rejected repeat must not create another User, credential, Owner, or audit event"
+    );
+
+    let before_rotation = sqlx::query_as::<_, (Uuid, i64)>(
+        r#"
+        SELECT u.id, u.authentication_epoch
+        FROM users u
+        JOIN user_password_credentials credential ON credential.user_id = u.id
+        WHERE u.login_name = 'mischa'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read pre-rotation identity");
+    sqlx::query(
+        r#"
+        INSERT INTO sessions (
+            id, user_id, token_hash, csrf_token_hash, authentication_epoch,
+            idle_expires_at, absolute_expires_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, now() + interval '30 minutes',
+            now() + interval '8 hours'
+        )
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(before_rotation.0)
+    .bind(vec![1_u8; 32])
+    .bind(vec![2_u8; 32])
+    .bind(before_rotation.1)
+    .execute(&pool)
+    .await
+    .expect("insert active session fixture");
+    let replacement = "replacement correct horse battery staple";
+    let rotation = rotate_password(
+        &pool,
+        PasswordRotationCommand {
+            login_name: "mischa".to_owned(),
+        },
+        replacement.to_owned(),
+    )
+    .await
+    .expect("rotate password");
+    assert_eq!(rotation.user_id, before_rotation.0);
+    assert_eq!(rotation.authentication_epoch, before_rotation.1 + 1);
+    assert_eq!(rotation.revoked_sessions, 1);
+    let after_rotation = sqlx::query_as::<_, (i64, String, bool, i64)>(
+        r#"
+        SELECT u.authentication_epoch, credential.password_phc,
+               session.revoked_at IS NOT NULL,
+               (SELECT count(*) FROM audit_events
+                WHERE action = 'identity.password.rotate'
+                  AND target_id = u.id
+                  AND outcome = 'succeeded')
+        FROM users u
+        JOIN user_password_credentials credential ON credential.user_id = u.id
+        JOIN sessions session ON session.user_id = u.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(before_rotation.0)
+    .fetch_one(&pool)
+    .await
+    .expect("read rotated identity");
+    assert_eq!(after_rotation.0, before_rotation.1 + 1);
+    assert!(after_rotation.2);
+    assert_eq!(after_rotation.3, 1);
+    assert!(
+        !password::verify_password(
+            "correct horse battery staple".to_owned(),
+            after_rotation.1.clone(),
+        )
+        .await
+        .expect("reject prior password")
+    );
+    assert!(
+        password::verify_password(replacement.to_owned(), after_rotation.1)
+            .await
+            .expect("verify replacement password")
     );
 
     pool.close().await;
