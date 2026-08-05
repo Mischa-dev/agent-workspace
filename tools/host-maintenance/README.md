@@ -78,6 +78,8 @@ path components may not be symlinks. Internal symlinks are counted and skipped,
 never followed. The report separately identifies the
 PostgreSQL database, unique application data, rebuildable repository mirrors,
 provider profiles, temporary files, immutable releases, and backup archives.
+Each category labels unique preserved data, rebuildable cache, sensitive or
+reclaimable operational data, rollback artifacts, and recovery artifacts.
 The report rejects symlinks and reports whether both the data quota and
 minimum-free-space watermark admit new growth.
 

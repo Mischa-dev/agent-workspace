@@ -148,6 +148,7 @@ pub struct RestoreResult {
 #[serde(rename_all = "camelCase")]
 pub struct StorageCategory {
     pub category: String,
+    pub classification: String,
     pub allocated_bytes: u64,
     pub regular_files: u64,
     pub directories: u64,
@@ -351,15 +352,39 @@ pub fn storage_report(options: &StorageReportOptions) -> Result<StorageReport> {
     .context("parse PostgreSQL database size")?;
 
     let categories = vec![
-        scan_storage_category("data_total", &data_root)?,
-        scan_storage_category("attachments", &data_root.join("attachments"))?,
-        scan_storage_category("artifacts", &data_root.join("artifacts"))?,
-        scan_storage_category("repository_mirrors", &data_root.join("repositories"))?,
-        scan_storage_category("worktrees", &data_root.join("worktrees"))?,
-        scan_storage_category("provider_profiles", &data_root.join("codex/profiles"))?,
-        scan_storage_category("temporary_files", &data_root.join("tmp"))?,
-        scan_storage_category("immutable_releases", &releases_root)?,
-        scan_storage_category("backup_archives", &backups_root)?,
+        scan_storage_category("data_total", "aggregate", &data_root)?,
+        scan_storage_category(
+            "attachments",
+            "unique_preserved_data",
+            &data_root.join("attachments"),
+        )?,
+        scan_storage_category(
+            "artifacts",
+            "unique_preserved_data",
+            &data_root.join("artifacts"),
+        )?,
+        scan_storage_category(
+            "repository_mirrors",
+            "rebuildable_cache",
+            &data_root.join("repositories"),
+        )?,
+        scan_storage_category(
+            "worktrees",
+            "unique_preserved_data",
+            &data_root.join("worktrees"),
+        )?,
+        scan_storage_category(
+            "provider_profiles",
+            "sensitive_operational_data",
+            &data_root.join("codex/profiles"),
+        )?,
+        scan_storage_category(
+            "temporary_files",
+            "reclaimable_operational_data",
+            &data_root.join("tmp"),
+        )?,
+        scan_storage_category("immutable_releases", "rollback_artifact", &releases_root)?,
+        scan_storage_category("backup_archives", "recovery_artifact", &backups_root)?,
     ];
     let data_bytes = categories
         .first()
@@ -916,10 +941,15 @@ fn ensure_no_symlinks(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn scan_storage_category(category: &str, root: &Path) -> Result<StorageCategory> {
+fn scan_storage_category(
+    category: &str,
+    classification: &str,
+    root: &Path,
+) -> Result<StorageCategory> {
     if !root.exists() {
         return Ok(StorageCategory {
             category: category.to_owned(),
+            classification: classification.to_owned(),
             allocated_bytes: 0,
             regular_files: 0,
             directories: 0,
@@ -958,6 +988,7 @@ fn scan_storage_category(category: &str, root: &Path) -> Result<StorageCategory>
     }
     Ok(StorageCategory {
         category: category.to_owned(),
+        classification: classification.to_owned(),
         allocated_bytes,
         regular_files,
         directories,
@@ -1382,14 +1413,16 @@ mod tests {
         let nested = directory.path().join("nested");
         fs::create_dir(&nested).expect("nested directory");
         fs::write(nested.join("artifact"), b"bounded").expect("fixture file");
-        let report = scan_storage_category("fixture", directory.path()).expect("scan storage");
+        let report =
+            scan_storage_category("fixture", "unique", directory.path()).expect("scan storage");
         assert_eq!(report.category, "fixture");
         assert_eq!(report.regular_files, 1);
         assert_eq!(report.directories, 2);
         assert!(report.allocated_bytes >= 512);
 
         symlink(nested.join("artifact"), directory.path().join("link")).expect("fixture symlink");
-        let report = scan_storage_category("fixture", directory.path()).expect("skip symlink");
+        let report =
+            scan_storage_category("fixture", "unique", directory.path()).expect("skip symlink");
         assert_eq!(report.skipped_symlinks, 1);
         assert_eq!(report.regular_files, 1);
     }
