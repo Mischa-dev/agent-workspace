@@ -896,13 +896,13 @@ fn restore_database(program: &Path, psql: &Path, database_url: &str, dump: &Path
     for section in ["pre-data", "data"] {
         restore_database_section(program, database_url, dump, section)?;
     }
-    // Browser session rows are intentionally absent from ordinary backups.
-    // Audit history remains durable, but its optional session correlation must
+    // Credential rows are intentionally absent from ordinary backups. Audit
+    // history remains durable, but its optional credential correlations must
     // be cleared before post-data foreign keys are installed.
     let _ = run_psql(
         psql,
         database_url,
-        "UPDATE audit_events SET session_id = NULL WHERE session_id IS NOT NULL",
+        "UPDATE audit_events SET session_id = NULL, mcp_credential_id = NULL, mcp_oauth_grant_id = NULL WHERE session_id IS NOT NULL OR mcp_credential_id IS NOT NULL OR mcp_oauth_grant_id IS NOT NULL",
     )?;
     restore_database_section(program, database_url, dump, "post-data")
 }
@@ -1357,7 +1357,7 @@ mod tests {
         fs::write(
             &psql,
             format!(
-                "#!/bin/sh\n[ \"$PGDATABASE\" = 'target_database' ]\n[ \"$5\" = '--command' ]\n[ \"$6\" = 'UPDATE audit_events SET session_id = NULL WHERE session_id IS NOT NULL' ]\nprintf 'sanitize\\n' >> '{}'\n",
+                "#!/bin/sh\n[ \"$PGDATABASE\" = 'target_database' ]\n[ \"$5\" = '--command' ]\n[ \"$6\" = 'UPDATE audit_events SET session_id = NULL, mcp_credential_id = NULL, mcp_oauth_grant_id = NULL WHERE session_id IS NOT NULL OR mcp_credential_id IS NOT NULL OR mcp_oauth_grant_id IS NOT NULL' ]\nprintf 'sanitize\\n' >> '{}'\n",
                 order.display()
             ),
         )
