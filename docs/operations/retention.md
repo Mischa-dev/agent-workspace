@@ -41,6 +41,9 @@ the worktree is clean and on the expected branch, and requires `HEAD` to equal
 the recorded published commit. Git performs one final dirty-tree refusal during
 removal. Any mismatch or race preserves the worktree; successful retries mark
 the worktree removed and its logical workspace cleaned before pruning metadata.
+The aggregate `preservedWorktrees` count includes every registered live tree
+that was not removed, including dirty, unpushed, active, ambiguous, and
+too-young trees that never become candidates.
 
 ## Storage reporting and admission
 

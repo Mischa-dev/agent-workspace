@@ -36,6 +36,13 @@ pub async fn clean_worktrees(
     data_root: &Path,
     apply: bool,
 ) -> Result<WorktreeRetentionResult, AppError> {
+    let live_worktrees: u64 = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM git_worktrees WHERE state IN ('creating','ready','dirty','missing','failed')",
+    )
+    .fetch_one(pool)
+    .await?
+    .try_into()
+    .map_err(|_| AppError::Internal("live worktree count"))?;
     let candidates = load_candidates(pool).await?;
     let database_candidates = candidates.len() as u64;
     let mut eligible = 0_u64;
@@ -111,7 +118,7 @@ pub async fn clean_worktrees(
         database_candidates,
         eligible_clean_worktrees: eligible,
         removed_worktrees: removed,
-        preserved_worktrees: database_candidates.saturating_sub(removed),
+        preserved_worktrees: live_worktrees.saturating_sub(removed),
     })
 }
 
