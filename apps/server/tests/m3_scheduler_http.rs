@@ -621,6 +621,36 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         "the current Actor's acknowledgement must survive timeline refetch"
     );
 
+    let pre_workspace_retry = retry_run(
+        &application,
+        &cookie,
+        &csrf,
+        unsafe_retry_id,
+        "retry-pre-workspace-failure",
+    )
+    .await;
+    assert_eq!(pre_workspace_retry.0, StatusCode::ACCEPTED);
+    let pre_workspace_retry_id = uuid_field(&pre_workspace_retry.2, "runId");
+    wait_for_state(&pool, pre_workspace_retry_id, "blocked").await;
+    let allocated_workspace = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_workspace_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(pre_workspace_retry_id)
+    .fetch_one(&pool)
+    .await
+    .expect("a retry whose predecessor has no workspace receives a fresh workspace");
+    assert_ne!(allocated_workspace, workspace_id);
+    assert!(
+        second_worktree.join("UNCOMMITTED.txt").is_file(),
+        "the earlier dirty worktree remains preserved"
+    );
+    assert_eq!(
+        interrupt(&application, &cookie, &csrf, pre_workspace_retry_id)
+            .await
+            .0,
+        StatusCode::OK
+    );
+
     wait_for_claim_release(&pool, second_run_id).await;
     supervisors.shutdown_all().await;
     pool.close().await;
