@@ -231,14 +231,6 @@ pub(crate) async fn start_agent_run(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
     if sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -928,6 +920,15 @@ async fn legacy_start_agent_run(
         "repository",
         "a deterministic trusted repository is required",
     ))?;
+
+    let admission_root = state.config.data_root.clone();
+    let admission_quota = state.config.data_quota_bytes;
+    let admission_free = state.config.minimum_free_bytes;
+    tokio::task::spawn_blocking(move || {
+        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
+    })
+    .await
+    .map_err(|_| AppError::Internal("join storage admission"))??;
 
     let mirror = git_runtime::absolute_runtime_path(PathBuf::from(&setup.mirror_path).as_path())?;
     let default_branch = setup.default_branch.clone();
