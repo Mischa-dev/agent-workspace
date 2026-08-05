@@ -202,6 +202,24 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
 }
 
 async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
+    let admission_root = state.config.data_root.clone();
+    let admission_quota = state.config.data_quota_bytes;
+    let admission_free = state.config.minimum_free_bytes;
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
+    })
+    .await
+    .map_err(|_| AppError::Internal("join storage admission"))?
+    {
+        fail_admission(
+            state,
+            &run,
+            "Run admission stopped because the host storage watermark blocks new work.",
+            None,
+        )
+        .await?;
+        return Err(error);
+    }
     let mirror = expected_repository_mirror_path(&state.config.data_root, run.repository_id)?;
     if Path::new(&run.mirror_path) != mirror {
         fail_admission(state, &run, PROVIDER_START_FAILURE_REASON, None).await?;

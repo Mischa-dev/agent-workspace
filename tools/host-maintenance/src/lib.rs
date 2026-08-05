@@ -5,13 +5,13 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -34,6 +34,9 @@ pub const REBUILDABLE_CACHE_ENTRIES: &[&str] = &["repositories"];
 pub const PRESERVED_UNIQUE_ENTRIES: &[&str] = &["artifacts", "attachments", "worktrees"];
 pub const RESTORED_DATA_OWNER: &str = "agent-workspace:agent-workspace";
 pub const SUPPORTED_DATA_ROOT: &str = "/var/lib/agent-workspace";
+pub const RETENTION_POLICY_VERSION: u32 = 1;
+pub const SUPPORTED_RELEASES_ROOT: &str = "/opt/agent-workspace/releases";
+pub const SUPPORTED_BACKUPS_ROOT: &str = "/var/backups/agent-workspace";
 
 const MAX_SECRET_FILE_BYTES: u64 = 8 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -62,6 +65,24 @@ pub struct RestoreOptions {
     pub psql: PathBuf,
     pub tar: PathBuf,
     pub chown: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct StorageReportOptions {
+    pub data_root: PathBuf,
+    pub releases_root: PathBuf,
+    pub backups_root: PathBuf,
+    pub database_name_file: PathBuf,
+    pub psql: PathBuf,
+    pub data_quota_bytes: u64,
+    pub minimum_free_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetentionOptions {
+    pub database_name_file: PathBuf,
+    pub psql: PathBuf,
+    pub apply: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -121,6 +142,45 @@ pub struct RestoreResult {
     pub target_release_root: PathBuf,
     pub release_commit: String,
     pub credential_rows_restored: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageCategory {
+    pub category: String,
+    pub allocated_bytes: u64,
+    pub regular_files: u64,
+    pub directories: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageReport {
+    pub policy_version: u32,
+    pub postgres_bytes: u64,
+    pub filesystem_available_bytes: u64,
+    pub data_quota_bytes: u64,
+    pub minimum_free_bytes: u64,
+    pub growth_admitted: bool,
+    pub rejection_categories: Vec<String>,
+    pub categories: Vec<StorageCategory>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionCategory {
+    pub category: String,
+    pub eligible_rows: u64,
+    pub affected_rows: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionResult {
+    pub policy_version: u32,
+    pub mode: String,
+    pub locked: bool,
+    pub categories: Vec<RetentionCategory>,
 }
 
 pub fn create_backup(options: &BackupOptions) -> Result<BackupResult> {
@@ -256,6 +316,136 @@ pub fn validate_backup(source: &Path) -> Result<BackupManifest> {
         );
     }
     Ok(manifest)
+}
+
+pub fn storage_report(options: &StorageReportOptions) -> Result<StorageReport> {
+    ensure!(
+        options.data_quota_bytes >= 1024 * 1024 * 1024,
+        "data quota must be at least one GiB"
+    );
+    ensure!(
+        options.minimum_free_bytes >= 1024 * 1024 * 1024,
+        "minimum free space must be at least one GiB"
+    );
+    let data_root = validate_source_root(&options.data_root, "data root")?;
+    let releases_root = validate_source_root(&options.releases_root, "releases root")?;
+    let backups_root = validate_source_root(&options.backups_root, "backups root")?;
+    ensure!(
+        data_root == Path::new(SUPPORTED_DATA_ROOT)
+            && releases_root == Path::new(SUPPORTED_RELEASES_ROOT)
+            && backups_root == Path::new(SUPPORTED_BACKUPS_ROOT),
+        "storage report roots do not match the supported Red Hat layout"
+    );
+    validate_executable(&options.psql)?;
+    let database_name = read_database_name_file(&options.database_name_file)?;
+    let postgres_bytes: u64 = run_psql(
+        &options.psql,
+        database_name.as_str(),
+        "SELECT pg_database_size(current_database())",
+    )?
+    .trim()
+    .parse()
+    .context("parse PostgreSQL database size")?;
+
+    let categories = vec![
+        scan_storage_category("data_total", &data_root)?,
+        scan_storage_category("attachments", &data_root.join("attachments"))?,
+        scan_storage_category("artifacts", &data_root.join("artifacts"))?,
+        scan_storage_category("repository_mirrors", &data_root.join("repositories"))?,
+        scan_storage_category("worktrees", &data_root.join("worktrees"))?,
+        scan_storage_category("provider_profiles", &data_root.join("codex/profiles"))?,
+        scan_storage_category("temporary_files", &data_root.join("tmp"))?,
+        scan_storage_category("immutable_releases", &releases_root)?,
+        scan_storage_category("backup_archives", &backups_root)?,
+    ];
+    let data_bytes = categories
+        .first()
+        .context("data storage category is missing")?
+        .allocated_bytes;
+    let filesystem = rustix::fs::statvfs(&data_root).context("inspect data filesystem")?;
+    let filesystem_available_bytes = filesystem.f_bavail.saturating_mul(filesystem.f_frsize);
+    let mut rejection_categories = Vec::new();
+    if data_bytes >= options.data_quota_bytes {
+        rejection_categories.push("data_quota_reached".to_owned());
+    }
+    if filesystem_available_bytes <= options.minimum_free_bytes {
+        rejection_categories.push("minimum_free_space_reached".to_owned());
+    }
+
+    Ok(StorageReport {
+        policy_version: RETENTION_POLICY_VERSION,
+        postgres_bytes,
+        filesystem_available_bytes,
+        data_quota_bytes: options.data_quota_bytes,
+        minimum_free_bytes: options.minimum_free_bytes,
+        growth_admitted: rejection_categories.is_empty(),
+        rejection_categories,
+        categories,
+    })
+}
+
+pub fn run_retention(options: &RetentionOptions) -> Result<RetentionResult> {
+    validate_executable(&options.psql)?;
+    let database_name = read_database_name_file(&options.database_name_file)?;
+    let query = if options.apply {
+        retention_apply_query()
+    } else {
+        retention_report_query()
+    };
+    let encoded = run_psql(&options.psql, database_name.as_str(), query)?;
+    let categories: Vec<RetentionCategory> =
+        serde_json::from_str(encoded.trim()).context("parse retention summary")?;
+    ensure!(
+        categories.len() == 7,
+        "retention summary did not contain every policy category"
+    );
+    ensure!(
+        categories
+            .iter()
+            .all(|category| category.affected_rows <= category.eligible_rows),
+        "retention summary reported more affected than eligible rows"
+    );
+    Ok(RetentionResult {
+        policy_version: RETENTION_POLICY_VERSION,
+        mode: if options.apply { "apply" } else { "dry_run" }.to_owned(),
+        locked: options.apply,
+        categories,
+    })
+}
+
+fn retention_report_query() -> &'static str {
+    "SELECT json_agg(row_to_json(summary) ORDER BY summary.category)::text FROM (VALUES \
+    ('expired_idempotency', (SELECT count(*) FROM idempotency_keys WHERE expires_at <= now() - interval '1 day'), 0::bigint), \
+    ('expired_invitations', (SELECT count(*) FROM project_invitations WHERE status = 'active' AND expires_at <= now()), 0::bigint), \
+    ('oauth_authorization_codes', (SELECT count(*) FROM mcp_oauth_authorization_codes WHERE (used_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '1 day'), 0::bigint), \
+    ('oauth_access_tokens', (SELECT count(*) FROM mcp_oauth_access_tokens WHERE (revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '7 days'), 0::bigint), \
+    ('oauth_refresh_tokens', (SELECT count(*) FROM mcp_oauth_refresh_tokens WHERE (used_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '30 days'), 0::bigint), \
+    ('published_outbox', (SELECT count(*) FROM outbox_events WHERE published_at <= now() - interval '30 days'), 0::bigint), \
+    ('completed_temporary_jobs', (SELECT count(*) FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days'), 0::bigint) \
+    ) AS summary(category, eligible_rows, affected_rows)"
+}
+
+fn retention_apply_query() -> &'static str {
+    "BEGIN; SELECT pg_advisory_xact_lock(470127786, 1); WITH \
+    expired_idempotency AS (DELETE FROM idempotency_keys WHERE expires_at <= now() - interval '1 day' RETURNING 1), \
+    expired_invitations AS (UPDATE project_invitations SET status='revoked', revoked_at=now(), version=version+1, updated_at=now() WHERE status='active' AND expires_at <= now() RETURNING 1), \
+    oauth_authorization_codes AS (DELETE FROM mcp_oauth_authorization_codes WHERE (used_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '1 day' RETURNING 1), \
+    oauth_access_tokens AS (DELETE FROM mcp_oauth_access_tokens WHERE (revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '7 days' RETURNING 1), \
+    refresh_eligible AS (SELECT id FROM mcp_oauth_refresh_tokens WHERE (used_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '30 days' FOR UPDATE), \
+    refresh_links AS (UPDATE mcp_oauth_refresh_tokens SET rotated_to_token_id=NULL WHERE rotated_to_token_id IN (SELECT id FROM refresh_eligible) RETURNING 1), \
+    oauth_refresh_tokens AS (DELETE FROM mcp_oauth_refresh_tokens WHERE id IN (SELECT id FROM refresh_eligible) RETURNING 1), \
+    published_outbox AS (DELETE FROM outbox_events WHERE published_at <= now() - interval '30 days' RETURNING 1), \
+    completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1), \
+    summary AS (SELECT * FROM (VALUES \
+      ('expired_idempotency', (SELECT count(*) FROM expired_idempotency), (SELECT count(*) FROM expired_idempotency)), \
+      ('expired_invitations', (SELECT count(*) FROM expired_invitations), (SELECT count(*) FROM expired_invitations)), \
+      ('oauth_authorization_codes', (SELECT count(*) FROM oauth_authorization_codes), (SELECT count(*) FROM oauth_authorization_codes)), \
+      ('oauth_access_tokens', (SELECT count(*) FROM oauth_access_tokens), (SELECT count(*) FROM oauth_access_tokens)), \
+      ('oauth_refresh_tokens', (SELECT count(*) FROM oauth_refresh_tokens), (SELECT count(*) FROM oauth_refresh_tokens)), \
+      ('published_outbox', (SELECT count(*) FROM published_outbox), (SELECT count(*) FROM published_outbox)), \
+      ('completed_temporary_jobs', (SELECT count(*) FROM completed_temporary_jobs), (SELECT count(*) FROM completed_temporary_jobs)) \
+    ) AS value(category, eligible_rows, affected_rows)) \
+    SELECT json_agg(row_to_json(summary) ORDER BY summary.category)::text FROM summary; COMMIT;"
 }
 
 pub fn restore_backup(options: &RestoreOptions) -> Result<RestoreResult> {
@@ -723,6 +913,53 @@ fn ensure_no_symlinks(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn scan_storage_category(category: &str, root: &Path) -> Result<StorageCategory> {
+    if !root.exists() {
+        return Ok(StorageCategory {
+            category: category.to_owned(),
+            allocated_bytes: 0,
+            regular_files: 0,
+            directories: 0,
+        });
+    }
+    reject_symlink_components(root)?;
+    let mut pending = vec![root.to_path_buf()];
+    let mut allocated_bytes = 0_u64;
+    let mut regular_files = 0_u64;
+    let mut directories = 0_u64;
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("inspect storage category {category}"))?;
+        ensure!(
+            !metadata.file_type().is_symlink(),
+            "storage category contains a symlink"
+        );
+        if metadata.is_dir() {
+            directories = directories.saturating_add(1);
+            for entry in
+                fs::read_dir(&path).with_context(|| format!("read storage category {category}"))?
+            {
+                pending.push(
+                    entry
+                        .with_context(|| format!("read storage category entry {category}"))?
+                        .path(),
+                );
+            }
+        } else if metadata.is_file() {
+            regular_files = regular_files.saturating_add(1);
+            allocated_bytes = allocated_bytes.saturating_add(metadata.blocks().saturating_mul(512));
+        } else {
+            bail!("storage category contains an unsupported filesystem entry");
+        }
+    }
+    Ok(StorageCategory {
+        category: category.to_owned(),
+        allocated_bytes,
+        regular_files,
+        directories,
+    })
+}
+
 fn artifact_record(path: &Path) -> Result<ArtifactRecord> {
     let mut file =
         File::open(path).with_context(|| format!("open backup artifact {}", path.display()))?;
@@ -768,6 +1005,7 @@ fn write_manifest(path: &Path, manifest: &BackupManifest) -> Result<()> {
 fn run_psql(program: &Path, database_url: &str, query: &str) -> Result<String> {
     let args = vec![
         OsString::from("--no-psqlrc"),
+        OsString::from("--quiet"),
         OsString::from("--tuples-only"),
         OsString::from("--no-align"),
         OsString::from("--field-separator=|"),
@@ -1074,8 +1312,9 @@ mod tests {
         ARCHIVE_FORMAT, ArtifactRecord, BACKUP_FORMAT_VERSION, BackupManifest, EXCLUDED_TABLE_DATA,
         INCLUDED_DATA_ENTRIES, MigrationRecord, PRESERVED_UNIQUE_ENTRIES,
         REBUILDABLE_CACHE_ENTRIES, SourceLayout, create_release_archive, read_database_name_file,
-        read_secret_file, restore_database, run_from_file, run_to_file, safe_archive_entry,
-        validate_archive, validate_backup, validate_manifest, validate_new_destination,
+        read_secret_file, restore_database, retention_apply_query, retention_report_query,
+        run_from_file, run_to_file, safe_archive_entry, scan_storage_category, validate_archive,
+        validate_backup, validate_manifest, validate_new_destination,
     };
 
     fn fixture_manifest() -> BackupManifest {
@@ -1127,6 +1366,43 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn storage_categories_count_allocated_files_without_following_symlinks() {
+        let temporary_parent = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let directory = TempDir::new_in(temporary_parent).expect("storage fixture");
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested).expect("nested directory");
+        fs::write(nested.join("artifact"), b"bounded").expect("fixture file");
+        let report = scan_storage_category("fixture", directory.path()).expect("scan storage");
+        assert_eq!(report.category, "fixture");
+        assert_eq!(report.regular_files, 1);
+        assert_eq!(report.directories, 2);
+        assert!(report.allocated_bytes >= 512);
+
+        symlink(nested.join("artifact"), directory.path().join("link")).expect("fixture symlink");
+        assert!(scan_storage_category("fixture", directory.path()).is_err());
+    }
+
+    #[test]
+    fn retention_is_dry_run_by_default_and_apply_is_locked() {
+        let report = retention_report_query();
+        assert!(!report.contains("DELETE FROM"));
+        assert!(!report.contains("UPDATE project_invitations"));
+        assert!(report.contains("expired_idempotency"));
+        assert!(report.contains("completed_temporary_jobs"));
+
+        let apply = retention_apply_query();
+        assert!(apply.contains("pg_advisory_xact_lock"));
+        assert!(apply.contains("DELETE FROM idempotency_keys"));
+        assert!(apply.contains("UPDATE project_invitations"));
+        assert!(apply.contains("rotated_to_token_id=NULL"));
+        assert!(!apply.contains("DELETE FROM audit_events"));
+        assert!(!apply.contains("DELETE FROM messages"));
+        assert!(!apply.contains("DELETE FROM agent_runs"));
     }
 
     fn temporary_directory() -> TempDir {

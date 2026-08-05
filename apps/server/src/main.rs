@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use agent_workspace_server::{
     AppState, bootstrap, config::AppConfig, github, mcp, migration_preflight,
     provider::SupervisorRegistry, rate_limit::RateLimiters, realtime::RealtimeHub, recovery,
-    router, seed, shutdown_signal, telemetry::init_tracing, work_items,
+    retention, router, seed, shutdown_signal, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use sqlx::postgres::PgPoolOptions;
@@ -108,6 +108,19 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("rotate User password and sessions")?;
             println!("{}", serde_json::to_string_pretty(&rotated)?);
+            return Ok(());
+        }
+        Some("retention-worktrees") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["apply"])?;
+            let result = retention::clean_worktrees(
+                &pool,
+                &config.data_root,
+                optional_bool(&options, "apply", false)?,
+            )
+            .await
+            .context("clean eligible retained worktrees")?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
             return Ok(());
         }
         Some("mcp-credential-create") => {
@@ -414,6 +427,20 @@ fn optional_u16(
             .parse::<u16>()
             .with_context(|| format!("invalid --{name}"))
     })
+}
+
+fn optional_bool(
+    options: &BTreeMap<String, String>,
+    name: &str,
+    default: bool,
+) -> anyhow::Result<bool> {
+    options
+        .get(name)
+        .map_or(Ok(default), |value| match value.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => bail!("invalid --{name}; expected true or false"),
+        })
 }
 
 fn parse_scopes(value: &str) -> anyhow::Result<Vec<String>> {

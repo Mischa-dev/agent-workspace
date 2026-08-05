@@ -3,7 +3,8 @@
 use std::{collections::BTreeMap, env, path::PathBuf};
 
 use agent_workspace_host_maintenance::{
-    BackupOptions, RestoreOptions, create_backup, restore_backup, validate_backup,
+    BackupOptions, RestoreOptions, RetentionOptions, StorageReportOptions, create_backup,
+    restore_backup, run_retention, storage_report, validate_backup,
 };
 use anyhow::{Context, Result, bail};
 
@@ -83,6 +84,39 @@ fn main() -> Result<()> {
             })?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        "storage-report" => {
+            reject_unknown(
+                &options,
+                &[
+                    "data-root",
+                    "releases-root",
+                    "backups-root",
+                    "database-name-file",
+                    "psql",
+                    "data-quota-bytes",
+                    "minimum-free-bytes",
+                ],
+            )?;
+            let report = storage_report(&StorageReportOptions {
+                data_root: path(&options, "data-root")?,
+                releases_root: path(&options, "releases-root")?,
+                backups_root: path(&options, "backups-root")?,
+                database_name_file: path(&options, "database-name-file")?,
+                psql: path(&options, "psql")?,
+                data_quota_bytes: unsigned(&options, "data-quota-bytes")?,
+                minimum_free_bytes: unsigned(&options, "minimum-free-bytes")?,
+            })?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        "retention-cleanup" => {
+            reject_unknown(&options, &["database-name-file", "psql", "apply"])?;
+            let result = run_retention(&RetentionOptions {
+                database_name_file: path(&options, "database-name-file")?,
+                psql: path(&options, "psql")?,
+                apply: optional_boolean(&options, "apply")?,
+            })?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         _ => bail!("unknown maintenance command"),
     }
     Ok(())
@@ -124,6 +158,20 @@ fn value<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a st
         .with_context(|| format!("missing required maintenance option --{name}"))
 }
 
+fn optional_boolean(options: &BTreeMap<String, String>, name: &str) -> Result<bool> {
+    match options.get(name).map(String::as_str) {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => bail!("maintenance option --{name} must be true or false"),
+    }
+}
+
 fn path(options: &BTreeMap<String, String>, name: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(value(options, name)?))
+}
+
+fn unsigned(options: &BTreeMap<String, String>, name: &str) -> Result<u64> {
+    value(options, name)?
+        .parse()
+        .with_context(|| format!("maintenance option --{name} must be an unsigned integer"))
 }

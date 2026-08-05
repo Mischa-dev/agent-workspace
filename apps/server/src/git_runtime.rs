@@ -527,6 +527,57 @@ pub fn remove_clean_worktree(mirror: &Path, worktree: &Path) -> Result<(), AppEr
     prune_worktrees_locked(mirror)
 }
 
+pub fn remove_published_worktree(
+    mirror: &Path,
+    worktree: &Path,
+    expected_branch: &str,
+    published_commit: &str,
+) -> Result<(), AppError> {
+    validate_branch(expected_branch)?;
+    validate_commit(published_commit)?;
+    validate_mirror(mirror)?;
+    let repository_root = mirror
+        .parent()
+        .ok_or(AppError::Invalid("mirror has no repository root"))?;
+    let _lock = repository_lock(repository_root)?;
+    let inspection = inspect_worktree(mirror, worktree)?;
+    if inspection.dirty {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "dirty worktree is retained",
+        ));
+    }
+    if inspection.branch != expected_branch {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "worktree branch does not match its durable workspace",
+        ));
+    }
+    let head = run_git([
+        OsString::from("-C"),
+        worktree.as_os_str().to_owned(),
+        OsString::from("rev-parse"),
+        OsString::from("--verify"),
+        OsString::from("HEAD^{commit}"),
+    ])?;
+    let head = String::from_utf8(head.stdout)
+        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?;
+    if head.trim() != published_commit {
+        return Err(AppError::Conflict(
+            "git_worktree",
+            "unpushed worktree is retained",
+        ));
+    }
+    run_git([
+        OsString::from("--git-dir"),
+        mirror.as_os_str().to_owned(),
+        OsString::from("worktree"),
+        OsString::from("remove"),
+        worktree.as_os_str().to_owned(),
+    ])?;
+    prune_worktrees_locked(mirror)
+}
+
 pub fn repair_and_prune_worktrees(mirror: &Path, worktree: Option<&Path>) -> Result<(), AppError> {
     validate_mirror(mirror)?;
     let repository_root = mirror
@@ -835,8 +886,8 @@ mod tests {
         RegisteredRepository, RepositoryPreparationMode, TemporaryAskpass, create_worktree,
         expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
         managed_worktree_path, prepare_repository, remove_clean_worktree,
-        repair_and_prune_worktrees, reserve_process_slot, unique_run_branch, validate_branch,
-        validate_ref, worktree_is_dirty,
+        remove_published_worktree, repair_and_prune_worktrees, reserve_process_slot,
+        unique_run_branch, validate_branch, validate_ref, worktree_is_dirty,
     };
     use std::{
         fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,
@@ -1027,6 +1078,25 @@ mod tests {
         remove_clean_worktree(&mirror, &created[0].0).expect("remove clean worktree");
         assert!(!created[0].0.exists());
         repair_and_prune_worktrees(&mirror, Some(&created[1].0)).expect("repair and prune");
+        assert!(
+            remove_published_worktree(
+                &mirror,
+                &created[1].0,
+                &created[1].1,
+                &first_preparation.base_commit,
+            )
+            .is_err(),
+            "a clean but unpushed commit must be retained"
+        );
+        assert!(created[1].0.exists());
+        remove_published_worktree(
+            &mirror,
+            &created[1].0,
+            &created[1].1,
+            &publishable.head_commit,
+        )
+        .expect("remove verified published worktree");
+        assert!(!created[1].0.exists());
     }
 
     #[cfg(unix)]
