@@ -54,6 +54,9 @@ filesystem's available blocks. It does not follow symlinks and reports only
 aggregate categories.
 Registered root path components must not be symlinks. Internal symlinks are
 reported only as a count and are never traversed or resolved.
+Runtime growth admission applies the same rule: internal symlinks are skipped
+without traversal, while every registered destination path is independently
+validated before a write begins.
 
 New disk-growing operations are admitted only while both conditions hold:
 

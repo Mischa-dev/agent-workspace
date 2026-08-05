@@ -37,10 +37,12 @@ pub fn inspect(
         let metadata = fs::symlink_metadata(&path)
             .map_err(|_| AppError::Internal("inspect storage admission root"))?;
         if metadata.file_type().is_symlink() {
-            return Err(AppError::Conflict(
-                "storage",
-                "storage root contains a symlink",
-            ));
+            // Provider profiles and project-local tool caches may contain
+            // symlinks. Admission must never traverse them, but their mere
+            // presence cannot block every unrelated disk-growing operation.
+            // Registered destination roots still reject symlink path
+            // components before writes are attempted.
+            continue;
         }
         if metadata.is_dir() {
             let children = fs::read_dir(&path)
@@ -105,9 +107,19 @@ mod tests {
     }
 
     #[test]
-    fn symlinks_are_rejected() {
+    fn symlinks_are_skipped_without_following_targets() {
         let root = TempDir::new().expect("storage root");
-        symlink("/tmp", root.path().join("outside")).expect("symlink");
-        assert!(inspect(root.path(), u64::MAX, 1).is_err());
+        let outside = TempDir::new().expect("outside root");
+        fs::write(outside.path().join("large"), vec![0_u8; 8192]).expect("outside artifact");
+        fs::write(root.path().join("inside"), vec![0_u8; 4096]).expect("inside artifact");
+        symlink(outside.path(), root.path().join("outside")).expect("symlink");
+
+        let report = inspect(root.path(), u64::MAX, 1).expect("storage report");
+        let inside_blocks = fs::metadata(root.path().join("inside"))
+            .expect("inside metadata")
+            .blocks()
+            .saturating_mul(512);
+        assert_eq!(report.allocated_bytes, inside_blocks);
+        assert!(report.admitted);
     }
 }
