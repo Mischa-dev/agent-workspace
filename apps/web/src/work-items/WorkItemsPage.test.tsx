@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -243,12 +243,16 @@ afterEach(() => {
 })
 
 function renderPage(path = `/projects/${projectId}/work-items`) {
+  const container = document.createElement('div')
+  container.id = 'root'
+  document.body.append(container)
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route element={<WorkItemsPage />} path="/projects/:projectId/work-items" />
       </Routes>
     </MemoryRouter>,
+    { container },
   )
 }
 
@@ -302,6 +306,31 @@ describe('Work Items list', () => {
       }),
       expect.any(Object),
     )
+  })
+
+  it('keeps the creation dialog modal to keyboard users and restores focus', async () => {
+    renderPage()
+    const trigger = screen.getByRole('button', { name: 'New Work Item' })
+    fireEvent.click(trigger)
+
+    const dialog = screen.getByRole('dialog', { name: 'Capture the work' })
+    const title = screen.getByLabelText('Title')
+    const close = screen.getByRole('button', { name: 'Close' })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect(title).toHaveFocus()
+    expect(document.querySelector('#root')).toHaveAttribute('inert')
+
+    close.focus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(cancel).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(close).toHaveFocus()
+    expect((await axe.run(document.body)).violations).toEqual([])
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.querySelector('#root')).not.toHaveAttribute('inert')
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 
   it('renders the Kanban projection with keyboard-equivalent move controls', () => {

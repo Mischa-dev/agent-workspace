@@ -1,4 +1,13 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  RefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -62,6 +71,7 @@ export function WorkItemsPage() {
   const { projectId = '' } = useParams()
   const [parameters, setParameters] = useSearchParams()
   const [createOpen, setCreateOpen] = useState(false)
+  const createButtonRef = useRef<HTMLButtonElement>(null)
   const view = parameters.get('view') === 'board' ? 'board' : 'list'
   const project = useProject(projectId)
   const workflow = useWorkItemWorkflow(projectId)
@@ -135,6 +145,7 @@ export function WorkItemsPage() {
             <button
               className="primary-button"
               onClick={() => setCreateOpen(true)}
+              ref={createButtonRef}
               type="button"
             >
               New Work Item
@@ -280,6 +291,7 @@ export function WorkItemsPage() {
         <CreateWorkItemDialog
           onClose={() => setCreateOpen(false)}
           projectId={projectId}
+          returnFocusRef={createButtonRef}
           workflow={workflow.data}
         />
       ) : null}
@@ -353,14 +365,17 @@ function WorkItemBoard({
 function CreateWorkItemDialog({
   onClose,
   projectId,
+  returnFocusRef,
   workflow,
 }: {
   onClose: () => void
   projectId: string
+  returnFocusRef: RefObject<HTMLButtonElement | null>
   workflow: NonNullable<ReturnType<typeof useWorkItemWorkflow>['data']>
 }) {
   const navigate = useNavigate()
   const mutation = useCreateWorkItem()
+  const dialogRef = useRef<HTMLElement>(null)
   const idempotencyKey = useRef(crypto.randomUUID())
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -368,6 +383,41 @@ function CreateWorkItemDialog({
     workflow.types.find((item) => item.isDefault)?.id ?? workflow.types[0]?.id ?? '',
   )
   const [priority, setPriority] = useState<WorkItemPriority>('no_priority')
+
+  useEffect(() => {
+    const applicationRoot = document.querySelector<HTMLElement>('#root')
+    const applicationWasInert = applicationRoot?.hasAttribute('inert') ?? false
+    const returnFocus = returnFocusRef.current
+    applicationRoot?.setAttribute('inert', '')
+    return () => {
+      if (!applicationWasInert) applicationRoot?.removeAttribute('inert')
+      window.requestAnimationFrame(() => returnFocus?.focus())
+    }
+  }, [returnFocusRef])
+
+  const handleDialogKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    ).filter((element) => element.tabIndex >= 0)
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -392,9 +442,16 @@ function CreateWorkItemDialog({
     )
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section aria-labelledby="new-work-item-title" aria-modal="true" className="work-item-dialog" role="dialog">
+      <section
+        aria-labelledby="new-work-item-title"
+        aria-modal="true"
+        className="work-item-dialog"
+        onKeyDown={handleDialogKeyDown}
+        ref={dialogRef}
+        role="dialog"
+      >
         <header>
           <div>
             <span className="section-label">NEW WORK ITEM</span>
@@ -434,7 +491,8 @@ function CreateWorkItemDialog({
           </div>
         </form>
       </section>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

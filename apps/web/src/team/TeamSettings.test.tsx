@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import axe from 'axe-core'
 
 import { TeamSettings } from './TeamSettings'
 
@@ -110,9 +111,16 @@ describe('TeamSettings', () => {
       }),
     )
 
-    renderTeam()
+    const rendered = renderTeam()
     expect(await screen.findByText(member.displayName)).toBeVisible()
     expect(document.querySelector('img')).toBeNull()
+    expect(
+      (
+        await axe.run(rendered.container, {
+          rules: { 'color-contrast': { enabled: false } },
+        })
+      ).violations,
+    ).toEqual([])
     fireEvent.change(screen.getByLabelText(`Role for ${member.displayName}`), {
       target: { value: 'viewer' },
     })

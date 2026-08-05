@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { JoinPage } from './JoinPage'
@@ -95,9 +96,16 @@ describe('invitation acceptance', () => {
       }),
     )
 
-    renderJoin()
+    const rendered = renderJoin()
     expect(await screen.findByText(resolvedInvitation.projectName)).toBeVisible()
     expect(document.querySelector('img')).toBeNull()
+    expect(
+      (
+        await axe.run(rendered.container, {
+          rules: { 'color-contrast': { enabled: false } },
+        })
+      ).violations,
+    ).toEqual([])
     fireEvent.change(screen.getByLabelText('Display name'), {
       target: { value: 'New Human' },
     })
