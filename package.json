@@ -9,6 +9,9 @@
   },
   "scripts": {
     "build": "pnpm --filter @agent-workspace/web build",
+    "check:assets": "node --test scripts/web-budget-lib.test.mjs && node scripts/check-web-budgets.mjs",
+    "check:performance-tools": "node --test scripts/private-host-performance-lib.test.mjs scripts/web-budget-lib.test.mjs",
+    "measure:private-host": "node scripts/measure-private-host.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:down": "docker compose -f docker-compose.dev.yml down",
     "db:up": "docker compose -f docker-compose.dev.yml up -d --wait",
