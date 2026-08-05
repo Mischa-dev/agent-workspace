@@ -56,7 +56,9 @@ pub struct McpPrincipal {
     pub mcp_credential_id: Option<Uuid>,
     pub oauth_grant_id: Option<Uuid>,
     pub actor_id: Uuid,
+    pub actor_kind: ActorKind,
     pub project_id: Uuid,
+    pub external_agent_connection_id: Option<Uuid>,
     pub client_name: String,
     pub scopes: Vec<String>,
     pub authentication_class: &'static str,
@@ -76,7 +78,9 @@ impl McpPrincipal {
 struct CredentialAuthRow {
     credential_id: Uuid,
     actor_id: Uuid,
+    actor_kind: String,
     project_id: Uuid,
+    external_agent_connection_id: Option<Uuid>,
     client_name: String,
     token_digest: Vec<u8>,
     scopes: Vec<String>,
@@ -173,12 +177,11 @@ impl McpServer {
              AND om.actor_id = $2
              AND om.enabled
             JOIN actors a ON a.id = pm.actor_id
-            JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
             WHERE p.id = $1
               AND p.archived_at IS NULL
               AND pm.enabled
               AND a.status = 'active'
-              AND a.kind = 'human'
+              AND a.kind IN ('human', 'external_agent')
             "#,
         )
         .bind(principal.project_id)
@@ -190,6 +193,7 @@ impl McpServer {
             Ok(Some(row))
                 if mcp_policy_allows(
                     principal.actor_id,
+                    principal.actor_kind,
                     principal.project_id,
                     &row.role,
                     Action::McpRead,
@@ -613,13 +617,17 @@ async fn resolve_bearer_principal(
         SELECT
             c.id AS credential_id,
             c.actor_id,
+            a.kind AS actor_kind,
             c.project_id,
+            c.external_agent_connection_id,
             c.client_name,
             c.token_digest,
             c.scopes
         FROM mcp_client_credentials c
         JOIN actors a ON a.id = c.actor_id
-        JOIN users u ON u.actor_id = c.actor_id AND u.status = 'active'
+        LEFT JOIN users u ON u.actor_id = c.actor_id
+        LEFT JOIN external_agent_connections connection
+          ON connection.id = c.external_agent_connection_id
         JOIN projects p ON p.id = c.project_id
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
@@ -631,10 +639,20 @@ async fn resolve_bearer_principal(
           AND c.status = 'active'
           AND c.revoked_at IS NULL
           AND c.expires_at > now()
-          AND a.kind = 'human'
           AND a.status = 'active'
           AND p.archived_at IS NULL
           AND pm.enabled
+          AND (
+              (a.kind = 'human'
+               AND u.status = 'active'
+               AND c.external_agent_connection_id IS NULL)
+              OR
+              (a.kind = 'external_agent'
+               AND connection.status = 'active'
+               AND connection.project_id = c.project_id
+               AND connection.actor_id = c.actor_id
+               AND connection.scopes = c.scopes)
+          )
         "#,
     )
     .bind(prefix)
@@ -648,6 +666,7 @@ async fn resolve_bearer_principal(
     let Some(row) = matched else {
         return Ok(None);
     };
+    let actor_kind = parse_mcp_actor_kind(&row.actor_kind)?;
 
     sqlx::query(
         r#"
@@ -661,13 +680,29 @@ async fn resolve_bearer_principal(
     .bind(LAST_USED_THROTTLE_MINUTES)
     .execute(&state.pool)
     .await?;
+    if let Some(connection_id) = row.external_agent_connection_id {
+        sqlx::query(
+            r#"
+            UPDATE external_agent_connections
+            SET last_used_at = now(), last_error_category = NULL, updated_at = now()
+            WHERE id = $1 AND status = 'active'
+              AND (last_used_at IS NULL OR last_used_at < now() - make_interval(mins => $2::integer))
+            "#,
+        )
+        .bind(connection_id)
+        .bind(LAST_USED_THROTTLE_MINUTES)
+        .execute(&state.pool)
+        .await?;
+    }
 
     Ok(Some(McpPrincipal {
         credential_id: row.credential_id,
         mcp_credential_id: Some(row.credential_id),
         oauth_grant_id: None,
         actor_id: row.actor_id,
+        actor_kind,
         project_id: row.project_id,
+        external_agent_connection_id: row.external_agent_connection_id,
         client_name: row.client_name,
         scopes: row.scopes,
         authentication_class: "mcp_bearer",
@@ -991,15 +1026,27 @@ async fn validate_issue_command(
     } else {
         Action::McpRead
     };
-    if !role
-        .is_some_and(|role| mcp_policy_allows(command.actor_id, command.project_id, &role, action))
-    {
+    if !role.is_some_and(|role| {
+        mcp_policy_allows(
+            command.actor_id,
+            ActorKind::Human,
+            command.project_id,
+            &role,
+            action,
+        )
+    }) {
         return Err(AppError::NotFound("project_membership"));
     }
     Ok(())
 }
 
-fn mcp_policy_allows(actor_id: Uuid, project_id: Uuid, role: &str, action: Action) -> bool {
+fn mcp_policy_allows(
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    project_id: Uuid,
+    role: &str,
+    action: Action,
+) -> bool {
     let role = match role {
         "owner" => MembershipRole::Owner,
         "admin" => MembershipRole::Admin,
@@ -1011,7 +1058,7 @@ fn mcp_policy_allows(actor_id: Uuid, project_id: Uuid, role: &str, action: Actio
         authorize(
             &Subject::new(
                 actor_id,
-                ActorKind::Human,
+                actor_kind,
                 true,
                 Some(Membership::project(project_id, role, true)),
                 None,
@@ -1021,6 +1068,14 @@ fn mcp_policy_allows(actor_id: Uuid, project_id: Uuid, role: &str, action: Actio
         ),
         Decision::Allow
     )
+}
+
+fn parse_mcp_actor_kind(value: &str) -> Result<ActorKind, AppError> {
+    match value {
+        "human" => Ok(ActorKind::Human),
+        "external_agent" => Ok(ActorKind::ExternalAgent),
+        _ => Err(AppError::Internal("invalid MCP Actor kind")),
+    }
 }
 
 fn generate_token() -> (String, String, [u8; 32]) {

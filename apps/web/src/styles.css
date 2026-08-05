@@ -2529,7 +2529,9 @@ p {
 
 .team-settings,
 .team-member-list,
-.team-invitation-list {
+.team-invitation-list,
+.external-agent-settings,
+.external-agent-list {
   display: grid;
   gap: 12px;
 }
@@ -2537,6 +2539,8 @@ p {
 .team-invite-form,
 .team-member,
 .team-invitation,
+.external-agent-form,
+.external-agent-row,
 .one-shot-secret {
   display: flex;
   align-items: end;
@@ -2550,6 +2554,7 @@ p {
 
 .team-member > div:first-child,
 .team-invitation > div:first-child,
+.external-agent-row > div:first-child,
 .one-shot-secret {
   display: grid;
   gap: 4px;
@@ -2567,6 +2572,23 @@ p {
   user-select: all;
 }
 
+.external-agent-form {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.external-agent-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.external-agent-scopes label {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -2582,7 +2604,9 @@ p {
 @media (max-width: 720px) {
   .team-invite-form,
   .team-member,
-  .team-invitation {
+  .team-invitation,
+  .external-agent-form,
+  .external-agent-row {
     align-items: stretch;
     flex-direction: column;
   }

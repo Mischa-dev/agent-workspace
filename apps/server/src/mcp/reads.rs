@@ -6,8 +6,7 @@ use uuid::Uuid;
 
 use super::McpPrincipal;
 use crate::policy::{
-    Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-    authorize,
+    Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
 };
 
 const MAX_INSTRUCTIONS_CHARACTERS: usize = 20_000;
@@ -540,12 +539,11 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
          AND om.actor_id = pm.actor_id
          AND om.enabled
         JOIN actors a ON a.id = pm.actor_id
-        JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
         WHERE pm.project_id = $1
           AND pm.actor_id = $2
           AND pm.enabled
           AND p.archived_at IS NULL
-          AND a.kind = 'human'
+          AND a.kind IN ('human', 'external_agent')
           AND a.status = 'active'
         "#,
     )
@@ -562,7 +560,7 @@ async fn authorize_read(pool: &sqlx::PgPool, principal: &McpPrincipal) -> bool {
         authorize(
             &Subject::new(
                 principal.actor_id,
-                ActorKind::Human,
+                principal.actor_kind,
                 true,
                 Some(Membership::project(principal.project_id, role, true)),
                 None,
