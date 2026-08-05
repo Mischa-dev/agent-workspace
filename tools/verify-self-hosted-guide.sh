@@ -20,15 +20,15 @@ for required in \
   'migration' \
   'Rollback boundary'
 do
-  rg --fixed-strings --quiet "${required}" "${guide}"
+  grep --fixed-strings --quiet "${required}" "${guide}"
 done
 
-if rg --quiet 'curl[^\n]*\|[[:space:]]*(sh|bash)' "${guide}"; then
+if grep --extended-regexp --quiet 'curl[^\n]*\|[[:space:]]*(sh|bash)' "${guide}"; then
   echo "The self-hosted guide must not pipe network responses into a shell." >&2
   exit 1
 fi
 
-if rg --quiet '(password|secret|token)[[:space:]]*=[[:space:]]*[^[:space:]`]*(example|test|real)[^[:space:]`]*' "${guide}"; then
+if grep --extended-regexp --ignore-case --quiet '(password|secret|token)[[:space:]]*=[[:space:]]*[^[:space:]`]*(example|test|real)[^[:space:]`]*' "${guide}"; then
   echo "The self-hosted guide contains a credential-like literal." >&2
   exit 1
 fi

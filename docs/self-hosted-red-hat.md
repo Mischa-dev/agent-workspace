@@ -1,7 +1,7 @@
 # Self-host Agent Workspace on Red Hat Enterprise Linux 10 ARM64
 
-This is the supported private-beta runbook for one Red Hat Enterprise Linux
-10.1 ARM64 host. The Mac and the private GitHub repository remain canonical;
+This is the supported private-beta runbook for one Red Hat Enterprise Linux 10.1 ARM64
+host. The Mac and the private GitHub repository remain canonical;
 the host is an exact-commit build and runtime target. Nothing here creates
 public application ingress, changes Tailscale, replaces `/usr/bin/node`, or
 replaces a global Codex installation.
