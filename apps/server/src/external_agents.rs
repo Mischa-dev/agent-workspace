@@ -419,7 +419,16 @@ async fn mutate_connection(
     } else {
         requested_enabled.unwrap_or(current.status == "active")
     };
+    let has_explicit_scopes = requested_scopes.is_some();
     let requested_scopes = requested_scopes.unwrap_or_else(|| current.scopes.clone());
+    if next_role == "viewer"
+        && has_explicit_scopes
+        && requested_scopes
+            .iter()
+            .any(|scope| !matches!(scope.as_str(), "read" | "events"))
+    {
+        return Err(AppError::Validation("external_agent_scopes"));
+    }
     let next_scopes = if next_role == "viewer" {
         requested_scopes
             .iter()
@@ -432,58 +441,71 @@ async fn mutate_connection(
     if !next_scopes.iter().any(|scope| scope == "read") {
         return Err(AppError::Validation("external_agent_scopes"));
     }
-    let contract_changed = next_role != current.role || next_scopes != current.scopes;
+    let role_changed = next_role != current.role;
+    let scopes_changed = next_scopes != current.scopes;
+    let contract_changed = role_changed || scopes_changed;
     let enabled_changed = next_enabled != (current.status == "active");
     let should_issue =
         !remove && next_enabled && (force_rotate || contract_changed || enabled_changed);
     if force_rotate && !next_enabled {
         return Err(AppError::Conflict("external_agent_connection", "disabled"));
     }
+    if !contract_changed && !enabled_changed && !force_rotate && !remove {
+        transaction.commit().await?;
+        return Ok(ConnectionMutationResponse {
+            connection: current.into(),
+            one_time_credential: None,
+        });
+    }
 
     if !next_enabled || contract_changed || force_rotate {
         revoke_credentials(&mut transaction, connection_id).await?;
     }
-    sqlx::query(
-        r#"
-        UPDATE actors
-        SET status = CASE WHEN $2 THEN 'active' ELSE 'disabled' END, updated_at = now()
-        WHERE id = $1 AND kind = 'external_agent'
-        "#,
-    )
-    .bind(current.actor_id)
-    .bind(next_enabled)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        UPDATE organization_memberships
-        SET enabled = $3, version = version + 1, updated_at = now()
-        WHERE organization_id = $1 AND actor_id = $2
-        "#,
-    )
-    .bind(access.organization_id)
-    .bind(current.actor_id)
-    .bind(next_enabled)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        UPDATE project_memberships
-        SET role = $3, enabled = $4,
-            disabled_by_actor_id = CASE WHEN $4 THEN NULL ELSE $5 END,
-            disabled_at = CASE WHEN $4 THEN NULL ELSE now() END,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND actor_id = $2
-        "#,
-    )
-    .bind(project_id)
-    .bind(current.actor_id)
-    .bind(next_role)
-    .bind(next_enabled)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(map_database_error)?;
+    if enabled_changed || remove {
+        sqlx::query(
+            r#"
+            UPDATE actors
+            SET status = CASE WHEN $2 THEN 'active' ELSE 'disabled' END, updated_at = now()
+            WHERE id = $1 AND kind = 'external_agent'
+            "#,
+        )
+        .bind(current.actor_id)
+        .bind(next_enabled)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE organization_memberships
+            SET enabled = $3, version = version + 1, updated_at = now()
+            WHERE organization_id = $1 AND actor_id = $2
+            "#,
+        )
+        .bind(access.organization_id)
+        .bind(current.actor_id)
+        .bind(next_enabled)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    if enabled_changed || role_changed || remove {
+        sqlx::query(
+            r#"
+            UPDATE project_memberships
+            SET role = $3, enabled = $4,
+                disabled_by_actor_id = CASE WHEN $4 THEN NULL ELSE $5 END,
+                disabled_at = CASE WHEN $4 THEN NULL ELSE now() END,
+                version = version + 1, updated_at = now()
+            WHERE project_id = $1 AND actor_id = $2
+            "#,
+        )
+        .bind(project_id)
+        .bind(current.actor_id)
+        .bind(next_role)
+        .bind(next_enabled)
+        .bind(principal.actor_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_database_error)?;
+    }
     let updated = sqlx::query(
         r#"
         UPDATE external_agent_connections
