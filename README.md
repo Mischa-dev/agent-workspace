@@ -67,3 +67,7 @@ frontend development, Vite proxies HTTP and WebSocket traffic to that port.
 The Red Hat build operator uses `deploy/redhat/install-build-rust.sh` for an
 isolated pinned Rust toolchain. Its `CARGO_HOME` and `RUSTUP_HOME` live under
 the bot account and do not replace Red Hat's `/usr/bin/rustc`.
+
+The supported private-host installation, upgrade, rollback, recovery, and
+maintenance procedure is in
+[`docs/self-hosted-red-hat.md`](docs/self-hosted-red-hat.md).
