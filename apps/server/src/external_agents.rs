@@ -102,6 +102,7 @@ struct UpdateConnectionRequest {
     expected_version: i64,
     role: Option<String>,
     enabled: Option<bool>,
+    scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,7 +297,9 @@ async fn update_connection(
     ApiJson(request): ApiJson<UpdateConnectionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if request.expected_version < 1 || request.role.is_none() && request.enabled.is_none() {
+    if request.expected_version < 1
+        || request.role.is_none() && request.enabled.is_none() && request.scopes.is_none()
+    {
         return Err(AppError::Invalid("external_agent_update"));
     }
     if request
@@ -306,6 +309,7 @@ async fn update_connection(
     {
         return Err(AppError::Validation("external_agent_role"));
     }
+    let scopes = request.scopes.map(normalize_scopes).transpose()?;
     mutate_connection(
         &state,
         &headers,
@@ -315,6 +319,7 @@ async fn update_connection(
         request.expected_version,
         request.role,
         request.enabled,
+        scopes,
         false,
         false,
     )
@@ -337,6 +342,7 @@ async fn rotate_credential(
         project_id,
         connection_id,
         request.expected_version,
+        None,
         None,
         None,
         true,
@@ -363,6 +369,7 @@ async fn remove_connection(
         request.expected_version,
         None,
         None,
+        None,
         false,
         true,
     )
@@ -380,6 +387,7 @@ async fn mutate_connection(
     expected_version: i64,
     requested_role: Option<String>,
     requested_enabled: Option<bool>,
+    requested_scopes: Option<Vec<String>>,
     force_rotate: bool,
     remove: bool,
 ) -> Result<ConnectionMutationResponse, AppError> {
@@ -411,24 +419,28 @@ async fn mutate_connection(
     } else {
         requested_enabled.unwrap_or(current.status == "active")
     };
+    let requested_scopes = requested_scopes.unwrap_or_else(|| current.scopes.clone());
     let next_scopes = if next_role == "viewer" {
-        current
-            .scopes
+        requested_scopes
             .iter()
             .filter(|scope| matches!(scope.as_str(), "read" | "events"))
             .cloned()
             .collect::<Vec<_>>()
     } else {
-        current.scopes.clone()
+        requested_scopes
     };
-    let role_changed = next_role != current.role || next_scopes != current.scopes;
+    if !next_scopes.iter().any(|scope| scope == "read") {
+        return Err(AppError::Validation("external_agent_scopes"));
+    }
+    let contract_changed = next_role != current.role || next_scopes != current.scopes;
     let enabled_changed = next_enabled != (current.status == "active");
-    let should_issue = !remove && next_enabled && (force_rotate || role_changed || enabled_changed);
+    let should_issue =
+        !remove && next_enabled && (force_rotate || contract_changed || enabled_changed);
     if force_rotate && !next_enabled {
         return Err(AppError::Conflict("external_agent_connection", "disabled"));
     }
 
-    if !next_enabled || role_changed || force_rotate {
+    if !next_enabled || contract_changed || force_rotate {
         revoke_credentials(&mut transaction, connection_id).await?;
     }
     sqlx::query(
@@ -595,14 +607,8 @@ fn validate_create(request: CreateConnectionRequest) -> Result<NormalizedCreate,
     {
         return Err(AppError::Validation("external_agent_identity"));
     }
-    let mut scopes = request.scopes;
-    scopes.sort();
-    scopes.dedup();
+    let scopes = normalize_scopes(request.scopes)?;
     if scopes.is_empty()
-        || !scopes.iter().any(|scope| scope == "read")
-        || !scopes
-            .iter()
-            .all(|scope| ALLOWED_SCOPES.contains(&scope.as_str()))
         || (request.role == "viewer"
             && scopes
                 .iter()
@@ -617,6 +623,20 @@ fn validate_create(request: CreateConnectionRequest) -> Result<NormalizedCreate,
         role: request.role,
         scopes,
     })
+}
+
+fn normalize_scopes(mut scopes: Vec<String>) -> Result<Vec<String>, AppError> {
+    scopes.sort();
+    scopes.dedup();
+    if scopes.is_empty()
+        || !scopes.iter().any(|scope| scope == "read")
+        || !scopes
+            .iter()
+            .all(|scope| ALLOWED_SCOPES.contains(&scope.as_str()))
+    {
+        return Err(AppError::Validation("external_agent_scopes"));
+    }
+    Ok(scopes)
 }
 
 fn authorize_management(

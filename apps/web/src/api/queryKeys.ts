@@ -13,6 +13,8 @@ export const queryKeys = {
   members: (projectId: string) => ['project', projectId, 'members'] as const,
   invitations: (projectId: string) =>
     ['project', projectId, 'invitations'] as const,
+  externalAgents: (projectId: string) =>
+    ['project', projectId, 'external-agents'] as const,
   githubIntegration: (projectId: string) =>
     ['project', projectId, 'github-integration'] as const,
   githubAutomation: (projectId: string) =>

@@ -4,6 +4,7 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { ExecutionAccountSettings } from '../execution/ExecutionAccountSettings'
+import { ExternalAgentSettings } from '../external-agents/ExternalAgentSettings'
 import { GitHubIntegrationSettings } from '../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../repositories/RepositorySettings'
 import { TeamSettings } from '../team/TeamSettings'
@@ -161,6 +162,18 @@ export function ProjectSettingsPage() {
             details, but account, integration, and team management controls are
             unavailable.
           </p>
+        )}
+
+        {project.data.capabilities.manage && (
+          <section aria-labelledby="external-agents-heading" className="page-section">
+            <h2 id="external-agents-heading">External agents</h2>
+            <p>
+              Connect an externally operated teammate with its own Project Actor,
+              least-privilege permissions, and a one-time bearer. Agent Workspace
+              does not host its model, memory, schedules, or autonomy loop.
+            </p>
+            <ExternalAgentSettings projectId={project.data.id} />
+          </section>
         )}
 
         {project.data.role !== 'viewer' && (
