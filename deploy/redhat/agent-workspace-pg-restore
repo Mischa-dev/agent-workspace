@@ -8,6 +8,7 @@ fi
 
 readonly podman_command=(
   /usr/bin/podman exec
+  --interactive
   --user postgres
   --env PGDATABASE
   --env PGUSER=agent_workspace
