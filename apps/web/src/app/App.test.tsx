@@ -1159,6 +1159,13 @@ describe('M1 authenticated shell', () => {
     expect(
       screen.getByRole('button', { name: 'Interrupt run' }),
     ).toBeVisible()
+    expect(
+      (
+        await axe.run(container, {
+          rules: { 'color-contrast': { enabled: false } },
+        })
+      ).violations,
+    ).toEqual([])
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => {
       expect(

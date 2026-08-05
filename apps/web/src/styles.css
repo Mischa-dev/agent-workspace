@@ -165,7 +165,7 @@ p {
 
 .project-button[data-active="true"] {
   background: var(--accent-strong);
-  color: white;
+  color: var(--accent-ink);
 }
 
 .project-initials {
@@ -338,13 +338,25 @@ p {
 }
 
 @media (forced-colors: active) {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline-color: Highlight;
+  }
+
   .project-sidebar .thread-link,
   .project-sidebar .thread-link[data-attention] {
     color: LinkText;
     forced-color-adjust: auto;
   }
 
-  .thread-attention-icon {
+  .thread-attention-icon,
+  .approval-prompt,
+  .conflict-banner,
+  .inline-error,
+  .work-item-state {
     border-color: currentColor;
   }
 }
@@ -802,7 +814,7 @@ p {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
-  box-shadow: 0 18px 50px oklch(0.08 0.015 252 / 0.5);
+  box-shadow: 0 6px 8px oklch(0.08 0.015 252 / 0.5);
 }
 
 .mention-picker > header {
@@ -1665,7 +1677,6 @@ p {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
-  box-shadow: 0 24px 80px oklch(0.07 0.01 253 / 0.5);
 }
 
 .work-item-dialog > header {
@@ -2218,7 +2229,7 @@ p {
   place-items: center;
   border-radius: 8px;
   background: var(--accent-strong);
-  color: white;
+  color: var(--accent-ink);
 }
 
 .switcher-results a > span:nth-child(2) {
@@ -2367,7 +2378,7 @@ p {
   }
 
   .mobile-toolbar button {
-    min-height: 36px;
+    min-height: 44px;
     padding: 0 11px;
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -2463,6 +2474,34 @@ p {
   .danger-button,
   .error-state button {
     min-height: 44px;
+  }
+
+  .channel-creator summary,
+  .channel-creator input,
+  .channel-creator button,
+  .thread-creator input,
+  .thread-creator button,
+  .structured-composer button,
+  .load-older-button,
+  .session-state button,
+  .inline-error button,
+  .field input,
+  .field select,
+  .field textarea,
+  .work-item-filters input,
+  .work-item-filters select,
+  .primary-link,
+  .secondary-link,
+  .text-button {
+    min-height: 44px;
+  }
+
+  .icon-button,
+  .pin-button,
+  .selected-mentions button,
+  .criterion-actions button {
+    min-width: 44px;
+    height: 44px;
   }
 
   .sign-in-panel {
