@@ -43,7 +43,7 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
 
     let temporary = tempfile::tempdir().expect("temporary scheduler root");
     let data_root = temporary.path().join("data");
-    let config = AppConfig::from_values(&BTreeMap::from([
+    let mut config = AppConfig::from_values(&BTreeMap::from([
         ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
         (
             "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
@@ -70,6 +70,10 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         ),
     ]))
     .expect("scheduler configuration");
+    // Scheduler behavior is covered independently from host-capacity admission.
+    // Keep this temporary fixture deterministic as CI disk usage changes.
+    config.data_quota_bytes = u64::MAX;
+    config.minimum_free_bytes = 0;
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed scheduler fixture");

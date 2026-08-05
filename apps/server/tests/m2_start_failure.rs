@@ -71,7 +71,7 @@ done
     .expect("write fake Codex binary");
     fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o700))
         .expect("make fake Codex executable");
-    let config = AppConfig::from_values(&BTreeMap::from([
+    let mut config = AppConfig::from_values(&BTreeMap::from([
         (
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
             database_url.clone(),
@@ -91,6 +91,10 @@ done
         ),
     ]))
     .expect("development configuration");
+    // This integration test exercises provider-start failure, not host capacity.
+    // Keep its tiny temporary data root independent of the CI runner's remaining disk.
+    config.data_quota_bytes = u64::MAX;
+    config.minimum_free_bytes = 0;
     let seed = dev_seed(&pool, &config)
         .await
         .expect("seed M2 failure fixture");
