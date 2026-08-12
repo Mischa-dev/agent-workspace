@@ -15,6 +15,8 @@ export const queryKeys = {
     ['project', projectId, 'invitations'] as const,
   externalAgents: (projectId: string) =>
     ['project', projectId, 'external-agents'] as const,
+  sponsoredExecutions: (projectId: string) =>
+    ['project', projectId, 'sponsored-executions'] as const,
   githubIntegration: (projectId: string) =>
     ['project', projectId, 'github-integration'] as const,
   githubAutomation: (projectId: string) =>

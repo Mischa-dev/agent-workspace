@@ -5,6 +5,7 @@ import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { ExecutionAccountSettings } from '../execution/ExecutionAccountSettings'
 import { ExternalAgentSettings } from '../external-agents/ExternalAgentSettings'
+import { SponsoredExecutionSettings } from '../external-agents/SponsoredExecutionSettings'
 import { GitHubIntegrationSettings } from '../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../repositories/RepositorySettings'
 import { TeamSettings } from '../team/TeamSettings'
@@ -173,6 +174,21 @@ export function ProjectSettingsPage() {
               does not host its model, memory, schedules, or autonomy loop.
             </p>
             <ExternalAgentSettings projectId={project.data.id} />
+          </section>
+        )}
+
+        {project.data.role !== 'viewer' && (
+          <section
+            aria-labelledby="sponsored-execution-heading"
+            className="page-section"
+          >
+            <h2 id="sponsored-execution-heading">Sponsored Worker requests</h2>
+            <p>
+              Review requests from external teammates before they can use your
+              personal Codex Execution Profile. No run, worktree, or provider
+              session exists until you approve a request here.
+            </p>
+            <SponsoredExecutionSettings projectId={project.data.id} />
           </section>
         )}
 
