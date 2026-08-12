@@ -34,8 +34,8 @@ mode `0700`/`0600` as applicable. `terminal.home_mode` is exactly `profile`.
 
 Before installation and again after profile creation, the pre-existing command
 remained `/home/bot/.local/bin/hermes`, reporting
-`Hermes Agent v0.18.2 (2026.7.7.2)`, and its default profiles were not read,
-cloned, or modified.
+`Hermes Agent v0.18.2 (2026.7.7.2)`. The M9 runtime never loaded the default
+profile; it was not cloned, reconfigured, or modified by M9.
 
 Official Hermes configuration supports remote HTTP MCP servers with `url` and
 `headers`, profile-secret expansion through `${VAR}` or `${env:VAR}`, explicit
