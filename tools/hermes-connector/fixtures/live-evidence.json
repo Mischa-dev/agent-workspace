@@ -1,0 +1,66 @@
+{
+  "fixtureVersion": 1,
+  "redacted": true,
+  "runtime": {
+    "name": "Hermes Agent",
+    "version": "0.20.0",
+    "releaseTag": "v2026.8.3",
+    "releaseCommit": "3c27eb6234bf91b8ceee9e9071591b31e9b148cb",
+    "profileIsolation": "passed",
+    "modelAuthentication": "personal_chatgpt_oauth_passed",
+    "workingModel": "gpt-5.6-terra",
+    "unsupportedModelObservation": "gpt-5.3-codex_http_400"
+  },
+  "mcp": {
+    "transport": "streamable_http_over_loopback_ssh_forward",
+    "negotiatedProtocol": "2025-11-25",
+    "serverIdentity": "agent-workspace/0.6.0",
+    "discoveredToolCount": 23,
+    "enabledToolCount": 22,
+    "unauthenticatedResult": "http_401",
+    "readToolResult": "passed",
+    "messageAuthorship": "external_actor_passed",
+    "workItemCreateAndUpdate": "passed"
+  },
+  "events": {
+    "delivery": "bounded_at_least_once_polling",
+    "seedLastSequence": 10,
+    "replayedSequences": [11, 12, 13, 14, 15, 16, 17, 18],
+    "independentReplayResultsEqual": true,
+    "nextCursorStable": true,
+    "oldCredentialCursorAfterRotation": "invalid_request"
+  },
+  "credentialLifecycle": {
+    "preRotationCredentialAfterRotation": "http_401",
+    "rotatedCredential": "http_200",
+    "disabledConnectionCredential": "http_401",
+    "reenabledConnectionCredential": "http_200",
+    "removedConnectionCredential": "http_401",
+    "revokedSecretFilesScrubbed": true
+  },
+  "sponsoredExecution": {
+    "requester": "<external-actor>",
+    "sponsor": "<human-actor>",
+    "humanApprovalRequired": true,
+    "runBeforeApproval": false,
+    "isolatedWorktreeAllocatedAfterApproval": true,
+    "commandEventObserved": true,
+    "fileEventObserved": true,
+    "consolidatedWorkerMessageObserved": true,
+    "controlledRestartPreState": "working",
+    "controlledRestartPostState": "interrupted",
+    "actionableRecoveryReason": true,
+    "branchBaseCommitAndWorktreePreserved": true,
+    "manualDatabaseOrFilesystemRepair": false
+  },
+  "boundaries": {
+    "agentWorkspaceHostedExternalRuntime": false,
+    "agentWorkspaceModifiedExternalMemoryOrSchedules": false,
+    "browserExposedCredential": false,
+    "repositoryFixtureContainsCredential": false,
+    "defaultHermesCommandUnchanged": true,
+    "systemNodeUnchanged": true,
+    "globalCodexUnchanged": true,
+    "unrelatedPodmanProjectsUnchanged": true
+  }
+}
