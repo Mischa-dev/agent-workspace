@@ -8,6 +8,7 @@ readonly release_root="${install_root}/releases/${commit_sha}"
 readonly node_bin="${install_root}/toolchains/node-v24.18.1-linux-arm64/bin"
 readonly cargo_bin="${HOME}/.local/share/agent-workspace/cargo/bin"
 readonly rustup_home="${HOME}/.local/share/agent-workspace/rustup"
+readonly cargo_target_root="${checkout_root}/target"
 
 if [[ -n "$(git -C "${checkout_root}" status --porcelain)" ]]; then
   echo "Refusing to deploy a dirty checkout." >&2
@@ -18,6 +19,10 @@ export PATH="${cargo_bin}:${node_bin}:${PATH}"
 export COREPACK_HOME="${checkout_root}/.corepack"
 export CARGO_HOME="${HOME}/.local/share/agent-workspace/cargo"
 export RUSTUP_HOME="${rustup_home}"
+# Keep Cargo's output path identical to the path installed below. Inheriting a
+# caller-provided CARGO_TARGET_DIR can otherwise build the new commit elsewhere
+# while copying stale binaries from this checkout's target directory.
+export CARGO_TARGET_DIR="${cargo_target_root}"
 
 cd "${checkout_root}"
 corepack prepare pnpm@11.18.0 --activate
@@ -29,10 +34,10 @@ cargo build --release --locked \
 
 sudo install -d -m 0755 "${release_root}/bin" "${release_root}/web"
 sudo install -m 0755 \
-  target/release/agent-workspace-server \
+  "${cargo_target_root}/release/agent-workspace-server" \
   "${release_root}/bin/agent-workspace-server"
 sudo install -m 0755 \
-  target/release/agent-workspace-host-maintenance \
+  "${cargo_target_root}/release/agent-workspace-host-maintenance" \
   "${release_root}/bin/agent-workspace-host-maintenance"
 sudo install -m 0755 \
   deploy/redhat/agent-workspace-service-command \
