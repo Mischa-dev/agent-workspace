@@ -172,6 +172,34 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
 
     assert_mcp_auth(&application, &first_token, StatusCode::OK).await;
     let session_id = initialize_mcp(&application, &first_token).await;
+    let tools = protocol_json(
+        mcp_request(
+            &application,
+            &first_token,
+            Some(&session_id),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+        )
+        .await,
+    )
+    .await;
+    let message_tool = tools["result"]["tools"]
+        .as_array()
+        .expect("MCP tools")
+        .iter()
+        .find(|tool| tool["name"] == "conversation_message_send")
+        .expect("conversation_message_send tool");
+    assert_eq!(
+        message_tool["inputSchema"]["properties"]["content"]["$ref"],
+        "#/$defs/MessageContent"
+    );
+    assert_eq!(
+        message_tool["inputSchema"]["$defs"]["MessageContent"]["type"],
+        "object"
+    );
+    assert_eq!(
+        message_tool["inputSchema"]["$defs"]["MessageContent"]["properties"]["nodes"]["type"],
+        "array"
+    );
     let conversations = call_mcp_tool(
         &application,
         &first_token,
