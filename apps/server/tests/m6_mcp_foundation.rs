@@ -240,7 +240,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(14)
+        Some(19)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),

@@ -36,6 +36,7 @@ use crate::{
     },
 };
 
+mod collaboration;
 mod oauth;
 mod reads;
 mod writes;
@@ -71,6 +72,10 @@ impl McpPrincipal {
 
     pub fn can_write(&self) -> bool {
         self.scopes.iter().any(|scope| scope == "write")
+    }
+
+    pub fn has_scope(&self, expected: &str) -> bool {
+        self.scopes.iter().any(|scope| scope == expected)
     }
 }
 
@@ -130,6 +135,116 @@ struct ProjectProjectionRow {
 
 #[tool_router]
 impl McpServer {
+    #[tool(
+        description = "List bounded active Channels and Threads in the authenticated Project",
+        annotations(
+            title = "List conversations",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_list(
+        &self,
+        Parameters(arguments): Parameters<collaboration::ConversationListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<collaboration::CollaborationReadResult<collaboration::ConversationListProjection>>
+    {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(collaboration::CollaborationReadResult::denied());
+        };
+        Json(collaboration::conversation_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Read one bounded active Conversation timeline by immutable ID and opaque cursor",
+        annotations(
+            title = "Read conversation timeline",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_timeline_get(
+        &self,
+        Parameters(arguments): Parameters<collaboration::ConversationTimelineArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<collaboration::CollaborationReadResult<collaboration::ConversationTimelineProjection>>
+    {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(collaboration::CollaborationReadResult::denied());
+        };
+        Json(collaboration::conversation_timeline_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Search bounded active human and external-agent teammates for Message mentions",
+        annotations(
+            title = "Search mentionable actors",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn mentionable_actor_search(
+        &self,
+        Parameters(arguments): Parameters<collaboration::MentionableActorSearchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<collaboration::CollaborationReadResult<collaboration::MentionableActorProjection>>
+    {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(collaboration::CollaborationReadResult::denied());
+        };
+        Json(collaboration::mentionable_actor_search(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Send one immutable version-one Message as the authenticated external Actor",
+        annotations(
+            title = "Send conversation Message",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_message_send(
+        &self,
+        Parameters(arguments): Parameters<collaboration::ConversationMessageSendArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<collaboration::ConversationMessageSendResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(collaboration::ConversationMessageSendResult::denied());
+        };
+        Json(collaboration::conversation_message_send(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Poll bounded durable events addressed to this external agent connection",
+        annotations(
+            title = "Poll external events",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn external_event_poll(
+        &self,
+        Parameters(arguments): Parameters<collaboration::ExternalEventPollArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<collaboration::ExternalEventPollResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(collaboration::ExternalEventPollResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(collaboration::poll_external_events(&self.state, principal, arguments).await)
+    }
+
     #[tool(
         description = "Read the authenticated Project identity, membership role, and canonical URL",
         annotations(

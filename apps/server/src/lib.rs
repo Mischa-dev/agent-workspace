@@ -10,6 +10,7 @@ pub mod domain;
 pub mod error;
 pub mod execution;
 pub mod external_agents;
+pub mod external_events;
 pub mod git_runtime;
 pub mod github;
 pub mod health;

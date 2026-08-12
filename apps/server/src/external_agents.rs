@@ -15,6 +15,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    external_events::enqueue_external_event,
     policy::{
         Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
         authorize,
@@ -258,6 +259,17 @@ async fn create_connection(
         &normalized.scopes,
         &token_prefix,
         &token_digest,
+    )
+    .await?;
+    enqueue_external_event(
+        &mut transaction,
+        connection_id,
+        project_id,
+        "connection.created",
+        "External agent connection is ready",
+        "external_agent_connection",
+        connection_id,
+        &format!("/projects/{project_id}/settings"),
     )
     .await?;
     insert_audit(
@@ -570,6 +582,24 @@ async fn mutate_connection(
     } else {
         "external_agent.disabled"
     };
+    let event_summary = match action {
+        "external_agent.removed" => "External agent connection was removed",
+        "external_agent.credential_rotated" => "External agent bearer was rotated",
+        "external_agent.updated" if enabled_changed => "External agent connection was enabled",
+        "external_agent.updated" => "External agent permissions were updated",
+        _ => "External agent connection was disabled",
+    };
+    enqueue_external_event(
+        &mut transaction,
+        connection_id,
+        project_id,
+        action,
+        event_summary,
+        "external_agent_connection",
+        connection_id,
+        &format!("/projects/{project_id}/settings"),
+    )
+    .await?;
     insert_audit(
         &mut transaction,
         headers,

@@ -20,6 +20,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     domain::allocate_conversation_sequence,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    external_events::enqueue_external_event,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash},
     message_content::{MessageContent, MessageContentError},
     outbox::{
@@ -938,24 +939,61 @@ async fn send_message(
 ) -> Result<Response, AppError> {
     require_authenticated_write(state, headers, principal)?;
     let idempotency_key = IdempotencyKey::from_headers(headers)?;
-    let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
-    let request_hash = RequestHash::for_value(&content)?;
-    let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
-
-    let mut transaction = state.pool.begin().await?;
-    let conversation = lock_conversation_access(
-        &mut transaction,
-        principal,
+    let outcome = append_message_command(
+        state,
+        MessageCommandActor {
+            actor_id: principal.actor_id,
+            actor_kind: principal.actor_kind.clone(),
+            mcp_credential: None,
+        },
         conversation_id,
-        Action::MessageSend,
-        false,
+        Some(expected_kind),
+        idempotency_key,
+        request.content,
     )
     .await?;
-    require_conversation_kind(&conversation, expected_kind)?;
+    created_message_response(outcome.status, &outcome.body)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MessageCommandActor {
+    pub(crate) actor_id: Uuid,
+    pub(crate) actor_kind: String,
+    pub(crate) mcp_credential: Option<MessageMcpCredential>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MessageMcpCredential {
+    pub(crate) credential_id: Uuid,
+    pub(crate) connection_id: Uuid,
+}
+
+pub(crate) struct MessageAppendOutcome {
+    pub(crate) status: StatusCode,
+    pub(crate) body: MessageAppendResponse,
+    pub(crate) idempotent_replay: bool,
+}
+
+pub(crate) async fn append_message_command(
+    state: &AppState,
+    actor: MessageCommandActor,
+    conversation_id: Uuid,
+    expected_kind: Option<&'static str>,
+    idempotency_key: IdempotencyKey,
+    content: serde_json::Value,
+) -> Result<MessageAppendOutcome, AppError> {
+    let content = MessageContent::from_json(content).map_err(message_content_error)?;
+    let request_hash = RequestHash::for_value(&content)?;
+    let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
+    let mut transaction = state.pool.begin().await?;
+    let conversation = lock_message_conversation(&mut transaction, &actor, conversation_id).await?;
+    if let Some(expected_kind) = expected_kind {
+        require_conversation_kind(&conversation, expected_kind)?;
+    }
     require_active_conversation(&conversation)?;
     let reservation = match idempotency::reserve(
         &mut transaction,
-        principal.actor_id,
+        actor.actor_id,
         &scope,
         &idempotency_key,
         request_hash,
@@ -965,7 +1003,11 @@ async fn send_message(
         IdempotencyOutcome::Replay(replay) => {
             let body: MessageAppendResponse = replay.decode()?;
             transaction.commit().await?;
-            return created_message_response(replay.status(), &body);
+            return Ok(MessageAppendOutcome {
+                status: replay.status(),
+                body,
+                idempotent_replay: true,
+            });
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
@@ -1045,7 +1087,7 @@ async fn send_message(
     .bind(message_id)
     .bind(conversation.project_id)
     .bind(conversation.id)
-    .bind(principal.actor_id)
+    .bind(actor.actor_id)
     .bind(&content_json)
     .bind(&plain_text)
     .execute(&mut *transaction)
@@ -1102,7 +1144,7 @@ async fn send_message(
             conversation_id: conversation.id,
             message_id,
             sequence,
-            author_actor_id: principal.actor_id,
+            author_actor_id: actor.actor_id,
         }),
     )
     .await?;
@@ -1150,7 +1192,7 @@ async fn send_message(
     let message = MessageView {
         id: result.message_id,
         author: ActorView {
-            id: principal.actor_id,
+            id: actor.actor_id,
             kind: result.author_kind,
             display_name: result.author_name,
             handle: result.author_handle,
@@ -1174,9 +1216,221 @@ async fn send_message(
             worker_event: None,
         },
     };
+    enqueue_external_message_events(
+        &mut transaction,
+        &conversation,
+        actor.actor_id,
+        message_id,
+        &mentioned_actor_ids,
+    )
+    .await?;
+    if let Some(mcp) = actor.mcp_credential {
+        sqlx::query(
+            r#"
+            INSERT INTO audit_events (
+                id, actor_id, project_id, authentication_class, action,
+                target_kind, target_id, outcome, channel, client_name,
+                mcp_credential_id, external_agent_connection_id, metadata
+            )
+            SELECT $1, $2, $3, 'mcp_bearer', 'conversation.message_sent',
+                   'message', $4, 'succeeded', 'mcp', credential.client_name,
+                   credential.id, $5, jsonb_build_object('conversation_id', $6)
+            FROM mcp_client_credentials credential
+            WHERE credential.id = $7
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(actor.actor_id)
+        .bind(conversation.project_id)
+        .bind(message_id)
+        .bind(mcp.connection_id)
+        .bind(conversation.id)
+        .bind(mcp.credential_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
     transaction.commit().await?;
-    created_message_response(StatusCode::CREATED, &body)
+    Ok(MessageAppendOutcome {
+        status: StatusCode::CREATED,
+        body,
+        idempotent_replay: false,
+    })
+}
+
+async fn lock_message_conversation(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &MessageCommandActor,
+    conversation_id: Uuid,
+) -> Result<ConversationAccessRow, AppError> {
+    let mcp_project_id = if let Some(proof) = actor.mcp_credential {
+        Some(
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT credential.project_id
+                FROM mcp_client_credentials credential
+                JOIN external_agent_connections connection
+                  ON connection.id = credential.external_agent_connection_id
+                JOIN actors actor ON actor.id = credential.actor_id
+                WHERE credential.id = $1
+                  AND connection.id = $2
+                  AND credential.actor_id = $3
+                  AND actor.kind = 'external_agent'
+                  AND actor.status = 'active'
+                  AND credential.status = 'active'
+                  AND credential.revoked_at IS NULL
+                  AND credential.expires_at > now()
+                  AND credential.scopes @> ARRAY['write']::text[]
+                  AND connection.actor_id = credential.actor_id
+                  AND connection.project_id = credential.project_id
+                  AND connection.status = 'active'
+                  AND connection.scopes = credential.scopes
+                FOR SHARE OF credential, connection, actor
+                "#,
+            )
+            .bind(proof.credential_id)
+            .bind(proof.connection_id)
+            .bind(actor.actor_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AppError::NotFound("conversation"))?,
+        )
+    } else {
+        None
+    };
+    let row = sqlx::query_as::<_, ConversationAccessRow>(
+        r#"
+        SELECT conversation.id, conversation.project_id, conversation.kind,
+               conversation.parent_channel_id, conversation.origin_message_id,
+               conversation.name, conversation.version,
+               conversation.archived_at::text AS archived_at,
+               project.archived_at IS NOT NULL AS project_archived,
+               COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
+               conversation.next_entry_sequence,
+               membership.role AS membership_role,
+               membership.enabled AS membership_enabled
+        FROM conversations conversation
+        JOIN projects project ON project.id = conversation.project_id
+        JOIN actors actor ON actor.id = $2
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
+        JOIN project_memberships membership
+          ON membership.project_id = conversation.project_id
+         AND membership.actor_id = $2
+        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+        WHERE conversation.id = $1
+          AND actor.kind = $3 AND actor.status = 'active'
+          AND (
+              -- Browser authentication, including the loopback-only development
+              -- principal, was validated before entering this command path.
+              ($4::uuid IS NULL AND actor.kind = 'human')
+              OR
+              ($4::uuid = conversation.project_id AND actor.kind = 'external_agent')
+          )
+        FOR UPDATE OF conversation
+        FOR SHARE OF project, actor, organization_membership, membership
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(actor.actor_id)
+    .bind(&actor.actor_kind)
+    .bind(mcp_project_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("conversation"))?;
+    let scope = if row.kind == "thread" {
+        ProjectScope::thread(row.project_id, row.id)
+    } else {
+        ProjectScope::project(row.project_id)
+    };
+    let subject = Subject::new(
+        actor.actor_id,
+        parse_actor_kind(&actor.actor_kind)?,
+        true,
+        Some(Membership::project(
+            row.project_id,
+            parse_membership_role(&row.membership_role)?,
+            row.membership_enabled,
+        )),
+        None,
+    );
+    if !matches!(
+        authorize(&subject, Action::MessageSend, Resource::Project(scope)),
+        Decision::Allow
+    ) {
+        return Err(AppError::NotFound("conversation"));
+    }
+    Ok(row)
+}
+
+async fn enqueue_external_message_events(
+    transaction: &mut Transaction<'_, Postgres>,
+    conversation: &ConversationAccessRow,
+    author_actor_id: Uuid,
+    message_id: Uuid,
+    mentioned_actor_ids: &[Uuid],
+) -> Result<(), AppError> {
+    if mentioned_actor_ids.is_empty() {
+        return Ok(());
+    }
+    // Historical migration tests intentionally exercise this command path on
+    // pre-M9 schemas. The durable Message is still valid there; external-agent
+    // delivery begins only once the M9 connection table has been installed.
+    let external_connections_available = sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('external_agent_connections') IS NOT NULL",
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !external_connections_available {
+        return Ok(());
+    }
+    let connections = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT connection.id, connection.actor_id
+        FROM external_agent_connections connection
+        JOIN actors actor ON actor.id = connection.actor_id
+        JOIN project_memberships membership
+          ON membership.project_id = connection.project_id
+         AND membership.actor_id = connection.actor_id
+        WHERE connection.project_id = $1
+          AND connection.actor_id = ANY($2)
+          AND connection.actor_id <> $3
+          AND connection.status = 'active'
+          AND actor.status = 'active'
+          AND membership.enabled
+        ORDER BY connection.id
+        FOR SHARE OF connection, actor, membership
+        "#,
+    )
+    .bind(conversation.project_id)
+    .bind(mentioned_actor_ids)
+    .bind(author_actor_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let kind = if conversation.kind == "thread" {
+        "threads"
+    } else {
+        "channels"
+    };
+    for (connection_id, _) in connections {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            conversation.project_id,
+            "message.mentioned",
+            "You were mentioned in a Message",
+            "message",
+            message_id,
+            &format!(
+                "/projects/{}/{kind}/{}",
+                conversation.project_id, conversation.id
+            ),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn conversation_timeline(
