@@ -331,6 +331,11 @@ impl SupervisorRegistry {
         self.inner.shutting_down.load(Ordering::Acquire)
     }
 
+    pub fn request_shutdown(&self) {
+        self.inner.shutting_down.store(true, Ordering::Release);
+        self.inner.shutdown.notify_waiters();
+    }
+
     pub async fn shutdown_requested(&self) {
         if self.is_shutting_down() {
             return;
@@ -370,8 +375,7 @@ impl SupervisorRegistry {
     }
 
     pub async fn shutdown_all(&self) {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        self.inner.shutdown.notify_waiters();
+        self.request_shutdown();
         let supervisors = {
             let profiles = self.inner.profiles.lock().await;
             profiles.values().cloned().collect::<Vec<_>>()
@@ -1525,6 +1529,11 @@ done
             Err(super::LoginCeremonyError::Capacity)
         ));
 
+        registry.request_shutdown();
+        assert!(registry.is_shutting_down());
+        tokio::time::timeout(Duration::from_millis(50), registry.shutdown_requested())
+            .await
+            .expect("requested shutdown is immediately observable");
         registry.shutdown_all().await;
         assert!(registry.is_shutting_down());
     }

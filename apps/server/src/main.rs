@@ -264,8 +264,10 @@ async fn main() -> anyhow::Result<()> {
             shutdown_receiver.clone(),
         ));
     let signal_shutdown_sender = shutdown_sender.clone();
+    let signal_supervisors = supervisors.clone();
     let signal_task = tokio::spawn(async move {
         shutdown_signal().await;
+        signal_supervisors.request_shutdown();
         let _ = signal_shutdown_sender.send(true);
     });
     let application_shutdown = shutdown_receiver.clone();
