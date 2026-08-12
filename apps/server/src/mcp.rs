@@ -136,6 +136,36 @@ struct ProjectProjectionRow {
 #[tool_router]
 impl McpServer {
     #[tool(
+        description = "Request human-sponsored Worker execution for an existing Thread without starting a run before approval",
+        annotations(
+            title = "Request sponsored Worker execution",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn external_execution_request_create(
+        &self,
+        Parameters(arguments): Parameters<
+            crate::external_execution::ExternalExecutionRequestArguments,
+        >,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<crate::external_execution::ExternalExecutionRequestResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(crate::external_execution::ExternalExecutionRequestResult::denied());
+        };
+        Json(
+            crate::external_execution::request_sponsored_execution(
+                &self.state,
+                principal,
+                arguments,
+            )
+            .await,
+        )
+    }
+
+    #[tool(
         description = "List bounded active Channels and Threads in the authenticated Project",
         annotations(
             title = "List conversations",

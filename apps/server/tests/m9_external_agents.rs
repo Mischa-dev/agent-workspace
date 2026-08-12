@@ -74,7 +74,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "displayName":"Hermes teammate",
                 "handle":"Hermes Teammate",
                 "role":"member",
-                "scopes":["read","write","events"]
+                "scopes":["read","write","events","worker_request"]
             }),
         ))
         .await
@@ -142,6 +142,20 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
             .expect("external User absence"),
         0
     );
+    sqlx::query(
+        "UPDATE execution_profiles SET status = 'available', account_state = 'authenticated' WHERE id = $1",
+    )
+    .bind(seed.execution_profile_id)
+    .execute(&pool)
+    .await
+    .expect("prepare sponsor Execution Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&pool)
+    .await
+    .expect("prepare sponsored repository");
 
     let list = application
         .clone()
@@ -336,6 +350,116 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     )
     .await;
     assert_eq!(empty["events"], json!([]));
+
+    let run_count_before = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
+        .fetch_one(&pool)
+        .await
+        .expect("run count before sponsorship");
+    let sponsored = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "external_execution_request_create",
+        json!({
+            "conversationId":seed.thread_id.to_string(),
+            "repositoryId":seed.repository_id.to_string(),
+            "sponsorActorId":seed.human_actor_id.to_string(),
+            "prompt":"Make one bounded sponsored change.",
+            "clientRequestId":"m9-sponsored-run-1"
+        }),
+    )
+    .await;
+    assert_eq!(sponsored["outcome"], "requested");
+    let sponsored_request_id = sponsored["requestId"]
+        .as_str()
+        .expect("sponsored request id")
+        .parse::<Uuid>()
+        .expect("sponsored request UUID");
+    let sponsored_approval_id = sponsored["approvalId"]
+        .as_str()
+        .expect("sponsored approval id")
+        .parse::<Uuid>()
+        .expect("sponsored approval UUID");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
+            .fetch_one(&pool)
+            .await
+            .expect("preapproval run count"),
+        run_count_before,
+        "requesting sponsorship must not create an Agent Run"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT agent_run_id FROM external_execution_requests WHERE id = $1",
+        )
+        .bind(sponsored_request_id)
+        .fetch_one(&pool)
+        .await
+        .expect("preapproval request state"),
+        None
+    );
+    let sponsored_list = application
+        .clone()
+        .oneshot(read_request(
+            &format!(
+                "/api/v1/projects/{}/external-execution-requests",
+                seed.project_id
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("sponsored request list response");
+    assert_eq!(sponsored_list.status(), StatusCode::OK);
+    let sponsored_list = response_json(sponsored_list).await;
+    assert_eq!(
+        sponsored_list["requests"][0]["id"],
+        sponsored_request_id.to_string()
+    );
+
+    let approval_response = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/agent-approvals/{sponsored_approval_id}/respond"),
+            &cookie,
+            &csrf,
+            "m9-sponsored-approval-1",
+            json!({"decision":"approve"}),
+        ))
+        .await
+        .expect("sponsored approval response");
+    assert_eq!(approval_response.status(), StatusCode::OK);
+    let approval_response = response_json(approval_response).await;
+    let sponsored_run_id = approval_response["agentRunId"]
+        .as_str()
+        .expect("sponsored Agent Run id")
+        .parse::<Uuid>()
+        .expect("sponsored Agent Run UUID");
+    let run_attribution = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<Uuid>)>(
+        "SELECT requesting_actor_id, sponsoring_actor_id, external_execution_request_id FROM agent_runs WHERE id = $1",
+    )
+    .bind(sponsored_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("sponsored run attribution");
+    assert_eq!(run_attribution.0, actor_id);
+    assert_eq!(run_attribution.1, Some(seed.human_actor_id));
+    assert_eq!(run_attribution.2, Some(sponsored_request_id));
+    let sponsored_events = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "external_event_poll",
+        json!({"afterCursor":first_cursor,"limit":10,"waitSeconds":0}),
+    )
+    .await;
+    assert!(
+        sponsored_events["events"]
+            .as_array()
+            .expect("sponsored events")
+            .iter()
+            .any(|event| event["kind"] == "external_execution.approved")
+    );
     terminate_mcp(&application, &first_token, &session_id).await;
     let connection_uri = format!("{base}/{connection_id}");
     let rotated = application
@@ -457,7 +581,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        6
+        8
     );
 
     drop(application);

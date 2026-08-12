@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .merge(crate::auth::router())
         .merge(crate::projects::router())
         .merge(crate::execution::router())
+        .merge(crate::external_execution::router())
         .route("/api/v1/dev/bootstrap", get(development_bootstrap))
         .route("/api/v1/threads/{id}/agent-runs", post(start_agent_run))
         .route(
@@ -152,8 +153,8 @@ pub(crate) struct StartRunRequest {
 #[derive(Debug, FromRow)]
 pub(crate) struct RunSetup {
     pub(crate) repository_id: Uuid,
-    execution_worker_id: Uuid,
-    execution_profile_id: Uuid,
+    pub(crate) execution_worker_id: Uuid,
+    pub(crate) execution_profile_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -686,7 +687,7 @@ pub(crate) async fn select_run_setup(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     conversation_id: Uuid,
-    requesting_actor_id: Uuid,
+    profile_owner_actor_id: Uuid,
     explicit_repository_id: Option<Uuid>,
 ) -> Result<RunSetup, AppError> {
     let bound_repository_id = sqlx::query_scalar::<_, Option<Uuid>>(
@@ -803,7 +804,7 @@ pub(crate) async fn select_run_setup(
     )
     .bind(project_id)
     .bind(selected_repository_id)
-    .bind(requesting_actor_id)
+    .bind(profile_owner_actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::ExecutionProfileRequired)
@@ -1327,9 +1328,9 @@ async fn persist_run_start_failure(
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ApprovalResponse {
-    decision: Option<String>,
-    answer: Option<String>,
+pub(crate) struct ApprovalResponse {
+    pub(crate) decision: Option<String>,
+    pub(crate) answer: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1349,6 +1350,25 @@ async fn respond_to_approval(
     ApiJson(response): ApiJson<ApprovalResponse>,
 ) -> Result<Json<ApprovalView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let external_request_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT external_execution_request_id FROM agent_approvals WHERE id = $1",
+    )
+    .bind(approval_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+    if let Some(external_request_id) = external_request_id {
+        return crate::external_execution::respond_to_sponsored_execution(
+            &state,
+            &headers,
+            &principal,
+            approval_id,
+            external_request_id,
+            response,
+        )
+        .await
+        .map(Json);
+    }
     let request_hash = RequestHash::for_value(&response)?;
 
     #[derive(FromRow)]
@@ -2070,7 +2090,7 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
     })
 }
 
-async fn fetch_approval(
+pub(crate) async fn fetch_approval(
     state: &AppState,
     approval_id: Uuid,
     project_id: Uuid,
