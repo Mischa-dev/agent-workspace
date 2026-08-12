@@ -473,6 +473,13 @@ async fn mutate_connection(
     if !next_enabled || contract_changed || force_rotate {
         revoke_credentials(&mut transaction, connection_id).await?;
     }
+    if !next_enabled
+        || remove
+        || (current.scopes.iter().any(|scope| scope == "worker_request")
+            && !next_scopes.iter().any(|scope| scope == "worker_request"))
+    {
+        cancel_pending_execution_requests(&mut transaction, project_id, connection_id).await?;
+    }
     if enabled_changed || remove {
         sqlx::query(
             r#"
@@ -896,6 +903,65 @@ async fn revoke_credentials(
     .bind(connection_id)
     .execute(&mut **transaction)
     .await?;
+    Ok(())
+}
+
+async fn cancel_pending_execution_requests(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    connection_id: Uuid,
+) -> Result<(), AppError> {
+    let request_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id
+        FROM external_execution_requests
+        WHERE project_id = $1 AND external_agent_connection_id = $2
+          AND status = 'pending'
+        ORDER BY id
+        FOR UPDATE
+        "#,
+    )
+    .bind(project_id)
+    .bind(connection_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if request_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        UPDATE agent_approvals
+        SET status = 'canceled'
+        WHERE external_execution_request_id = ANY($1) AND status = 'pending'
+        "#,
+    )
+    .bind(&request_ids)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE external_execution_requests
+        SET status = 'canceled', version = version + 1,
+            resolved_at = now(), updated_at = now()
+        WHERE id = ANY($1) AND status = 'pending'
+        "#,
+    )
+    .bind(&request_ids)
+    .execute(&mut **transaction)
+    .await?;
+    for request_id in request_ids {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            project_id,
+            "external_execution.canceled",
+            "Sponsored Worker execution was canceled because the connection was disabled",
+            "external_execution_request",
+            request_id,
+            &format!("/projects/{project_id}/external-execution-requests/{request_id}"),
+        )
+        .await?;
+    }
     Ok(())
 }
 

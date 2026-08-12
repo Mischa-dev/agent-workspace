@@ -367,7 +367,7 @@ pub(crate) struct RunCapabilities {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ApprovalRow {
     pub(crate) id: Uuid,
-    pub(crate) agent_run_id: Uuid,
+    pub(crate) agent_run_id: Option<Uuid>,
     pub(crate) kind: String,
     pub(crate) summary: String,
     pub(crate) options: serde_json::Value,
@@ -3038,6 +3038,9 @@ async fn fetch_run_projection(
     let approvals = approvals
         .into_iter()
         .map(|approval| {
+            let agent_run_id = approval
+                .agent_run_id
+                .ok_or(AppError::Internal("run approval without Agent Run"))?;
             let eligibility = parse_membership_role(&approval.eligible_role)?;
             let respond = approval.status == "pending"
                 && matches!(
@@ -3048,7 +3051,7 @@ async fn fetch_run_projection(
                             scope: ProjectScope::approval(
                                 conversation.project_id,
                                 conversation.id,
-                                approval.agent_run_id,
+                                agent_run_id,
                                 approval.repository_id,
                                 approval.id,
                             ),
