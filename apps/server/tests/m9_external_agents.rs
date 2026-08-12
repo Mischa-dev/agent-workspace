@@ -5,12 +5,12 @@ use agent_workspace_server::{
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     domain::{RunState, transition_run},
-    external_events::enqueue_external_approval_requested,
+    external_events::{enqueue_external_approval_requested, enqueue_external_event},
     mcp::MCP_PATH,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
+    retention, router,
     seed::dev_seed,
 };
 use axum::{
@@ -464,6 +464,21 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(addressed["outcome"], "found");
     assert_eq!(addressed["approval"]["version"], 1);
     assert_eq!(addressed["approval"]["canRespond"], true);
+    let invalid_approval = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":addressed_approval_id.to_string(),
+            "expectedVersion":1,
+            "decision":"later",
+            "clientRequestId":"m9-addressed-invalid-1"
+        }),
+    )
+    .await;
+    assert_eq!(invalid_approval["outcome"], "invalid_request");
+    assert_eq!(invalid_approval["field"], "approval decision");
     let denied_approval = call_mcp_tool(
         &application,
         &first_token,
@@ -763,6 +778,67 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(removed["connection"]["status"], "removed");
     assert_eq!(removed["connection"]["version"], 5);
     assert_mcp_auth(&application, &third_token, StatusCode::UNAUTHORIZED).await;
+
+    let expired_resource_id = Uuid::now_v7();
+    let retained_resource_id = Uuid::now_v7();
+    let mut event_transaction = pool.begin().await.expect("begin retention fixture");
+    for resource_id in [expired_resource_id, retained_resource_id] {
+        enqueue_external_event(
+            &mut event_transaction,
+            connection_id,
+            seed.project_id,
+            "connection.test",
+            "Connector retention fixture changed",
+            "external_agent_connection",
+            resource_id,
+            &format!("/projects/{}/settings", seed.project_id),
+        )
+        .await
+        .expect("enqueue retention fixture");
+    }
+    event_transaction
+        .commit()
+        .await
+        .expect("commit retention fixture");
+    sqlx::query(
+        "UPDATE external_agent_events SET created_at=now()-interval '40 days', expires_at=now()-interval '10 days' WHERE resource_id=$1",
+    )
+    .bind(expired_resource_id)
+    .execute(&pool)
+    .await
+    .expect("expire retention fixture");
+    let dry_run = retention::clean_external_events(&pool, false)
+        .await
+        .expect("dry-run external event retention");
+    assert_eq!(dry_run.mode, "dry_run");
+    assert_eq!(dry_run.expired_candidates, 1);
+    assert_eq!(dry_run.removed_events, 0);
+    let applied = retention::clean_external_events(&pool, true)
+        .await
+        .expect("apply external event retention");
+    assert_eq!(applied.mode, "apply");
+    assert_eq!(applied.removed_events, 1);
+    assert_eq!(applied.remaining_expired_events, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM external_agent_events WHERE resource_id=$1",
+        )
+        .bind(retained_resource_id)
+        .fetch_one(&pool)
+        .await
+        .expect("retained external event count"),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM external_agent_connections WHERE id=$1",
+        )
+        .bind(connection_id)
+        .fetch_one(&pool)
+        .await
+        .expect("retained connection count"),
+        1
+    );
 
     let audit_text = sqlx::query_scalar::<_, String>(
         "SELECT COALESCE(string_agg(metadata::text, ''), '') FROM audit_events WHERE external_agent_connection_id = $1",
