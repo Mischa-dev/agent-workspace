@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::error::AppError;
+use crate::{error::AppError, external_events::enqueue_external_event};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -208,7 +208,62 @@ pub async fn transition_run(
     .execute(&mut **transaction)
     .await?;
 
+    if terminal {
+        enqueue_external_terminal_run_event(transaction, run_id, next).await?;
+    }
+
     Ok(next)
+}
+
+async fn enqueue_external_terminal_run_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    state: RunState,
+) -> Result<(), AppError> {
+    let available =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
+            .fetch_one(&mut **transaction)
+            .await?;
+    if !available {
+        return Ok(());
+    }
+    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+        r#"
+        SELECT connection.id, conversation.project_id, run.conversation_id
+        FROM agent_runs run
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        JOIN actors actor ON actor.id = run.requesting_actor_id
+         AND actor.kind = 'external_agent'
+        JOIN external_agent_connections connection
+          ON connection.project_id = conversation.project_id
+         AND connection.actor_id = run.requesting_actor_id
+         AND connection.status = 'active'
+        JOIN project_memberships membership
+          ON membership.project_id = connection.project_id
+         AND membership.actor_id = connection.actor_id
+         AND membership.enabled
+        WHERE run.id = $1 AND actor.status = 'active'
+        ORDER BY connection.id
+        FOR SHARE OF connection, actor, membership
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (connection_id, project_id, conversation_id) in recipients {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            project_id,
+            "agent_run.terminal",
+            &format!("Sponsored Worker run reached {state}"),
+            "agent_run",
+            run_id,
+            &format!("/projects/{project_id}/threads/{conversation_id}"),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

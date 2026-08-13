@@ -218,9 +218,16 @@ After the exact new commit is green, repeat credential-free transfer and run
 report, retention dry run, and a controlled restart:
 
 ```bash
+sudo /opt/agent-workspace/current/bin/agent-workspace-service-command \
+  retention-external-events
 sudo systemctl restart agent-workspace
 curl --fail --silent http://127.0.0.1:3100/health/ready
 ```
+
+External-agent event retention is a dry run unless the owner adds the literal
+`--apply true`. It deletes only expired addressed invalidation rows in bounded
+batches; it does not delete Messages, Work Items, approvals, Agent Runs,
+connections, or audit history.
 
 Provider profiles can require interactive reauthentication after restore or
 credential rotation. Use the personal profile's normal Codex login ceremony;

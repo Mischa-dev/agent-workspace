@@ -6,6 +6,16 @@ readonly guide="docs/self-hosted-red-hat.md"
 test -f "${guide}"
 bash -n deploy/redhat/*.sh
 
+grep --fixed-strings --quiet \
+  'export CARGO_TARGET_DIR="${cargo_target_root}"' \
+  deploy/redhat/deploy-release.sh
+grep --fixed-strings --quiet \
+  '"${cargo_target_root}/release/agent-workspace-server"' \
+  deploy/redhat/deploy-release.sh
+grep --fixed-strings --quiet \
+  '"${cargo_target_root}/release/agent-workspace-host-maintenance"' \
+  deploy/redhat/deploy-release.sh
+
 for required in \
   'Red Hat Enterprise Linux 10.1 ARM64' \
   '127.0.0.1:3100' \

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -50,14 +51,14 @@ impl PlainTextMessageBuffer {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MessageContent {
     pub version: u16,
     pub nodes: Vec<MessageNode>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MessageNode {
     Text {
@@ -65,10 +66,12 @@ pub enum MessageNode {
     },
     Mention {
         #[serde(rename = "actorId")]
+        #[schemars(with = "String")]
         actor_id: Uuid,
     },
     WorkItemRef {
         #[serde(rename = "workItemId", alias = "work_item_id")]
+        #[schemars(with = "String")]
         work_item_id: Uuid,
     },
 }

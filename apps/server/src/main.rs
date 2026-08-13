@@ -123,6 +123,16 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             return Ok(());
         }
+        Some("retention-external-events") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["apply"])?;
+            let result =
+                retention::clean_external_events(&pool, optional_bool(&options, "apply", false)?)
+                    .await
+                    .context("clean expired external-agent events")?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            return Ok(());
+        }
         Some("mcp-credential-create") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(
@@ -254,8 +264,10 @@ async fn main() -> anyhow::Result<()> {
             shutdown_receiver.clone(),
         ));
     let signal_shutdown_sender = shutdown_sender.clone();
+    let signal_supervisors = supervisors.clone();
     let signal_task = tokio::spawn(async move {
         shutdown_signal().await;
+        signal_supervisors.request_shutdown();
         let _ = signal_shutdown_sender.send(true);
     });
     let application_shutdown = shutdown_receiver.clone();

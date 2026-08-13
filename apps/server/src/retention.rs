@@ -31,6 +31,69 @@ pub struct WorktreeRetentionResult {
     pub preserved_worktrees: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalEventRetentionResult {
+    pub policy_version: u32,
+    pub mode: &'static str,
+    pub expired_candidates: u64,
+    pub removed_events: u64,
+    pub remaining_expired_events: u64,
+}
+
+pub async fn clean_external_events(
+    pool: &PgPool,
+    apply: bool,
+) -> Result<ExternalEventRetentionResult, AppError> {
+    let expired_candidates = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
+    )
+    .fetch_one(pool)
+    .await?
+    .try_into()
+    .map_err(|_| AppError::Internal("expired external event count"))?;
+    let removed_events = if apply {
+        sqlx::query(
+            r#"
+            WITH candidates AS (
+                SELECT id
+                FROM external_agent_events
+                WHERE expires_at <= now()
+                ORDER BY expires_at, id
+                LIMIT 10000
+                FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM external_agent_events event
+            USING candidates
+            WHERE event.id = candidates.id
+            "#,
+        )
+        .execute(pool)
+        .await?
+        .rows_affected()
+    } else {
+        0
+    };
+    let remaining_expired_events = if apply {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
+        )
+        .fetch_one(pool)
+        .await?
+        .try_into()
+        .map_err(|_| AppError::Internal("remaining expired external event count"))?
+    } else {
+        expired_candidates
+    };
+    Ok(ExternalEventRetentionResult {
+        policy_version: 1,
+        mode: if apply { "apply" } else { "dry_run" },
+        expired_candidates,
+        removed_events,
+        remaining_expired_events,
+    })
+}
+
 pub async fn clean_worktrees(
     pool: &PgPool,
     data_root: &Path,

@@ -84,6 +84,63 @@ pub async fn enqueue_external_event(
     Ok(sequence)
 }
 
+pub async fn enqueue_external_approval_requested(
+    transaction: &mut Transaction<'_, Postgres>,
+    approval_id: Uuid,
+) -> Result<(), AppError> {
+    let available =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
+            .fetch_one(&mut **transaction)
+            .await?;
+    if !available {
+        return Ok(());
+    }
+    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+        r#"
+        SELECT connection.id, conversation.project_id, run.conversation_id
+        FROM agent_approvals approval
+        JOIN agent_runs run ON run.id = approval.agent_run_id
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        JOIN external_agent_connections connection
+          ON connection.project_id = conversation.project_id
+         AND connection.status = 'active'
+         AND connection.actor_id <> approval.requesting_actor_id
+        JOIN actors actor ON actor.id = connection.actor_id
+         AND actor.kind = 'external_agent' AND actor.status = 'active'
+        JOIN project_memberships membership
+          ON membership.project_id = connection.project_id
+         AND membership.actor_id = connection.actor_id
+         AND membership.enabled
+        WHERE approval.id = $1
+          AND approval.status = 'pending'
+          AND NOT approval.human_required
+          AND (
+              approval.eligible_actor_id = connection.actor_id
+              OR (approval.eligible_actor_id IS NULL AND approval.eligible_role = membership.role)
+          )
+        ORDER BY connection.id
+        FOR SHARE OF approval, run, connection, actor, membership
+        "#,
+    )
+    .bind(approval_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (connection_id, project_id, conversation_id) in recipients {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            project_id,
+            "approval.requested",
+            "An approval requires your decision",
+            "agent_approval",
+            approval_id,
+            &format!("/projects/{project_id}/threads/{conversation_id}"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub fn encode_cursor(
     signing_key: &[u8],
     connection_id: Uuid,

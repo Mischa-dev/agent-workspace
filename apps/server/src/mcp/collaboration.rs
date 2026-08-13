@@ -15,6 +15,7 @@ use crate::{
     error::AppError,
     external_events::{ExternalEvent, decode_cursor, encode_cursor},
     idempotency::IdempotencyKey,
+    message_content::MessageContent,
     policy::{Action, ActorKind},
 };
 
@@ -51,7 +52,7 @@ pub(super) struct MentionableActorSearchArguments {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ConversationMessageSendArguments {
     pub conversation_id: String,
-    pub content: serde_json::Value,
+    pub content: MessageContent,
     pub client_request_id: String,
 }
 
@@ -573,6 +574,10 @@ pub(super) async fn conversation_message_send(
     let Some(connection_id) = principal.external_agent_connection_id else {
         return ConversationMessageSendResult::denied();
     };
+    let content = match serde_json::to_value(arguments.content) {
+        Ok(content) => content,
+        Err(_) => return unavailable_send(),
+    };
     match append_message_command(
         state,
         MessageCommandActor {
@@ -586,7 +591,7 @@ pub(super) async fn conversation_message_send(
         conversation_id,
         None,
         idempotency_key,
-        arguments.content,
+        content,
     )
     .await
     {

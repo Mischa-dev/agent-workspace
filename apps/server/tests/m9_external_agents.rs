@@ -4,11 +4,13 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
+    domain::{RunState, transition_run},
+    external_events::{enqueue_external_approval_requested, enqueue_external_event},
     mcp::MCP_PATH,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
+    retention, router,
     seed::dev_seed,
 };
 use axum::{
@@ -74,7 +76,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "displayName":"Hermes teammate",
                 "handle":"Hermes Teammate",
                 "role":"member",
-                "scopes":["read","write","events","worker_request"]
+                "scopes":["read","write","events","approval_respond","worker_request"]
             }),
         ))
         .await
@@ -170,6 +172,34 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
 
     assert_mcp_auth(&application, &first_token, StatusCode::OK).await;
     let session_id = initialize_mcp(&application, &first_token).await;
+    let tools = protocol_json(
+        mcp_request(
+            &application,
+            &first_token,
+            Some(&session_id),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+        )
+        .await,
+    )
+    .await;
+    let message_tool = tools["result"]["tools"]
+        .as_array()
+        .expect("MCP tools")
+        .iter()
+        .find(|tool| tool["name"] == "conversation_message_send")
+        .expect("conversation_message_send tool");
+    assert_eq!(
+        message_tool["inputSchema"]["properties"]["content"]["$ref"],
+        "#/$defs/MessageContent"
+    );
+    assert_eq!(
+        message_tool["inputSchema"]["$defs"]["MessageContent"]["type"],
+        "object"
+    );
+    assert_eq!(
+        message_tool["inputSchema"]["$defs"]["MessageContent"]["properties"]["nodes"]["type"],
+        "array"
+    );
     let conversations = call_mcp_tool(
         &application,
         &first_token,
@@ -351,6 +381,172 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     .await;
     assert_eq!(empty["events"], json!([]));
 
+    let created_work_item = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "work_item_create",
+        json!({
+            "title":"External teammate fixture",
+            "description":"Created through the canonical M9 MCP command.",
+            "priority":"medium",
+            "assigneeActorId":actor_id.to_string(),
+            "clientRequestId":"m9-work-item-create-1"
+        }),
+    )
+    .await;
+    assert_eq!(created_work_item["outcome"], "applied");
+    let external_work_item_id = created_work_item["workItemId"]
+        .as_str()
+        .expect("created Work Item id")
+        .parse::<Uuid>()
+        .expect("created Work Item UUID");
+    let updated_work_item = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "work_item_update",
+        json!({
+            "workItemId":external_work_item_id.to_string(),
+            "expectedVersion":1,
+            "priority":"high",
+            "clientRequestId":"m9-work-item-update-1"
+        }),
+    )
+    .await;
+    assert_eq!(updated_work_item["outcome"], "applied");
+    assert_eq!(updated_work_item["version"], 2);
+    let read_work_item = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "work_item_get",
+        json!({"identifier":external_work_item_id.to_string()}),
+    )
+    .await;
+    assert_eq!(read_work_item["outcome"], "found");
+    assert_eq!(
+        read_work_item["value"]["assignee"]["actorId"],
+        actor_id.to_string()
+    );
+
+    let addressed_run_id = Uuid::now_v7();
+    let addressed_approval_id = Uuid::now_v7();
+    let mut approval_transaction = pool.begin().await.expect("begin approval fixture");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            state, prompt, authorization_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
+        "#,
+    )
+    .bind(addressed_run_id)
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind("Addressed approval fixture")
+    .execute(&mut *approval_transaction)
+    .await
+    .expect("insert addressed run");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, provider_request_id,
+            kind, summary, options, eligible_role, human_required
+        ) VALUES (
+            $1, $2, $3, $4, 'approval', $5,
+            '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
+            'member', false
+        )
+        "#,
+    )
+    .bind(addressed_approval_id)
+    .bind(addressed_run_id)
+    .bind(seed.human_actor_id)
+    .bind(format!("m9-addressed:{addressed_approval_id}"))
+    .bind("Allow one bounded fixture action?")
+    .execute(&mut *approval_transaction)
+    .await
+    .expect("insert addressed approval");
+    enqueue_external_approval_requested(&mut approval_transaction, addressed_approval_id)
+        .await
+        .expect("enqueue addressed approval");
+    approval_transaction
+        .commit()
+        .await
+        .expect("commit approval fixture");
+
+    let addressed = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_get",
+        json!({"approvalId":addressed_approval_id.to_string()}),
+    )
+    .await;
+    assert_eq!(addressed["outcome"], "found");
+    assert_eq!(addressed["approval"]["version"], 1);
+    assert_eq!(addressed["approval"]["canRespond"], true);
+    let invalid_approval = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":addressed_approval_id.to_string(),
+            "expectedVersion":1,
+            "decision":"later",
+            "clientRequestId":"m9-addressed-invalid-1"
+        }),
+    )
+    .await;
+    assert_eq!(invalid_approval["outcome"], "invalid_request");
+    assert_eq!(invalid_approval["field"], "approval decision");
+    let denied_approval = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":addressed_approval_id.to_string(),
+            "expectedVersion":1,
+            "decision":"deny",
+            "clientRequestId":"m9-addressed-deny-1"
+        }),
+    )
+    .await;
+    assert_eq!(denied_approval["outcome"], "applied");
+    assert_eq!(denied_approval["approval"]["version"], 2);
+    assert_eq!(denied_approval["approval"]["canRespond"], false);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
+            .bind(addressed_run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("addressed run state"),
+        "interrupted"
+    );
+    let stale_approval = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":addressed_approval_id.to_string(),
+            "expectedVersion":1,
+            "decision":"deny",
+            "clientRequestId":"m9-addressed-deny-stale"
+        }),
+    )
+    .await;
+    assert_eq!(stale_approval["outcome"], "conflict");
+    assert_eq!(stale_approval["current"]["version"], 2);
+
     let run_count_before = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
         .fetch_one(&pool)
         .await
@@ -380,6 +576,15 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .expect("sponsored approval id")
         .parse::<Uuid>()
         .expect("sponsored approval UUID");
+    let human_required = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_get",
+        json!({"approvalId":sponsored_approval_id.to_string()}),
+    )
+    .await;
+    assert_eq!(human_required["outcome"], "not_found");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
             .fetch_one(&pool)
@@ -445,6 +650,30 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(run_attribution.0, actor_id);
     assert_eq!(run_attribution.1, Some(seed.human_actor_id));
     assert_eq!(run_attribution.2, Some(sponsored_request_id));
+    let mut terminal_transaction = pool.begin().await.expect("begin terminal transition");
+    let sponsored_state =
+        sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")
+            .bind(sponsored_run_id)
+            .fetch_one(&mut *terminal_transaction)
+            .await
+            .expect("lock sponsored run state");
+    if !matches!(
+        sponsored_state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        transition_run(
+            &mut terminal_transaction,
+            sponsored_run_id,
+            RunState::Failed,
+            Some("M9 terminal event fixture"),
+        )
+        .await
+        .expect("finish sponsored run");
+    }
+    terminal_transaction
+        .commit()
+        .await
+        .expect("commit terminal run transition");
     let sponsored_events = call_mcp_tool(
         &application,
         &first_token,
@@ -460,6 +689,21 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
             .iter()
             .any(|event| event["kind"] == "external_execution.approved")
     );
+    let event_kinds = sponsored_events["events"]
+        .as_array()
+        .expect("M9 event list")
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "work_item.assigned",
+        "work_item.changed",
+        "approval.requested",
+        "approval.resolved",
+        "agent_run.terminal",
+    ] {
+        assert!(event_kinds.contains(&expected), "missing event {expected}");
+    }
     terminate_mcp(&application, &first_token, &session_id).await;
     let connection_uri = format!("{base}/{connection_id}");
     let rotated = application
@@ -563,6 +807,67 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(removed["connection"]["version"], 5);
     assert_mcp_auth(&application, &third_token, StatusCode::UNAUTHORIZED).await;
 
+    let expired_resource_id = Uuid::now_v7();
+    let retained_resource_id = Uuid::now_v7();
+    let mut event_transaction = pool.begin().await.expect("begin retention fixture");
+    for resource_id in [expired_resource_id, retained_resource_id] {
+        enqueue_external_event(
+            &mut event_transaction,
+            connection_id,
+            seed.project_id,
+            "connection.test",
+            "Connector retention fixture changed",
+            "external_agent_connection",
+            resource_id,
+            &format!("/projects/{}/settings", seed.project_id),
+        )
+        .await
+        .expect("enqueue retention fixture");
+    }
+    event_transaction
+        .commit()
+        .await
+        .expect("commit retention fixture");
+    sqlx::query(
+        "UPDATE external_agent_events SET created_at=now()-interval '40 days', expires_at=now()-interval '10 days' WHERE resource_id=$1",
+    )
+    .bind(expired_resource_id)
+    .execute(&pool)
+    .await
+    .expect("expire retention fixture");
+    let dry_run = retention::clean_external_events(&pool, false)
+        .await
+        .expect("dry-run external event retention");
+    assert_eq!(dry_run.mode, "dry_run");
+    assert_eq!(dry_run.expired_candidates, 1);
+    assert_eq!(dry_run.removed_events, 0);
+    let applied = retention::clean_external_events(&pool, true)
+        .await
+        .expect("apply external event retention");
+    assert_eq!(applied.mode, "apply");
+    assert_eq!(applied.removed_events, 1);
+    assert_eq!(applied.remaining_expired_events, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM external_agent_events WHERE resource_id=$1",
+        )
+        .bind(retained_resource_id)
+        .fetch_one(&pool)
+        .await
+        .expect("retained external event count"),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM external_agent_connections WHERE id=$1",
+        )
+        .bind(connection_id)
+        .fetch_one(&pool)
+        .await
+        .expect("retained connection count"),
+        1
+    );
+
     let audit_text = sqlx::query_scalar::<_, String>(
         "SELECT COALESCE(string_agg(metadata::text, ''), '') FROM audit_events WHERE external_agent_connection_id = $1",
     )
@@ -581,7 +886,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        8
+        11
     );
 
     drop(application);

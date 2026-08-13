@@ -8,6 +8,7 @@ use super::McpPrincipal;
 use crate::{
     AppState,
     error::AppError,
+    external_events::enqueue_external_event,
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
@@ -61,6 +62,16 @@ pub struct CreateSubtaskArguments {
     pub parent_work_item_id: String,
     pub title: String,
     pub description: Option<String>,
+    pub client_request_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateWorkItemArguments {
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: Option<String>,
+    pub assignee_actor_id: Option<String>,
     pub client_request_id: String,
 }
 
@@ -202,6 +213,175 @@ impl From<&LockedWorkItem> for ConflictProjection {
 struct MembershipRow {
     role: String,
     project_archived: bool,
+}
+
+pub async fn create_work_item(
+    state: &AppState,
+    principal: &McpPrincipal,
+    mut arguments: CreateWorkItemArguments,
+) -> WriteResult {
+    let result = async {
+        let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false)
+        else {
+            return Ok(WriteResult::invalid("title"));
+        };
+        let description = match arguments.description.take() {
+            Some(value) => match normalize_text(value, MAX_DESCRIPTION_CHARACTERS, true) {
+                Some(value) => value,
+                None => return Ok(WriteResult::invalid("description")),
+            },
+            None => String::new(),
+        };
+        let priority = arguments
+            .priority
+            .clone()
+            .unwrap_or_else(|| "no_priority".to_owned());
+        if !matches!(
+            priority.as_str(),
+            "no_priority" | "low" | "medium" | "high" | "urgent"
+        ) {
+            return Ok(WriteResult::invalid("priority"));
+        }
+        let assignee_actor_id = match arguments.assignee_actor_id.as_deref() {
+            Some(value) => match parse_id(value) {
+                Some(actor_id) => Some(actor_id),
+                None => return Ok(WriteResult::invalid("assigneeActorId")),
+            },
+            None => None,
+        };
+        let key = match IdempotencyKey::parse(&arguments.client_request_id) {
+            Ok(key) => key,
+            Err(_) => return Ok(WriteResult::invalid("clientRequestId")),
+        };
+        let mut transaction = state.pool.begin().await?;
+        if let Some(result) = authorize_write(&mut transaction, principal).await? {
+            return Ok(result);
+        }
+        if let Some(actor_id) = assignee_actor_id
+            && !membership_exists(&mut transaction, principal.project_id, actor_id).await?
+        {
+            return Ok(WriteResult::invalid("assigneeActorId"));
+        }
+        let scope = resource_bound_scope(
+            "mcp_work_items",
+            principal.project_id,
+            "create",
+        )?;
+        let request_hash = RequestHash::for_value(&arguments)?;
+        let reservation = match reserve(
+            &mut transaction,
+            principal.actor_id,
+            &scope,
+            &key,
+            request_hash,
+        )
+        .await?
+        {
+            IdempotencyOutcome::Replay(replay) => {
+                transaction.commit().await?;
+                return Ok(replay.decode::<WriteResult>()?.replayed());
+            }
+            IdempotencyOutcome::Reserved(reservation) => reservation,
+        };
+        let number = sqlx::query_scalar::<_, i64>(
+            "UPDATE project_counters SET next_work_item_number = next_work_item_number + 1, updated_at = now() WHERE project_id = $1 RETURNING next_work_item_number - 1",
+        )
+        .bind(principal.project_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let (type_id, status_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
+            r#"
+            SELECT type.id, status.id
+            FROM work_item_types type
+            CROSS JOIN work_item_statuses status
+            WHERE type.project_id = $1 AND type.enabled AND type.is_default
+              AND status.project_id = $1 AND status.enabled AND status.is_default
+            "#,
+        )
+        .bind(principal.project_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let board_rank = sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(max(board_rank), 0) + $3 FROM work_items WHERE project_id = $1 AND status_id = $2",
+        )
+        .bind(principal.project_id)
+        .bind(status_id)
+        .bind(BOARD_RANK_STEP)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let work_item_id = Uuid::now_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO work_items (
+                id, project_id, number, title, description, type_id, status_id,
+                priority, assignee_actor_id, created_by_actor_id, board_rank
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "#,
+        )
+        .bind(work_item_id)
+        .bind(principal.project_id)
+        .bind(number)
+        .bind(title)
+        .bind(description)
+        .bind(type_id)
+        .bind(status_id)
+        .bind(priority)
+        .bind(assignee_actor_id)
+        .bind(principal.actor_id)
+        .bind(board_rank)
+        .execute(&mut *transaction)
+        .await?;
+        let activity_id = insert_work_item_activity(
+            &mut transaction,
+            principal.project_id,
+            work_item_id,
+            principal.actor_id,
+            "work_item_created",
+            "Work Item created through MCP",
+            &serde_json::json!({"number": number}),
+        )
+        .await?;
+        enqueue_update(&mut transaction, principal.project_id, work_item_id, 1).await?;
+        enqueue_external_work_item_event(
+            &mut transaction,
+            principal.project_id,
+            work_item_id,
+            assignee_actor_id,
+            "work_item.assigned",
+            "A Work Item was assigned to you",
+        )
+        .await?;
+        let result_id = insert_mcp_audit(
+            &mut transaction,
+            principal,
+            "work_item.mcp_created",
+            work_item_id,
+            &arguments.client_request_id,
+            serde_json::json!({"number": number}),
+        )
+        .await?;
+        let result = applied(
+            work_item_id,
+            1,
+            vec!["work_item".to_owned()],
+            Some(activity_id),
+            result_id,
+        );
+        complete(
+            &mut transaction,
+            &reservation,
+            StatusCode::CREATED,
+            &result,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+    .await;
+    match result {
+        Ok(result) => result,
+        Err(error) => command_error("work_item_create", error),
+    }
 }
 
 pub async fn set_status(
@@ -457,6 +637,17 @@ async fn update_work_item_inner(
         )
         .await;
     }
+    if current.assignee_actor_id != assignee {
+        enqueue_external_work_item_event(
+            &mut transaction,
+            principal.project_id,
+            work_item_id,
+            current.assignee_actor_id,
+            "work_item.changed",
+            "A Work Item assignment changed",
+        )
+        .await?;
+    }
     sqlx::query(
         r#"
         UPDATE work_items
@@ -600,6 +791,15 @@ async fn post_update_inner(
         principal.project_id,
         work_item_id,
         current.version,
+    )
+    .await?;
+    enqueue_external_work_item_event(
+        &mut transaction,
+        principal.project_id,
+        work_item_id,
+        current.assignee_actor_id,
+        "work_item.changed",
+        "An assigned Work Item changed",
     )
     .await?;
     let result_id = insert_mcp_audit(
@@ -1108,8 +1308,23 @@ async fn membership_exists(
     actor_id: Uuid,
 ) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2 AND enabled)",
-    ).bind(project_id).bind(actor_id).fetch_one(&mut **transaction).await?)
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1
+              AND membership.actor_id = $2
+              AND membership.enabled
+              AND actor.status = 'active'
+              AND actor.kind IN ('human', 'external_agent')
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 async fn advance_version(
@@ -1153,6 +1368,15 @@ async fn finalize_work_item_change(
         version,
     )
     .await?;
+    enqueue_external_work_item_event(
+        &mut transaction,
+        principal.project_id,
+        work_item_id,
+        None,
+        "work_item.changed",
+        "An assigned Work Item changed",
+    )
+    .await?;
     let result_id = insert_mcp_audit(
         &mut transaction,
         principal,
@@ -1192,6 +1416,61 @@ async fn enqueue_update(
     Ok(())
 }
 
+async fn enqueue_external_work_item_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    explicit_actor_id: Option<Uuid>,
+    kind: &str,
+    summary: &str,
+) -> Result<(), AppError> {
+    let available =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
+            .fetch_one(&mut **transaction)
+            .await?;
+    if !available {
+        return Ok(());
+    }
+    let connections = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT connection.id, connection.actor_id
+        FROM work_items item
+        JOIN external_agent_connections connection
+          ON connection.project_id = item.project_id
+         AND connection.actor_id = COALESCE($3, item.assignee_actor_id)
+         AND connection.status = 'active'
+        JOIN actors actor ON actor.id = connection.actor_id
+         AND actor.kind = 'external_agent' AND actor.status = 'active'
+        JOIN project_memberships membership
+          ON membership.project_id = connection.project_id
+         AND membership.actor_id = connection.actor_id
+         AND membership.enabled
+        WHERE item.project_id = $1 AND item.id = $2
+        ORDER BY connection.id
+        FOR SHARE OF connection, actor, membership
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(explicit_actor_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (connection_id, _) in connections {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            project_id,
+            kind,
+            summary,
+            "work_item",
+            work_item_id,
+            &format!("/projects/{project_id}/work-items/{work_item_id}"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn insert_mcp_audit(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
@@ -1206,8 +1485,12 @@ async fn insert_mcp_audit(
         INSERT INTO audit_events (
             id, actor_id, project_id, authentication_class, action, target_kind,
             target_id, outcome, request_id, metadata, channel, client_name,
-            mcp_credential_id, mcp_oauth_grant_id
-        ) VALUES ($1, $2, $3, $4, $5, 'work_item', $6, 'succeeded', $7, $8, 'mcp', $9, $10, $11)
+            mcp_credential_id, mcp_oauth_grant_id,
+            external_agent_connection_id
+        ) VALUES (
+            $1, $2, $3, $4, $5, 'work_item', $6, 'succeeded', $7, $8,
+            'mcp', $9, $10, $11, $12
+        )
         "#,
     )
     .bind(audit_id)
@@ -1221,6 +1504,7 @@ async fn insert_mcp_audit(
     .bind(&principal.client_name)
     .bind(principal.mcp_credential_id)
     .bind(principal.oauth_grant_id)
+    .bind(principal.external_agent_connection_id)
     .execute(&mut **transaction)
     .await?;
     Ok(audit_id)

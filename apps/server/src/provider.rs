@@ -409,7 +409,19 @@ async fn drive_turn(
     loop {
         tokio::select! {
             event = provider.next_event() => {
-                let event = event.map_err(|error| provider_error(run_id, "read event", error))?;
+                let event = match event {
+                    Ok(event) => event,
+                    Err(error) => {
+                        if !state.supervisors.is_shutting_down() {
+                            sleep(Duration::from_millis(100)).await;
+                        }
+                        if state.supervisors.is_shutting_down() {
+                            provider.shutdown_process().await;
+                            return Ok(());
+                        }
+                        return Err(provider_error(run_id, "read event", error));
+                    }
+                };
                 match event {
                     ProviderEvent::Request(request) => handle_provider_request(
                         &state,
@@ -589,6 +601,11 @@ async fn handle_provider_request(
     .await?;
     let approval_id = match inserted_approval_id {
         Some(approval_id) => {
+            crate::external_events::enqueue_external_approval_requested(
+                &mut transaction,
+                approval_id,
+            )
+            .await?;
             transition_run(&mut transaction, run_id, RunState::Blocked, None).await?;
             let event_id = insert_event(
                 &mut transaction,

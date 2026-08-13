@@ -2,18 +2,45 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M8 accepted; M9 elaborated and authorized; source of truth v0.28
+**Status:** M0 through M9 accepted; version one complete; source of truth v0.29
 
 **Owner:** Mischa Nelson  
 **Date:** August 4, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M8 are complete. M9 is
-elaborated and authorized by accepted M8 evidence and the owner's explicit
-August 4, 2026 instruction to continue through M9.
+**Implementation authorization:** Milestones M0 through M9 are complete. Any
+post-version-one milestone requires a new elaboration and explicit owner
+authorization.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.29 — M9 acceptance and version-one completion
+
+- accepted M9 against exact green commit
+  `b910e0179765e05f8c5dc3e0aa2f031660384317`, GitHub CI run
+  `31651785611`, and the matching immutable Red Hat release
+- recorded the pinned isolated Hermes Agent `0.20.0` installation, exact
+  release commit and dependency fixture, personal ChatGPT OAuth ceremony,
+  negotiated MCP `2025-11-25` contract, 22-tool allowlist, Project reads,
+  external-Actor Message authorship, and Work Item create/update proof
+- proved bounded at-least-once event replay, credential-bound cursors, bearer
+  rotation, disable, re-enable, removal, immediate HTTP 401 enforcement, and
+  scrubbing of every revoked connector-secret copy
+- proved human-sponsored Worker execution through the personal Codex profile:
+  no run or worktree before approval, external requester plus human sponsor
+  attribution, isolated branch/worktree allocation, command/file/consolidated
+  Message events, and browser-visible terminal state
+- fixed the generated Message schema required by Hermes and the host-shutdown
+  race that could turn restart recovery into a generic failure
+- proved a controlled restart from durable `working` state produces an
+  actionable `interrupted` Recovery entry while preserving the provider
+  Thread, exact base commit, branch, and worktree without manual repair
+- confirmed the default Hermes runtime, system Node, global Codex, existing
+  Tailscale routing, unrelated Podman projects, and retained dirty worktrees
+  were not reconfigured or removed
+- declared the M9 exit criteria satisfied and the M0-through-M9 version-one
+  implementation complete
 
 ### v0.28 — M8 acceptance and M9 authorization
 
@@ -7787,6 +7814,23 @@ retains the external Actor as originating requester and the human as sponsor
 and approver. Denial, expiry, disable, missing profile, or conflict has no
 fallback to another account. Pooled/service profiles and automatic sponsor
 selection remain future decisions.
+
+## D-056: Hermes compatibility is pinned to the installed MCP extra and negotiated protocol
+
+**Status:** Accepted
+
+**Reason:** Hermes Agent `0.20.0` does not provide its Streamable HTTP client in
+the base installed environment. The accepted isolated runtime therefore uses
+the exact upstream `[mcp]` extra from the pinned lock, yielding the committed
+70-package dependency fixture with `mcp==1.28.1` and the upstream
+`starlette==1.3.1` security override. The live client negotiated MCP
+`2025-11-25`; Agent Workspace records and contract-tests that observation but
+does not weaken its bounded tool, credential, or policy contract to hard-code a
+client-specific older protocol. The personal OAuth provider successfully ran
+`gpt-5.6-terra`; the observed HTTP 400 for `gpt-5.3-codex` is a compatibility
+limit, not authority to select or control the external runtime's model. Any
+Hermes version, dependency, protocol, or model change requires a new isolated
+compatibility proof and redacted fixture update.
 
 ---
 

@@ -542,6 +542,8 @@ async fn prepare_demo_blocker(state: &AppState, run: &ClaimedRun) -> Result<(), 
     ]))
     .execute(&mut *transaction)
     .await?;
+    crate::external_events::enqueue_external_approval_requested(&mut transaction, approval_id)
+        .await?;
     transition_run(&mut transaction, run.run_id, RunState::Blocked, None).await?;
     let event_id = insert_event(
         &mut transaction,

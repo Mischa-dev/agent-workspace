@@ -1265,6 +1265,8 @@ async fn prepare_demo_blocker(
     ]))
     .execute(&mut *transaction)
     .await?;
+    crate::external_events::enqueue_external_approval_requested(&mut transaction, approval_id)
+        .await?;
     let event_id = insert_significant_event(
         &mut transaction,
         run_id,
@@ -1953,7 +1955,7 @@ async fn interrupt_agent_run(
         .map(Json)
 }
 
-async fn insert_significant_event(
+pub(crate) async fn insert_significant_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
     kind: &str,
@@ -1980,7 +1982,7 @@ async fn insert_significant_event(
     Ok(event_id)
 }
 
-async fn retain_run_workspace(
+pub(crate) async fn retain_run_workspace(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     run_id: Uuid,
 ) -> Result<(), AppError> {
@@ -1998,7 +2000,7 @@ async fn retain_run_workspace(
     Ok(())
 }
 
-async fn insert_event_entry(
+pub(crate) async fn insert_event_entry(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     conversation_id: Uuid,
     event_id: Uuid,

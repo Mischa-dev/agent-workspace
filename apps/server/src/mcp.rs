@@ -36,6 +36,7 @@ use crate::{
     },
 };
 
+mod approvals;
 mod collaboration;
 mod oauth;
 mod reads;
@@ -135,6 +136,48 @@ struct ProjectProjectionRow {
 
 #[tool_router]
 impl McpServer {
+    #[tool(
+        description = "Read one bounded approval addressed to the authenticated external Actor",
+        annotations(
+            title = "Get addressed approval",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn approval_get(
+        &self,
+        Parameters(arguments): Parameters<approvals::ApprovalGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<approvals::ApprovalToolResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(approvals::ApprovalToolResult::denied());
+        };
+        Json(approvals::get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Answer one current non-human-required approval addressed to the authenticated external Actor",
+        annotations(
+            title = "Respond to addressed approval",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn approval_respond(
+        &self,
+        Parameters(arguments): Parameters<approvals::ApprovalRespondArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<approvals::ApprovalToolResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(approvals::ApprovalToolResult::denied());
+        };
+        Json(approvals::respond(&self.state, principal, arguments).await)
+    }
+
     #[tool(
         description = "Request human-sponsored Worker execution for an existing Thread without starting a run before approval",
         annotations(
@@ -418,6 +461,29 @@ impl McpServer {
             });
         };
         Json(reads::work_item_get(&self.state, principal, &arguments.identifier).await)
+    }
+
+    #[tool(
+        description = "Create one bounded top-level Work Item in the authenticated Project",
+        annotations(
+            title = "Create Work Item",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn work_item_create(
+        &self,
+        Parameters(arguments): Parameters<writes::CreateWorkItemArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<writes::WriteResult> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(writes::WriteResult::PermissionDenied {
+                retry_category: "reauthenticate".to_owned(),
+            });
+        };
+        Json(writes::create_work_item(&self.state, principal, arguments).await)
     }
 
     #[tool(
