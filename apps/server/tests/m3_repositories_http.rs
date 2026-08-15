@@ -112,20 +112,37 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
     let local_repository_id = Uuid::now_v7();
     let local_mirror = expected_repository_mirror_path(&data_root, local_repository_id)
         .expect("local canonical mirror path");
+    fs::create_dir_all(local_mirror.parent().expect("local mirror parent"))
+        .expect("create local mirror parent");
+    let imported = Command::new("/usr/bin/git")
+        .args([
+            "clone",
+            "--mirror",
+            local_source.to_string_lossy().as_ref(),
+            local_mirror.to_string_lossy().as_ref(),
+        ])
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", "/dev/null")
+        .output()
+        .expect("create imported local mirror fixture");
+    assert!(imported.status.success());
     sqlx::query(
         r#"
         INSERT INTO repositories (
             id, project_id, github_repository_id, owner, name, clone_url,
-            default_branch, mirror_path, enabled, trusted, preparation_state
+            default_branch, mirror_path, legacy_mirror_path,
+            enabled, trusted, preparation_state
         )
         VALUES ($1, $2, 9000000001, 'Fixture', 'local-repository', $3,
-                'main', $4, true, true, 'pending')
+                'main', $4, $5, true, true, 'pending')
         "#,
     )
     .bind(local_repository_id)
     .bind(seed.project_id)
     .bind(local_source.to_string_lossy().as_ref())
     .bind(local_mirror.to_string_lossy().as_ref())
+    .bind(local_source.to_string_lossy().as_ref())
     .execute(&pool)
     .await
     .expect("insert internal local repository fixture");

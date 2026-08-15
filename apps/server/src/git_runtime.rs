@@ -106,6 +106,24 @@ pub fn prepare_repository(
     repository: &RegisteredRepository,
     mode: RepositoryPreparationMode,
 ) -> Result<PreparedRepository, AppError> {
+    prepare_repository_inner(data_root, repository, mode, None)
+}
+
+pub fn prepare_repository_with_token(
+    data_root: &Path,
+    repository: &RegisteredRepository,
+    mode: RepositoryPreparationMode,
+    token: &SecretString,
+) -> Result<PreparedRepository, AppError> {
+    prepare_repository_inner(data_root, repository, mode, Some(token))
+}
+
+fn prepare_repository_inner(
+    data_root: &Path,
+    repository: &RegisteredRepository,
+    mode: RepositoryPreparationMode,
+    token: Option<&SecretString>,
+) -> Result<PreparedRepository, AppError> {
     let data_root = absolute_runtime_path(data_root)?;
     let repository_root = prepare_private_profile_directory(
         &data_root,
@@ -128,7 +146,7 @@ pub fn prepare_repository(
             "imported mirror is not available",
         ));
     } else {
-        run_git([
+        let arguments = [
             OsString::from("clone"),
             OsString::from("--mirror"),
             OsString::from("--no-local"),
@@ -136,18 +154,28 @@ pub fn prepare_repository(
             OsString::from("core.hooksPath=/dev/null"),
             OsString::from(&repository.clone_url),
             repository.mirror_path.as_os_str().to_owned(),
-        ])?;
+        ];
+        if let Some(token) = token {
+            run_git_authenticated(&data_root, arguments, token)?;
+        } else {
+            run_git(arguments)?;
+        }
         validate_existing_mirror(&repository.mirror_path, &repository.clone_url)?;
     }
     if mode == RepositoryPreparationMode::RefreshOrClone {
-        run_git([
+        let arguments = [
             OsString::from("--git-dir"),
             repository.mirror_path.as_os_str().to_owned(),
             OsString::from("remote"),
             OsString::from("update"),
             OsString::from("--prune"),
             OsString::from("origin"),
-        ])?;
+        ];
+        if let Some(token) = token {
+            run_git_authenticated(&data_root, arguments, token)?;
+        } else {
+            run_git(arguments)?;
+        }
     }
     let base_commit = resolve_base_commit(&repository.mirror_path, &repository.default_branch)?;
     Ok(PreparedRepository { base_commit })
@@ -788,6 +816,93 @@ where
     Err(AppError::Conflict("repository", "Git operation failed"))
 }
 
+fn run_git_authenticated<I, S>(
+    data_root: &Path,
+    arguments: I,
+    token: &SecretString,
+) -> Result<Output, AppError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let askpass = TemporaryAskpass::create(data_root)?;
+    let _process_permit = GitProcessPermit::try_acquire()?;
+    let mut command = Command::new("/usr/bin/git");
+    command
+        .args(arguments)
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("HOME", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_COUNT", "4")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "/dev/null")
+        .env("GIT_CONFIG_KEY_1", "credential.helper")
+        .env("GIT_CONFIG_VALUE_1", "")
+        .env("GIT_CONFIG_KEY_2", "credential.useHttpPath")
+        .env("GIT_CONFIG_VALUE_2", "true")
+        .env("GIT_CONFIG_KEY_3", "http.followRedirects")
+        .env("GIT_CONFIG_VALUE_3", "false")
+        .env("GIT_ASKPASS", askpass.path())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "/bin/false")
+        .env("AGENT_WORKSPACE_GIT_PASSWORD", token.expose_secret())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|_| AppError::Internal("start credentialed Git"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(AppError::Internal("capture credentialed Git stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(AppError::Internal("capture credentialed Git stderr"))?;
+    let stdout_reader = thread::spawn(move || bounded_read(stdout, MAX_GIT_OUTPUT_BYTES));
+    let stderr_reader = thread::spawn(move || bounded_read(stderr, MAX_GIT_ERROR_BYTES));
+    let deadline = Instant::now() + GIT_NETWORK_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| AppError::Internal("wait for credentialed Git"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Conflict("repository", "Git operation timed out"));
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| AppError::Internal("join credentialed Git stdout reader"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| AppError::Internal("join credentialed Git stderr reader"))??;
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
+    if output.status.success() {
+        return Ok(output);
+    }
+    tracing::warn!(
+        stdout_bytes = output.stdout.len(),
+        stderr_bytes = output.stderr.len(),
+        "bounded credentialed Git operation failed"
+    );
+    Err(AppError::Conflict("repository", "Git operation failed"))
+}
+
 struct GitProcessPermit;
 
 impl GitProcessPermit {
@@ -885,9 +1000,9 @@ mod tests {
     use super::{
         RegisteredRepository, RepositoryPreparationMode, TemporaryAskpass, create_worktree,
         expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
-        managed_worktree_path, prepare_repository, remove_clean_worktree,
-        remove_published_worktree, repair_and_prune_worktrees, reserve_process_slot,
-        unique_run_branch, validate_branch, validate_ref, worktree_is_dirty,
+        managed_worktree_path, prepare_repository, prepare_repository_with_token,
+        remove_clean_worktree, remove_published_worktree, repair_and_prune_worktrees,
+        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, worktree_is_dirty,
     };
     use std::{
         fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,
@@ -957,6 +1072,73 @@ mod tests {
         drop(helper);
         assert!(!helper_path.exists());
         assert!(!directory.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credentialed_repository_preparation_removes_ephemeral_askpass_material() {
+        let temporary = tempfile::tempdir().expect("temporary Git runtime root");
+        let data_root = temporary.path().join("data");
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).expect("create source repository");
+        git(&source, ["init", "-b", "main"]);
+        fs::write(source.join("known.txt"), "known\n").expect("write known file");
+        git(&source, ["add", "known.txt"]);
+        git(
+            &source,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+        );
+
+        let repository_id = Uuid::now_v7();
+        let mirror = expected_repository_mirror_path(&data_root, repository_id)
+            .expect("expected mirror path");
+        let repository = RegisteredRepository {
+            id: repository_id,
+            clone_url: source.to_string_lossy().into_owned(),
+            default_branch: "main".to_owned(),
+            mirror_path: mirror,
+        };
+        let token = secrecy::SecretString::from("opaque-test-installation-token");
+        prepare_repository_with_token(
+            &data_root,
+            &repository,
+            RepositoryPreparationMode::RefreshOrClone,
+            &token,
+        )
+        .expect("prepare repository through credentialed boundary");
+
+        let askpass_root = data_root.join("github/askpass");
+        assert!(
+            !askpass_root.exists()
+                || fs::read_dir(&askpass_root)
+                    .expect("read askpass root")
+                    .next()
+                    .is_none(),
+            "credential helper material must not survive preparation"
+        );
+        let origin = Command::new("/usr/bin/git")
+            .current_dir(&repository.mirror_path)
+            .args(["remote", "get-url", "origin"])
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("HOME", "/dev/null")
+            .output()
+            .expect("read prepared origin");
+        assert!(origin.status.success());
+        let origin = String::from_utf8(origin.stdout)
+            .expect("UTF-8 prepared origin")
+            .trim()
+            .to_owned();
+        assert_eq!(origin, repository.clone_url);
+        assert!(!origin.contains("opaque-test-installation-token"));
     }
 
     #[cfg(unix)]

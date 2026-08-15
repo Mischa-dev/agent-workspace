@@ -16,8 +16,9 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     git_runtime::{
         RegisteredRepository, RepositoryPreparationMode, expected_repository_mirror_path,
-        prepare_repository, validate_registered_ref,
+        prepare_repository, prepare_repository_with_token, validate_registered_ref,
     },
+    github::repository_git_token,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
@@ -340,11 +341,34 @@ async fn prepare_registered_repository(
         RepositoryPreparationMode::RefreshOrClone
     };
     let data_root = state.config.data_root.clone();
-    let preparation = tokio::task::spawn_blocking(move || {
-        prepare_repository(data_root.as_path(), &registered, preparation_mode)
-    })
-    .await;
-    let prepared = matches!(preparation, Ok(Ok(_)));
+    let prepared = match preparation_mode {
+        RepositoryPreparationMode::VerifyImportedMirror => {
+            matches!(
+                tokio::task::spawn_blocking(move || {
+                    prepare_repository(data_root.as_path(), &registered, preparation_mode)
+                })
+                .await,
+                Ok(Ok(_))
+            )
+        }
+        RepositoryPreparationMode::RefreshOrClone => {
+            match repository_git_token(&state, project_id, repository_id).await {
+                Ok(token) => matches!(
+                    tokio::task::spawn_blocking(move || {
+                        prepare_repository_with_token(
+                            data_root.as_path(),
+                            &registered,
+                            preparation_mode,
+                            &token,
+                        )
+                    })
+                    .await,
+                    Ok(Ok(_))
+                ),
+                Err(_) => false,
+            }
+        }
+    };
     if !prepared {
         tracing::warn!(%project_id, %repository_id, "repository preparation failed");
     }
