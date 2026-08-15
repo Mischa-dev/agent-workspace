@@ -263,17 +263,44 @@ function GitHubReverify({
   projectId: string
   repositoryIds: string[]
 }) {
+  const repositories = useQuery({
+    queryKey: queryKeys.repositories(projectId),
+    queryFn: () => listRepositories(projectId),
+  })
+  const [selected, setSelected] = useState(repositoryIds)
   const [error, setError] = useState<string | null>(null)
   const verify = useMutation({
-    mutationFn: () => syncGitHubInstallation(projectId, { installationId, repositoryIds }),
+    mutationFn: () => syncGitHubInstallation(projectId, { installationId, repositoryIds: selected }),
     onSuccess: onVerified,
     onError: (reason) => setError(integrationError(reason)),
   })
+  const available = repositories.data?.repositories.filter(
+    (repository) => repository.enabled && repository.trusted && !repository.archivedAt,
+  ) ?? []
   return (
     <div className="repository-actions">
+      <fieldset disabled={repositories.isPending || verify.isPending}>
+        <legend>Repository selection</legend>
+        {repositories.isPending && <p>Loading registered repositories…</p>}
+        {repositories.isError && (
+          <p role="alert">Registered repositories could not be loaded.</p>
+        )}
+        {repositories.isSuccess && available.map((repository) => (
+          <label key={repository.id}>
+            <input
+              checked={selected.includes(repository.id)}
+              onChange={(event) => setSelected((current) => event.target.checked
+                ? [...current, repository.id]
+                : current.filter((id) => id !== repository.id))}
+              type="checkbox"
+            />
+            {repository.owner}/{repository.name}
+          </label>
+        ))}
+      </fieldset>
       {error && <p role="alert">{error}</p>}
       <button
-        disabled={repositoryIds.length === 0 || verify.isPending}
+        disabled={selected.length === 0 || repositories.isPending || verify.isPending}
         onClick={() => {
           setError(null)
           verify.mutate()

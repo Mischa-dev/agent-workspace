@@ -451,6 +451,7 @@ struct InstallationToken {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InstallationTokenScope {
     VerifyInstallation,
+    ContentsRead,
     ContentsWrite,
     PullRequestsWrite,
     ChecksRead,
@@ -464,6 +465,10 @@ impl InstallationTokenScope {
                 "contents": "write",
                 "pull_requests": "write",
                 "checks": "read"
+            }),
+            Self::ContentsRead => json!({
+                "metadata": "read",
+                "contents": "read"
             }),
             Self::ContentsWrite => json!({
                 "metadata": "read",
@@ -494,6 +499,68 @@ impl std::fmt::Debug for InstallationToken {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("InstallationToken([REDACTED])")
     }
+}
+
+#[derive(Debug, FromRow)]
+struct RepositoryGitScope {
+    installation_id: i64,
+    github_repository_id: i64,
+}
+
+pub(crate) async fn repository_git_token(
+    state: &AppState,
+    project_id: Uuid,
+    repository_id: Uuid,
+) -> Result<SecretString, AppError> {
+    let config = state
+        .config
+        .github
+        .as_ref()
+        .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
+    let scope = sqlx::query_as::<_, RepositoryGitScope>(
+        r#"
+        SELECT installation.installation_id,
+               repository.github_repository_id
+        FROM github_installations installation
+        JOIN github_installation_repositories access
+          ON access.project_id = installation.project_id
+         AND access.github_installation_id = installation.id
+         AND access.access_state = 'selected'
+        JOIN repositories repository
+          ON repository.project_id = access.project_id
+         AND repository.id = access.repository_id
+         AND repository.github_repository_id = access.github_repository_id
+        WHERE installation.project_id = $1
+          AND installation.enabled
+          AND installation.state = 'available'
+          AND repository.id = $2
+          AND repository.enabled
+          AND repository.trusted
+          AND repository.archived_at IS NULL
+        "#,
+    )
+    .bind(project_id)
+    .bind(repository_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Conflict(
+        "github_integration",
+        "repository_scope_unavailable",
+    ))?;
+    let installation_id = u64::try_from(scope.installation_id)
+        .map_err(|_| AppError::Internal("GitHub Installation ID"))?;
+    let github_repository_id = u64::try_from(scope.github_repository_id)
+        .map_err(|_| AppError::Internal("GitHub Repository ID"))?;
+    let client = GitHubClient::new(config).map_err(map_github_error)?;
+    let token = client
+        .installation_token(
+            installation_id,
+            &[github_repository_id],
+            InstallationTokenScope::ContentsRead,
+        )
+        .await
+        .map_err(map_github_error)?;
+    Ok(token.secret)
 }
 
 #[derive(Debug, Deserialize)]
