@@ -135,13 +135,14 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
             enabled, trusted, preparation_state
         )
         VALUES ($1, $2, 9000000001, 'Fixture', 'local-repository', $3,
-                'main', $4, $4, true, true, 'pending')
+                'main', $4, $5, true, true, 'pending')
         "#,
     )
     .bind(local_repository_id)
     .bind(seed.project_id)
     .bind(local_source.to_string_lossy().as_ref())
     .bind(local_mirror.to_string_lossy().as_ref())
+    .bind(local_source.to_string_lossy().as_ref())
     .execute(&pool)
     .await
     .expect("insert internal local repository fixture");
