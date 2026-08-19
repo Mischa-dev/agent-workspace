@@ -8,7 +8,7 @@ use super::McpPrincipal;
 use crate::{
     AppState,
     error::AppError,
-    external_events::enqueue_external_event,
+    external_events::enqueue_external_work_item_event,
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
@@ -218,14 +218,14 @@ struct MembershipRow {
 pub async fn create_work_item(
     state: &AppState,
     principal: &McpPrincipal,
-    mut arguments: CreateWorkItemArguments,
+    arguments: CreateWorkItemArguments,
 ) -> WriteResult {
     let result = async {
         let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false)
         else {
             return Ok(WriteResult::invalid("title"));
         };
-        let description = match arguments.description.take() {
+        let description = match arguments.description.clone() {
             Some(value) => match normalize_text(value, MAX_DESCRIPTION_CHARACTERS, true) {
                 Some(value) => value,
                 None => return Ok(WriteResult::invalid("description")),
@@ -826,7 +826,7 @@ async fn post_update_inner(
 pub async fn create_subtask(
     state: &AppState,
     principal: &McpPrincipal,
-    mut arguments: CreateSubtaskArguments,
+    arguments: CreateSubtaskArguments,
 ) -> WriteResult {
     let result = async {
         let Some(parent_id) = parse_id(&arguments.parent_work_item_id) else {
@@ -835,7 +835,7 @@ pub async fn create_subtask(
         let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false) else {
             return Ok(WriteResult::invalid("title"));
         };
-        let description = match arguments.description.take() {
+        let description = match arguments.description.clone() {
             Some(value) => match normalize_text(value, MAX_DESCRIPTION_CHARACTERS, true) {
                 Some(value) => value,
                 None => return Ok(WriteResult::invalid("description")),
@@ -1413,61 +1413,6 @@ async fn enqueue_update(
         }),
     )
     .await?;
-    Ok(())
-}
-
-async fn enqueue_external_work_item_event(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    explicit_actor_id: Option<Uuid>,
-    kind: &str,
-    summary: &str,
-) -> Result<(), AppError> {
-    let available =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
-            .fetch_one(&mut **transaction)
-            .await?;
-    if !available {
-        return Ok(());
-    }
-    let connections = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        SELECT connection.id, connection.actor_id
-        FROM work_items item
-        JOIN external_agent_connections connection
-          ON connection.project_id = item.project_id
-         AND connection.actor_id = COALESCE($3, item.assignee_actor_id)
-         AND connection.status = 'active'
-        JOIN actors actor ON actor.id = connection.actor_id
-         AND actor.kind = 'external_agent' AND actor.status = 'active'
-        JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
-         AND membership.actor_id = connection.actor_id
-         AND membership.enabled
-        WHERE item.project_id = $1 AND item.id = $2
-        ORDER BY connection.id
-        FOR SHARE OF connection, actor, membership
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(explicit_actor_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for (connection_id, _) in connections {
-        enqueue_external_event(
-            transaction,
-            connection_id,
-            project_id,
-            kind,
-            summary,
-            "work_item",
-            work_item_id,
-            &format!("/projects/{project_id}/work-items/{work_item_id}"),
-        )
-        .await?;
-    }
     Ok(())
 }
 

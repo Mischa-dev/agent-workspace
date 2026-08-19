@@ -84,6 +84,61 @@ pub async fn enqueue_external_event(
     Ok(sequence)
 }
 
+pub async fn enqueue_external_work_item_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    explicit_actor_id: Option<Uuid>,
+    kind: &str,
+    summary: &str,
+) -> Result<(), AppError> {
+    let available =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
+            .fetch_one(&mut **transaction)
+            .await?;
+    if !available {
+        return Ok(());
+    }
+    let connection_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT connection.id
+        FROM work_items item
+        JOIN external_agent_connections connection
+          ON connection.project_id = item.project_id
+         AND connection.actor_id = COALESCE($3, item.assignee_actor_id)
+         AND connection.status = 'active'
+        JOIN actors actor ON actor.id = connection.actor_id
+         AND actor.kind = 'external_agent' AND actor.status = 'active'
+        JOIN project_memberships membership
+          ON membership.project_id = connection.project_id
+         AND membership.actor_id = connection.actor_id
+         AND membership.enabled
+        WHERE item.project_id = $1 AND item.id = $2
+        ORDER BY connection.id
+        FOR SHARE OF connection, actor, membership
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(explicit_actor_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for connection_id in connection_ids {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            project_id,
+            kind,
+            summary,
+            "work_item",
+            work_item_id,
+            &format!("/projects/{project_id}/work-items/{work_item_id}"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub async fn enqueue_external_approval_requested(
     transaction: &mut Transaction<'_, Postgres>,
     approval_id: Uuid,
@@ -95,36 +150,7 @@ pub async fn enqueue_external_approval_requested(
     if !available {
         return Ok(());
     }
-    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-        r#"
-        SELECT connection.id, conversation.project_id, run.conversation_id
-        FROM agent_approvals approval
-        JOIN agent_runs run ON run.id = approval.agent_run_id
-        JOIN conversations conversation ON conversation.id = run.conversation_id
-        JOIN external_agent_connections connection
-          ON connection.project_id = conversation.project_id
-         AND connection.status = 'active'
-         AND connection.actor_id <> approval.requesting_actor_id
-        JOIN actors actor ON actor.id = connection.actor_id
-         AND actor.kind = 'external_agent' AND actor.status = 'active'
-        JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
-         AND membership.actor_id = connection.actor_id
-         AND membership.enabled
-        WHERE approval.id = $1
-          AND approval.status = 'pending'
-          AND NOT approval.human_required
-          AND (
-              approval.eligible_actor_id = connection.actor_id
-              OR (approval.eligible_actor_id IS NULL AND approval.eligible_role = membership.role)
-          )
-        ORDER BY connection.id
-        FOR SHARE OF approval, run, connection, actor, membership
-        "#,
-    )
-    .bind(approval_id)
-    .fetch_all(&mut **transaction)
-    .await?;
+    let recipients = external_approval_recipients(transaction, approval_id, "pending").await?;
     for (connection_id, project_id, conversation_id) in recipients {
         enqueue_external_event(
             transaction,
@@ -139,6 +165,83 @@ pub async fn enqueue_external_approval_requested(
         .await?;
     }
     Ok(())
+}
+
+pub async fn enqueue_external_approval_resolved(
+    transaction: &mut Transaction<'_, Postgres>,
+    approval_id: Uuid,
+) -> Result<(), AppError> {
+    let available =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('external_agent_events') IS NOT NULL")
+            .fetch_one(&mut **transaction)
+            .await?;
+    if !available {
+        return Ok(());
+    }
+    let recipients = external_approval_recipients(transaction, approval_id, "resolved").await?;
+    for (connection_id, project_id, conversation_id) in recipients {
+        enqueue_external_event(
+            transaction,
+            connection_id,
+            project_id,
+            "approval.resolved",
+            "An addressed approval was resolved",
+            "agent_approval",
+            approval_id,
+            &format!("/projects/{project_id}/threads/{conversation_id}"),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn external_approval_recipients(
+    transaction: &mut Transaction<'_, Postgres>,
+    approval_id: Uuid,
+    required_status: &str,
+) -> Result<Vec<(Uuid, Uuid, Uuid)>, AppError> {
+    let recipients = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+        r#"
+        SELECT connection.id, conversation.project_id, run.conversation_id
+        FROM agent_approvals approval
+        JOIN agent_runs run ON run.id = approval.agent_run_id
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        JOIN projects project ON project.id = conversation.project_id
+         AND project.archived_at IS NULL
+        JOIN external_agent_connections connection
+          ON connection.project_id = conversation.project_id
+          AND connection.status = 'active'
+         AND connection.actor_id <> approval.requesting_actor_id
+        JOIN actors actor ON actor.id = connection.actor_id
+         AND actor.kind = 'external_agent' AND actor.status = 'active'
+        JOIN project_memberships membership
+          ON membership.project_id = connection.project_id
+         AND membership.actor_id = connection.actor_id
+         AND membership.enabled
+         AND membership.role IN ('owner', 'admin', 'member')
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = connection.actor_id
+         AND organization_membership.enabled
+        WHERE approval.id = $1
+          AND approval.status = $2
+          AND NOT approval.human_required
+          AND (
+              approval.eligible_actor_id = connection.actor_id
+              OR (
+                  approval.eligible_actor_id IS NULL
+                  AND approval.eligible_role IN (membership.role, 'any_authorized')
+              )
+          )
+        ORDER BY connection.id
+        FOR SHARE OF approval, run, connection, actor, membership, organization_membership
+        "#,
+    )
+    .bind(approval_id)
+    .bind(required_status)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(recipients)
 }
 
 pub fn encode_cursor(

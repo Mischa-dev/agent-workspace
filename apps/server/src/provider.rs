@@ -25,6 +25,28 @@ use codex_app_server::{
     ApprovalKind, ItemKind, ProfileLease, ProviderAnswer, ProviderEvent, RecoveredTurn,
 };
 
+const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProviderApprovalPolicy {
+    eligible_role: &'static str,
+    human_required: bool,
+}
+
+fn provider_approval_policy(kind: ApprovalKind) -> Option<ProviderApprovalPolicy> {
+    match kind {
+        ApprovalKind::Question => Some(ProviderApprovalPolicy {
+            eligible_role: ANY_AUTHORIZED_APPROVER,
+            human_required: false,
+        }),
+        ApprovalKind::Approval => Some(ProviderApprovalPolicy {
+            eligible_role: "owner",
+            human_required: true,
+        }),
+        ApprovalKind::Unsupported => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct StartedProviderRun {
     pub provider_session_id: Uuid,
@@ -575,6 +597,8 @@ async fn handle_provider_request(
         ApprovalKind::Approval => "approval",
         ApprovalKind::Unsupported => unreachable!("unsupported requests return above"),
     };
+    let approval_policy = provider_approval_policy(request.kind)
+        .ok_or(AppError::Internal("unsupported provider approval policy"))?;
     let provider_request_id = request.durable_id();
     let summary = request.summary().to_owned();
     let options = request.public_options();
@@ -583,9 +607,9 @@ async fn handle_provider_request(
         r#"
         INSERT INTO agent_approvals (
             id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options
+            kind, summary, options, eligible_role, human_required
         )
-        SELECT $1, $2, ar.requesting_actor_id, $3, $4, $5, $6
+        SELECT $1, $2, ar.requesting_actor_id, $3, $4, $5, $6, $7, $8
         FROM agent_runs ar WHERE ar.id = $2
         ON CONFLICT (agent_run_id, provider_request_id) DO NOTHING
         RETURNING id
@@ -597,6 +621,8 @@ async fn handle_provider_request(
     .bind(kind)
     .bind(&summary)
     .bind(options)
+    .bind(approval_policy.eligible_role)
+    .bind(approval_policy.human_required)
     .fetch_optional(&mut *transaction)
     .await?;
     let approval_id = match inserted_approval_id {
@@ -1109,9 +1135,31 @@ fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError 
 
 #[cfg(test)]
 mod tests {
-    use super::{recovered_turn_has_identity, validated_worker_message};
+    use super::{
+        ProviderApprovalPolicy, provider_approval_policy, recovered_turn_has_identity,
+        validated_worker_message,
+    };
     use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
-    use crate::provider::codex_app_server::RecoveredTurn;
+    use crate::provider::codex_app_server::{ApprovalKind, RecoveredTurn};
+
+    #[test]
+    fn provider_approval_policy_keeps_execution_approvals_human_required() {
+        assert_eq!(
+            provider_approval_policy(ApprovalKind::Question),
+            Some(ProviderApprovalPolicy {
+                eligible_role: "any_authorized",
+                human_required: false,
+            })
+        );
+        assert_eq!(
+            provider_approval_policy(ApprovalKind::Approval),
+            Some(ProviderApprovalPolicy {
+                eligible_role: "owner",
+                human_required: true,
+            })
+        );
+        assert_eq!(provider_approval_policy(ApprovalKind::Unsupported), None);
+    }
 
     #[test]
     fn worker_messages_share_unicode_and_control_boundaries() {
