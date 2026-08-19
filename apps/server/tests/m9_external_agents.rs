@@ -575,6 +575,11 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .expect("create second connection response");
     assert_eq!(second_created.status(), StatusCode::OK);
     let second_created = response_json(second_created).await;
+    let second_actor_id = second_created["connection"]["actorId"]
+        .as_str()
+        .expect("second connection actor id")
+        .parse::<Uuid>()
+        .expect("second connection Actor UUID");
     let second_token = second_created["oneTimeCredential"]["token"]
         .as_str()
         .expect("second connection token")
@@ -592,6 +597,122 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .as_str()
         .expect("second connection initial cursor")
         .to_owned();
+
+    let self_response_run_id = Uuid::now_v7();
+    let self_response_approval_id = Uuid::now_v7();
+    let mut self_response_transaction = pool.begin().await.expect("begin self-response fixture");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            state, prompt, authorization_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
+        "#,
+    )
+    .bind(self_response_run_id)
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind("External self-response authorization fixture")
+    .execute(&mut *self_response_transaction)
+    .await
+    .expect("insert self-response run");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, provider_request_id,
+            kind, summary, options, eligible_role, human_required
+        ) VALUES (
+            $1, $2, $3, $4, 'question', $5, '[]'::jsonb,
+            'any_authorized', false
+        )
+        "#,
+    )
+    .bind(self_response_approval_id)
+    .bind(self_response_run_id)
+    .bind(actor_id)
+    .bind(format!("m9-self-response:{self_response_approval_id}"))
+    .bind("Which authorized teammate should answer this question?")
+    .execute(&mut *self_response_transaction)
+    .await
+    .expect("insert self-response approval");
+    enqueue_external_approval_requested(&mut self_response_transaction, self_response_approval_id)
+        .await
+        .expect("enqueue self-response approval request");
+    self_response_transaction
+        .commit()
+        .await
+        .expect("commit self-response fixture");
+
+    let requester_self_response = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":self_response_approval_id.to_string(),
+            "expectedVersion":1,
+            "answer":"I should not be able to answer my own question.",
+            "clientRequestId":"m9-self-response-requester"
+        }),
+    )
+    .await;
+    assert_eq!(requester_self_response["outcome"], "not_found");
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<Uuid>)>(
+            "SELECT status, responded_by_actor_id FROM agent_approvals WHERE id = $1",
+        )
+        .bind(self_response_approval_id)
+        .fetch_one(&pool)
+        .await
+        .expect("self-response approval remains pending"),
+        ("pending".to_owned(), None)
+    );
+
+    let teammate_response = call_mcp_tool(
+        &application,
+        &second_token,
+        &second_session_id,
+        "approval_respond",
+        json!({
+            "approvalId":self_response_approval_id.to_string(),
+            "expectedVersion":1,
+            "answer":"Another authorized teammate can answer.",
+            "clientRequestId":"m9-self-response-teammate"
+        }),
+    )
+    .await;
+    assert_eq!(teammate_response["outcome"], "applied");
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<Uuid>)>(
+            "SELECT status, responded_by_actor_id FROM agent_approvals WHERE id = $1",
+        )
+        .bind(self_response_approval_id)
+        .fetch_one(&pool)
+        .await
+        .expect("teammate resolved self-response approval"),
+        ("resolved".to_owned(), Some(second_actor_id))
+    );
+    let mut self_response_terminal = pool
+        .begin()
+        .await
+        .expect("begin self-response terminal transition");
+    transition_run(
+        &mut self_response_terminal,
+        self_response_run_id,
+        RunState::Completed,
+        None,
+    )
+    .await
+    .expect("complete self-response fixture run");
+    self_response_terminal
+        .commit()
+        .await
+        .expect("commit self-response terminal transition");
 
     let addressed_run_id = Uuid::now_v7();
     let addressed_approval_id = Uuid::now_v7();

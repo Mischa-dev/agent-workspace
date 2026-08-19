@@ -505,7 +505,7 @@ async fn load_context(
         JOIN agent_approvals approval ON approval.id = $4
          AND approval.agent_run_id IS NOT NULL
          AND ($6 OR NOT approval.human_required)
-         AND ($6 OR approval.requesting_actor_id <> credential.actor_id)
+         AND approval.requesting_actor_id <> credential.actor_id
          AND (
              approval.eligible_actor_id = credential.actor_id
              OR (
