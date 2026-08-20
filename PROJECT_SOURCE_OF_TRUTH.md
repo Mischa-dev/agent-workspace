@@ -2,10 +2,10 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; source of truth v0.30
+**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; frontend overhaul in progress; source of truth v0.31
 
 **Owner:** Mischa Nelson  
-**Date:** August 16, 2026
+**Date:** August 19, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
 **Implementation authorization:** Milestones M0 through M9 are complete. M9.1
 is authorized by the owner's explicit August 16, 2026 instruction. Any later
@@ -15,6 +15,19 @@ authorization.
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.31 — incremental frontend overhaul architecture
+
+- authorized the post-version-one frontend overhaul without changing backend
+  Work Item mutation contracts or accepted Actor/capability boundaries
+- retained one route tree and one TanStack Query server-state model while
+  introducing route-level chunks, semantic theme/density tokens, project-owned
+  accessible primitives, and responsive modal navigation
+- split realtime context publication from socket lifecycle and required Thread
+  and Work Item decomposition to follow stable product responsibilities
+- retained the existing aggregate web budgets and required measurement of every
+  emitted route asset so code splitting cannot hide total growth
+- recorded the incremental migration boundary in Decision D-058
 
 ### v0.30 — M9.1 correctness stabilization authorization
 
@@ -7927,6 +7940,20 @@ human sponsor. Every creation path stores this policy explicitly; database
 defaults are not an approval-routing decision. This makes the external
 approval surface reachable without allowing a connector to approve provider
 execution or its own request.
+
+## D-058: The frontend overhaul is one incremental application, not a parallel rewrite
+
+**Status:** Accepted
+
+**Reason:** The accepted frontend already contains security-sensitive session,
+capability, non-disclosure, idempotency, realtime-convergence, and hostile-output
+contracts. The professional redesign therefore keeps one router, one TanStack
+Query server-state model, and one set of public backend contracts while replacing
+presentation through route chunks, semantic tokens, project-owned accessible
+primitives, responsive shell regions, and responsibility-based feature
+decomposition. Theme and density persistence is limited to validated
+presentation preferences. Route splitting is measured as both individual
+assets and aggregate output, and may never be used to conceal bundle growth.
 
 ---
 

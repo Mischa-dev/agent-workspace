@@ -2,17 +2,20 @@
 
 ## Theme
 
-A restrained dark operational interface intended for a technical operator in a
-mixed-light desktop environment. The visual system remains deliberately
-provisional during M1 because product naming and public identity are unresolved.
+A restrained operational interface for technical work in mixed-light
+environments. Dark is the default product expression; Light and System are
+complete, supported modes. Theme and density are presentation-only preferences
+stored locally and cannot affect identity, authority, capabilities, or durable
+workspace state.
 
 ## Color
 
-Use the existing cool blue-gray palette through CSS custom properties. Deep
-neutral surfaces establish hierarchy; blue marks active work, orange marks a
-human blocker, red marks failure, white marks newly completed work, and gray
-marks settled history. Every state includes text and an icon in addition to
-color. The accent is reserved for focus, selection, and primary actions.
+Primitive OKLCH values feed semantic surface, text, border, action, status, and
+identity roles. Deep neutral surfaces establish hierarchy; blue marks selection
+and primary action, amber marks attention, red marks failure, green marks
+success, and gray marks settled history. Every state includes text or an icon in
+addition to color. Custom themes may override only the validated accent and
+identity roles documented in `docs/frontend/theme-and-tokens.md`.
 
 ## Typography
 
@@ -23,10 +26,12 @@ paths, and event payloads.
 
 ## Layout
 
-The desktop shell has four regions: narrow project rail, project sidebar,
-flexible main workspace, and collapsible context drawer. At medium widths the
-context drawer disappears; at small widths the project sidebar also collapses.
-The main Thread surface owns scrolling while the composer stays available.
+The desktop shell has four regions: 64 px Project rail, 248 px Project sidebar,
+flexible main workspace, and 288 px context region. At tablet widths context is
+an explicit modal sheet. At phone widths the main resource is the only
+persistent region and the rail, Project sidebar, and context become independent
+drawers. The main Thread surface owns scrolling while the composer stays
+available.
 
 ## Components
 
@@ -48,9 +53,17 @@ Use 150–200ms state transitions for hover, focus, and newly arriving timeline
 content. Avoid page choreography. Disable nonessential transitions under
 `prefers-reduced-motion`.
 
-## M1 Boundaries
+## Density and interaction
 
-Keep the four-region desktop shell and existing cool blue-gray tokens. At phone
-widths, the Project rail and Project sidebar become keyboard-accessible drawers;
-they do not disappear. M1 adds no final logo, font, illustration, broad
-navigation system, or decorative surface treatment.
+Compact, Comfortable, and Spacious adjust row and control rhythm without
+shrinking readable type or mobile targets below 44 px. Focus is always visible.
+Dialogs and drawers make inactive regions inert, contain keyboard focus, close
+on Escape or backdrop, and restore the originating control.
+
+## Product boundaries
+
+Keep one application tree, router, server-state model, and responsive shell.
+Navigation exposes accepted Project, Channel, Thread, Work Item, and settings
+behavior only. A notification center or command palette remains deferred until
+its durable server contract exists. No final public logo or decorative identity
+system is implied by this operational UI.
