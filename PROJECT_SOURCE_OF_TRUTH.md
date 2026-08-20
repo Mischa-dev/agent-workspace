@@ -2,32 +2,88 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; frontend overhaul in progress; source of truth v0.31
+**Status:** M0 through M10 accepted; frontend overhaul accepted; source of truth v0.34
 
 **Owner:** Mischa Nelson  
-**Date:** August 19, 2026
+**Date:** August 20, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M9 are complete. M9.1
-is authorized by the owner's explicit August 16, 2026 instruction. Any later
-post-version-one milestone requires a new elaboration and explicit owner
-authorization.
+**Implementation authorization:** Milestones M0 through M10 are complete. M9.1
+was authorized by the owner's explicit August 16, 2026 instruction. M10 was
+authorized by the owner's explicit August 19, 2026 instruction to execute the
+canonical Work Item application-layer work order and is accepted against the
+evidence recorded in `docs/acceptance/m10.md`. The task-platform architecture
+in Decision D-059 fixes later product and engineering boundaries but does not
+authorize TP1 or any later implementation milestone. Each requires bounded
+elaboration and explicit owner authorization. The presentation-only frontend
+overhaul is accepted in Decision D-060 and does not expand those authorities.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
 
-### v0.31 — incremental frontend overhaul architecture
+### v0.34 — incremental frontend overhaul acceptance
 
-- authorized the post-version-one frontend overhaul without changing backend
+- accepted the post-version-one frontend overhaul without changing backend
   Work Item mutation contracts or accepted Actor/capability boundaries
 - retained one route tree and one TanStack Query server-state model while
   introducing route-level chunks, semantic theme/density tokens, project-owned
   accessible primitives, and responsive modal navigation
 - split realtime context publication from socket lifecycle and required Thread
   and Work Item decomposition to follow stable product responsibilities
+- preserved the authenticated shell during lazy-route loading, portaled modal
+  surfaces outside inert application content, and aligned responsive drawer,
+  focus, stacking, density, and touch-target behavior
 - retained the existing aggregate web budgets and required measurement of every
   emitted route asset so code splitting cannot hide total growth
-- recorded the incremental migration boundary in Decision D-058
+- recorded the incremental migration boundary in Decision D-060
+
+### v0.33 — canonical task-platform architecture
+
+- defined a dedicated task product as another client of the existing canonical
+  Work Item engine, never a synchronized second task system
+- selected the same monorepo and Rust modular monolith, a separate task-first
+  web application, one PostgreSQL migration chain, a versioned client-neutral
+  API, and a generated schema-backed TypeScript client
+- retained Project ownership, server-resolved Actor authorship, centralized
+  policy, optimistic concurrency, idempotency, transactional outbox, and
+  Agent Workspace-owned execution and integration links
+- grounded later writes in the accepted M10 `work_item_commands` boundary while
+  retaining adapter-owned transaction, idempotency, and wire concerns and
+  treating a shared read/query boundary as later TP1 work
+- did not claim that the Task API, generated client, dedicated application,
+  task-only mode, or schema additions are implemented or accepted
+- recorded the architecture in Decision D-059 and
+  `docs/task-platform/`
+
+### v0.32 — M10 canonical Work Item application-layer acceptance
+
+- accepted M10 against the locally green implementation commit
+  `cfe675d1007f888775a8deeea32161db05448074`
+- made HTTP and MCP Work Item mutations adapters around the shared
+  `work_item_commands` application layer while preserving every public wire,
+  idempotency, conflict, attribution, activity, audit, outbox, and addressed
+  external-event contract
+- added real-PostgreSQL browser-versus-MCP create and update parity assertions
+  for canonical state and exactly-once activity, audit, and outbox side effects
+- retained intentional HTTP, MCP, structured-comment, board-ranking, GitHub,
+  and sponsored-execution boundaries instead of collapsing them into transport
+  flags
+- recorded the completed local verification matrix in
+  `docs/acceptance/m10.md`; the pull request records final GitHub CI evidence
+
+### v0.31 — M10 canonical Work Item application-layer authorization
+
+- authorized a bounded post-version-one milestone to make HTTP and MCP Work
+  Item mutation paths adapters around one internal command layer
+- required transport-independent command inputs/results, shared authorization
+  and transaction primitives, and exactly-once activity, audit, outbox,
+  realtime, and addressed external-event finalization
+- preserved every public HTTP and MCP contract and documented intentionally
+  distinct browser, MCP, board-ranking, GitHub, and sponsored-execution
+  semantics rather than hiding them behind transport flags
+- excluded a task microservice, second database, synchronization system,
+  dedicated task UI, public SDK, schema rewrite, and unrelated module cleanup
+- recorded the application-command boundary in Decision D-058
 
 ### v0.30 — M9.1 correctness stabilization authorization
 
@@ -7941,7 +7997,60 @@ defaults are not an approval-routing decision. This makes the external
 approval surface reachable without allowing a connector to approve provider
 execution or its own request.
 
-## D-058: The frontend overhaul is one incremental application, not a parallel rewrite
+## D-058: Work Item mutations converge through one internal application-command layer
+
+**Status:** Accepted
+
+**Reason:** Browser HTTP and MCP are transport surfaces over the same Work Item
+model, Actor policy, PostgreSQL transactions, and side effects. Keeping their
+create, update, timeline, audit, outbox, and external-event implementations
+separate already produced correctness drift in M9.1. The server therefore owns
+one `work_item_commands` application layer for normalized values, membership
+authorization, Work Item locking and conflicts, workflow and assignee checks,
+canonical create/subtask and field/status updates, activity/timeline writes,
+audit attribution, transactional outbox invalidation, and addressed external
+events. HTTP and MCP retain their deliberately different wire validation,
+write protection, idempotency key/replay encoding, public response shapes, and
+audit channel metadata. Board ranking, acceptance criteria, links, blocker
+convenience commands, GitHub automation, and Worker sponsorship remain explicit
+domain commands but reuse the shared transaction and finalization primitives;
+they are not forced into a lowest-common-denominator transport operation. This
+is an internal modular-monolith boundary, not a task service or public SDK.
+
+## D-059: A dedicated task product is another client of one canonical Work Item engine
+
+**Status:** Accepted architecture; implementation remains milestone-gated
+
+**Reason:** Agent Workspace already owns one Project-scoped, Actor-authorized,
+optimistic-versioned Work Item model with durable collaboration, activity,
+links, MCP access, outbox invalidation, and the accepted M10
+`work_item_commands` mutation boundary. A dedicated task experience must use
+those same records and reuse the shared create/update commands and transaction
+primitives where they apply. It must not copy or synchronize Tasks into another
+service, schema, database, or repository. M10 did not add a shared read/query
+layer; TP1 must define authorized Task projections without wrapping an HTTP
+handler or duplicating policy.
+
+The first architecture keeps the Rust modular monolith and PostgreSQL migration
+chain, adds a separate task-first web application in this monorepo, and exposes
+a versioned client-neutral Task API plus generated TypeScript client. `Task` is
+dedicated-product and new-API terminology for the existing canonical Work Item
+identity; existing Agent Workspace and compatibility terminology may remain.
+Personal Inbox work uses a private Personal Project rather than nullable or
+user-owned Task exceptions. Conversations, Threads, Agent Runs, Execution
+Workers, repositories, and GitHub projections remain Agent Workspace-owned and
+attach through explicit links.
+
+The same server binary may later run in an integrated or task-only mode. The
+task-only mode uses the same schema and disables execution, Git, GitHub, and
+provider routes, workers, and readiness dependencies. Public multi-tenancy,
+separate services/databases, cross-Project Task moves, and durable offline
+mutation remain future decisions. The detailed boundaries, API proposal,
+migration plan, and gated roadmap live in `docs/task-platform/`; none is
+implementation acceptance. TP1 and every later task-platform milestone require
+separate explicit owner authorization.
+
+## D-060: The frontend overhaul is one incremental application, not a parallel rewrite
 
 **Status:** Accepted
 
