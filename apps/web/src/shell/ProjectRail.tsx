@@ -16,6 +16,7 @@ import {
 } from '../projects/hooks'
 import { ProjectInitials, ProjectSwitcher } from '../projects/ProjectSwitcher'
 import type { Project } from '../projects/types'
+import { AppearanceControl } from './AppearanceControl'
 
 function projectRecency(project: Project) {
   const value = project.navigation.lastOpenedAt
@@ -180,6 +181,7 @@ export function ProjectRail({
         </div>
 
         <div className="project-rail-actions">
+          <AppearanceControl />
           <button
             aria-expanded={switcherOpen}
             aria-haspopup="dialog"

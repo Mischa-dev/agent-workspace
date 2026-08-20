@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   BrowserRouter,
@@ -9,19 +9,22 @@ import {
 } from 'react-router-dom'
 
 import { SessionBoundary } from '../auth/SessionBoundary'
-import { SignInPage } from '../auth/SignInPage'
-import { JoinPage } from '../invitations/JoinPage'
 import { useAuthenticatedSession } from '../auth/session'
-import { CreateProjectPage } from '../projects/CreateProjectPage'
-import { ChannelPage } from '../conversations/ChannelPage'
-import { ConversationArchivePage } from '../conversations/ConversationArchivePage'
-import { HomePage } from '../projects/HomePage'
-import { ProjectOverviewPage } from '../projects/ProjectOverviewPage'
-import { ProjectSettingsPage } from '../projects/ProjectSettingsPage'
 import { AppShell } from '../shell/AppShell'
-import { ThreadPage } from '../threads/ThreadPage'
-import { WorkItemDetailPage } from '../work-items/WorkItemDetailPage'
-import { WorkItemsPage } from '../work-items/WorkItemsPage'
+import { ThemeProvider } from '../theme/ThemeProvider'
+import { AppErrorBoundary } from './AppErrorBoundary'
+
+const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
+const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
+const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
+const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
+const ConversationArchivePage = lazy(() => import('../conversations/ConversationArchivePage').then((module) => ({ default: module.ConversationArchivePage })))
+const HomePage = lazy(() => import('../projects/HomePage').then((module) => ({ default: module.HomePage })))
+const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })))
+const ProjectSettingsPage = lazy(() => import('../projects/ProjectSettingsPage').then((module) => ({ default: module.ProjectSettingsPage })))
+const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => ({ default: module.ThreadPage })))
+const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
+const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
 
 function createQueryClient() {
   return new QueryClient({
@@ -40,9 +43,12 @@ function createQueryClient() {
 export function App() {
   const [queryClient] = useState(createQueryClient)
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AppErrorBoundary>
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
           <Route element={<SignInPage />} path="/sign-in" />
           <Route element={<JoinPage />} path="/join" />
           <Route element={<SessionBoundary />}>
@@ -79,9 +85,21 @@ export function App() {
             />
             <Route element={<NotFoundPage />} path="*" />
           </Route>
-        </Routes>
-      </BrowserRouter>
-    </QueryClientProvider>
+              </Routes>
+            </Suspense>
+          </AppErrorBoundary>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
+  )
+}
+
+function RouteFallback() {
+  return (
+    <main aria-busy="true" className="session-state">
+      <div aria-hidden="true" className="brand-mark">A</div>
+      <p>Opening workspace…</p>
+    </main>
   )
 }
 

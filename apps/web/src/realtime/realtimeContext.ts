@@ -17,6 +17,10 @@ export function useRealtime() {
   return realtime
 }
 
+export function useOptionalRealtime() {
+  return useContext(RealtimeContext)
+}
+
 export function useConversationRealtime(conversationId: string) {
   const realtime = useRealtime()
   return {

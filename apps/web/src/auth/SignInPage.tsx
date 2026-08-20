@@ -9,6 +9,7 @@ import {
   login,
   useSession,
 } from './session'
+import { AppearanceControl } from '../shell/AppearanceControl'
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')
@@ -77,6 +78,9 @@ export function SignInPage() {
 
   return (
     <main className="sign-in-page">
+      <div className="public-appearance">
+        <AppearanceControl />
+      </div>
       <section aria-labelledby="sign-in-heading" className="sign-in-panel">
         <div className="brand-mark" aria-hidden="true">
           A
