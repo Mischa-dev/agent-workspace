@@ -367,12 +367,14 @@ pub async fn create_work_item(
     let finalized = finalize_created(
         transaction,
         actor,
-        work_item_id,
-        command.assignee_actor_id,
-        command.activity_summary,
-        activity_metadata,
-        command.audit_action,
-        audit_metadata,
+        CreatedFinalization {
+            work_item_id,
+            assignee_actor_id: command.assignee_actor_id,
+            activity_summary: command.activity_summary,
+            activity_metadata,
+            audit_action: command.audit_action,
+            audit_metadata,
+        },
     )
     .await?;
     Ok(CreateWorkItemOutcome::Created {
@@ -706,32 +708,36 @@ pub async fn finalize_change(
     })
 }
 
-pub async fn finalize_created(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor: &CommandActor,
+struct CreatedFinalization<'a> {
     work_item_id: Uuid,
     assignee_actor_id: Option<Uuid>,
-    activity_summary: &str,
+    activity_summary: &'a str,
     activity_metadata: serde_json::Value,
-    audit_action: &str,
+    audit_action: &'a str,
     audit_metadata: serde_json::Value,
+}
+
+async fn finalize_created(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    finalization: CreatedFinalization<'_>,
 ) -> Result<FinalizedChange, AppError> {
     let activity_id = insert_activity(
         transaction,
         actor.project_id,
-        work_item_id,
+        finalization.work_item_id,
         actor.actor_id,
         "work_item_created",
-        activity_summary,
-        &activity_metadata,
+        finalization.activity_summary,
+        &finalization.activity_metadata,
     )
     .await?;
-    enqueue_update(transaction, actor.project_id, work_item_id, 1).await?;
+    enqueue_update(transaction, actor.project_id, finalization.work_item_id, 1).await?;
     enqueue_external_work_item_event(
         transaction,
         actor.project_id,
-        work_item_id,
-        assignee_actor_id,
+        finalization.work_item_id,
+        finalization.assignee_actor_id,
         "work_item.assigned",
         "A Work Item was assigned to you",
     )
@@ -739,9 +745,9 @@ pub async fn finalize_created(
     let audit_id = record_audit(
         transaction,
         actor,
-        audit_action,
-        work_item_id,
-        audit_metadata,
+        finalization.audit_action,
+        finalization.work_item_id,
+        finalization.audit_metadata,
     )
     .await?;
     Ok(FinalizedChange {
@@ -958,9 +964,13 @@ mod tests {
 
     #[test]
     fn canonical_text_and_priority_validation_preserves_wire_contracts() {
-        assert_eq!(normalize_title("  Build it  ").unwrap(), "Build it");
         assert_eq!(
-            normalize_description("  line one\nline two  ").unwrap(),
+            normalize_title("  Build it  ").expect("normalize valid title"),
+            "Build it"
+        );
+        assert_eq!(
+            normalize_description("  line one\nline two  ")
+                .expect("normalize valid multiline description"),
             "line one\nline two"
         );
         assert!(normalize_single_line("line one\nline two", 100, false).is_err());
