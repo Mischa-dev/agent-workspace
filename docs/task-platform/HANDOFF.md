@@ -85,7 +85,7 @@ explicit links. Clients own only presentation, navigation, drafts, and cache.
 ## Branch, commit, and PR
 
 - Branch: `codex/task-platform-architecture`
-- Architecture commit: `fb7529161c082f6f48494f069e6621e0eb69d0b0`
+- Architecture commit: `fb752918673f5c866efc49651fb0d756348ae691`
 - Pull request: <https://github.com/Mischa-dev/agent-workspace/pull/87>
 - PR state at handoff: draft documentation PR
 
@@ -160,4 +160,3 @@ Only four owner decisions remain:
 - frontend tests: 28 files, 125 tests passed
 - frontend production build: passed
 - local Markdown link check: passed
-
