@@ -2,23 +2,25 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; source of truth v0.31
+**Status:** M0 through M10 accepted; source of truth v0.33
 
 **Owner:** Mischa Nelson  
-**Date:** August 19, 2026
+**Date:** August 20, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M9 are complete. M9.1
-is authorized by the owner's explicit August 16, 2026 instruction. Any later
-post-version-one milestone requires a new elaboration and explicit owner
-authorization. The task-platform architecture package defines later boundaries
-but does not authorize implementation before its M10 evidence gate and bounded
-milestone entry criteria.
+**Implementation authorization:** Milestones M0 through M10 are complete. M9.1
+was authorized by the owner's explicit August 16, 2026 instruction. M10 was
+authorized by the owner's explicit August 19, 2026 instruction to execute the
+canonical Work Item application-layer work order and is accepted against the
+evidence recorded in `docs/acceptance/m10.md`. The task-platform architecture
+in Decision D-059 fixes later product and engineering boundaries but does not
+authorize TP1 or any later implementation milestone. Each requires bounded
+elaboration and explicit owner authorization.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
 
-### v0.31 — canonical task-platform architecture
+### v0.33 — canonical task-platform architecture
 
 - defined a dedicated task product as another client of the existing canonical
   Work Item engine, never a synchronized second task system
@@ -28,11 +30,43 @@ milestone entry criteria.
 - retained Project ownership, server-resolved Actor authorship, centralized
   policy, optimistic concurrency, idempotency, transactional outbox, and
   Agent Workspace-owned execution and integration links
-- made the accepted M10 application command layer an explicit evidence gate and
-  did not claim that M10, the API, client, standalone mode, or schema additions
-  are implemented or accepted
-- recorded the architecture in Decision D-058 and
+- grounded later writes in the accepted M10 `work_item_commands` boundary while
+  retaining adapter-owned transaction, idempotency, and wire concerns and
+  treating a shared read/query boundary as later TP1 work
+- did not claim that the Task API, generated client, dedicated application,
+  task-only mode, or schema additions are implemented or accepted
+- recorded the architecture in Decision D-059 and
   `docs/task-platform/`
+
+### v0.32 — M10 canonical Work Item application-layer acceptance
+
+- accepted M10 against the locally green implementation commit
+  `cfe675d1007f888775a8deeea32161db05448074`
+- made HTTP and MCP Work Item mutations adapters around the shared
+  `work_item_commands` application layer while preserving every public wire,
+  idempotency, conflict, attribution, activity, audit, outbox, and addressed
+  external-event contract
+- added real-PostgreSQL browser-versus-MCP create and update parity assertions
+  for canonical state and exactly-once activity, audit, and outbox side effects
+- retained intentional HTTP, MCP, structured-comment, board-ranking, GitHub,
+  and sponsored-execution boundaries instead of collapsing them into transport
+  flags
+- recorded the completed local verification matrix in
+  `docs/acceptance/m10.md`; the pull request records final GitHub CI evidence
+
+### v0.31 — M10 canonical Work Item application-layer authorization
+
+- authorized a bounded post-version-one milestone to make HTTP and MCP Work
+  Item mutation paths adapters around one internal command layer
+- required transport-independent command inputs/results, shared authorization
+  and transaction primitives, and exactly-once activity, audit, outbox,
+  realtime, and addressed external-event finalization
+- preserved every public HTTP and MCP contract and documented intentionally
+  distinct browser, MCP, board-ranking, GitHub, and sponsored-execution
+  semantics rather than hiding them behind transport flags
+- excluded a task microservice, second database, synchronization system,
+  dedicated task UI, public SDK, schema rewrite, and unrelated module cleanup
+- recorded the application-command boundary in Decision D-058
 
 ### v0.30 — M9.1 correctness stabilization authorization
 
@@ -7946,16 +7980,39 @@ defaults are not an approval-routing decision. This makes the external
 approval surface reachable without allowing a connector to approve provider
 execution or its own request.
 
-## D-058: A dedicated task product is another client of one canonical Work Item engine
+## D-058: Work Item mutations converge through one internal application-command layer
+
+**Status:** Accepted
+
+**Reason:** Browser HTTP and MCP are transport surfaces over the same Work Item
+model, Actor policy, PostgreSQL transactions, and side effects. Keeping their
+create, update, timeline, audit, outbox, and external-event implementations
+separate already produced correctness drift in M9.1. The server therefore owns
+one `work_item_commands` application layer for normalized values, membership
+authorization, Work Item locking and conflicts, workflow and assignee checks,
+canonical create/subtask and field/status updates, activity/timeline writes,
+audit attribution, transactional outbox invalidation, and addressed external
+events. HTTP and MCP retain their deliberately different wire validation,
+write protection, idempotency key/replay encoding, public response shapes, and
+audit channel metadata. Board ranking, acceptance criteria, links, blocker
+convenience commands, GitHub automation, and Worker sponsorship remain explicit
+domain commands but reuse the shared transaction and finalization primitives;
+they are not forced into a lowest-common-denominator transport operation. This
+is an internal modular-monolith boundary, not a task service or public SDK.
+
+## D-059: A dedicated task product is another client of one canonical Work Item engine
 
 **Status:** Accepted architecture; implementation remains milestone-gated
 
 **Reason:** Agent Workspace already owns one Project-scoped, Actor-authorized,
 optimistic-versioned Work Item model with durable collaboration, activity,
-links, MCP access, and outbox invalidation. A dedicated task experience must use
-those same records and the upcoming canonical M10 application command layer.
-It must not copy or synchronize Tasks into another service, schema, database,
-or repository.
+links, MCP access, outbox invalidation, and the accepted M10
+`work_item_commands` mutation boundary. A dedicated task experience must use
+those same records and reuse the shared create/update commands and transaction
+primitives where they apply. It must not copy or synchronize Tasks into another
+service, schema, database, or repository. M10 did not add a shared read/query
+layer; TP1 must define authorized Task projections without wrapping an HTTP
+handler or duplicating policy.
 
 The first architecture keeps the Rust modular monolith and PostgreSQL migration
 chain, adds a separate task-first web application in this monorepo, and exposes
@@ -7973,8 +8030,8 @@ provider routes, workers, and readiness dependencies. Public multi-tenancy,
 separate services/databases, cross-Project Task moves, and durable offline
 mutation remain future decisions. The detailed boundaries, API proposal,
 migration plan, and gated roadmap live in `docs/task-platform/`; none is
-implementation acceptance, and the first implementation PR waits for M10
-command-layer evidence.
+implementation acceptance. TP1 and every later task-platform milestone require
+separate explicit owner authorization.
 
 ---
 

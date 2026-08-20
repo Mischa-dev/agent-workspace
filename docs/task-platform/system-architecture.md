@@ -2,56 +2,70 @@
 
 ## Selected architecture
 
-Extend the existing Rust modular monolith. M10 supplies transport-independent
-task commands and queries. Existing Agent Workspace HTTP handlers, the new
-versioned task API, MCP, GitHub automation, and internal jobs all adapt to that
-layer. One PostgreSQL schema stores the canonical records and transactional
-outbox. Two React applications consume the server through a generated client,
-but neither owns domain state.
+Extend the existing Rust modular monolith. Accepted M10 supplies a
+transport-independent mutation boundary for canonical create/update operations
+and shared authorization, locking, conflict, version, activity, audit, outbox,
+and addressed-event primitives. Existing Agent Workspace HTTP and MCP adapters
+use that boundary where their semantics overlap. The new versioned Task API must
+reuse it and first extract a canonical command entry point for any still
+surface-owned family. TP1 adds a deliberate authorized query/projection
+boundary; M10 supplied no shared queries. GitHub automation, jobs, and other
+integration-specific commands remain explicit domain adapters. One PostgreSQL
+schema stores canonical records and the transactional outbox. Two React
+applications consume the server through a generated client, but neither owns
+domain state.
 
 ```text
 Agent Workspace web ─┐
-Dedicated task web ──┼──► versioned HTTP adapters ─┐
-MCP / external agent ┤                            │
-GitHub / jobs ───────┘                            ▼
-                                             M10 application layer
-                                      commands + queries + authorization
-                                                   │
-                         ┌─────────────────────────┼──────────────────────┐
-                         ▼                         ▼                      ▼
-                 canonical task domain      linked AW modules     identity/policy
-                         │                         │                      │
-                         └─────────────────────────┼──────────────────────┘
-                                                   ▼
+Dedicated task web ──┼──► HTTP adapters ───────────────┐
+MCP / external agent ┘                                │
+                                                      ▼
+                                      authorized read projections (TP1)
+                                      accepted M10 mutation boundary
+                                                      │
+GitHub / jobs ───────► explicit linked-domain commands│
+                                                      ▼
+                         canonical task records + identity/policy
+                                                      │
+                                                      ▼
                                   PostgreSQL + transactional outbox
-                                                   │
-                                  ┌────────────────┴───────────────┐
-                                  ▼                                ▼
-                        browser invalidation              external event adapter
+                                                      │
+                                  ┌───────────────────┴──────────────┐
+                                  ▼                                  ▼
+                        browser invalidation                external event adapter
 ```
 
 ## Component responsibilities
 
 ### M10 application layer
 
-- Defines command/query input types independent of HTTP or MCP.
-- Resolves and revalidates Actor, Organization, Project, and resource scope.
-- Opens transactions and applies typed domain operations.
-- Enforces expected versions and idempotency before side effects.
-- Writes activity, audit, integration invalidation, and outbox facts in the
-  source transaction.
-- Returns canonical result types plus machine-readable conflicts.
+- Defines `CreateWorkItemCommand` and `UpdateWorkItemCommand` inputs/outcomes
+  independent of HTTP or MCP, including status-through-update and
+  subtask-through-create.
+- Provides shared membership authorization, Work Item lock/conflict, workflow,
+  assignee, version, activity/timeline, audit, outbox, and addressed-event
+  primitives.
+- Applies canonical create/update SQL inside a transaction supplied by the
+  caller and returns transport-neutral outcomes.
+- Does not own transaction begin/commit, idempotency reservation/replay, wire
+  validation, public response projection, or reads.
+- Leaves board ranking, archive/restore, criteria, links, blocker/review,
+  GitHub, and sponsored execution as explicit command families that reuse
+  primitives without pretending to be one common transport operation.
 
-The API does not call existing HTTP handlers, and MCP does not call the API over
-loopback. All transports call the same in-process application layer.
+The new API must not call existing HTTP handlers, and MCP does not call the API
+over loopback. Adapters call the same in-process command for genuinely shared
+operations; surface-specific operations remain explicit until a canonical
+entry point is extracted for another adapter.
 
 ### Canonical task domain
 
-Initially refactor the existing `apps/server/src/work_items.rs` behavior into
-explicit command, query, policy, and projection modules without changing stored
-identity. Keep the server as one crate until boundaries are proven.
+M10 established `apps/server/src/work_item_commands.rs` beside the existing
+`work_items.rs` and `mcp/` adapters without changing stored identity. Keep the
+server as one crate until boundaries are proven. TP1 may add explicit query and
+projection modules only as the new contract demonstrates the seam.
 
-Recommended internal shape after M10 evidence:
+Possible later internal shape after TP1/TP3 evidence:
 
 ```text
 apps/server/src/tasks/
@@ -65,29 +79,36 @@ apps/server/src/tasks/
   links.rs
 ```
 
-This is a target, not authority for a mechanical file split. M10 may establish
-different names; preserve its accepted transaction and command ownership.
+This is a target, not authority for a mechanical file split. Preserve accepted
+`work_item_commands.rs`, caller-owned transaction/idempotency lifecycle, and
+transport response ownership unless later evidence justifies a replacement.
 
 ### HTTP adapters
 
 - Existing `/api/v1/.../work-items` routes remain compatibility adapters.
 - New `/api/task/v1/.../tasks` routes form the client-neutral contract.
-- Both map request authentication, headers, and DTOs into the same commands.
+- Both map request authentication, headers, and DTOs into the same command only
+  where a canonical command entry point exists.
 - Responses use contract projections rather than serializing SQL rows.
 
 ### MCP adapter
 
 MCP keeps tool discovery, annotations, Project-bound credentials, OAuth, MCP
 cursor encoding, and tool-specific result envelopes. Task reads and writes map
-to application queries/commands. Tool behavior must not diverge from HTTP.
+to authorized read projections and accepted commands where applicable. Existing
+MCP reads remain in `mcp/reads.rs` until TP1 establishes a shared boundary.
+Equivalent operations must converge on canonical state/effects, while MCP-only
+subtask, pull-request, blocker/review, and sponsorship semantics retain their
+intentional contracts.
 
 ### Event adapters
 
-The canonical domain emits internal typed event facts. The outbox projects
-minimal invalidation envelopes for browsers. The external-agent adapter creates
-recipient-bound polling records. A later webhook adapter may project a
-privacy-bounded public event. Each adapter has its own delivery cursor and
-deduplication identity; none becomes the source of domain truth.
+Current commands write typed activity plus coarse `work_item.updated` browser
+outbox invalidation and separate recipient-bound external-agent records. M10 did
+not add a generic internal Task-event-fact model. TP6 may introduce a granular
+canonical taxonomy and privacy-bounded projections for later notifications or
+webhooks. Each adapter keeps its own delivery cursor and deduplication identity;
+none becomes the source of domain truth.
 
 ### Web clients
 
@@ -105,9 +126,11 @@ or service boundary.
 
 Transactions lock the aggregate root for compound changes where needed. The
 Task version is the user-visible optimistic token. Child criterion or
-relationship commands participate in the parent version unless M10 evidence
-shows a commutative append can remain independent. Immutable comment append
-uses idempotency and timeline sequence allocation.
+relationship commands participate in the parent version. Current criteria lock
+and advance the parent; criterion update also locks the criterion row. Subtask
+create locks its parent but creates a child at version 1 without advancing the
+parent. Immutable comment append locks the Work Item, uses adapter-owned
+idempotency and timeline sequence allocation, and keeps the current Task version.
 
 ## Read architecture
 
@@ -129,18 +152,23 @@ infrastructure preemptively.
 
 ## Write architecture
 
-Every command follows this order:
+The accepted adapter-plus-command flow follows this order:
 
 1. Resolve the authenticated Actor and fixed tenant/resource identifiers.
 2. Validate syntax and bounded payload sizes.
-3. Begin a database transaction.
-4. Load active Organization/Project membership and authorize the typed action.
-5. Reserve idempotency where applicable.
-6. Lock/load the current aggregate and compare `expectedVersion`.
+3. The adapter begins a database transaction.
+4. Load active Organization/Project membership and authorize the typed action
+   through shared policy primitives.
+5. The adapter reserves transport-scoped idempotency where applicable.
+6. The canonical command/helper locks and loads the aggregate and compares
+   `expectedVersion` where the operation is versioned.
 7. Validate workflow and cross-record invariants.
-8. Apply the mutation and increment the Task version once.
-9. Append Task activity/audit and typed event/outbox facts.
-10. Complete idempotency with the canonical response and commit.
+8. Apply the mutation. Versioned changes advance once; create starts at version
+   1; comment append retains the current version.
+9. Append the operation's accepted activity/timeline, audit, outbox, and
+   addressed external-event effects. Comment append adds a comment timeline
+   entry rather than an activity row.
+10. The adapter completes idempotency with its response and commits.
 
 External calls never occur inside a Task command. GitHub actions and
 notifications are driven by durable jobs/outbox after commit.
@@ -237,9 +265,15 @@ the database first or introduce dual writes.
 
 ## Architecture acceptance tests
 
-1. Browser, MCP, and integration calls reach the same M10 command implementation.
-2. One mutation produces one version increment, one activity fact, one audit
-   fact, and one canonical task outbox fact.
+1. Equivalent browser, MCP, and future Task API operations reach the same
+   canonical command implementation; surface-specific operations are not given
+   artificial parity requirements.
+2. A state-changing versioned command advances once and emits its accepted
+   activity, audit, outbox, and addressed-event effects. Create starts at
+   version 1. Comment append keeps the Task version and emits one comment
+   timeline entry plus audit/outbox/addressed-event effects. No-op and replay
+   behavior preserves the existing transport contract without duplicate domain
+   effects.
 3. Idempotent replay creates no duplicate child record or event.
 4. Conflicting clients receive current version/state with zero partial writes.
 5. Task-only mode starts and completes core flows with provider/GitHub config

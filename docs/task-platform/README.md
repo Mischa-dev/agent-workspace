@@ -1,19 +1,22 @@
 # Task Platform Architecture
 
-Status: architecture proposal, grounded in `main` at `61bb577` (PR #86).
-It defines implementation boundaries but does not claim that the task platform,
-M10, a new API, or a dedicated client has been implemented or accepted.
+Status: accepted architecture proposal, grounded in `main` at
+`3d2947fb7c3765785e860048968c2ada8a4419af` (merged PR #89). M10 is accepted;
+the Task API, generated client, dedicated application, task-only mode, and later
+schema additions remain unimplemented and separately authorization-gated.
 
 ## Recommendation
 
 Build one canonical Task/Work Item domain inside the existing Rust modular
-monolith and PostgreSQL database, then expose it through one M10 application
-command layer to every transport. Keep Agent Workspace as an integrated client,
-add a dedicated task client as a second web application in this monorepo, and
-treat MCP, GitHub, and future integrations as adapters. A Task in the dedicated
-product and a Work Item in the current product are the same record with the same
-UUID, project ownership, version, authorization, activity, and events. There is
-no synchronization boundary.
+monolith and PostgreSQL database. Reuse the accepted M10 `work_item_commands`
+mutation boundary where it applies and add a deliberate authorized read/query
+boundary in TP1. Keep Agent Workspace as an integrated client, add a dedicated
+task client as a second web application in this monorepo, and treat MCP, GitHub,
+and future integrations as adapters without forcing integration-specific
+commands into a lowest-common-denominator transport operation. A Task in the
+dedicated product and a Work Item in the current product are the same record
+with the same UUID, Project ownership, version, authorization, activity, and
+events. There is no synchronization boundary.
 
 Use `Task` in the dedicated product and new client-neutral API. Retain `Work
 Item` in existing Agent Workspace UI, Rust modules, tables, and compatibility
@@ -47,7 +50,7 @@ navigation, presentation, local drafts, filters, and cache.
 
 ## Current-system assessment
 
-The post-PR-#86 implementation already provides:
+The post-PR-#89 implementation already provides:
 
 - Project-scoped `work_items` with UUIDv7 identity, readable project key/number,
   type, status, semantic status category, priority, assignee, rank, archive
@@ -64,8 +67,12 @@ The post-PR-#86 implementation already provides:
   Repository selection, explicit pull-request links, and Work-with-Worker.
 - List and Kanban projections, filtering, stable cursor pagination, conflict
   responses, and server-returned per-resource capabilities.
-- Browser HTTP handlers and local/external-agent MCP tools. Both currently
-  contain task mutation logic; M10 is expected to consolidate that logic.
+- Browser HTTP handlers and local/external-agent MCP tools. Their overlapping
+  top-level create and field/status update paths use the canonical M10 command
+  types; comment append and surface-specific commands reuse shared locking,
+  version, activity, audit, outbox, and external-event finalization primitives.
+  Adapter-owned transaction/idempotency/wire behavior and intentionally
+  surface-specific command SQL remain explicit.
 - Transactional outbox invalidations for browser realtime and a separate
   connection-bound, retained polling stream for external agents.
 
@@ -79,8 +86,9 @@ roadmap items, not evidence of current implementation.
 - **Accepted baseline**: present in `PROJECT_SOURCE_OF_TRUTH.md` or current code.
 - **Architecture decision**: selected by this package for later implementation;
   it is not implementation acceptance.
-- **M10-dependent**: the boundary is fixed, but exact Rust command names and
-  transaction shapes must match M10 evidence.
+- **Accepted M10 boundary**: exact mutation commands and primitives are known;
+  M10 added no shared query/projection layer and retained adapter-owned
+  transaction lifecycle, idempotency replay, and response mapping.
 - **Future option**: deliberately outside the first implementation sequence.
 
 ## Documents
@@ -88,7 +96,7 @@ roadmap items, not evidence of current implementation.
 | Document | Purpose |
 |---|---|
 | [HANDOFF.md](HANDOFF.md) | Branch/PR handoff, decision summary, dependency status, roadmap, and open decisions |
-| [current-system-assessment.md](current-system-assessment.md) | Post-PR-#86 schema, API, MCP, event, frontend, deployment, and gap inventory |
+| [current-system-assessment.md](current-system-assessment.md) | Post-PR-#89 schema, API, MCP, event, frontend, deployment, and gap inventory |
 | [product-spec.md](product-spec.md) | Product thesis, users, vocabulary, experience, scope, and non-goals |
 | [domain-boundaries.md](domain-boundaries.md) | Ownership matrix and attachment rules between task and Agent Workspace domains |
 | [system-architecture.md](system-architecture.md) | Components, data flow, repository structure, and runtime boundaries |
@@ -101,10 +109,15 @@ roadmap items, not evidence of current implementation.
 | [implementation-roadmap.md](implementation-roadmap.md) | Dependency-ordered milestones, acceptance gates, and parallel tracks |
 | [decision-log.md](decision-log.md) | Architecture decisions, risks, and genuinely open owner decisions |
 
-## M10 dependency
+## M10 evidence
 
-This package assumes M10 will establish one transport-independent command/query
-layer for existing Work Item behavior. It does not assume exact module names,
-DTOs, or that M10 is complete. The versioned API must call that layer; it must
-not wrap the current HTTP handlers or duplicate their SQL. See
-[implementation-roadmap.md](implementation-roadmap.md) for the evidence gate.
+M10 established `apps/server/src/work_item_commands.rs` with canonical create
+and update command types, status-through-update, subtask-through-create, and
+shared authorization, locking, conflict, version, activity, audit, outbox, and
+addressed-event primitives. HTTP and MCP continue to own transaction lifecycle,
+idempotency reservation/replay, wire validation, and result projection. Read
+queries remain in their existing modules. The versioned Task API must call the
+accepted commands where applicable, extract a shared command entry point before
+adding a third adapter to a surface-specific mutation, and define authorized
+TP1 projections rather than wrapping an HTTP handler or duplicating policy. See
+[implementation-roadmap.md](implementation-roadmap.md) for the bounded sequence.

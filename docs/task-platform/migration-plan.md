@@ -45,13 +45,14 @@ database:
 Fail the migration if unknown shapes violate the accepted schema; do not repair
 ambiguous data automatically.
 
-## Phase 0: M10 command-layer gate
+## Phase 0: accepted M10 command baseline
 
-M10 must first prove existing browser and MCP mutations delegate to one
-application command layer with unchanged behavior. No task-platform migration
-depends on unverified command names. Contract adapters are introduced only
-after command transaction ownership, idempotency, optimistic conflict, event,
-and audit semantics are evidenced.
+Completed by merged PR #89. M10 proves canonical top-level create and
+field/status update commands plus shared locking, conflict, version,
+activity/timeline, audit, outbox, and addressed-event primitives. Adapters retain
+transaction lifecycle, idempotency reservation/replay, wire validation, and
+response projection. M10 added no shared queries. Surface-specific commands
+remain explicit until another adapter requires a canonical entry point.
 
 ## Phase 1: contract-only rollout
 
@@ -60,9 +61,11 @@ Add OpenAPI schema, generated client, discovery/capabilities, and a read-only
 Compare new and compatibility projections in contract tests for the same IDs,
 versions, and fields.
 
-Then add command endpoints delegating to M10. For every command, run dual-
-surface tests—not dual writes—asserting the same database effects when invoked
-through either route.
+Then add command endpoints. Reuse accepted M10 create/update entry points and
+extract or add a canonical command before exposing a currently handler-owned
+family through another route. Run dual-surface tests—not dual writes—for
+genuinely equivalent operations, asserting canonical database effects while
+preserving documented wire, content, no-op, and response differences.
 
 ## Phase 2: personal Project marker
 
@@ -122,7 +125,10 @@ standalone reads succeed.
 ## Backward-compatible APIs
 
 - Keep current `/api/v1/.../work-items` routes and MCP tool names.
-- Refactor their internals to M10 before or alongside adding new routes.
+- Preserve the completed M10 adapters for shared create/update families. Before
+  adding a Task API route for board, archive/restore, criteria, structured
+  comments, or another surface-owned mutation, extract a canonical command
+  entry point rather than copying the handler SQL.
 - Preserve current field meaning, conflict shapes, and idempotency behavior for
   pinned clients.
 - Do not return task-platform-only required fields from compatibility routes.
@@ -144,7 +150,7 @@ but preserve the initiating Actor and application command.
 
 1. Back up PostgreSQL and required non-secret runtime state; verify checksum and
    restore in a clean location.
-2. Deploy M10-accepted release with no new client behavior.
+2. Use the deployed/validated M10-accepted baseline with no new client behavior.
 3. Deploy read-only contract/capability endpoint dark; run projection parity.
 4. Enable task API reads for operators.
 5. Enable task API writes one command family at a time with contract/effect
@@ -182,14 +188,15 @@ one write path at all stages.
 ## Required migration tests
 
 - fresh schema through latest migration on real PostgreSQL
-- upgrade from accepted post-PR-#86 fixture
+- upgrade from accepted post-PR-#89 fixture
 - upgrade from representative M4/M6/M9 data shapes
 - idempotent startup/provisioning on already-migrated data
 - constraint tests for Project/Actor/parent/relationship/label scope
 - count/key/UUID/version/timeline reconciliation before and after
 - old server compatibility against expanded schema during rollback window
 - new server compatibility with old records and absent optional features
-- cross-client and MCP command-effect parity
+- cross-client and MCP command-effect parity for equivalent operations, with
+  intentional surface distinctions characterized separately
 
 ## Acceptance gate
 

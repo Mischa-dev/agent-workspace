@@ -1,8 +1,12 @@
 # Versioned Task API Contract
 
-Status: proposed public contract. Exact handler-to-command mapping is
-M10-dependent. Existing `/api/v1/.../work-items` routes remain the implemented
-compatibility surface until this contract is delivered.
+Status: proposed public contract, not implementation authorization. M10 is
+accepted: create/update/transition can reuse its canonical commands and subtask
+creation can reuse canonical create. M10 added no queries, and board,
+archive/restore, criteria, structured comment append, and block/unblock require
+a canonical command entry point before this API becomes another adapter.
+Existing `/api/v1/.../work-items` routes remain the implemented compatibility
+surface until this contract is delivered.
 
 ## Principles
 
@@ -41,12 +45,17 @@ POST /api/task/v1/projects/:projectId/tasks/:taskId/transition
 POST /api/task/v1/projects/:projectId/tasks/:taskId/archive
 POST /api/task/v1/projects/:projectId/tasks/:taskId/restore
 POST /api/task/v1/projects/:projectId/tasks/:taskId/move-on-board
+POST /api/task/v1/projects/:projectId/tasks/:taskId/block
+POST /api/task/v1/projects/:projectId/tasks/:taskId/unblock
 ```
 
 `update` accepts only ordinary fields: title, description, type, priority, and
 assignee. Status changes use `transition`; archive/restore and board moves have
 typed commands. Omitted means unchanged; explicit `null` is supported only for
-nullable fields such as assignee.
+nullable fields such as assignee. `block` requires a bounded reason and
+`expectedVersion`; `unblock` requires `expectedVersion`. MCP's current
+`mark_ready_for_review` remains a convenience composition rather than defining
+the neutral unblock contract.
 
 Example detail:
 
@@ -249,7 +258,9 @@ normalized request and the canonical response. Rules:
 - retention: publish the minimum window in discovery; clients must not assume
   indefinite retention
 
-MCP `clientRequestId` maps to the same application idempotency concept.
+MCP `clientRequestId` maps to the same application idempotency concept, while
+MCP and HTTP adapters retain their distinct scopes, replay encodings, and public
+results.
 
 ## Error and retry categories
 

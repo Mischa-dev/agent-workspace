@@ -64,9 +64,10 @@ disabled: Codex, execution, Git worktrees, repositories, GitHub, Worker routes
 ### Readiness
 
 Task-only readiness depends on database connectivity, migrations, identity,
-task command/query layer, static assets, outbox health within accepted bounds,
-and required task jobs. It must not depend on Codex auth, provider processes,
-repository mirrors, GitHub App configuration, or execution profiles.
+authorized Task read projections, canonical mutation entry points, static
+assets, outbox health within accepted bounds, and required task jobs. It must
+not depend on Codex auth, provider processes, repository mirrors, GitHub App
+configuration, or execution profiles.
 
 ### Configuration
 

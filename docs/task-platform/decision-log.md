@@ -1,8 +1,9 @@
 # Task Platform Decision and Risk Log
 
-These decisions define the architecture proposal. They do not declare M10 or
-task-platform implementation accepted. Existing decisions cited from
-`PROJECT_SOURCE_OF_TRUTH.md` remain canonical repository decisions.
+These decisions define the accepted architecture proposal. M10 is accepted by
+source-of-truth Decision D-058; this package does not declare TP1 or any later
+task-platform implementation authorized or accepted. Existing decisions cited
+from `PROJECT_SOURCE_OF_TRUTH.md` remain canonical repository decisions.
 
 ## TP-D001: One canonical task system
 
@@ -38,15 +39,22 @@ migration chain.
 **Reason:** A table rename provides little user value and raises migration/
 rollback risk. A second `tasks` table would violate TP-D001.
 
-## TP-D004: M10 is the sole application command/query boundary
+## TP-D004: New writes reuse the accepted M10 mutation boundary
 
-**Status:** M10-dependent architecture decision
+**Status:** Architecture decision grounded in accepted M10 evidence
 
-**Decision:** New HTTP, compatibility HTTP, MCP, GitHub automation, and jobs
-delegate in-process to M10. No adapter owns domain SQL or calls another adapter.
+**Decision:** New Task HTTP writes reuse `work_item_commands` when a canonical
+command entry point exists. Before a third adapter exposes a currently
+surface-owned operation, extract or add a transport-neutral command entry point.
+Adapters retain transaction/idempotency/wire/result concerns and never call one
+another. TP1 separately defines authorized reads because M10 added no query
+boundary. GitHub automation, jobs, and sponsorship retain their explicit domain
+commands while reusing safe shared primitives.
 
-**Reason:** Transport parity, atomic effects, authorization, idempotency, and
-audit cannot remain reliable with duplicated command implementations.
+**Reason:** Canonical state, conflicts, and transactional effects cannot remain
+reliable with a third duplicated mutation implementation. At the same time,
+M10 deliberately proved that idempotency encoding, public response mapping, and
+surface-specific commands do not belong in one lowest-common-denominator API.
 
 ## TP-D005: Client-neutral versioned Task API
 
@@ -144,7 +152,7 @@ disclosure boundaries. A simplistic implementation would corrupt semantics.
 | Permission drift between clients | Data disclosure or inconsistent actions | Server-only centralized policy and returned capability hints |
 | Event duplication | Duplicate notifications/integration writes | UUID event ID, at-least-once contract, consumer dedupe, canonical refetch |
 | Schema ownership ambiguity | Adapters add conflicting fields/tables | Task module owns core; explicit link-table ownership matrix |
-| M10 assumptions are wrong | API duplicates current handler logic | Hard evidence gate before write API; exact names deferred |
+| M10 boundary is overstated | API assumes nonexistent queries or treats helper reuse as a complete command | TP1 owns read projections; TP3 inventories each family and extracts a canonical entry point before adding another adapter |
 | Migration/rollback loss | IDs/history/links lost | In-place adoption, additive schema, inventory, restore and prior-binary test |
 | Shared UI over-coupling | Conditional product shell and blocked releases | Share client first; primitives only after two implementations |
 | Task-only mode accidentally starts execution | Secrets/process attack surface | Allowlisted mode, route/worker gating, negative listener/process tests |

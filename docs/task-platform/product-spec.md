@@ -34,7 +34,7 @@ Initial jobs to be done:
 |---|---|---|
 | Canonical record | Calls it a Task | Calls it a Work Item |
 | Identity | Same `work_items.id` | Same `work_items.id` |
-| Core mutations | Same M10 commands | Same M10 commands |
+| Core mutations | Same canonical application operations | Same canonical application operations |
 | Authorization | Same Actor/Organization/Project policy | Same policy |
 | Core activity/events | Same canonical stream | Same canonical stream |
 | Navigation | Task-first | Conversation/execution-first |
@@ -42,6 +42,11 @@ Initial jobs to be done:
 
 The dedicated client may deep-link to integrated features. It must not implement
 Agent Runs, provider sessions, Git worktrees, or GitHub synchronization.
+Accepted M10 already supplies canonical create/update operations and shared
+mutation primitives. Any currently handler-owned family must gain a canonical
+command entry point before the dedicated Task API exposes it; “same operation”
+does not mean every surface must expose MCP-only or Agent Workspace-only
+convenience commands.
 
 ## Standalone terminology
 

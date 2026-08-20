@@ -1,5 +1,10 @@
 # Events, Realtime, and Integrations
 
+Status: target architecture for TP6, not a claim that M10 implemented a generic
+Task-event-fact stream. The accepted baseline has typed Work Item activity,
+coarse `work_item.updated` browser outbox invalidation, and separate addressed
+external-agent events.
+
 ## Event model
 
 Separate four concepts:
@@ -12,10 +17,11 @@ Separate four concepts:
 
 An event is not a second write model. Consumers refetch canonical state.
 
-## Canonical taxonomy
+## Target canonical taxonomy
 
 Use namespaced, past-tense event types. Version each envelope and payload
-schema independently where useful.
+schema independently where useful. These `task.*` names are the proposed TP6
+public/internal taxonomy, not current M10 event names.
 
 ### Task lifecycle
 
@@ -55,9 +61,14 @@ or link changed.
 
 ## Durable versus ephemeral
 
-Durable facts include every accepted Task mutation, immutable comment append,
-relationship/link change, and automation transition. They commit in the source
-transaction with Task version, activity, audit, and outbox insertion.
+The target durable model covers every accepted Task mutation, immutable comment
+append, relationship/link change, and automation transition in the source
+transaction. Effects remain operation-specific: versioned changes advance the
+Task and append activity/audit/outbox/addressed-event effects; current comment
+append retains the Task version and adds a comment timeline entry plus
+audit/outbox/addressed-event effects rather than an activity row. TP6 must map
+existing facts without rewriting history or pretending the granular taxonomy is
+already stored.
 
 Ephemeral signals include typing, hover/presence, drag preview, optimistic local
 state, and stream progress. They may be dropped and must never be required for

@@ -1,30 +1,33 @@
 use axum::http::StatusCode;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::McpPrincipal;
 use crate::{
     AppState,
     error::AppError,
-    external_events::enqueue_external_work_item_event,
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
     message_content::MessageContent,
-    outbox::{OutboxEventPayload, WorkItemUpdatedPayload, enqueue_typed},
-    policy::{
-        Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
+    policy::{Action, ActorKind, Decision},
+    work_item_commands::{
+        AllocatedNumberMetadata, AuditAttribution, AuditVersionMetadata, ChangeFinalization,
+        CommandActor, ConflictKind, CreateWorkItemCommand, CreateWorkItemOutcome, LockedWorkItem,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, advance_version, authorize_mutation,
+        conflict_kind, create_work_item as execute_create_work_item, enqueue_update,
+        finalize_change, finalize_comment, insert_activity as insert_work_item_activity,
+        lock_membership, lock_work_item, record_audit, resolve_status, transition_allowed,
+        update_work_item_by_id,
     },
-    work_items::insert_work_item_activity,
 };
 
-const MAX_TITLE_CHARACTERS: usize = 240;
-const MAX_DESCRIPTION_CHARACTERS: usize = 100_000;
+const MAX_TITLE_CHARACTERS: usize = crate::work_item_commands::MAX_TITLE_CHARACTERS;
+const MAX_DESCRIPTION_CHARACTERS: usize = crate::work_item_commands::MAX_DESCRIPTION_CHARACTERS;
 const MAX_UPDATE_CHARACTERS: usize = 20_000;
 const MAX_BLOCKED_REASON_CHARACTERS: usize = 2_000;
-const BOARD_RANK_STEP: i64 = 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -168,19 +171,6 @@ impl WriteResult {
     }
 }
 
-#[derive(Debug, FromRow)]
-struct LockedWorkItem {
-    id: Uuid,
-    version: i64,
-    title: String,
-    description: String,
-    status_id: Uuid,
-    priority: String,
-    assignee_actor_id: Option<Uuid>,
-    archived: bool,
-    blocked_reason: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictProjection {
@@ -207,12 +197,6 @@ impl From<&LockedWorkItem> for ConflictProjection {
             blocked_reason: item.blocked_reason.clone(),
         }
     }
-}
-
-#[derive(Debug, FromRow)]
-struct MembershipRow {
-    role: String,
-    project_archived: bool,
 }
 
 pub async fn create_work_item(
@@ -257,16 +241,7 @@ pub async fn create_work_item(
         if let Some(result) = authorize_write(&mut transaction, principal).await? {
             return Ok(result);
         }
-        if let Some(actor_id) = assignee_actor_id
-            && !membership_exists(&mut transaction, principal.project_id, actor_id).await?
-        {
-            return Ok(WriteResult::invalid("assigneeActorId"));
-        }
-        let scope = resource_bound_scope(
-            "mcp_work_items",
-            principal.project_id,
-            "create",
-        )?;
+        let scope = resource_bound_scope("mcp_work_items", principal.project_id, "create")?;
         let request_hash = RequestHash::for_value(&arguments)?;
         let reservation = match reserve(
             &mut transaction,
@@ -283,97 +258,46 @@ pub async fn create_work_item(
             }
             IdempotencyOutcome::Reserved(reservation) => reservation,
         };
-        let number = sqlx::query_scalar::<_, i64>(
-            "UPDATE project_counters SET next_work_item_number = next_work_item_number + 1, updated_at = now() WHERE project_id = $1 RETURNING next_work_item_number - 1",
-        )
-        .bind(principal.project_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let (type_id, status_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
-            r#"
-            SELECT type.id, status.id
-            FROM work_item_types type
-            CROSS JOIN work_item_statuses status
-            WHERE type.project_id = $1 AND type.enabled AND type.is_default
-              AND status.project_id = $1 AND status.enabled AND status.is_default
-            "#,
-        )
-        .bind(principal.project_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let board_rank = sqlx::query_scalar::<_, i64>(
-            "SELECT COALESCE(max(board_rank), 0) + $3 FROM work_items WHERE project_id = $1 AND status_id = $2",
-        )
-        .bind(principal.project_id)
-        .bind(status_id)
-        .bind(BOARD_RANK_STEP)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let work_item_id = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO work_items (
-                id, project_id, number, title, description, type_id, status_id,
-                priority, assignee_actor_id, created_by_actor_id, board_rank
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            "#,
-        )
-        .bind(work_item_id)
-        .bind(principal.project_id)
-        .bind(number)
-        .bind(title)
-        .bind(description)
-        .bind(type_id)
-        .bind(status_id)
-        .bind(priority)
-        .bind(assignee_actor_id)
-        .bind(principal.actor_id)
-        .bind(board_rank)
-        .execute(&mut *transaction)
-        .await?;
-        let activity_id = insert_work_item_activity(
+        let outcome = execute_create_work_item(
             &mut transaction,
-            principal.project_id,
-            work_item_id,
-            principal.actor_id,
-            "work_item_created",
-            "Work Item created through MCP",
-            &serde_json::json!({"number": number}),
+            &mcp_actor(principal, arguments.client_request_id.clone()),
+            CreateWorkItemCommand {
+                title: &title,
+                description: &description,
+                type_id: None,
+                status_id: None,
+                priority: &priority,
+                assignee_actor_id,
+                parent_work_item_id: None,
+                activity_summary: "Work Item created through MCP",
+                activity_metadata: serde_json::json!({}),
+                activity_number_metadata: AllocatedNumberMetadata::Include,
+                audit_action: "work_item.mcp_created",
+                audit_metadata: serde_json::json!({}),
+            },
         )
         .await?;
-        enqueue_update(&mut transaction, principal.project_id, work_item_id, 1).await?;
-        enqueue_external_work_item_event(
-            &mut transaction,
-            principal.project_id,
-            work_item_id,
-            assignee_actor_id,
-            "work_item.assigned",
-            "A Work Item was assigned to you",
-        )
-        .await?;
-        let result_id = insert_mcp_audit(
-            &mut transaction,
-            principal,
-            "work_item.mcp_created",
-            work_item_id,
-            &arguments.client_request_id,
-            serde_json::json!({"number": number}),
-        )
-        .await?;
+        let (work_item_id, finalized) = match outcome {
+            CreateWorkItemOutcome::Created {
+                work_item_id,
+                finalized,
+                ..
+            } => (work_item_id, finalized),
+            CreateWorkItemOutcome::InvalidAssignee => {
+                return Ok(WriteResult::invalid("assigneeActorId"));
+            }
+            CreateWorkItemOutcome::ParentNotFound | CreateWorkItemOutcome::ParentArchived(_) => {
+                return Err(AppError::Internal("top-level MCP Work Item had a parent"));
+            }
+        };
         let result = applied(
             work_item_id,
             1,
             vec!["work_item".to_owned()],
-            Some(activity_id),
-            result_id,
+            Some(finalized.activity_id),
+            finalized.audit_id,
         );
-        complete(
-            &mut transaction,
-            &reservation,
-            StatusCode::CREATED,
-            &result,
-        )
-        .await?;
+        complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
         transaction.commit().await?;
         Ok(result)
     }
@@ -432,64 +356,36 @@ async fn set_status_inner(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let Some(current) =
-        lock_work_item(&mut transaction, principal.project_id, work_item_id).await?
-    else {
-        return Ok(not_found());
-    };
-    if let Some(conflict) = version_or_archive_conflict(&current, arguments.expected_version) {
-        return Ok(conflict);
-    }
     let Some(status_id) =
         resolve_status(&mut transaction, principal.project_id, &arguments.status).await?
     else {
         return Ok(WriteResult::invalid("status"));
     };
-    if status_id != current.status_id
-        && !transition_allowed(
-            &mut transaction,
-            principal.project_id,
-            current.status_id,
-            status_id,
-        )
-        .await?
-    {
-        return Ok(WriteResult::InvalidTransition {
-            current_status_id: current.status_id.to_string(),
-            requested_status_id: status_id.to_string(),
-            retry_category: "ask_user_or_choose_allowed_transition".to_owned(),
-        });
-    }
-    if status_id == current.status_id {
-        return finalize_noop(
-            transaction,
-            principal,
-            &reservation,
-            current.id,
-            current.version,
-            "work_item.mcp_status_unchanged",
-            &arguments.client_request_id,
-        )
-        .await;
-    }
-    sqlx::query(
-        "UPDATE work_items SET status_id = $3, version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $4",
+    let outcome = update_work_item_by_id(
+        &mut transaction,
+        &mcp_actor(principal, arguments.client_request_id.clone()),
+        work_item_id,
+        UpdateWorkItemCommand {
+            expected_version: arguments.expected_version,
+            title: None,
+            description: None,
+            type_id: None,
+            status_id: Some(status_id),
+            priority: None,
+            assignee_actor_id: None,
+            summary: "Work Item status updated through MCP",
+            audit_action: "work_item.mcp_status_updated",
+            audit_version_metadata: AuditVersionMetadata::Include,
+        },
     )
-    .bind(principal.project_id)
-    .bind(work_item_id)
-    .bind(status_id)
-    .bind(arguments.expected_version)
-    .execute(&mut *transaction)
     .await?;
-    finalize_work_item_change(
+    finish_update_outcome(
         transaction,
         principal,
         &reservation,
-        work_item_id,
-        arguments.expected_version + 1,
-        vec!["status".to_owned()],
-        "Work Item status updated through MCP",
-        "work_item.mcp_status_updated",
+        arguments.expected_version,
+        outcome,
+        "work_item.mcp_status_unchanged",
         &arguments.client_request_id,
     )
     .await
@@ -565,11 +461,6 @@ async fn update_work_item_inner(
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
     }
-    if let Some(actor_id) = assignee_actor_id
-        && !membership_exists(&mut transaction, principal.project_id, actor_id).await?
-    {
-        return Ok(WriteResult::invalid("assigneeActorId"));
-    }
     let scope = resource_bound_scope("mcp_work_items", work_item_id, "update")?;
     let request_hash = RequestHash::for_value(&arguments)?;
     let reservation = match reserve(
@@ -587,93 +478,36 @@ async fn update_work_item_inner(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let Some(current) =
-        lock_work_item(&mut transaction, principal.project_id, work_item_id).await?
-    else {
-        return Ok(not_found());
-    };
-    if let Some(conflict) = version_or_archive_conflict(&current, arguments.expected_version) {
-        return Ok(conflict);
-    }
-    let title = arguments
-        .title
-        .clone()
-        .unwrap_or_else(|| current.title.clone());
-    let description = arguments
-        .description
-        .clone()
-        .unwrap_or_else(|| current.description.clone());
-    let priority = arguments
-        .priority
-        .clone()
-        .unwrap_or_else(|| current.priority.clone());
-    let assignee = if arguments.clear_assignee == Some(true) {
-        None
+    let assignee_update = if arguments.clear_assignee == Some(true) {
+        Some(None)
     } else {
-        assignee_actor_id.or(current.assignee_actor_id)
+        assignee_actor_id.map(Some)
     };
-    let mut changed = Vec::new();
-    if title != current.title {
-        changed.push("title".to_owned());
-    }
-    if description != current.description {
-        changed.push("description".to_owned());
-    }
-    if priority != current.priority {
-        changed.push("priority".to_owned());
-    }
-    if assignee != current.assignee_actor_id {
-        changed.push("assignee".to_owned());
-    }
-    if changed.is_empty() {
-        return finalize_noop(
-            transaction,
-            principal,
-            &reservation,
-            current.id,
-            current.version,
-            "work_item.mcp_update_unchanged",
-            &arguments.client_request_id,
-        )
-        .await;
-    }
-    if current.assignee_actor_id != assignee {
-        enqueue_external_work_item_event(
-            &mut transaction,
-            principal.project_id,
-            work_item_id,
-            current.assignee_actor_id,
-            "work_item.changed",
-            "A Work Item assignment changed",
-        )
-        .await?;
-    }
-    sqlx::query(
-        r#"
-        UPDATE work_items
-        SET title = $3, description = $4, priority = $5, assignee_actor_id = $6,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND version = $7
-        "#,
+    let outcome = update_work_item_by_id(
+        &mut transaction,
+        &mcp_actor(principal, arguments.client_request_id.clone()),
+        work_item_id,
+        UpdateWorkItemCommand {
+            expected_version: arguments.expected_version,
+            title: arguments.title.as_deref(),
+            description: arguments.description.as_deref(),
+            type_id: None,
+            status_id: None,
+            priority: arguments.priority.as_deref(),
+            assignee_actor_id: assignee_update,
+            summary: "Work Item updated through MCP",
+            audit_action: "work_item.mcp_updated",
+            audit_version_metadata: AuditVersionMetadata::Include,
+        },
     )
-    .bind(principal.project_id)
-    .bind(work_item_id)
-    .bind(title)
-    .bind(description)
-    .bind(priority)
-    .bind(assignee)
-    .bind(arguments.expected_version)
-    .execute(&mut *transaction)
     .await?;
-    finalize_work_item_change(
+    finish_update_outcome(
         transaction,
         principal,
         &reservation,
-        work_item_id,
-        arguments.expected_version + 1,
-        changed,
-        "Work Item updated through MCP",
-        "work_item.mcp_updated",
+        arguments.expected_version,
+        outcome,
+        "work_item.mcp_update_unchanged",
         &arguments.client_request_id,
     )
     .await
@@ -764,51 +598,13 @@ async fn post_update_inner(
     .bind(update)
     .execute(&mut *transaction)
     .await?;
-    let sequence = sqlx::query_scalar::<_, i64>(
-        r#"
-        WITH allocated AS (
-            UPDATE work_items
-            SET next_timeline_sequence = next_timeline_sequence + 1
-            WHERE project_id = $1 AND id = $2
-            RETURNING next_timeline_sequence - 1 AS sequence
-        ), inserted AS (
-            INSERT INTO work_item_timeline_entries (
-                project_id, work_item_id, sequence, kind, comment_id
-            )
-            SELECT $1, $2, sequence, 'comment', $3 FROM allocated
-            RETURNING sequence
-        )
-        SELECT sequence FROM inserted
-        "#,
-    )
-    .bind(principal.project_id)
-    .bind(work_item_id)
-    .bind(comment_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    enqueue_update(
+    let (_sequence, result_id) = finalize_comment(
         &mut transaction,
-        principal.project_id,
+        &mcp_actor(principal, arguments.client_request_id.clone()),
         work_item_id,
+        comment_id,
         current.version,
-    )
-    .await?;
-    enqueue_external_work_item_event(
-        &mut transaction,
-        principal.project_id,
-        work_item_id,
-        current.assignee_actor_id,
-        "work_item.changed",
-        "An assigned Work Item changed",
-    )
-    .await?;
-    let result_id = insert_mcp_audit(
-        &mut transaction,
-        principal,
         "work_item.mcp_update_posted",
-        work_item_id,
-        &arguments.client_request_id,
-        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
     )
     .await?;
     let result = applied(
@@ -832,7 +628,8 @@ pub async fn create_subtask(
         let Some(parent_id) = parse_id(&arguments.parent_work_item_id) else {
             return Ok(WriteResult::invalid("parentWorkItemId"));
         };
-        let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false) else {
+        let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false)
+        else {
             return Ok(WriteResult::invalid("title"));
         };
         let description = match arguments.description.clone() {
@@ -852,74 +649,72 @@ pub async fn create_subtask(
         }
         let scope = resource_bound_scope("mcp_work_items", parent_id, "create_subtask")?;
         let request_hash = RequestHash::for_value(&arguments)?;
-        let reservation = match reserve(&mut transaction, principal.actor_id, &scope, &key, request_hash).await? {
+        let reservation = match reserve(
+            &mut transaction,
+            principal.actor_id,
+            &scope,
+            &key,
+            request_hash,
+        )
+        .await?
+        {
             IdempotencyOutcome::Replay(replay) => {
                 transaction.commit().await?;
                 return Ok(replay.decode::<WriteResult>()?.replayed());
             }
             IdempotencyOutcome::Reserved(reservation) => reservation,
         };
-        let Some(parent) = lock_work_item(&mut transaction, principal.project_id, parent_id).await?
-        else { return Ok(not_found()); };
-        if parent.archived {
-            return Ok(WriteResult::Conflict {
-                work_item_id: parent_id.to_string(), current_version: parent.version,
-                current: Some((&parent).into()),
-                changed_fields: vec!["archived".to_owned()], retry_category: "do_not_retry".to_owned()
-            });
-        }
-        let number = sqlx::query_scalar::<_, i64>(
-            "UPDATE project_counters SET next_work_item_number = next_work_item_number + 1, updated_at = now() WHERE project_id = $1 RETURNING next_work_item_number - 1",
+        let outcome = execute_create_work_item(
+            &mut transaction,
+            &mcp_actor(principal, arguments.client_request_id.clone()),
+            CreateWorkItemCommand {
+                title: &title,
+                description: &description,
+                type_id: None,
+                status_id: None,
+                priority: "no_priority",
+                assignee_actor_id: None,
+                parent_work_item_id: Some(parent_id),
+                activity_summary: "Subtask created through MCP",
+                activity_metadata: serde_json::json!({"parentWorkItemId": parent_id}),
+                activity_number_metadata: AllocatedNumberMetadata::Omit,
+                audit_action: "work_item.mcp_subtask_created",
+                audit_metadata: serde_json::json!({"parentWorkItemId": parent_id}),
+            },
         )
-        .bind(principal.project_id)
-        .fetch_one(&mut *transaction)
         .await?;
-        let (type_id, status_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
-            r#"
-            SELECT type.id, status.id
-            FROM work_item_types type
-            CROSS JOIN work_item_statuses status
-            WHERE type.project_id = $1 AND type.enabled AND type.is_default
-              AND status.project_id = $1 AND status.enabled AND status.is_default
-            "#,
-        )
-        .bind(principal.project_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let board_rank = sqlx::query_scalar::<_, i64>(
-            "SELECT COALESCE(max(board_rank), 0) + $3 FROM work_items WHERE project_id = $1 AND status_id = $2",
-        )
-        .bind(principal.project_id)
-        .bind(status_id)
-        .bind(BOARD_RANK_STEP)
-        .fetch_one(&mut *transaction)
-        .await?;
-        let subtask_id = Uuid::now_v7();
-        sqlx::query(
-            r#"
-            INSERT INTO work_items (
-                id, project_id, number, title, description, type_id, status_id,
-                priority, created_by_actor_id, board_rank, parent_work_item_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'no_priority', $8, $9, $10)
-            "#,
-        )
-        .bind(subtask_id).bind(principal.project_id).bind(number).bind(title).bind(description)
-        .bind(type_id).bind(status_id).bind(principal.actor_id).bind(board_rank).bind(parent_id)
-        .execute(&mut *transaction).await?;
-        let activity_id = insert_work_item_activity(
-            &mut transaction, principal.project_id, subtask_id, principal.actor_id,
-            "work_item_created", "Subtask created through MCP", &serde_json::json!({"parentWorkItemId": parent_id}),
-        ).await?;
-        enqueue_update(&mut transaction, principal.project_id, subtask_id, 1).await?;
-        let result_id = insert_mcp_audit(
-            &mut transaction, principal, "work_item.mcp_subtask_created", subtask_id,
-            &arguments.client_request_id, serde_json::json!({"parentWorkItemId": parent_id, "number": number}),
-        ).await?;
-        let result = applied(subtask_id, 1, vec!["subtask".to_owned()], Some(activity_id), result_id);
+        let (subtask_id, finalized) = match outcome {
+            CreateWorkItemOutcome::Created {
+                work_item_id,
+                finalized,
+                ..
+            } => (work_item_id, finalized),
+            CreateWorkItemOutcome::ParentNotFound => return Ok(not_found()),
+            CreateWorkItemOutcome::ParentArchived(parent) => {
+                return Ok(WriteResult::Conflict {
+                    work_item_id: parent_id.to_string(),
+                    current_version: parent.version,
+                    current: Some((&parent).into()),
+                    changed_fields: vec!["archived".to_owned()],
+                    retry_category: "do_not_retry".to_owned(),
+                });
+            }
+            CreateWorkItemOutcome::InvalidAssignee => {
+                return Err(AppError::Internal("unassigned subtask had an assignee"));
+            }
+        };
+        let result = applied(
+            subtask_id,
+            1,
+            vec!["subtask".to_owned()],
+            Some(finalized.activity_id),
+            finalized.audit_id,
+        );
         complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
         transaction.commit().await?;
         Ok(result)
-    }.await;
+    }
+    .await;
     match result {
         Ok(result) => result,
         Err(error) => command_error("work_item_create_subtask", error),
@@ -1167,29 +962,19 @@ async fn authorize_write(
             retry_category: "request_write_scope".to_owned(),
         }));
     }
-    let membership = sqlx::query_as::<_, MembershipRow>(
-        r#"
-        SELECT pm.role, p.archived_at IS NOT NULL AS project_archived
-        FROM project_memberships pm
-        JOIN projects p ON p.id = pm.project_id
-        JOIN organization_memberships om
-          ON om.organization_id = p.organization_id
-         AND om.actor_id = pm.actor_id
-         AND om.enabled
-        JOIN actors a ON a.id = pm.actor_id
-        WHERE pm.project_id = $1 AND pm.actor_id = $2
-          AND pm.enabled AND a.kind IN ('human', 'external_agent') AND a.status = 'active'
-        FOR SHARE OF pm, p, om, a
-        "#,
-    )
-    .bind(principal.project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
+    let membership = lock_membership(transaction, principal.actor_id, principal.project_id).await?;
     let Some(membership) = membership else {
         return Ok(Some(not_found()));
     };
-    if membership.project_archived {
+    if !membership.enabled
+        || !matches!(
+            principal.actor_kind,
+            ActorKind::Human | ActorKind::ExternalAgent
+        )
+    {
+        return Ok(Some(not_found()));
+    }
+    if membership.project_archived_at.is_some() {
         return Ok(Some(WriteResult::Conflict {
             work_item_id: String::new(),
             current_version: 0,
@@ -1198,20 +983,12 @@ async fn authorize_write(
             retry_category: "do_not_retry".to_owned(),
         }));
     }
-    let Some(role) = parse_membership_role(&membership.role) else {
-        return Ok(Some(not_found()));
-    };
-    let decision = authorize(
-        &Subject::new(
-            principal.actor_id,
-            principal.actor_kind,
-            true,
-            Some(Membership::project(principal.project_id, role, true)),
-            None,
-        ),
+    let decision = authorize_mutation(
+        &mcp_actor(principal, String::new()),
+        &membership,
         Action::McpWrite,
-        Resource::Project(ProjectScope::project(principal.project_id)),
-    );
+        None,
+    )?;
     if !matches!(decision, Decision::Allow) {
         return Ok(Some(WriteResult::PermissionDenied {
             retry_category: "ask_project_owner".to_owned(),
@@ -1220,123 +997,79 @@ async fn authorize_write(
     Ok(None)
 }
 
-fn parse_membership_role(role: &str) -> Option<MembershipRole> {
-    match role {
-        "owner" => Some(MembershipRole::Owner),
-        "admin" => Some(MembershipRole::Admin),
-        "member" => Some(MembershipRole::Member),
-        "viewer" => Some(MembershipRole::Viewer),
-        "worker" => Some(MembershipRole::Worker),
-        _ => None,
-    }
-}
-
-async fn lock_work_item(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-) -> Result<Option<LockedWorkItem>, AppError> {
-    Ok(sqlx::query_as::<_, LockedWorkItem>(
-        r#"
-        SELECT id, version, title, description, status_id, priority,
-               assignee_actor_id, archived_at IS NOT NULL AS archived,
-               blocked_reason
-        FROM work_items
-        WHERE project_id = $1 AND id = $2
-        FOR UPDATE
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_optional(&mut **transaction)
-    .await?)
-}
-
 fn version_or_archive_conflict(
     current: &LockedWorkItem,
     expected_version: i64,
 ) -> Option<WriteResult> {
-    if current.version != expected_version {
-        return Some(WriteResult::Conflict {
-            work_item_id: current.id.to_string(),
-            current_version: current.version,
-            current: Some(current.into()),
-            changed_fields: vec!["version".to_owned()],
-            retry_category: "refetch_then_decide".to_owned(),
-        });
-    }
-    current.archived.then(|| WriteResult::Conflict {
+    conflict_kind(current, expected_version).map(|kind| WriteResult::Conflict {
         work_item_id: current.id.to_string(),
         current_version: current.version,
         current: Some(current.into()),
-        changed_fields: vec!["archived".to_owned()],
-        retry_category: "do_not_retry".to_owned(),
+        changed_fields: vec![match kind {
+            ConflictKind::Version => "version".to_owned(),
+            ConflictKind::Archived => "archived".to_owned(),
+        }],
+        retry_category: match kind {
+            ConflictKind::Version => "refetch_then_decide".to_owned(),
+            ConflictKind::Archived => "do_not_retry".to_owned(),
+        },
     })
 }
 
-async fn resolve_status(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    value: &str,
-) -> Result<Option<Uuid>, AppError> {
-    let id = value.parse::<Uuid>().ok();
-    let rows = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM work_item_statuses
-        WHERE project_id = $1 AND enabled
-          AND (($2::uuid IS NOT NULL AND id = $2) OR lower(name) = lower($3) OR semantic_category = lower($3))
-        ORDER BY position, id LIMIT 2
-        "#,
-    ).bind(project_id).bind(id).bind(value).fetch_all(&mut **transaction).await?;
-    Ok((rows.len() == 1).then(|| rows[0]))
-}
-
-async fn transition_allowed(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    from: Uuid,
-    to: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM work_item_status_transitions WHERE project_id = $1 AND from_status_id = $2 AND to_status_id = $3)",
-    ).bind(project_id).bind(from).bind(to).fetch_one(&mut **transaction).await?)
-}
-
-async fn membership_exists(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    actor_id: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM project_memberships membership
-            JOIN actors actor ON actor.id = membership.actor_id
-            WHERE membership.project_id = $1
-              AND membership.actor_id = $2
-              AND membership.enabled
-              AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent')
-        )
-        "#,
-    )
-    .bind(project_id)
-    .bind(actor_id)
-    .fetch_one(&mut **transaction)
-    .await?)
-}
-
-async fn advance_version(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    expected: i64,
-) -> Result<i64, AppError> {
-    sqlx::query_scalar(
-        "UPDATE work_items SET version = version + 1, updated_at = now() WHERE project_id = $1 AND id = $2 AND version = $3 RETURNING version",
-    ).bind(project_id).bind(work_item_id).bind(expected).fetch_optional(&mut **transaction).await?
-    .ok_or(AppError::Internal("locked MCP Work Item version changed"))
+async fn finish_update_outcome(
+    mut transaction: Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    reservation: &crate::idempotency::IdempotencyReservation,
+    expected_version: i64,
+    outcome: UpdateWorkItemOutcome,
+    noop_action: &str,
+    request_id: &str,
+) -> Result<WriteResult, AppError> {
+    match outcome {
+        UpdateWorkItemOutcome::Applied {
+            work_item_id,
+            version,
+            changed_fields,
+            finalized,
+        } => {
+            let result = applied(
+                work_item_id,
+                version,
+                changed_fields,
+                Some(finalized.activity_id),
+                finalized.audit_id,
+            );
+            complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
+            transaction.commit().await?;
+            Ok(result)
+        }
+        UpdateWorkItemOutcome::Noop(current) => {
+            finalize_noop(
+                transaction,
+                principal,
+                reservation,
+                current.id,
+                current.version,
+                noop_action,
+                request_id,
+            )
+            .await
+        }
+        UpdateWorkItemOutcome::Conflict(current) => {
+            Ok(version_or_archive_conflict(&current, expected_version)
+                .ok_or(AppError::Internal("command returned an empty conflict"))?)
+        }
+        UpdateWorkItemOutcome::NotFound => Ok(not_found()),
+        UpdateWorkItemOutcome::InvalidAssignee => Ok(WriteResult::invalid("assigneeActorId")),
+        UpdateWorkItemOutcome::InvalidTransition {
+            current_status_id,
+            requested_status_id,
+        } => Ok(WriteResult::InvalidTransition {
+            current_status_id: current_status_id.to_string(),
+            requested_status_id: requested_status_id.to_string(),
+            retry_category: "ask_user_or_choose_allowed_transition".to_owned(),
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1351,69 +1084,30 @@ async fn finalize_work_item_change(
     action: &str,
     request_id: &str,
 ) -> Result<WriteResult, AppError> {
-    let activity_id = insert_work_item_activity(
+    let finalized = finalize_change(
         &mut transaction,
-        principal.project_id,
+        &mcp_actor(principal, request_id.to_owned()),
         work_item_id,
-        principal.actor_id,
-        "work_item_updated",
-        summary,
-        &serde_json::json!({"changedFields": changed_fields}),
-    )
-    .await?;
-    enqueue_update(
-        &mut transaction,
-        principal.project_id,
-        work_item_id,
-        version,
-    )
-    .await?;
-    enqueue_external_work_item_event(
-        &mut transaction,
-        principal.project_id,
-        work_item_id,
-        None,
-        "work_item.changed",
-        "An assigned Work Item changed",
-    )
-    .await?;
-    let result_id = insert_mcp_audit(
-        &mut transaction,
-        principal,
-        action,
-        work_item_id,
-        request_id,
-        serde_json::json!({"changedFields": changed_fields, "version": version}),
+        ChangeFinalization {
+            activity_kind: "work_item_updated",
+            summary,
+            audit_action: action,
+            activity_payload: serde_json::json!({"changedFields": changed_fields}),
+            audit_metadata: serde_json::json!({"changedFields": changed_fields, "version": version}),
+            version,
+        },
     )
     .await?;
     let result = applied(
         work_item_id,
         version,
         changed_fields,
-        Some(activity_id),
-        result_id,
+        Some(finalized.activity_id),
+        finalized.audit_id,
     );
     complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
     transaction.commit().await?;
     Ok(result)
-}
-
-async fn enqueue_update(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    version: i64,
-) -> Result<(), AppError> {
-    enqueue_typed(
-        transaction,
-        project_id,
-        OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
-            work_item_id,
-            version,
-        }),
-    )
-    .await?;
-    Ok(())
 }
 
 async fn insert_mcp_audit(
@@ -1424,35 +1118,30 @@ async fn insert_mcp_audit(
     request_id: &str,
     metadata: serde_json::Value,
 ) -> Result<Uuid, AppError> {
-    let audit_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, authentication_class, action, target_kind,
-            target_id, outcome, request_id, metadata, channel, client_name,
-            mcp_credential_id, mcp_oauth_grant_id,
-            external_agent_connection_id
-        ) VALUES (
-            $1, $2, $3, $4, $5, 'work_item', $6, 'succeeded', $7, $8,
-            'mcp', $9, $10, $11, $12
-        )
-        "#,
+    record_audit(
+        transaction,
+        &mcp_actor(principal, request_id.to_owned()),
+        action,
+        target_id,
+        metadata,
     )
-    .bind(audit_id)
-    .bind(principal.actor_id)
-    .bind(principal.project_id)
-    .bind(principal.authentication_class)
-    .bind(action)
-    .bind(target_id)
-    .bind(request_id)
-    .bind(metadata)
-    .bind(&principal.client_name)
-    .bind(principal.mcp_credential_id)
-    .bind(principal.oauth_grant_id)
-    .bind(principal.external_agent_connection_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(audit_id)
+    .await
+}
+
+fn mcp_actor(principal: &McpPrincipal, request_id: String) -> CommandActor {
+    CommandActor {
+        actor_id: principal.actor_id,
+        actor_kind: principal.actor_kind,
+        project_id: principal.project_id,
+        audit: AuditAttribution::Mcp {
+            authentication_class: principal.authentication_class,
+            request_id,
+            client_name: principal.client_name.clone(),
+            mcp_credential_id: principal.mcp_credential_id,
+            oauth_grant_id: principal.oauth_grant_id,
+            external_agent_connection_id: principal.external_agent_connection_id,
+        },
+    }
 }
 
 async fn finalize_noop(
@@ -1509,11 +1198,7 @@ fn parse_id(value: &str) -> Option<Uuid> {
 }
 
 fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Option<String> {
-    let value = value.trim().to_owned();
-    ((!value.is_empty() || allow_empty)
-        && value.chars().count() <= max_characters
-        && !value.chars().any(char::is_control))
-    .then_some(value)
+    crate::work_item_commands::normalize_single_line(&value, max_characters, allow_empty).ok()
 }
 
 fn command_error(command: &str, error: AppError) -> WriteResult {

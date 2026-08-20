@@ -130,11 +130,16 @@ the Integration Actor initiated a change.
 
 ## External agents and MCP
 
-MCP is an adapter over application queries and commands. Its current tools are
-Project-scoped and already enforce Actor identity, expected versions,
-idempotency, audit, and bounded polling. After M10, MCP handlers must delegate
-to the same command/query layer as both HTTP clients and retain transport-only
-concerns: schema annotation, tool naming, cursor encoding, and result mapping.
+MCP is an adapter over Project-scoped reads and commands. Its current tools
+enforce Actor identity, expected versions, idempotency, audit, and bounded
+polling. After accepted M10, overlapping create and field/status updates use the
+same canonical commands as HTTP, and comments/surface-specific mutations reuse
+shared primitives where applicable. MCP reads remain in `mcp/reads.rs`; TP1 must
+define a deliberate authorized projection boundary before another read client
+is added. MCP retains transport-only concerns such as schema annotation, tool
+naming, cursor encoding, idempotency replay, and result mapping. MCP-only
+subtask, pull-request, blocker/review, and sponsored-execution semantics are not
+forced into artificial HTTP parity.
 
 External agent runtimes own their model, memory, prompts, schedules, and loops.
 The platform owns only their Actor, credential, memberships, authorized data,

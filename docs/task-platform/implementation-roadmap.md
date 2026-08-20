@@ -1,7 +1,7 @@
 # Implementation Roadmap
 
-This backlog is dependency-ordered. Milestone names here are task-platform
-planning names, not claims that repository M10 or later milestones are accepted.
+This backlog is dependency-ordered. Repository M10 is accepted. TP1 through TP8
+are planning names, not implementation authorization or acceptance.
 
 ## Dependency graph
 
@@ -27,35 +27,38 @@ TP3 write API ───────► TP4 dedicated shell/core flows
                    TP8 migration/acceptance
 ```
 
-## M10 dependency gate
+## Accepted M10 baseline
 
-### Assumed scope
+PR #89 established `apps/server/src/work_item_commands.rs` with
+`CreateWorkItemCommand`, `UpdateWorkItemCommand`, canonical create/update,
+status-through-update, subtask-through-create, and shared authorization, lock,
+conflict, version, activity/timeline, audit, outbox, and addressed-event
+primitives. Real-PostgreSQL parity proves equivalent browser/MCP top-level
+create and common-field update reach equal canonical row state and each
+state-changing call adds one activity, audit, and outbox row.
 
-M10 provides transport-independent application commands/queries for existing
-Work Item behavior, central transaction ownership, server-resolved Actor,
-centralized policy, optimistic versioning, idempotency, activity/audit, outbox,
-and addressed external-agent event effects. Browser and MCP adapters use it.
+The accepted boundary is intentionally narrower than the earlier assumption:
 
-### Required evidence
+- M10 provides no shared queries or read DTOs.
+- adapters begin/commit transactions, reserve/complete idempotency, validate
+  wires, and project their public results
+- comment append retains the current Task version, adds one comment timeline
+  entry rather than activity, and shares only finalization; structured browser
+  content and MCP bounded text remain distinct
+- subtask create locks the parent and creates child version 1 without advancing
+  the parent; acceptance criteria lock and advance their parent
+- board move, archive/restore, criteria, Thread/Repository links, MCP pull-
+  request/blocker/review commands, GitHub automation, and sponsorship remain
+  explicit command families that reuse primitives where applicable
+- M10 retained coarse `work_item.updated` outbox invalidation and addressed
+  external events rather than introducing a generic Task-event-fact model
 
-- documented command/query boundaries and DTO ownership
-- browser/MCP effect-parity tests for create, update, transition, criterion,
-  comment, subtask, blocked/review, links, archive/restore, and conflicts
-- exactly-once domain effect under idempotent replay
-- source-transaction activity/audit/outbox/external-event behavior
-- no transport SQL for migrated command families
-- real PostgreSQL concurrency tests
-
-### Decisions that wait for evidence
-
-- exact Rust module and command type names
-- whether comment append is an aggregate-version or append-only idempotent
-  command in the canonical layer
-- exact internal event-fact representation
-- child-resource locking granularity
-- which current response projections can be shared versus remapped
-
-These details do not reopen the one-engine, one-database, one-Actor decision.
+Future parity is scoped to equivalent operations. Top-level create, common
+field update, and status transitions can compare canonical state/effects.
+Comment tests compare accepted side effects and plain-text projection while
+preserving transport content differences. HTTP-only and MCP-only commands gain
+cross-surface parity only if a counterpart is later added. Conflict semantics
+converge, but public envelopes remain transport-specific.
 
 ## TP1: versioned contract and read API
 
@@ -72,7 +75,8 @@ Writes, new schema, task client shell, labels, saved views, imports, webhooks.
 
 - add contract package and deterministic generation tooling
 - define strict schemas, examples, errors, pagination, unknown-enum behavior
-- add `/api/task/v1` router and read adapters to M10 queries
+- add `/api/task/v1` router plus deliberate authorized query/projection modules
+  over existing canonical rows; do not wrap an HTTP handler
 - add authorized global My Tasks projection
 - add schema conformance and compatibility projection tests
 - document contract revision/deprecation metadata
@@ -90,8 +94,8 @@ all responses validate; no unauthorized count/existence leak; CI is green.
 
 ### Parallelization
 
-Schema/examples and authorized query planning can proceed in parallel after M10
-query ownership is known. One owner resolves final wire naming.
+Schema/examples and authorized query ownership may be designed in parallel
+inside TP1. One owner resolves final wire naming and projection ownership.
 
 ## TP2: shared TypeScript client
 
@@ -128,7 +132,7 @@ generated types but cannot claim integration.
 ### Scope
 
 Expose create, update, transition, board move, archive/restore, criteria,
-comments, subtasks, and blocked-state commands through `/api/task/v1`.
+comments, subtasks, and explicit block/unblock commands through `/api/task/v1`.
 
 ### Non-goals
 
@@ -136,17 +140,24 @@ Arbitrary PATCH, bulk, labels, import/export, Agent Workspace execution flows.
 
 ### Tasks
 
-- map HTTP authentication/CSRF/idempotency into M10 commands
+- map create, update, transition, and subtask routes into accepted M10 commands
+- extract or add canonical command entry points for board move,
+  archive/restore, criteria, structured comment append, and block/unblock before
+  the Task API becomes another adapter for each family
+- keep HTTP authentication, CSRF, transaction, idempotency reservation/replay,
+  and response projection in the adapter
 - produce stable conflict/error/retry envelopes
 - add per-resource capabilities and transition targets
-- prove compatibility-route and MCP effect parity
+- prove compatibility-route and MCP effect parity only where operations are
+  genuinely equivalent; retain documented surface-specific distinctions
 - add metrics by command/result without content logging
 
 ### Tests and exit criteria
 
 Real PostgreSQL concurrent edits, idempotent replays/payload mismatch, revoked
-principal, role matrix, invalid transition, atomic activity/audit/outbox, and
-same result effects across transports. No handler-specific SQL.
+principal, role matrix, invalid transition, atomic accepted side effects, and
+same canonical effects across equivalent transports. New Task API handlers own
+no duplicated mutation SQL; each invokes a canonical command entry point.
 
 ## TP4: dedicated application shell and core flows
 
@@ -195,7 +206,7 @@ arbitrary bulk patch.
 
 ### Tasks
 
-- design additive migrations and M10 commands per feature
+- design additive migrations and canonical application commands per feature
 - add API/schema/client/UI vertically one feature at a time
 - add activity/audit/events and policy actions
 - index/query-plan filtered views
@@ -289,8 +300,8 @@ and task-only independence.
 
 ## Safe parallel tracks
 
-- Contract prose/examples and UX exploration can run while M10 is implemented,
-  but final mapping waits for evidence.
+- Contract prose/examples and UX exploration may use the accepted M10 evidence;
+  final read ownership and wire mapping are TP1 decisions.
 - Task client shell/accessibility work can use generated fixtures after TP1
   schema freeze while TP3 writes are built.
 - Deployment mode inventory can begin read-only while core API/client work lands.
@@ -301,7 +312,7 @@ and task-only independence.
 Do not parallelize competing changes to canonical command semantics, migration
 numbers, or the contract source without a single owning integrator.
 
-## First implementation PR after M10
+## Recommended first implementation PR after M10
 
 Ship **TP1 read-only contract foundation**:
 
@@ -313,4 +324,6 @@ Ship **TP1 read-only contract foundation**:
 - no writes, schema migration, new app, or behavior change
 
 This is the smallest production-shaped proof that the dedicated product can
-consume the same canonical model through a stable client-neutral boundary.
+consume the same canonical model through a stable client-neutral boundary. It
+remains unimplemented and requires explicit owner authorization before work
+begins.

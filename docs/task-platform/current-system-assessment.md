@@ -1,8 +1,9 @@
 # Current System Assessment
 
-Assessment base: `main` at `61bb577034d77dbcdb1d06f141036f51ede4bb7f`
-(merge of PR #86), inspected August 19, 2026. This is implementation evidence,
-not a claim about the not-yet-implemented M10 layer.
+Assessment base: `main` at `3d2947fb7c3765785e860048968c2ada8a4419af`
+(merge of PR #89), inspected August 20, 2026. This includes accepted M10
+implementation evidence; later Task API, client, deployment-mode, and schema
+work remains proposed.
 
 ## Storage and schema
 
@@ -92,9 +93,15 @@ bearers. External-agent connections reuse the MCP boundary and add connection-
 bound polling, credential rotation/revocation, approval tools, and human-
 sponsored Worker requests.
 
-Current browser and MCP implementations share concepts and policy but retain
-mutation logic in separate modules. That is the concrete reason M10 must become
-the single application command layer before another write transport is added.
+Accepted M10 added `apps/server/src/work_item_commands.rs`. Browser and MCP
+top-level create plus common field/status updates now call its canonical command
+types; MCP subtask creation reuses canonical create. Comment append and
+surface-specific mutations reuse its authorization, locks, conflict/version,
+activity, audit, outbox, and addressed-event primitives where applicable.
+Adapters deliberately retain transaction lifecycle, idempotency reservation and
+replay encoding, wire validation, and response mapping. Board, archive/restore,
+criteria, link, blocker/review, GitHub, and sponsored-execution behavior remains
+explicit rather than pretending every surface exposes the same command.
 
 ## Realtime and external event delivery
 
@@ -189,7 +196,12 @@ Task module.
 
 ## Concrete gaps before a dedicated client
 
-- M10 application command/query evidence and transport effect parity
+- a deliberate authorized Task query/projection boundary; M10 added no shared
+  queries or read DTOs
+- canonical command entry points for any currently handler-owned mutation
+  before the versioned Task API becomes a third adapter for that family
+- parity evidence scoped to genuinely overlapping operations rather than
+  identical browser/MCP coverage for surface-specific commands
 - reviewed versioned Task contract and strict generated client
 - dedicated shell and task-only capability/runtime mode
 - stable Personal Project marker and Inbox provisioning
