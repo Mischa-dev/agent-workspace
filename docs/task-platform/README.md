@@ -87,6 +87,7 @@ roadmap items, not evidence of current implementation.
 
 | Document | Purpose |
 |---|---|
+| [HANDOFF.md](HANDOFF.md) | Branch/PR handoff, decision summary, dependency status, roadmap, and open decisions |
 | [current-system-assessment.md](current-system-assessment.md) | Post-PR-#86 schema, API, MCP, event, frontend, deployment, and gap inventory |
 | [product-spec.md](product-spec.md) | Product thesis, users, vocabulary, experience, scope, and non-goals |
 | [domain-boundaries.md](domain-boundaries.md) | Ownership matrix and attachment rules between task and Agent Workspace domains |
