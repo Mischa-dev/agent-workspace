@@ -1,7 +1,7 @@
 # M10 Work Item mutation inventory
 
-Status: implementation baseline  
-Baseline: `61bb577034d77dbcdb1d06f141036f51ede4bb7f` (merged PR #86)  
+Status: implementation baseline
+Baseline: `61bb577034d77dbcdb1d06f141036f51ede4bb7f` (merged PR #86)
 Recorded: August 19, 2026
 
 ## Baseline
