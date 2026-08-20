@@ -137,4 +137,3 @@ Current attention remains the Project rail, sidebar state, in-page status, and
 realtime connection presentation. A future durable notification center and
 command palette may unify navigation and current-Actor attention after their
 server contracts exist. This overhaul does not fake either capability.
-

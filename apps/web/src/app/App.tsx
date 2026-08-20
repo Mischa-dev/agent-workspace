@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   BrowserRouter,
@@ -6,10 +6,12 @@ import {
   Route,
   Routes,
   useNavigate,
+  useParams,
 } from 'react-router-dom'
 
 import { SessionBoundary } from '../auth/SessionBoundary'
 import { useAuthenticatedSession } from '../auth/session'
+import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { ThemeProvider } from '../theme/ThemeProvider'
 import { AppErrorBoundary } from './AppErrorBoundary'
@@ -47,46 +49,100 @@ export function App() {
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <AppErrorBoundary>
-            <Suspense fallback={<RouteFallback />}>
-              <Routes>
-          <Route element={<SignInPage />} path="/sign-in" />
-          <Route element={<JoinPage />} path="/join" />
-          <Route element={<SessionBoundary />}>
-            <Route element={<Navigate replace to="/home" />} path="/" />
-            <Route element={<HomePage />} path="/home" />
-            <Route element={<CreateProjectPage />} path="/projects/new" />
-            <Route
-              element={<ProjectOverviewPage />}
-              path="/projects/:projectId"
-            />
-            <Route
-              element={<ProjectSettingsPage />}
-              path="/projects/:projectId/settings"
-            />
-            <Route
-              element={<WorkItemsPage />}
-              path="/projects/:projectId/work-items"
-            />
-            <Route
-              element={<WorkItemDetailPage />}
-              path="/projects/:projectId/work-items/:workItemId"
-            />
-            <Route
-              element={<ChannelPage />}
-              path="/projects/:projectId/channels/:channelId"
-            />
-            <Route
-              element={<ConversationArchivePage />}
-              path="/projects/:projectId/conversations/archived"
-            />
-            <Route
-              element={<ThreadPage />}
-              path="/projects/:projectId/threads/:threadId"
-            />
-            <Route element={<NotFoundPage />} path="*" />
-          </Route>
-              </Routes>
-            </Suspense>
+            <Routes>
+              <Route
+                element={
+                  <PublicRouteBoundary>
+                    <SignInPage />
+                  </PublicRouteBoundary>
+                }
+                path="/sign-in"
+              />
+              <Route
+                element={
+                  <PublicRouteBoundary>
+                    <JoinPage />
+                  </PublicRouteBoundary>
+                }
+                path="/join"
+              />
+              <Route element={<SessionBoundary />}>
+                <Route element={<Navigate replace to="/home" />} path="/" />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <HomePage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/home"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <CreateProjectPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/new"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ProjectOverviewPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ProjectSettingsPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/settings"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <WorkItemsPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/work-items"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <WorkItemDetailPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/work-items/:workItemId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ChannelPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/channels/:channelId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ConversationArchivePage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/conversations/archived"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ThreadPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/threads/:threadId"
+                />
+                <Route element={<NotFoundPage />} path="*" />
+              </Route>
+            </Routes>
           </AppErrorBoundary>
         </BrowserRouter>
       </QueryClientProvider>
@@ -94,12 +150,52 @@ export function App() {
   )
 }
 
-function RouteFallback() {
+function PublicRouteBoundary({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<PublicRouteFallback />}>{children}</Suspense>
+}
+
+export function AuthenticatedRouteBoundary({
+  children,
+}: {
+  children: ReactNode
+}) {
+  return (
+    <Suspense fallback={<AuthenticatedRouteFallback />}>
+      {children}
+    </Suspense>
+  )
+}
+
+function PublicRouteFallback() {
   return (
     <main aria-busy="true" className="session-state">
       <div aria-hidden="true" className="brand-mark">A</div>
-      <p>Opening workspace…</p>
+      <p>Opening…</p>
     </main>
+  )
+}
+
+function AuthenticatedRouteFallback() {
+  const session = useAuthenticatedSession()
+  const { projectId = '' } = useParams()
+  const projects = useProjects()
+  const project =
+    projects.data?.projects.find((candidate) => candidate.id === projectId) ??
+    null
+
+  return (
+    <AppShell project={project} user={session.user}>
+      <div aria-busy="true" className="page-content">
+        <p className="visually-hidden" role="status">
+          Loading workspace view.
+        </p>
+        <div aria-hidden="true" className="page-skeleton">
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+    </AppShell>
   )
 }
 

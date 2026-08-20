@@ -16,8 +16,8 @@
 
 .brand-mark,
 .project-button {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: var(--density-control);
+  height: var(--density-control);
   border-radius: var(--radius-lg);
 }
 
@@ -113,7 +113,7 @@
 }
 
 .project-sidebar li .thread-link {
-  min-height: 2rem;
+  min-height: var(--density-control);
   padding-left: 1.75rem;
   font-size: var(--font-size-sm);
 }

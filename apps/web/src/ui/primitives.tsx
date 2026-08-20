@@ -9,6 +9,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'quiet'
 
@@ -153,6 +154,9 @@ export function Dialog({ children, label, onClose, open }: { children: ReactNode
     if (!open) return
     restoreRef.current = document.activeElement as HTMLElement | null
     const panel = panelRef.current
+    const applicationRoot = document.querySelector<HTMLElement>('#root')
+    const applicationWasInert = applicationRoot?.hasAttribute('inert') ?? false
+    applicationRoot?.setAttribute('inert', '')
     panel?.querySelector<HTMLElement>(focusableSelector)?.focus()
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -171,14 +175,16 @@ export function Dialog({ children, label, onClose, open }: { children: ReactNode
     document.addEventListener('keydown', keydown)
     return () => {
       document.removeEventListener('keydown', keydown)
+      if (!applicationWasInert) applicationRoot?.removeAttribute('inert')
       window.requestAnimationFrame(() => restoreRef.current?.focus())
     }
   }, [onClose, open])
   if (!open) return null
-  return (
+  return createPortal(
     <div className="ui-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div aria-label={label} aria-modal="true" className="ui-dialog" ref={panelRef} role="dialog">{children}</div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -250,4 +256,3 @@ export function Announcement({ children, urgent = false }: { children: ReactNode
 export function Toast({ children, urgent = false }: { children: ReactNode; urgent?: boolean }) {
   return <div aria-live={urgent ? 'assertive' : 'polite'} className="ui-toast" role={urgent ? 'alert' : 'status'}>{children}</div>
 }
-

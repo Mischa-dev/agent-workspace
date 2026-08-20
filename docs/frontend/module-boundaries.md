@@ -34,4 +34,3 @@ tokens, base, primitives, shell, and new feature rules live in separate files.
 Old selectors may coexist only in that seam. There is no second router,
 alternate application tree, duplicated task model, or competing realtime
 authority.
-

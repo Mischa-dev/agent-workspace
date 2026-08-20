@@ -58,4 +58,3 @@ describe('appearance preferences', () => {
     ).toEqual(DEFAULT_APPEARANCE)
   })
 })
-

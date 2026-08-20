@@ -243,4 +243,3 @@ export function useRealtimeConnection(): RealtimeContextValue {
 
   return useMemo(() => ({ connection, streams }), [connection, streams])
 }
-

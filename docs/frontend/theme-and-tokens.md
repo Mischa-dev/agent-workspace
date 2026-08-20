@@ -39,4 +39,3 @@ numbers.
 - Reduced-motion mode removes nonessential animation.
 - Density never overrides the 44 px touch-target floor at phone widths.
 - Theme validation is presentation-only and cannot alter server authorization.
-

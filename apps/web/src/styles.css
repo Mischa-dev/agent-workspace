@@ -2112,7 +2112,7 @@ p {
 
 .switcher-backdrop {
   position: fixed;
-  z-index: 60;
+  z-index: var(--layer-toast);
   inset: 0;
   display: grid;
   place-items: start center;
@@ -2302,7 +2302,7 @@ p {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .app-shell {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -2315,7 +2315,7 @@ p {
   .project-rail,
   .project-sidebar {
     position: fixed;
-    z-index: 40;
+    z-index: var(--layer-modal);
     top: 0;
     bottom: 0;
     left: 0;

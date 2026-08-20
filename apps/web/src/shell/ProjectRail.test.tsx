@@ -122,6 +122,9 @@ describe('ProjectRail', () => {
     const onNavigate = vi.fn()
     const documentEscape = vi.fn()
     document.addEventListener('keydown', documentEscape)
+    const applicationRoot = document.createElement('div')
+    applicationRoot.id = 'root'
+    document.body.appendChild(applicationRoot)
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -136,6 +139,7 @@ describe('ProjectRail', () => {
           />
         </MemoryRouter>
       </QueryClientProvider>,
+      { container: applicationRoot },
     )
 
     const searchButton = screen.getByRole('button', {
@@ -143,6 +147,7 @@ describe('ProjectRail', () => {
     })
     fireEvent.click(searchButton)
     expect(searchButton).toHaveAttribute('aria-expanded', 'true')
+    expect(applicationRoot).toHaveAttribute('inert')
 
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
 
@@ -151,6 +156,7 @@ describe('ProjectRail', () => {
     )
     await waitFor(() => expect(searchButton).toHaveFocus())
     expect(searchButton).toHaveAttribute('aria-expanded', 'false')
+    expect(applicationRoot).not.toHaveAttribute('inert')
     expect(documentEscape).not.toHaveBeenCalled()
     expect(onNavigate).not.toHaveBeenCalled()
     document.removeEventListener('keydown', documentEscape)

@@ -1,7 +1,9 @@
 # Current frontend feature inventory
 
-**Baseline:** `61bb577034d77dbcdb1d06f141036f51ede4bb7f` (PR #86)  
-**Captured:** August 19, 2026  
+**Baseline:** `61bb577034d77dbcdb1d06f141036f51ede4bb7f` (PR #86)
+
+**Captured:** August 19, 2026
+
 **Frontend:** React 19, TypeScript 6, Vite 8, TanStack Query 5, React Router 7
 
 ## Baseline evidence
@@ -109,4 +111,3 @@
 4. Realtime socket orchestration can move into a hook without changing context.
 5. Thread timeline/context/run controls and Work Item list/board/detail sections
    are stable responsibility boundaries; no duplicate server model is needed.
-
