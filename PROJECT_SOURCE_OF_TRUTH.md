@@ -2,7 +2,7 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 through M9 accepted; M9.1 merged; M10 canonical Work Item application layer authorized; source of truth v0.31
+**Status:** M0 through M10 accepted; source of truth v0.32
 
 **Owner:** Mischa Nelson  
 **Date:** August 19, 2026
@@ -11,11 +11,28 @@
 is authorized by the owner's explicit August 16, 2026 instruction. Any later
 post-version-one milestone requires a new elaboration and explicit owner
 authorization. M10 is authorized by the owner's explicit August 19, 2026
-instruction to execute the canonical Work Item application-layer work order.
+instruction to execute the canonical Work Item application-layer work order and
+is accepted against the evidence recorded in `docs/acceptance/m10.md`.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.32 — M10 canonical Work Item application-layer acceptance
+
+- accepted M10 against the locally green implementation commit
+  `cfe675d1007f888775a8deeea32161db05448074`
+- made HTTP and MCP Work Item mutations adapters around the shared
+  `work_item_commands` application layer while preserving every public wire,
+  idempotency, conflict, attribution, activity, audit, outbox, and addressed
+  external-event contract
+- added real-PostgreSQL browser-versus-MCP create and update parity assertions
+  for canonical state and exactly-once activity, audit, and outbox side effects
+- retained intentional HTTP, MCP, structured-comment, board-ranking, GitHub,
+  and sponsored-execution boundaries instead of collapsing them into transport
+  flags
+- recorded the completed local verification matrix in
+  `docs/acceptance/m10.md`; the pull request records final GitHub CI evidence
 
 ### v0.31 — M10 canonical Work Item application-layer authorization
 
