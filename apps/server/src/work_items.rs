@@ -17,23 +17,25 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::ActorView,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    external_events::enqueue_external_work_item_event,
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
     message_content::{MessageContent, MessageContentError, MessageNode},
     outbox::{
-        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload,
-        WorkItemUpdatedPayload, enqueue_typed,
+        ConversationCreatedPayload, OutboxConversationKind, OutboxEventPayload, enqueue_typed,
     },
-    policy::{
-        Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
-        authorize,
+    policy::{Action, ActorKind, Decision, MembershipRole},
+    work_item_commands::{
+        AllocatedNumberMetadata, AuditAttribution, AuditVersionMetadata, ChangeFinalization,
+        CommandActor, CreateWorkItemCommand, CreateWorkItemOutcome, ProjectMembership,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
+        create_work_item as execute_create_work_item, finalize_change, finalize_comment,
+        insert_activity, lock_membership, update_work_item_by_id,
     },
 };
 
-const MAX_TITLE_CHARACTERS: usize = 240;
-const MAX_DESCRIPTION_CHARACTERS: usize = 100_000;
+#[cfg(test)]
+const MAX_DESCRIPTION_CHARACTERS: usize = crate::work_item_commands::MAX_DESCRIPTION_CHARACTERS;
 const MAX_SEARCH_CHARACTERS: usize = 120;
 const DEFAULT_PAGE_SIZE: u16 = 50;
 const MAX_PAGE_SIZE: u16 = 100;
@@ -1312,143 +1314,44 @@ async fn update_work_item(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current_row = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
     let capabilities = capabilities(&membership)?;
-    if current_row.version != request.expected_version {
-        let current = work_item_view(current_row, capabilities)?;
-        return work_item_version_conflict_response(current);
-    }
-    if current_row.archived_at.is_some() {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-
-    let type_id = match request.type_id {
-        Some(type_id) => {
-            select_definition(
-                &mut transaction,
-                project_id,
-                "work_item_types",
-                Some(type_id),
-            )
-            .await?
-        }
-        None => current_row.type_id,
-    };
-    let status_id = match request.status_id {
-        Some(status_id) => {
-            select_definition(
-                &mut transaction,
-                project_id,
-                "work_item_statuses",
-                Some(status_id),
-            )
-            .await?
-        }
-        None => current_row.status_id,
-    };
-    if status_id != current_row.status_id {
-        require_status_transition(
-            &mut transaction,
-            project_id,
-            current_row.status_id,
-            status_id,
-        )
-        .await?;
-    }
-    if let Some(assignee_actor_id) = request.assignee_actor_id {
-        validate_assignee(&mut transaction, project_id, assignee_actor_id).await?;
-    }
-    let title = request.title.unwrap_or_else(|| current_row.title.clone());
-    let description = request
-        .description
-        .unwrap_or_else(|| current_row.description.clone());
-    let priority = request
-        .priority
-        .unwrap_or_else(|| current_row.priority.clone());
-    let assignee_actor_id = request
-        .assignee_actor_id
-        .unwrap_or(current_row.assignee_actor_id);
-    let mut changed_fields = Vec::new();
-    if title != current_row.title {
-        changed_fields.push("title");
-    }
-    if description != current_row.description {
-        changed_fields.push("description");
-    }
-    if type_id != current_row.type_id {
-        changed_fields.push("type");
-    }
-    if status_id != current_row.status_id {
-        changed_fields.push("status");
-    }
-    if priority != current_row.priority {
-        changed_fields.push("priority");
-    }
-    if assignee_actor_id != current_row.assignee_actor_id {
-        changed_fields.push("assignee");
-    }
-    if changed_fields.is_empty() {
-        let item = work_item_view(current_row, capabilities)?;
-        complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-        transaction.commit().await?;
-        return work_item_response(StatusCode::OK, item);
-    }
-    if assignee_actor_id != current_row.assignee_actor_id {
-        enqueue_external_work_item_event(
-            &mut transaction,
-            project_id,
-            work_item_id,
-            current_row.assignee_actor_id,
-            "work_item.changed",
-            "A Work Item assignment changed",
-        )
-        .await?;
-    }
-
-    let updated = sqlx::query(
-        r#"
-        UPDATE work_items
-        SET title = $3, description = $4, type_id = $5, status_id = $6,
-            priority = $7, assignee_actor_id = $8,
-            version = version + 1, updated_at = now()
-        WHERE project_id = $1 AND id = $2 AND version = $9
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(title)
-    .bind(description)
-    .bind(type_id)
-    .bind(status_id)
-    .bind(priority)
-    .bind(assignee_actor_id)
-    .bind(request.expected_version)
-    .execute(&mut *transaction)
-    .await?;
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal(
-            "locked Work Item update lost its version",
-        ));
-    }
-    let version = request
-        .expected_version
-        .checked_add(1)
-        .ok_or(AppError::Validation("expectedVersion"))?;
-    record_work_item_change(
+    let outcome = update_work_item_by_id(
         &mut transaction,
-        &headers,
-        &principal,
-        project_id,
+        &browser_actor(&headers, &principal, project_id)?,
         work_item_id,
-        "work_item_updated",
-        "Work Item updated",
-        "work_item.updated",
-        serde_json::json!({"changedFields": changed_fields}),
-        version,
+        UpdateWorkItemCommand {
+            expected_version: request.expected_version,
+            title: request.title.as_deref(),
+            description: request.description.as_deref(),
+            type_id: request.type_id,
+            status_id: request.status_id,
+            priority: request.priority.as_deref(),
+            assignee_actor_id: request.assignee_actor_id,
+            summary: "Work Item updated",
+            audit_action: "work_item.updated",
+            audit_version_metadata: AuditVersionMetadata::Omit,
+        },
     )
     .await?;
+    match outcome {
+        UpdateWorkItemOutcome::NotFound => return Err(AppError::NotFound("work_item")),
+        UpdateWorkItemOutcome::InvalidAssignee => {
+            return Err(AppError::Validation("assigneeActorId"));
+        }
+        UpdateWorkItemOutcome::InvalidTransition { .. } => {
+            return Err(AppError::Conflict("work_item_status", "transition"));
+        }
+        UpdateWorkItemOutcome::Conflict(current) => {
+            if current.version == request.expected_version && current.archived {
+                return Err(AppError::Conflict("work_item", "archived"));
+            }
+            let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
+                .await?
+                .ok_or(AppError::NotFound("work_item"))?;
+            return work_item_version_conflict_response(work_item_view(row, capabilities)?);
+        }
+        UpdateWorkItemOutcome::Noop(_) | UpdateWorkItemOutcome::Applied { .. } => {}
+    }
     let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
         .await?
         .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
@@ -2576,103 +2479,35 @@ async fn create_work_item(
         }
         IdempotencyOutcome::Reserved(reservation) => {
             ensure_default_workflow(&mut transaction, project_id).await?;
-            let type_id = select_definition(
+            let outcome = execute_create_work_item(
                 &mut transaction,
-                project_id,
-                "work_item_types",
-                request.type_id,
+                &browser_actor(&headers, &principal, project_id)?,
+                CreateWorkItemCommand {
+                    title: &request.title,
+                    description: &request.description,
+                    type_id: request.type_id,
+                    status_id: request.status_id,
+                    priority: &request.priority,
+                    assignee_actor_id: request.assignee_actor_id,
+                    parent_work_item_id: None,
+                    activity_summary: "Work Item created",
+                    activity_metadata: serde_json::json!({}),
+                    activity_number_metadata: AllocatedNumberMetadata::Omit,
+                    audit_action: "work_item.created",
+                    audit_metadata: serde_json::json!({}),
+                },
             )
             .await?;
-            let status_id = select_definition(
-                &mut transaction,
-                project_id,
-                "work_item_statuses",
-                request.status_id,
-            )
-            .await?;
-            validate_assignee(&mut transaction, project_id, request.assignee_actor_id).await?;
-            let number = sqlx::query_scalar::<_, i64>(
-                r#"
-                UPDATE project_counters
-                SET next_work_item_number = next_work_item_number + 1,
-                    updated_at = now()
-                WHERE project_id = $1
-                RETURNING next_work_item_number - 1
-                "#,
-            )
-            .bind(project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-            let board_rank = sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(max(board_rank), 0) + $3 FROM work_items WHERE project_id = $1 AND status_id = $2",
-            )
-            .bind(project_id)
-            .bind(status_id)
-            .bind(BOARD_RANK_STEP)
-            .fetch_one(&mut *transaction)
-            .await?;
-            let work_item_id = Uuid::now_v7();
-            sqlx::query(
-                r#"
-                INSERT INTO work_items (
-                    id, project_id, number, title, description, type_id,
-                    status_id, priority, assignee_actor_id, created_by_actor_id,
-                    board_rank
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                "#,
-            )
-            .bind(work_item_id)
-            .bind(project_id)
-            .bind(number)
-            .bind(&request.title)
-            .bind(&request.description)
-            .bind(type_id)
-            .bind(status_id)
-            .bind(&request.priority)
-            .bind(request.assignee_actor_id)
-            .bind(principal.actor_id)
-            .bind(board_rank)
-            .execute(&mut *transaction)
-            .await?;
-            insert_work_item_activity(
-                &mut transaction,
-                project_id,
-                work_item_id,
-                principal.actor_id,
-                "work_item_created",
-                "Work Item created",
-                &serde_json::json!({}),
-            )
-            .await?;
-            enqueue_typed(
-                &mut transaction,
-                project_id,
-                OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
-                    work_item_id,
-                    version: 1,
-                }),
-            )
-            .await?;
-            enqueue_external_work_item_event(
-                &mut transaction,
-                project_id,
-                work_item_id,
-                request.assignee_actor_id,
-                "work_item.assigned",
-                "A Work Item was assigned to you",
-            )
-            .await?;
-            insert_audit_event(
-                &mut transaction,
-                &headers,
-                &principal,
-                project_id,
-                "work_item.created",
-                work_item_id,
-                serde_json::json!({"number": number}),
-            )
-            .await?;
+            let work_item_id = match outcome {
+                CreateWorkItemOutcome::Created { work_item_id, .. } => work_item_id,
+                CreateWorkItemOutcome::InvalidAssignee => {
+                    return Err(AppError::Validation("assigneeActorId"));
+                }
+                CreateWorkItemOutcome::ParentNotFound
+                | CreateWorkItemOutcome::ParentArchived(_) => {
+                    return Err(AppError::Internal("top-level Work Item had a parent"));
+                }
+            };
             let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
                 .await?
                 .ok_or(AppError::Internal("created Work Item is unavailable"))?;
@@ -3223,39 +3058,13 @@ async fn create_work_item_comment(
         .execute(&mut *transaction)
         .await?;
     }
-    let sequence = insert_work_item_comment_timeline_entry(
+    let (sequence, _) = finalize_comment(
         &mut transaction,
-        project_id,
+        &browser_actor(&headers, &principal, project_id)?,
         work_item_id,
         comment_id,
-    )
-    .await?;
-    enqueue_typed(
-        &mut transaction,
-        project_id,
-        OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
-            work_item_id,
-            version: current.version,
-        }),
-    )
-    .await?;
-    enqueue_external_work_item_event(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        None,
-        "work_item.changed",
-        "An assigned Work Item changed",
-    )
-    .await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
+        current.version,
         "work_item.comment_created",
-        work_item_id,
-        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
     )
     .await?;
     let author = fetch_comment_actor_rows(&mut transaction, project_id, &[principal.actor_id])
@@ -3354,37 +3163,6 @@ async fn get_work_item_timeline(
         entries,
         next_cursor,
     }))
-}
-
-async fn select_definition(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    table: &'static str,
-    selected_id: Option<Uuid>,
-) -> Result<Uuid, AppError> {
-    let query = match (table, selected_id) {
-        ("work_item_types", Some(_)) => {
-            "SELECT id FROM work_item_types WHERE project_id = $1 AND id = $2 AND enabled"
-        }
-        ("work_item_statuses", Some(_)) => {
-            "SELECT id FROM work_item_statuses WHERE project_id = $1 AND id = $2 AND enabled"
-        }
-        ("work_item_types", None) => {
-            "SELECT id FROM work_item_types WHERE project_id = $1 AND enabled AND is_default"
-        }
-        ("work_item_statuses", None) => {
-            "SELECT id FROM work_item_statuses WHERE project_id = $1 AND enabled AND is_default"
-        }
-        _ => return Err(AppError::Internal("unknown Work Item definition")),
-    };
-    let mut query = sqlx::query_scalar::<_, Uuid>(query).bind(project_id);
-    if let Some(selected_id) = selected_id {
-        query = query.bind(selected_id);
-    }
-    query
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::Validation("Work Item definition"))
 }
 
 async fn fetch_comment_actor_rows(
@@ -3581,68 +3359,6 @@ async fn timeline_entry_view(
     }
 }
 
-async fn validate_assignee(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    assignee_actor_id: Option<Uuid>,
-) -> Result<(), AppError> {
-    let Some(assignee_actor_id) = assignee_actor_id else {
-        return Ok(());
-    };
-    let valid = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM project_memberships membership
-            JOIN actors actor ON actor.id = membership.actor_id
-            WHERE membership.project_id = $1
-              AND membership.actor_id = $2
-              AND membership.enabled
-              AND actor.status = 'active'
-              AND actor.kind IN ('human', 'external_agent')
-        )
-        "#,
-    )
-    .bind(project_id)
-    .bind(assignee_actor_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    if valid {
-        Ok(())
-    } else {
-        Err(AppError::Validation("assigneeActorId"))
-    }
-}
-
-async fn require_status_transition(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    from_status_id: Uuid,
-    to_status_id: Uuid,
-) -> Result<(), AppError> {
-    let allowed = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM work_item_status_transitions
-            WHERE project_id = $1
-              AND from_status_id = $2
-              AND to_status_id = $3
-        )
-        "#,
-    )
-    .bind(project_id)
-    .bind(from_status_id)
-    .bind(to_status_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    if allowed {
-        Ok(())
-    } else {
-        Err(AppError::Conflict("work_item_status", "transition"))
-    }
-}
-
 async fn project_membership(
     pool: &PgPool,
     actor_id: Uuid,
@@ -3673,26 +3389,14 @@ async fn lock_project_membership(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<ProjectMembershipRow>, AppError> {
-    Ok(sqlx::query_as::<_, ProjectMembershipRow>(
-        r#"
-        SELECT project.id AS project_id,
-               project.archived_at::text AS project_archived_at,
-               membership.role, membership.enabled AS membership_enabled
-        FROM projects project
-        JOIN project_memberships membership ON membership.project_id = project.id
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = membership.actor_id
-         AND organization_membership.enabled
-        WHERE project.id = $1 AND membership.actor_id = $2
-        FOR UPDATE OF project, membership
-        FOR SHARE OF organization_membership
-        "#,
-    )
-    .bind(project_id)
-    .bind(actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?)
+    Ok(lock_membership(transaction, actor_id, project_id)
+        .await?
+        .map(|membership| ProjectMembershipRow {
+            project_id: membership.project_id,
+            project_archived_at: membership.project_archived_at,
+            role: membership.role,
+            membership_enabled: membership.enabled,
+        }))
 }
 
 fn authorize_work_item(
@@ -3701,22 +3405,22 @@ fn authorize_work_item(
     action: Action,
     work_item_id: Option<Uuid>,
 ) -> Result<(), AppError> {
-    let scope = work_item_id.map_or_else(
-        || ProjectScope::project(membership.project_id),
-        |id| ProjectScope::work_item(membership.project_id, id),
-    );
-    let subject = Subject::new(
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
-        true,
-        Some(Membership::project(
-            membership.project_id,
-            membership_role(&membership.role)?,
-            membership.membership_enabled,
-        )),
-        None,
-    );
-    match authorize(&subject, action, Resource::Project(scope)) {
+    let command_actor = CommandActor {
+        actor_id: principal.actor_id,
+        actor_kind: actor_kind(&principal.actor_kind)?,
+        project_id: membership.project_id,
+        audit: AuditAttribution::Browser {
+            session_id: principal.session_id,
+            request_id: None,
+        },
+    };
+    let command_membership = ProjectMembership {
+        project_id: membership.project_id,
+        project_archived_at: membership.project_archived_at.clone(),
+        role: membership.role.clone(),
+        enabled: membership.membership_enabled,
+    };
+    match authorize_mutation(&command_actor, &command_membership, action, work_item_id)? {
         Decision::Allow => Ok(()),
         Decision::Deny(_) if action == Action::WorkItemView => Err(AppError::NotFound("work_item")),
         Decision::Deny(_) => Err(AppError::Forbidden),
@@ -4012,26 +3716,11 @@ fn work_item_view(
 }
 
 fn normalize_title(value: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.chars().count() > MAX_TITLE_CHARACTERS
-        || value.chars().any(char::is_control)
-    {
-        return Err(AppError::Validation("title"));
-    }
-    Ok(value.to_owned())
+    crate::work_item_commands::normalize_title(value)
 }
 
 fn normalize_description(value: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    if value.chars().count() > MAX_DESCRIPTION_CHARACTERS
-        || value
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
-    {
-        return Err(AppError::Validation("description"));
-    }
-    Ok(value.to_owned())
+    crate::work_item_commands::normalize_description(value)
 }
 
 fn normalize_criterion_text(value: &str) -> Result<String, AppError> {
@@ -4088,11 +3777,7 @@ fn default_priority() -> String {
 }
 
 fn validate_priority(value: &str) -> Result<(), AppError> {
-    if matches!(value, "no_priority" | "low" | "medium" | "high" | "urgent") {
-        Ok(())
-    } else {
-        Err(AppError::Validation("priority"))
-    }
+    crate::work_item_commands::validate_priority(value)
 }
 
 fn validate_priority_filter(value: Option<&str>) -> Result<(), AppError> {
@@ -4239,44 +3924,21 @@ async fn record_work_item_change(
     payload: serde_json::Value,
     version: i64,
 ) -> Result<(), AppError> {
-    insert_work_item_activity(
+    finalize_change(
         transaction,
-        project_id,
+        &browser_actor(headers, principal, project_id)?,
         work_item_id,
-        principal.actor_id,
-        kind,
-        summary,
-        &payload,
-    )
-    .await?;
-    enqueue_typed(
-        transaction,
-        project_id,
-        OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
-            work_item_id,
+        ChangeFinalization {
+            activity_kind: kind,
+            summary,
+            audit_action,
+            activity_payload: payload.clone(),
+            audit_metadata: payload,
             version,
-        }),
+        },
     )
     .await?;
-    enqueue_external_work_item_event(
-        transaction,
-        project_id,
-        work_item_id,
-        None,
-        "work_item.changed",
-        "An assigned Work Item changed",
-    )
-    .await?;
-    insert_audit_event(
-        transaction,
-        headers,
-        principal,
-        project_id,
-        audit_action,
-        work_item_id,
-        payload,
-    )
-    .await
+    Ok(())
 }
 
 pub(crate) async fn insert_work_item_activity(
@@ -4288,124 +3950,37 @@ pub(crate) async fn insert_work_item_activity(
     summary: &str,
     payload: &serde_json::Value,
 ) -> Result<Uuid, AppError> {
-    let activity_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_activity (
-            id, project_id, work_item_id, actor_id, kind, summary, payload
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#,
+    insert_activity(
+        transaction,
+        project_id,
+        work_item_id,
+        actor_id,
+        kind,
+        summary,
+        payload,
     )
-    .bind(activity_id)
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(actor_id)
-    .bind(kind)
-    .bind(summary)
-    .bind(payload)
-    .execute(&mut **transaction)
-    .await?;
-    let sequence =
-        allocate_work_item_timeline_sequence(transaction, project_id, work_item_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_timeline_entries (
-            project_id, work_item_id, sequence, kind, activity_id
-        )
-        VALUES ($1, $2, $3, 'activity', $4)
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(sequence)
-    .bind(activity_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(activity_id)
+    .await
 }
 
-async fn allocate_work_item_timeline_sequence(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-) -> Result<i64, AppError> {
-    sqlx::query_scalar(
-        r#"
-        UPDATE work_items
-        SET next_timeline_sequence = next_timeline_sequence + 1
-        WHERE project_id = $1 AND id = $2
-        RETURNING next_timeline_sequence - 1
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("work_item"))
-}
-
-async fn insert_work_item_comment_timeline_entry(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<i64, AppError> {
-    let sequence =
-        allocate_work_item_timeline_sequence(transaction, project_id, work_item_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_timeline_entries (
-            project_id, work_item_id, sequence, kind, comment_id
-        )
-        VALUES ($1, $2, $3, 'comment', $4)
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(sequence)
-    .bind(comment_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(sequence)
-}
-
-async fn insert_audit_event(
-    transaction: &mut Transaction<'_, Postgres>,
+fn browser_actor(
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
     project_id: Uuid,
-    action: &'static str,
-    work_item_id: Uuid,
-    metadata: serde_json::Value,
-) -> Result<(), AppError> {
+) -> Result<CommandActor, AppError> {
     let request_id = headers
         .get(crate::REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        )
-        VALUES (
-            $1, $2, $3, $4, 'password_session',
-            $5, 'work_item', $6, 'succeeded', $7, $8
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(action)
-    .bind(work_item_id)
-    .bind(request_id)
-    .bind(metadata)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
+        .filter(|value| value.len() <= 128)
+        .map(str::to_owned);
+    Ok(CommandActor {
+        actor_id: principal.actor_id,
+        actor_kind: actor_kind(&principal.actor_kind)?,
+        project_id,
+        audit: AuditAttribution::Browser {
+            session_id: principal.session_id,
+            request_id,
+        },
+    })
 }
 
 fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
