@@ -2,19 +2,37 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; source of truth v0.30
+**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; source of truth v0.31
 
 **Owner:** Mischa Nelson  
-**Date:** August 16, 2026
+**Date:** August 19, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
 **Implementation authorization:** Milestones M0 through M9 are complete. M9.1
 is authorized by the owner's explicit August 16, 2026 instruction. Any later
 post-version-one milestone requires a new elaboration and explicit owner
-authorization.
+authorization. The task-platform architecture package defines later boundaries
+but does not authorize implementation before its M10 evidence gate and bounded
+milestone entry criteria.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.31 — canonical task-platform architecture
+
+- defined a dedicated task product as another client of the existing canonical
+  Work Item engine, never a synchronized second task system
+- selected the same monorepo and Rust modular monolith, a separate task-first
+  web application, one PostgreSQL migration chain, a versioned client-neutral
+  API, and a generated schema-backed TypeScript client
+- retained Project ownership, server-resolved Actor authorship, centralized
+  policy, optimistic concurrency, idempotency, transactional outbox, and
+  Agent Workspace-owned execution and integration links
+- made the accepted M10 application command layer an explicit evidence gate and
+  did not claim that M10, the API, client, standalone mode, or schema additions
+  are implemented or accepted
+- recorded the architecture in Decision D-058 and
+  `docs/task-platform/`
 
 ### v0.30 — M9.1 correctness stabilization authorization
 
@@ -7927,6 +7945,36 @@ human sponsor. Every creation path stores this policy explicitly; database
 defaults are not an approval-routing decision. This makes the external
 approval surface reachable without allowing a connector to approve provider
 execution or its own request.
+
+## D-058: A dedicated task product is another client of one canonical Work Item engine
+
+**Status:** Accepted architecture; implementation remains milestone-gated
+
+**Reason:** Agent Workspace already owns one Project-scoped, Actor-authorized,
+optimistic-versioned Work Item model with durable collaboration, activity,
+links, MCP access, and outbox invalidation. A dedicated task experience must use
+those same records and the upcoming canonical M10 application command layer.
+It must not copy or synchronize Tasks into another service, schema, database,
+or repository.
+
+The first architecture keeps the Rust modular monolith and PostgreSQL migration
+chain, adds a separate task-first web application in this monorepo, and exposes
+a versioned client-neutral Task API plus generated TypeScript client. `Task` is
+dedicated-product and new-API terminology for the existing canonical Work Item
+identity; existing Agent Workspace and compatibility terminology may remain.
+Personal Inbox work uses a private Personal Project rather than nullable or
+user-owned Task exceptions. Conversations, Threads, Agent Runs, Execution
+Workers, repositories, and GitHub projections remain Agent Workspace-owned and
+attach through explicit links.
+
+The same server binary may later run in an integrated or task-only mode. The
+task-only mode uses the same schema and disables execution, Git, GitHub, and
+provider routes, workers, and readiness dependencies. Public multi-tenancy,
+separate services/databases, cross-Project Task moves, and durable offline
+mutation remain future decisions. The detailed boundaries, API proposal,
+migration plan, and gated roadmap live in `docs/task-platform/`; none is
+implementation acceptance, and the first implementation PR waits for M10
+command-layer evidence.
 
 ---
 
