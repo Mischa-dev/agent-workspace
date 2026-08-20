@@ -2,18 +2,38 @@
 ## Project Source of Truth and Implementation Plan
 
 **Working title:** Agent Workspace  
-**Status:** M0 through M9 accepted; version one complete; source of truth v0.29
+**Status:** M0 through M9 accepted; M9.1 correctness stabilization authorized; source of truth v0.30
 
 **Owner:** Mischa Nelson  
-**Date:** August 4, 2026
+**Date:** August 16, 2026
 **Document role:** This file is the canonical product and engineering plan until a later version explicitly replaces it.  
-**Implementation authorization:** Milestones M0 through M9 are complete. Any
+**Implementation authorization:** Milestones M0 through M9 are complete. M9.1
+is authorized by the owner's explicit August 16, 2026 instruction. Any later
 post-version-one milestone requires a new elaboration and explicit owner
 authorization.
 
 > The product name, visual identity, and public branding are intentionally unresolved. "Agent Workspace" is a neutral working title, not a proposed final name.
 
 ## Revision history
+
+### v0.30 — M9.1 correctness stabilization authorization
+
+- authorized a bounded post-version-one milestone to correct five verified M9
+  behavioral defects without expanding into the later canonical Work Item
+  command-layer refactor
+- required browser and MCP Work Item mutations to enqueue the same addressed
+  external-agent invalidations in their source transactions
+- required create and subtask idempotency hashes to retain every normalized
+  request field, including descriptions
+- defined provider questions as non-human, any-authorized-member decisions;
+  provider command/file approvals remain human-required owner decisions, and
+  external Worker sponsorship remains addressed to its exact human sponsor
+- required connector attempts against human-required approvals to remain
+  non-disclosing while recording a denied audit event
+- required an approval resolution to invalidate every active external
+  connection still addressed by the approval, regardless of which surface or
+  Actor resolved it
+- recorded the provider approval eligibility boundary in Decision D-057
 
 ### v0.29 — M9 acceptance and version-one completion
 
@@ -7097,6 +7117,67 @@ of the retained compatibility profile without separate authorization.
 - the default Hermes profile, system Node, global Codex, existing Tailscale
   routes, unrelated Podman projects, and retained dirty worktrees are unchanged
 
+## Milestone M9.1: External-agent correctness stabilization
+
+**Status:** Elaborated and authorized by the owner's explicit August 16, 2026
+instruction. This milestone repairs accepted M9 behavior; it does not reopen
+the version-one product scope.
+
+### M9.1-001 Work Item event-source parity
+
+- move addressed Work Item event selection into one shared server helper used
+  by both browser and MCP mutation transactions
+- emit assignment and change invalidations for browser create, update, move,
+  comment, archive/restore, and collaboration mutations wherever the MCP path
+  would notify the same active external assignee
+- when assignment changes, invalidate the former external assignee and the new
+  external assignee without creating duplicate events for one connection
+
+### M9.1-002 Complete idempotency request identity
+
+- compute Work Item create and subtask request hashes before destructive
+  normalization such as `Option::take`, or hash an equivalent complete
+  normalized request value
+- reject reuse of one `clientRequestId` when only the description differs;
+  never replay the first result for a materially different request
+
+### M9.1-003 Explicit provider approval creation policy
+
+- provider questions use `any_authorized` eligibility and
+  `human_required=false`; every active Project member whose ordinary role
+  permits `ApprovalRespond` may answer, subject to separation of duty
+- provider command/file approvals retain `owner` eligibility and
+  `human_required=true`
+- sponsored external execution approvals retain exact sponsor eligibility and
+  `human_required=true`
+- every approval insertion supplies its eligibility and human-required policy
+  explicitly rather than relying on database defaults
+
+### M9.1-004 Denial auditing and resolution fanout
+
+- an authenticated external connection attempting to answer an otherwise
+  addressed human-required approval receives the existing non-disclosing
+  result and creates a bounded denied audit event tied to that connection
+- resolving a non-human approval through MCP or the browser enqueues
+  `approval.resolved` for every active addressed external connection in the
+  same transaction
+- recipient selection revalidates connection, Actor, membership, exact Actor
+  or role/any-authorized eligibility, human-required state, and separation of
+  duty at event time
+
+### M9.1 verification and exclusions
+
+**Expected tests:** create and subtask description mismatch, browser-created
+assignment/change/comment events, provider question versus command policy,
+human-required denial audit with non-disclosure, two-connection request and
+resolution fanout, browser resolution fanout, disabled recipient exclusion,
+formatting, Clippy with warnings denied, and PostgreSQL integration tests.
+
+**Exclusions:** extracting the full canonical Work Item application-command
+layer, redesigning the approval data model, allowing external agents to approve
+provider command/file execution, changing the sponsored-execution safety
+boundary, frontend redesign, push delivery, and a new connector protocol.
+
 ---
 
 # 28. Exact first implementation sequence
@@ -7831,6 +7912,21 @@ client-specific older protocol. The personal OAuth provider successfully ran
 limit, not authority to select or control the external runtime's model. Any
 Hermes version, dependency, protocol, or model change requires a new isolated
 compatibility proof and redacted fixture update.
+
+## D-057: Provider questions are collaborative; provider execution approvals remain human-required
+
+**Status:** Accepted
+
+**Reason:** Provider-generated questions request bounded project context and do
+not authorize command or file execution. They are therefore addressed to any
+active Project member whose ordinary role permits `ApprovalRespond`, with
+`human_required=false` and the existing separation-of-duty check. Provider
+command/file approvals retain exact `owner`, `human_required=true` policy.
+Sponsored external execution remains separately addressed to the selected
+human sponsor. Every creation path stores this policy explicitly; database
+defaults are not an approval-routing decision. This makes the external
+approval surface reachable without allowing a connector to approve provider
+execution or its own request.
 
 ---
 

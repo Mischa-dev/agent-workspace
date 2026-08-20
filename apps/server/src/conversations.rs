@@ -2074,7 +2074,7 @@ async fn project_conversation_sidebar(
                     FROM agent_approvals approval
                     WHERE approval.agent_run_id = run.id
                       AND approval.status = 'pending'
-                      AND approval.eligible_role = $3
+                      AND approval.eligible_role IN ($3, 'any_authorized')
                       AND $3 IN ('owner', 'admin', 'member')
                       AND (NOT approval.human_required OR $4 = 'human')
                 ) AS has_pending_response,
@@ -3041,7 +3041,11 @@ async fn fetch_run_projection(
             let agent_run_id = approval
                 .agent_run_id
                 .ok_or(AppError::Internal("run approval without Agent Run"))?;
-            let eligibility = parse_membership_role(&approval.eligible_role)?;
+            let eligibility = if approval.eligible_role == "any_authorized" {
+                ApprovalEligibility::AnyAuthorizedMember
+            } else {
+                ApprovalEligibility::Role(parse_membership_role(&approval.eligible_role)?)
+            };
             let respond = approval.status == "pending"
                 && matches!(
                     authorize(
@@ -3057,7 +3061,7 @@ async fn fetch_run_projection(
                             ),
                             requirements: ApprovalRequirements {
                                 requesting_actor_id: approval.requesting_actor_id,
-                                eligibility: ApprovalEligibility::Role(eligibility),
+                                eligibility,
                                 human_required: approval.human_required,
                                 separation_of_duty: false,
                             },

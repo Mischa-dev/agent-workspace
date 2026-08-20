@@ -10,7 +10,7 @@ use crate::{
     api::{insert_event_entry, insert_significant_event, retain_run_workspace},
     domain::{RunState, transition_run},
     error::AppError,
-    external_events::enqueue_external_event,
+    external_events::enqueue_external_approval_resolved,
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
@@ -20,6 +20,8 @@ use crate::{
         MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
 };
+
+const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -213,9 +215,15 @@ async fn respond_inner(
     key: IdempotencyKey,
 ) -> Result<ApprovalToolResult, AppError> {
     let mut transaction = state.pool.begin().await?;
-    let Some(context) = load_context(&mut transaction, principal, approval_id, true).await? else {
+    let Some(context) = load_context(&mut transaction, principal, approval_id, true, true).await?
+    else {
         return Ok(ApprovalToolResult::not_found());
     };
+    if context.human_required {
+        insert_human_required_denial_audit(&mut transaction, principal, &context).await?;
+        transaction.commit().await?;
+        return Ok(ApprovalToolResult::not_found());
+    }
     require_policy(principal, &context)?;
     let (response, approved) = validate_response(&context.kind, &arguments)?;
     let request_hash = RequestHash::for_value(&arguments)?;
@@ -322,7 +330,7 @@ async fn respond_inner(
         .await?;
         insert_event_entry(&mut transaction, context.conversation_id, interrupted_event).await?;
     }
-    enqueue_external_result_event(&mut transaction, &context).await?;
+    enqueue_external_approval_resolved(&mut transaction, approval_id).await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         context.project_id,
@@ -424,7 +432,7 @@ async fn fetch_context(
     lock: bool,
 ) -> Result<Option<ApprovalContext>, AppError> {
     let mut transaction = state.pool.begin().await?;
-    let context = load_context(&mut transaction, principal, approval_id, lock).await?;
+    let context = load_context(&mut transaction, principal, approval_id, lock, false).await?;
     if let Some(context) = &context {
         require_policy(principal, context)?;
     }
@@ -448,6 +456,7 @@ async fn load_context(
     principal: &McpPrincipal,
     approval_id: Uuid,
     lock: bool,
+    include_human_required_for_denial: bool,
 ) -> Result<Option<ApprovalContext>, AppError> {
     if principal.actor_kind != ActorKind::ExternalAgent
         || principal.external_agent_connection_id.is_none()
@@ -495,11 +504,14 @@ async fn load_context(
          AND organization_membership.enabled
         JOIN agent_approvals approval ON approval.id = $4
          AND approval.agent_run_id IS NOT NULL
-         AND NOT approval.human_required
+         AND ($6 OR NOT approval.human_required)
          AND approval.requesting_actor_id <> credential.actor_id
          AND (
              approval.eligible_actor_id = credential.actor_id
-             OR (approval.eligible_actor_id IS NULL AND approval.eligible_role = membership.role)
+             OR (
+                 approval.eligible_actor_id IS NULL
+                 AND approval.eligible_role IN (membership.role, 'any_authorized')
+             )
          )
         JOIN agent_runs run ON run.id = approval.agent_run_id
         JOIN conversations conversation ON conversation.id = run.conversation_id
@@ -521,6 +533,7 @@ async fn load_context(
         .bind(principal.actor_id)
         .bind(approval_id)
         .bind(principal.project_id)
+        .bind(include_human_required_for_denial)
         .fetch_optional(&mut **transaction)
         .await?)
 }
@@ -529,6 +542,9 @@ fn require_policy(principal: &McpPrincipal, context: &ApprovalContext) -> Result
     let role = parse_role(&context.membership_role)?;
     let eligibility = match context.eligible_actor_id {
         Some(actor_id) => ApprovalEligibility::Actor(actor_id),
+        None if context.eligible_role == ANY_AUTHORIZED_APPROVER => {
+            ApprovalEligibility::AnyAuthorizedMember
+        }
         None => ApprovalEligibility::Role(parse_role(&context.eligible_role)?),
     };
     let subject = Subject::new(
@@ -617,23 +633,33 @@ fn bounded_text(value: &str, limit: usize) -> String {
         .collect()
 }
 
-async fn enqueue_external_result_event(
+async fn insert_human_required_denial_audit(
     transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
     context: &ApprovalContext,
 ) -> Result<(), AppError> {
-    enqueue_external_event(
-        transaction,
-        context.connection_id,
-        context.project_id,
-        "approval.resolved",
-        "An addressed approval was resolved",
-        "agent_approval",
-        context.id,
-        &format!(
-            "/projects/{}/threads/{}",
-            context.project_id, context.conversation_id
-        ),
+    sqlx::query(
+        r#"
+        INSERT INTO audit_events (
+            id, actor_id, project_id, authentication_class, action,
+            target_kind, target_id, outcome, channel, client_name,
+            mcp_credential_id, external_agent_connection_id, metadata
+        ) VALUES (
+            $1, $2, $3, 'mcp_bearer', 'approval.external_response_rejected',
+            'agent_approval', $4, 'denied', 'mcp', $5,
+            $6, $7, jsonb_build_object('reason', 'human_required', 'version', $8)
+        )
+        "#,
     )
+    .bind(Uuid::now_v7())
+    .bind(principal.actor_id)
+    .bind(context.project_id)
+    .bind(context.id)
+    .bind(&principal.client_name)
+    .bind(principal.mcp_credential_id)
+    .bind(context.connection_id)
+    .bind(context.version)
+    .execute(&mut **transaction)
     .await?;
     Ok(())
 }

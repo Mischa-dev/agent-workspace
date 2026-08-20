@@ -526,9 +526,9 @@ async fn prepare_demo_blocker(state: &AppState, run: &ClaimedRun) -> Result<(), 
         r#"
         INSERT INTO agent_approvals (
             id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options
+            kind, summary, options, eligible_role, human_required
         )
-        VALUES ($1, $2, $3, $4, 'approval', $5, $6)
+        VALUES ($1, $2, $3, $4, 'approval', $5, $6, 'owner', true)
         "#,
     )
     .bind(approval_id)

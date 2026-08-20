@@ -17,6 +17,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::ActorView,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    external_events::enqueue_external_work_item_event,
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
@@ -1394,6 +1395,17 @@ async fn update_work_item(
         transaction.commit().await?;
         return work_item_response(StatusCode::OK, item);
     }
+    if assignee_actor_id != current_row.assignee_actor_id {
+        enqueue_external_work_item_event(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            current_row.assignee_actor_id,
+            "work_item.changed",
+            "A Work Item assignment changed",
+        )
+        .await?;
+    }
 
     let updated = sqlx::query(
         r#"
@@ -2642,6 +2654,15 @@ async fn create_work_item(
                 }),
             )
             .await?;
+            enqueue_external_work_item_event(
+                &mut transaction,
+                project_id,
+                work_item_id,
+                request.assignee_actor_id,
+                "work_item.assigned",
+                "A Work Item was assigned to you",
+            )
+            .await?;
             insert_audit_event(
                 &mut transaction,
                 &headers,
@@ -3216,6 +3237,15 @@ async fn create_work_item_comment(
             work_item_id,
             version: current.version,
         }),
+    )
+    .await?;
+    enqueue_external_work_item_event(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        None,
+        "work_item.changed",
+        "An assigned Work Item changed",
     )
     .await?;
     insert_audit_event(
@@ -4226,6 +4256,15 @@ async fn record_work_item_change(
             work_item_id,
             version,
         }),
+    )
+    .await?;
+    enqueue_external_work_item_event(
+        transaction,
+        project_id,
+        work_item_id,
+        None,
+        "work_item.changed",
+        "An assigned Work Item changed",
     )
     .await?;
     insert_audit_event(

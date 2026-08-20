@@ -27,6 +27,8 @@ use crate::{
     },
 };
 
+const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(crate::auth::router())
@@ -1246,12 +1248,12 @@ async fn prepare_demo_blocker(
         r#"
         INSERT INTO agent_approvals (
             id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options
+            kind, summary, options, eligible_role, human_required
         )
         VALUES (
             $1, $2, $3, $4, 'approval',
             'Allow the development executor to append its proof line to KNOWN_FILE.txt?',
-            $5
+            $5, 'owner', true
         )
         "#,
     )
@@ -1428,7 +1430,11 @@ async fn respond_to_approval(
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_approval"))?;
-    let eligible_role = parse_membership_role(&context.eligible_role)?;
+    let approval_eligibility = if context.eligible_role == ANY_AUTHORIZED_APPROVER {
+        ApprovalEligibility::AnyAuthorizedMember
+    } else {
+        ApprovalEligibility::Role(parse_membership_role(&context.eligible_role)?)
+    };
     authorize_project_action(
         &principal,
         context.project_id,
@@ -1445,7 +1451,7 @@ async fn respond_to_approval(
             ),
             requirements: ApprovalRequirements {
                 requesting_actor_id: context.requesting_actor_id,
-                eligibility: ApprovalEligibility::Role(eligible_role),
+                eligibility: approval_eligibility,
                 human_required: context.human_required,
                 separation_of_duty: false,
             },
@@ -1600,6 +1606,8 @@ async fn respond_to_approval(
         .await?;
         insert_event_entry(&mut transaction, context.conversation_id, interrupted_event).await?;
     }
+    crate::external_events::enqueue_external_approval_resolved(&mut transaction, approval_id)
+        .await?;
     outbox::enqueue_agent_run_updated(
         &mut transaction,
         context.project_id,

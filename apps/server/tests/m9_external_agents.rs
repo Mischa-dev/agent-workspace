@@ -28,6 +28,10 @@ const PASSWORD: &str = "correct horse battery staple";
 
 #[tokio::test]
 async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("agent_workspace_server=debug")
+        .try_init();
     let Some((database_url, administrative_pool)) = integration_pool().await else {
         return;
     };
@@ -401,6 +405,51 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .expect("created Work Item id")
         .parse::<Uuid>()
         .expect("created Work Item UUID");
+    let mismatched_create = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "work_item_create",
+        json!({
+            "title":"External teammate fixture",
+            "description":"A different description must not replay.",
+            "priority":"medium",
+            "assigneeActorId":actor_id.to_string(),
+            "clientRequestId":"m9-work-item-create-1"
+        }),
+    )
+    .await;
+    assert_eq!(mismatched_create["outcome"], "conflict");
+    assert_eq!(mismatched_create["retryCategory"], "use_new_request_id");
+    let created_subtask = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "work_item_create_subtask",
+        json!({
+            "parentWorkItemId":external_work_item_id.to_string(),
+            "title":"Idempotency subtask fixture",
+            "description":"Original subtask description",
+            "clientRequestId":"m9-subtask-create-1"
+        }),
+    )
+    .await;
+    assert_eq!(created_subtask["outcome"], "applied");
+    let mismatched_subtask = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "work_item_create_subtask",
+        json!({
+            "parentWorkItemId":external_work_item_id.to_string(),
+            "title":"Idempotency subtask fixture",
+            "description":"Different subtask description",
+            "clientRequestId":"m9-subtask-create-1"
+        }),
+    )
+    .await;
+    assert_eq!(mismatched_subtask["outcome"], "conflict");
+    assert_eq!(mismatched_subtask["retryCategory"], "use_new_request_id");
     let updated_work_item = call_mcp_tool(
         &application,
         &first_token,
@@ -430,8 +479,244 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         actor_id.to_string()
     );
 
+    let browser_created = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/projects/{}/work-items", seed.project_id),
+            &cookie,
+            &csrf,
+            "m9-browser-work-item-create",
+            json!({
+                "title":"Browser external event fixture",
+                "description":"Created by a human and assigned to an external teammate.",
+                "typeId":null,
+                "statusId":null,
+                "priority":"medium",
+                "assigneeActorId":actor_id
+            }),
+        ))
+        .await
+        .expect("browser Work Item create response");
+    assert_eq!(browser_created.status(), StatusCode::CREATED);
+    let browser_created = response_json(browser_created).await;
+    let browser_work_item_id = browser_created["id"]
+        .as_str()
+        .expect("browser Work Item id")
+        .parse::<Uuid>()
+        .expect("browser Work Item UUID");
+    let browser_updated = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "PATCH",
+            &format!(
+                "/api/v1/projects/{}/work-items/{browser_work_item_id}",
+                seed.project_id
+            ),
+            &cookie,
+            &csrf,
+            "m9-browser-work-item-update",
+            json!({"expectedVersion":1,"priority":"high"}),
+        ))
+        .await
+        .expect("browser Work Item update response");
+    assert_eq!(browser_updated.status(), StatusCode::OK);
+    let browser_comment = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!(
+                "/api/v1/projects/{}/work-items/{browser_work_item_id}/comments",
+                seed.project_id
+            ),
+            &cookie,
+            &csrf,
+            "m9-browser-work-item-comment",
+            json!({"content":{"version":1,"nodes":[
+                {"type":"text","text":"Browser-authored update fixture"}
+            ]}}),
+        ))
+        .await
+        .expect("browser Work Item comment response");
+    assert_eq!(browser_comment.status(), StatusCode::CREATED);
+    let browser_event_kinds = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT string_agg(kind, ',' ORDER BY sequence)
+        FROM external_agent_events
+        WHERE connection_id = $1 AND resource_id = $2
+        "#,
+    )
+    .bind(connection_id)
+    .bind(browser_work_item_id)
+    .fetch_one(&pool)
+    .await
+    .expect("browser Work Item external events");
+    assert_eq!(
+        browser_event_kinds,
+        "work_item.assigned,work_item.changed,work_item.changed"
+    );
+
+    let second_created = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            &base,
+            &cookie,
+            &csrf,
+            json!({
+                "connectionName":"Hermes M9 second",
+                "displayName":"Second external teammate",
+                "handle":"second-external-teammate",
+                "role":"member",
+                "scopes":["read","write","events","approval_respond"]
+            }),
+        ))
+        .await
+        .expect("create second connection response");
+    assert_eq!(second_created.status(), StatusCode::OK);
+    let second_created = response_json(second_created).await;
+    let second_actor_id = second_created["connection"]["actorId"]
+        .as_str()
+        .expect("second connection actor id")
+        .parse::<Uuid>()
+        .expect("second connection Actor UUID");
+    let second_token = second_created["oneTimeCredential"]["token"]
+        .as_str()
+        .expect("second connection token")
+        .to_owned();
+    let second_session_id = initialize_mcp(&application, &second_token).await;
+    let second_initial_events = call_mcp_tool(
+        &application,
+        &second_token,
+        &second_session_id,
+        "external_event_poll",
+        json!({"limit":10,"waitSeconds":0}),
+    )
+    .await;
+    let second_initial_cursor = second_initial_events["nextCursor"]
+        .as_str()
+        .expect("second connection initial cursor")
+        .to_owned();
+
+    let self_response_run_id = Uuid::now_v7();
+    let self_response_approval_id = Uuid::now_v7();
+    let mut self_response_transaction = pool.begin().await.expect("begin self-response fixture");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            state, prompt, authorization_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
+        "#,
+    )
+    .bind(self_response_run_id)
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind("External self-response authorization fixture")
+    .execute(&mut *self_response_transaction)
+    .await
+    .expect("insert self-response run");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, provider_request_id,
+            kind, summary, options, eligible_role, human_required
+        ) VALUES (
+            $1, $2, $3, $4, 'question', $5, '[]'::jsonb,
+            'any_authorized', false
+        )
+        "#,
+    )
+    .bind(self_response_approval_id)
+    .bind(self_response_run_id)
+    .bind(actor_id)
+    .bind(format!("m9-self-response:{self_response_approval_id}"))
+    .bind("Which authorized teammate should answer this question?")
+    .execute(&mut *self_response_transaction)
+    .await
+    .expect("insert self-response approval");
+    enqueue_external_approval_requested(&mut self_response_transaction, self_response_approval_id)
+        .await
+        .expect("enqueue self-response approval request");
+    self_response_transaction
+        .commit()
+        .await
+        .expect("commit self-response fixture");
+
+    let requester_self_response = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":self_response_approval_id.to_string(),
+            "expectedVersion":1,
+            "answer":"I should not be able to answer my own question.",
+            "clientRequestId":"m9-self-response-requester"
+        }),
+    )
+    .await;
+    assert_eq!(requester_self_response["outcome"], "not_found");
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<Uuid>)>(
+            "SELECT status, responded_by_actor_id FROM agent_approvals WHERE id = $1",
+        )
+        .bind(self_response_approval_id)
+        .fetch_one(&pool)
+        .await
+        .expect("self-response approval remains pending"),
+        ("pending".to_owned(), None)
+    );
+
+    let teammate_response = call_mcp_tool(
+        &application,
+        &second_token,
+        &second_session_id,
+        "approval_respond",
+        json!({
+            "approvalId":self_response_approval_id.to_string(),
+            "expectedVersion":1,
+            "answer":"Another authorized teammate can answer.",
+            "clientRequestId":"m9-self-response-teammate"
+        }),
+    )
+    .await;
+    assert_eq!(teammate_response["outcome"], "applied");
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<Uuid>)>(
+            "SELECT status, responded_by_actor_id FROM agent_approvals WHERE id = $1",
+        )
+        .bind(self_response_approval_id)
+        .fetch_one(&pool)
+        .await
+        .expect("teammate resolved self-response approval"),
+        ("resolved".to_owned(), Some(second_actor_id))
+    );
+    let mut self_response_terminal = pool
+        .begin()
+        .await
+        .expect("begin self-response terminal transition");
+    transition_run(
+        &mut self_response_terminal,
+        self_response_run_id,
+        RunState::Completed,
+        None,
+    )
+    .await
+    .expect("complete self-response fixture run");
+    self_response_terminal
+        .commit()
+        .await
+        .expect("commit self-response terminal transition");
+
     let addressed_run_id = Uuid::now_v7();
     let addressed_approval_id = Uuid::now_v7();
+    let human_required_approval_id = Uuid::now_v7();
     let mut approval_transaction = pool.begin().await.expect("begin approval fixture");
     sqlx::query(
         r#"
@@ -461,7 +746,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         ) VALUES (
             $1, $2, $3, $4, 'approval', $5,
             '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
-            'member', false
+            'any_authorized', false
         )
         "#,
     )
@@ -473,6 +758,28 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     .execute(&mut *approval_transaction)
     .await
     .expect("insert addressed approval");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, eligible_actor_id,
+            provider_request_id, kind, summary, options,
+            eligible_role, human_required
+        ) VALUES (
+            $1, $2, $3, $4, $5, 'approval', $6,
+            '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
+            'member', true
+        )
+        "#,
+    )
+    .bind(human_required_approval_id)
+    .bind(addressed_run_id)
+    .bind(seed.human_actor_id)
+    .bind(actor_id)
+    .bind(format!("m9-human-required:{human_required_approval_id}"))
+    .bind("Human-required approval audit fixture")
+    .execute(&mut *approval_transaction)
+    .await
+    .expect("insert human-required approval");
     enqueue_external_approval_requested(&mut approval_transaction, addressed_approval_id)
         .await
         .expect("enqueue addressed approval");
@@ -480,6 +787,52 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .commit()
         .await
         .expect("commit approval fixture");
+
+    let hidden_human_required = call_mcp_tool(
+        &application,
+        &first_token,
+        &session_id,
+        "approval_respond",
+        json!({
+            "approvalId":human_required_approval_id.to_string(),
+            "expectedVersion":1,
+            "decision":"approve",
+            "clientRequestId":"m9-human-required-denial-1"
+        }),
+    )
+    .await;
+    assert_eq!(hidden_human_required["outcome"], "not_found");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*) FROM audit_events
+            WHERE external_agent_connection_id = $1
+              AND target_id = $2
+              AND action = 'approval.external_response_rejected'
+              AND outcome = 'denied'
+              AND metadata->>'reason' = 'human_required'
+            "#,
+        )
+        .bind(connection_id)
+        .bind(human_required_approval_id)
+        .fetch_one(&pool)
+        .await
+        .expect("human-required denial audit count"),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
+            .bind(human_required_approval_id)
+            .fetch_one(&pool)
+            .await
+            .expect("human-required approval status"),
+        "pending"
+    );
+    sqlx::query("UPDATE agent_approvals SET status = 'canceled' WHERE id = $1")
+        .bind(human_required_approval_id)
+        .execute(&pool)
+        .await
+        .expect("clean up human-required approval fixture");
 
     let addressed = call_mcp_tool(
         &application,
@@ -546,6 +899,169 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     .await;
     assert_eq!(stale_approval["outcome"], "conflict");
     assert_eq!(stale_approval["current"]["version"], 2);
+
+    let second_addressed_events = call_mcp_tool(
+        &application,
+        &second_token,
+        &second_session_id,
+        "external_event_poll",
+        json!({
+            "afterCursor":second_initial_cursor,
+            "limit":10,
+            "waitSeconds":0
+        }),
+    )
+    .await;
+    let second_addressed_kinds = second_addressed_events["events"]
+        .as_array()
+        .expect("second connection addressed events")
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect::<Vec<_>>();
+    assert!(second_addressed_kinds.contains(&"approval.requested"));
+    assert!(second_addressed_kinds.contains(&"approval.resolved"));
+    let second_addressed_cursor = second_addressed_events["nextCursor"]
+        .as_str()
+        .expect("second connection addressed cursor")
+        .to_owned();
+
+    let browser_resolution_run_id = Uuid::now_v7();
+    let browser_resolution_approval_id = Uuid::now_v7();
+    let mut browser_resolution_transaction = pool
+        .begin()
+        .await
+        .expect("begin browser resolution fixture");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            state, prompt, authorization_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', $8, '{}'::jsonb)
+        "#,
+    )
+    .bind(browser_resolution_run_id)
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind("Browser approval resolution fixture")
+    .execute(&mut *browser_resolution_transaction)
+    .await
+    .expect("insert browser resolution run");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, provider_request_id,
+            kind, summary, options, eligible_role, human_required
+        ) VALUES (
+            $1, $2, $3, $4, 'question', $5, '[]'::jsonb,
+            'any_authorized', false
+        )
+        "#,
+    )
+    .bind(browser_resolution_approval_id)
+    .bind(browser_resolution_run_id)
+    .bind(actor_id)
+    .bind(format!(
+        "m9-browser-resolution:{browser_resolution_approval_id}"
+    ))
+    .bind("Provide one bounded fixture answer.")
+    .execute(&mut *browser_resolution_transaction)
+    .await
+    .expect("insert browser resolution approval");
+    enqueue_external_approval_requested(
+        &mut browser_resolution_transaction,
+        browser_resolution_approval_id,
+    )
+    .await
+    .expect("enqueue browser resolution request");
+    browser_resolution_transaction
+        .commit()
+        .await
+        .expect("commit browser resolution fixture");
+    let browser_projection = application
+        .clone()
+        .oneshot(read_request(
+            &format!("/api/v1/conversations/{}/timeline", seed.thread_id),
+            &cookie,
+        ))
+        .await
+        .expect("browser approval projection response");
+    let browser_projection_status = browser_projection.status();
+    let browser_projection = response_json(browser_projection).await;
+    assert_eq!(
+        browser_projection_status,
+        StatusCode::OK,
+        "browser approval projection: {browser_projection}"
+    );
+    assert!(
+        browser_projection["approvals"]
+            .as_array()
+            .expect("browser approval projection")
+            .iter()
+            .any(|approval| {
+                approval["id"] == browser_resolution_approval_id.to_string()
+                    && approval["capabilities"]["respond"] == true
+            })
+    );
+    let browser_resolution = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/agent-approvals/{browser_resolution_approval_id}/respond"),
+            &cookie,
+            &csrf,
+            "m9-browser-approval-resolution",
+            json!({"answer":"Bounded browser answer"}),
+        ))
+        .await
+        .expect("browser approval resolution response");
+    let browser_resolution_status = browser_resolution.status();
+    let browser_resolution_body = response_json(browser_resolution).await;
+    assert_eq!(
+        browser_resolution_status,
+        StatusCode::OK,
+        "browser approval resolution: {browser_resolution_body}"
+    );
+    let second_browser_resolution_events = call_mcp_tool(
+        &application,
+        &second_token,
+        &second_session_id,
+        "external_event_poll",
+        json!({
+            "afterCursor":second_addressed_cursor,
+            "limit":10,
+            "waitSeconds":0
+        }),
+    )
+    .await;
+    let second_browser_resolution_kinds = second_browser_resolution_events["events"]
+        .as_array()
+        .expect("second connection browser resolution events")
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect::<Vec<_>>();
+    assert!(second_browser_resolution_kinds.contains(&"approval.requested"));
+    assert!(second_browser_resolution_kinds.contains(&"approval.resolved"));
+    let mut browser_resolution_terminal = pool
+        .begin()
+        .await
+        .expect("begin browser resolution terminal transition");
+    transition_run(
+        &mut browser_resolution_terminal,
+        browser_resolution_run_id,
+        RunState::Completed,
+        None,
+    )
+    .await
+    .expect("complete browser resolution run");
+    browser_resolution_terminal
+        .commit()
+        .await
+        .expect("commit browser resolution terminal transition");
 
     let run_count_before = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runs")
         .fetch_one(&pool)
@@ -679,7 +1195,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &first_token,
         &session_id,
         "external_event_poll",
-        json!({"afterCursor":first_cursor,"limit":10,"waitSeconds":0}),
+        json!({"afterCursor":first_cursor,"limit":100,"waitSeconds":0}),
     )
     .await;
     assert!(
@@ -705,6 +1221,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         assert!(event_kinds.contains(&expected), "missing event {expected}");
     }
     terminate_mcp(&application, &first_token, &session_id).await;
+    terminate_mcp(&application, &second_token, &second_session_id).await;
     let connection_uri = format!("{base}/{connection_id}");
     let rotated = application
         .clone()
@@ -886,7 +1403,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .fetch_one(&pool)
         .await
         .expect("external audit count"),
-        11
+        13
     );
 
     drop(application);
