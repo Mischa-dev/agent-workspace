@@ -7943,6 +7943,26 @@ defaults are not an approval-routing decision. This makes the external
 approval surface reachable without allowing a connector to approve provider
 execution or its own request.
 
+## D-058: Work Item mutations converge through one internal application-command layer
+
+**Status:** Accepted
+
+**Reason:** Browser HTTP and MCP are transport surfaces over the same Work Item
+model, Actor policy, PostgreSQL transactions, and side effects. Keeping their
+create, update, timeline, audit, outbox, and external-event implementations
+separate already produced correctness drift in M9.1. The server therefore owns
+one `work_item_commands` application layer for normalized values, membership
+authorization, Work Item locking and conflicts, workflow and assignee checks,
+canonical create/subtask and field/status updates, activity/timeline writes,
+audit attribution, transactional outbox invalidation, and addressed external
+events. HTTP and MCP retain their deliberately different wire validation,
+write protection, idempotency key/replay encoding, public response shapes, and
+audit channel metadata. Board ranking, acceptance criteria, links, blocker
+convenience commands, GitHub automation, and Worker sponsorship remain explicit
+domain commands but reuse the shared transaction and finalization primitives;
+they are not forced into a lowest-common-denominator transport operation. This
+is an internal modular-monolith boundary, not a task service or public SDK.
+
 ---
 
 # 32. Open decisions

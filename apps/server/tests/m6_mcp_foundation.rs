@@ -509,6 +509,205 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(missing_pr.pointer("/outcome"), Some(&json!("not_found")));
 
+    // M10 characterization: equivalent browser and MCP creates converge on
+    // canonical row state and exactly one activity, audit, and outbox event.
+    let parity_cookie = login(&application).await;
+    let parity_csrf = csrf_from_cookie(&parity_cookie);
+    let parity_effects_before = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count effects before M10 create parity");
+    let browser_create_response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/projects/{}/work-items", seed.project_id))
+                .header(header::COOKIE, &parity_cookie)
+                .header(header::ORIGIN, "http://127.0.0.1:3100")
+                .header("x-csrf-token", &parity_csrf)
+                .header("idempotency-key", "m10-browser-create-parity")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "title":"M10 parity item",
+                        "description":"Shared command state",
+                        "priority":"low"
+                    }))
+                    .expect("browser parity create JSON"),
+                ))
+                .expect("browser parity create request"),
+        )
+        .await
+        .expect("browser parity create response");
+    assert_eq!(browser_create_response.status(), StatusCode::CREATED);
+    let browser_created = json_response(browser_create_response).await;
+    let browser_work_item_id = Uuid::parse_str(
+        browser_created["id"]
+            .as_str()
+            .expect("browser parity Work Item id"),
+    )
+    .expect("browser parity Work Item UUID");
+    let after_browser = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count effects after browser parity create");
+    assert_eq!(
+        after_browser,
+        (
+            parity_effects_before.0 + 1,
+            parity_effects_before.1 + 1,
+            parity_effects_before.2 + 1
+        )
+    );
+
+    let mcp_created = call_tool(
+        &application,
+        &token,
+        &session_id,
+        21,
+        "work_item_create",
+        json!({
+            "title":"M10 parity item",
+            "description":"Shared command state",
+            "priority":"low",
+            "clientRequestId":"m10-mcp-create-parity"
+        }),
+    )
+    .await;
+    assert_eq!(mcp_created["outcome"], "applied");
+    let mcp_work_item_id = Uuid::parse_str(
+        mcp_created["workItemId"]
+            .as_str()
+            .expect("MCP parity Work Item id"),
+    )
+    .expect("MCP parity Work Item UUID");
+    let after_mcp = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count effects after MCP parity create");
+    assert_eq!(
+        after_mcp,
+        (
+            after_browser.0 + 1,
+            after_browser.1 + 1,
+            after_browser.2 + 1
+        )
+    );
+    let browser_state = sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
+        "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+    )
+    .bind(browser_work_item_id)
+    .fetch_one(&pool)
+    .await
+    .expect("browser parity row");
+    let mcp_state = sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
+        "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+    )
+    .bind(mcp_work_item_id)
+    .fetch_one(&pool)
+    .await
+    .expect("MCP parity row");
+    assert_eq!(browser_state, mcp_state);
+
+    let browser_update_response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/projects/{}/work-items/{browser_work_item_id}",
+                    seed.project_id
+                ))
+                .header(header::COOKIE, &parity_cookie)
+                .header(header::ORIGIN, "http://127.0.0.1:3100")
+                .header("x-csrf-token", &parity_csrf)
+                .header("idempotency-key", "m10-browser-update-parity")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "expectedVersion":1,
+                        "title":"M10 parity updated",
+                        "description":"Shared update state",
+                        "priority":"urgent"
+                    }))
+                    .expect("browser parity update JSON"),
+                ))
+                .expect("browser parity update request"),
+        )
+        .await
+        .expect("browser parity update response");
+    assert_eq!(browser_update_response.status(), StatusCode::OK);
+    assert_eq!(
+        json_response(browser_update_response).await["version"],
+        json!(2)
+    );
+    let after_browser_update = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count effects after browser parity update");
+    assert_eq!(
+        after_browser_update,
+        (after_mcp.0 + 1, after_mcp.1 + 1, after_mcp.2 + 1)
+    );
+    let mcp_updated = call_tool(
+        &application,
+        &token,
+        &session_id,
+        22,
+        "work_item_update",
+        json!({
+            "workItemId":mcp_work_item_id.to_string(),
+            "expectedVersion":1,
+            "title":"M10 parity updated",
+            "description":"Shared update state",
+            "priority":"urgent",
+            "clientRequestId":"m10-mcp-update-parity"
+        }),
+    )
+    .await;
+    assert_eq!(mcp_updated["outcome"], "applied");
+    assert_eq!(mcp_updated["version"], 2);
+    let after_mcp_update = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM outbox_events)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("count effects after MCP parity update");
+    assert_eq!(
+        after_mcp_update,
+        (
+            after_browser_update.0 + 1,
+            after_browser_update.1 + 1,
+            after_browser_update.2 + 1
+        )
+    );
+    let browser_updated_state =
+        sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
+            "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+        )
+        .bind(browser_work_item_id)
+        .fetch_one(&pool)
+        .await
+        .expect("browser parity updated row");
+    let mcp_updated_state =
+        sqlx::query_as::<_, (String, String, String, i64, Uuid, Uuid)>(
+            "SELECT title, description, priority, version, type_id, status_id FROM work_items WHERE id = $1",
+        )
+        .bind(mcp_work_item_id)
+        .fetch_one(&pool)
+        .await
+        .expect("MCP parity updated row");
+    assert_eq!(browser_updated_state, mcp_updated_state);
+
     let mcp_audits = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM audit_events WHERE authentication_class = 'mcp_bearer' AND channel = 'mcp' AND mcp_credential_id = $1",
     )
@@ -517,7 +716,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await
     .expect("MCP audit count");
     assert_eq!(
-        mcp_audits, 8,
+        mcp_audits, 10,
         "exact replay and conflicts create no success audit"
     );
     let viewer_denial_effects_before = sqlx::query_as::<_, (i64, i64)>(
