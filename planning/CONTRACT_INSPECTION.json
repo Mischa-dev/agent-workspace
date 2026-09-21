@@ -1,0 +1,175 @@
+{
+  "record_version": 1,
+  "review_date": "2026-09-21",
+  "scope": "Planning-only local interface and source inspection. No live authentication, provider call, or runtime qualification.",
+  "codex": {
+    "version": "codex-cli 0.148.0",
+    "schema_command": "codex app-server generate-json-schema --out <temporary-directory>",
+    "experimental_fields_included": false,
+    "observed_methods": [
+      "thread/start",
+      "thread/resume",
+      "thread/read",
+      "turn/start",
+      "turn/steer",
+      "turn/interrupt",
+      "account/rateLimits/read"
+    ],
+    "observed_notifications": [
+      "thread/started",
+      "turn/started",
+      "turn/completed",
+      "account/rateLimits/updated"
+    ],
+    "schemas": [
+      {
+        "schema": "ClientRequest.json",
+        "sha256": "655aa2c690be5aebd7365cef3fd8bcb2cfea7b8b4c48d157051065081e0eb558",
+        "required": [],
+        "fields": []
+      },
+      {
+        "schema": "ServerNotification.json",
+        "sha256": "6c5ac0ec799aba669d543e7ad3d8a7a702f997610e41cb9875960a30bf6bdbdc",
+        "required": [],
+        "fields": [
+          "emittedAtMs"
+        ]
+      },
+      {
+        "schema": "v2/ThreadStartParams.json",
+        "sha256": "792e2f32e37cece971bd616664ea2053741acbed4e9c92e9d1766427718f2ecd",
+        "required": [],
+        "fields": [
+          "approvalPolicy",
+          "approvalsReviewer",
+          "baseInstructions",
+          "config",
+          "cwd",
+          "developerInstructions",
+          "ephemeral",
+          "model",
+          "modelProvider",
+          "personality",
+          "sandbox",
+          "serviceName",
+          "serviceTier",
+          "sessionStartSource",
+          "threadSource"
+        ]
+      },
+      {
+        "schema": "v2/ThreadResumeParams.json",
+        "sha256": "7d9ff4b7d83702448715ada355a9713af6f71beaf6fcfcb08c4f03ac52842813",
+        "required": [
+          "threadId"
+        ],
+        "fields": [
+          "approvalPolicy",
+          "approvalsReviewer",
+          "baseInstructions",
+          "config",
+          "cwd",
+          "developerInstructions",
+          "model",
+          "modelProvider",
+          "personality",
+          "sandbox",
+          "serviceTier",
+          "threadId"
+        ]
+      },
+      {
+        "schema": "v2/TurnStartParams.json",
+        "sha256": "ff2e7e0796fbe2ad99e5ec7d489cc8c8630b75f2ab8f17857711107587e3197d",
+        "required": [
+          "input",
+          "threadId"
+        ],
+        "fields": [
+          "approvalPolicy",
+          "approvalsReviewer",
+          "clientUserMessageId",
+          "cwd",
+          "effort",
+          "input",
+          "model",
+          "outputSchema",
+          "personality",
+          "sandboxPolicy",
+          "serviceTier",
+          "summary",
+          "threadId"
+        ]
+      },
+      {
+        "schema": "v2/TurnSteerParams.json",
+        "sha256": "4a52eb76e7a717bb388484ccd7538737fca0df35481fc30a21e259f1bfe96e37",
+        "required": [
+          "expectedTurnId",
+          "input",
+          "threadId"
+        ],
+        "fields": [
+          "clientUserMessageId",
+          "expectedTurnId",
+          "input",
+          "threadId"
+        ]
+      },
+      {
+        "schema": "v2/TurnInterruptParams.json",
+        "sha256": "6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b",
+        "required": [
+          "threadId",
+          "turnId"
+        ],
+        "fields": [
+          "threadId",
+          "turnId"
+        ]
+      },
+      {
+        "schema": "v2/GetAccountRateLimitsResponse.json",
+        "sha256": "c67762e486f5a9b081ec42650fce657781669e6b1261c09c47bc8085d8cf2fc1",
+        "required": [
+          "rateLimits"
+        ],
+        "fields": [
+          "rateLimitResetCredits",
+          "rateLimits",
+          "rateLimitsByLimitId"
+        ]
+      }
+    ],
+    "live_qualified": false,
+    "dispatch_idempotency": "Not established by schema; clientUserMessageId is not treated as a guarantee."
+  },
+  "agentos": {
+    "sources": [
+      {
+        "path": "/Users/mischanelson/Documents/ChatGPT/AgentOS/docs/TASKS.md",
+        "sha256": "46eb09ee73c03d153917597df7dfe480be628e0ec9718fd214b65dafb91bf7a8"
+      },
+      {
+        "path": "/Users/mischanelson/Documents/ChatGPT/AgentOS/crates/agentos-application/src/tasks.rs",
+        "sha256": "3c8ac216e96e2a1dcb65e25ed6296e00e75a545d0dddf42b516b362ebccbd247"
+      },
+      {
+        "path": "/Users/mischanelson/Documents/ChatGPT/AgentOS/crates/agentos-core/src/tasks.rs",
+        "sha256": "8bcf3da576007d16bb461eb4bd17cfa3dbb2fbb74620e2ac4a5fe50b9a15ac84"
+      }
+    ],
+    "submission_fields": [
+      "agent",
+      "source_revision",
+      "prompt"
+    ],
+    "max_prompt_utf8_bytes": 65536,
+    "native_conversation_session_or_steering": "Not established by the inspected task interface.",
+    "unknown_acceptance": "Retain uncertainty; no automatic replacement dispatch.",
+    "live_qualified_by_this_review": false
+  },
+  "proposed_adapter_contract": "workspace-connector/v1",
+  "status": "Specification only; not implemented by this review."
+}
