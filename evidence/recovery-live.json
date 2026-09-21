@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-09-21T07:51:11.137Z",
+  "database": "workspace_recovery_1789977070896",
+  "checks": [
+    {
+      "name": "Live Stop followed by observed runtime interruption",
+      "passed": true,
+      "runId": "e9a2637e-6695-4514-8a22-d24dea33b7d0"
+    },
+    {
+      "name": "Worker restart holds uncertain dispatch without replay",
+      "passed": true,
+      "fixture": "Synthetic durable uncertain receipt; real PostgreSQL, pg-boss and process restart"
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-09-21T07:51:30.262Z"
+}

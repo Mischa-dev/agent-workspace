@@ -1,0 +1,29 @@
+{
+  "startedAt": "2026-09-21T07:41:18.244Z",
+  "database": "workspace_live_1789976477976",
+  "live": true,
+  "checks": [
+    {
+      "name": "Live DM and database Resource create/read",
+      "passed": true,
+      "resourceId": "31c1f952-6e0b-4a70-8851-0fdf00664f4f"
+    },
+    {
+      "name": "Real independent group, separate runtime threads, private DM exclusion",
+      "passed": true,
+      "threads": [
+        "01a0c2ea-2b4e-7520-a959-b73a24e9cafd",
+        "01a0c2ea-2b46-7661-a8ac-7ab0cba85606"
+      ]
+    },
+    {
+      "name": "Real bounded local work session and isolated worktree write",
+      "passed": true,
+      "worktree": "/Users/mischanelson/Documents/ChatGPT/workspace/.local/qualification/workspace_live_1789976477976/worktrees/3c2bfeda-8481-40ea-b17b-134a898ca426",
+      "sessionId": "9d883928-ca28-40c5-a4d4-e6ac16306034",
+      "limitation": "repo.check performs patch formatting checks; arbitrary project test commands remain disabled."
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-09-21T07:42:35.315Z"
+}

@@ -7,8 +7,13 @@ export interface RuntimeInput {
   cwd: string;
   timeoutMs: number;
   onEvent: (type: string, data: Record<string, unknown>) => Promise<void>;
-  tool: (name: string, input: Record<string, unknown>) => Promise<unknown>;
+  tool: (name: string, input: Record<string, unknown>, metadata?: RuntimeToolMetadata) => Promise<unknown>;
   signal: AbortSignal;
+}
+export interface RuntimeToolMetadata {
+  callId: string;
+  threadId: string;
+  turnId: string;
 }
 export interface RuntimeResult {
   status: 'completed' | 'cancelled' | 'failed' | 'uncertain';
