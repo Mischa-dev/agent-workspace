@@ -1,78 +1,1057 @@
-import {revisionContent} from '../storage/content.js';
-import {github} from '../connectors/github.js';
-import {verifyIntegration} from './repository.js';
-import {pool} from '../db.js';
-import {randomUUID} from 'node:crypto';
-import type {Command,Task,Conversation,Resource,ResponseRequest,Message,Run} from '../../../../packages/shared/src/index.js';
-import {Store,AppError,hash} from './store.js';
-import {requireOwner,requestContext,resourceAccess,readiness,route,validateTask,type Actor} from './policy.js';
-const bounded=(value:unknown,max=20000)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new AppError(400,`Text must contain 1–${max} characters.`);return value.trim();};
-const strings=(v:any)=>Array.isArray(v)?v.filter(x=>typeof x==='string'):[];
-const attachments=(s:Store,actor:Actor,values:any=[])=>{if(!Array.isArray(values)||values.length>20)throw new AppError(400,'Too many attachments.');return values.map(v=>{resourceAccess(s,actor,v.resourceId);const rev=s.get(v.revisionId,'revision');if(rev.data.resourceId!==v.resourceId)throw new AppError(400,'Revision belongs to a different Resource.');return {resourceId:v.resourceId,revisionId:v.revisionId};})};
-export async function transact<T>(fn:(s:Store)=>Promise<T>|T,type='change'){const client=await pool.connect();try{await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(431055439)');const s=new Store(client);await s.load();const value=await fn(s);const cursor=await s.commit(type);await client.query('COMMIT');return {value,cursor};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}}
-export async function execute(actor:Actor,command:Command){if(!command.id||command.id.length>160)throw new AppError(400,'Command id required.');return transact(async s=>{const digest=hash({type:command.type,input:command.input});const old=await s.client.query('SELECT * FROM commands WHERE id=$1',[`${actor.id}:${command.id}`]);if(old.rowCount){if(old.rows[0].digest!==digest)throw new AppError(409,'Command id was already used with different input.');return old.rows[0].result;}
- const value=await apply(s,actor,command.type,command.input);await s.client.query('INSERT INTO commands(id,actor,digest,result) VALUES($1,$2,$3,$4)',[`${actor.id}:${command.id}`,actor.id,digest,JSON.stringify(value??null)]);return value;},command.type);}
-export async function apply(s:Store,a:Actor,type:string,i:any):Promise<any>{
- if(type==='conversation.read'){const {req,c}=requestContext(s,a);return s.all<Message>('message').filter(m=>m.data.conversationId===c.id&&(!m.data.staged||m.data.requestId===req.id)&& (req.data.mode!=='independent'||req.data.snapshotIds.includes(m.id)||m.data.requestId===req.id));}
- if(type==='resource.list'){if(a.owner)return s.all('resource');const {c,req}=requestContext(s,a);return s.all<Resource>('resource').filter(r=>r.data.agentIds.includes(a.id)&&r.data.conversationIds.includes(c.id)&&(!r.data.stagedFor||r.data.stagedFor===req.id)&&(req.data.mode!=='independent'||r.data.stagedFor===req.id||(req.data as any).resourcePins?.[r.id])).map(r=>req.data.mode==='independent'&&(req.data as any).resourcePins?.[r.id]?{...r,data:{...r.data,latestRevisionId:(req.data as any).resourcePins[r.id]}}:r);}
- if(type==='resource.read'){const r=resourceAccess(s,a,i.id);let revisionId=i.revisionId||r.data.latestRevisionId;if(!a.owner){const {req}=requestContext(s,a);if(req.data.mode==='independent'&&r.data.stagedFor!==req.id){const frozen=(req.data as any).resourcePins?.[r.id];if(!frozen||(i.revisionId&&i.revisionId!==frozen))throw new AppError(404,'Resource revision is outside this independent snapshot.');revisionId=frozen;}}const rev=s.get(revisionId,'revision');if(rev.data.resourceId!==r.id)throw new AppError(404,'Revision not found');return {resource:r,revision:{...rev,data:await revisionContent(rev.data)}};}
- if(type==='resource.create'){
- let projectIds=strings(i.projectIds),spaceIds=strings(i.spaceIds);let conversationIds=strings(i.conversationIds),agentIds=strings(i.agentIds),stagedFor:undefined|string;
- if(!a.owner){const {c,req}=requestContext(s,a);conversationIds=[c.id];agentIds=[...c.data.agentIds];projectIds=c.data.projectId?[c.data.projectId]:[];spaceIds=c.data.spaceId?[c.data.spaceId]:[];if(req.data.mode==='independent')stagedFor=req.id;}
- for(const id of conversationIds){const c=s.get<Conversation>(id,'conversation');if(a.owner&&!i.agentIds)agentIds.push(...c.data.agentIds);}
- const body=typeof i.text==='string'?i.text:'';if(body.length>256000)throw new AppError(413,'Resource text exceeds 256 KB.');if(!a.owner&&i.storageKey)throw new AppError(403,'Agent file upload is unavailable through this tool.');
- const resource=s.add('resource',{title:bounded(i.title,240),type:i.storageKey?'file':['note','paste','output'].includes(i.type)?i.type:'note',latestRevisionId:'',conversationIds,agentIds:[...new Set(agentIds)],projectIds,spaceIds,...(stagedFor?{stagedFor}:{})});
- const rev=s.add('revision',{resourceId:resource.id,text:i.storageKey?undefined:body,storageKey:i.storageKey,filename:i.filename,mimeType:i.mimeType,size:i.size??Buffer.byteLength(body),checksum:i.checksum||hash(body),authorId:a.id,number:1});s.patch(resource.id,{latestRevisionId:rev.id});return {resource:s.get(resource.id),revision:rev};
- }
- if(type==='resource.revise'){const r=resourceAccess(s,a,i.id);if(!a.owner){const {req}=requestContext(s,a);if(req.data.mode==='independent'&&r.data.stagedFor!==req.id)throw new AppError(403,'Shared inputs are read-only during independent opinions.');}if(r.revision!==i.expectedRevision)throw new AppError(409,'Resource changed. Your draft is preserved; reload before saving.');if(r.data.type==='file')throw new AppError(400,'Upload a new file Resource; byte revisions are immutable.');const text=String(i.text??'');if(text.length>256000)throw new AppError(413,'Resource text exceeds 256 KB.');const prev=s.get(r.data.latestRevisionId,'revision');const rev=s.add('revision',{resourceId:r.id,text,size:Buffer.byteLength(text),checksum:hash(text),authorId:a.id,number:prev.data.number+1});s.patch(r.id,{title:i.title?bounded(i.title,240):r.data.title,latestRevisionId:rev.id},i.expectedRevision);return {resource:s.get(r.id),revision:rev};}
- if(type==='plan.propose'||type==='proposal.create'){let conversationId=i.conversationId,projectId=i.projectId;if(!a.owner){const {c}=requestContext(s,a);conversationId=c.id;projectId=c.data.projectId;}
- if(!Array.isArray(i.tasks)||i.tasks.length<1||i.tasks.length>100)throw new AppError(400,'A proposal needs 1–100 tasks.');return s.add('proposal',{title:bounded(i.title,240),conversationId,projectId,status:'proposed',tasks:i.tasks.map((t:any)=>({...t,title:bounded(t.title,240)})),sourceId:a.requestId,authorId:a.id});}
- if(type==='task.list'){if(a.owner)return s.all('task');const {c}=requestContext(s,a);return c.data.projectId?s.all<Task>('task').filter(t=>t.data.projectId===c.data.projectId):[];}
- requireOwner(a);
- if(type==='agent.create'){const name=bounded(i.name,40);if(!/^[a-zA-Z][a-zA-Z0-9 _-]*$/.test(name)||s.all('agent').some(r=>r.data.name.toLowerCase()===name.toLowerCase()))throw new AppError(400,'Choose a unique agent name using letters, numbers, spaces or hyphens.');return s.add('agent',{name,role:bounded(i.role||'A helpful workspace collaborator.',2000),capabilities:strings(i.capabilities).filter(x=>/^[a-zA-Z][a-zA-Z0-9 -]{1,30}$/.test(x)).slice(0,20),color:i.color||'#527868',enabled:true});}
- if(type==='agent.update'){const agent=s.get(i.id,'agent');const patch={role:i.role??agent.data.role,capabilities:i.capabilities?strings(i.capabilities).filter(x=>/^[a-zA-Z][a-zA-Z0-9 -]{1,30}$/.test(x)).slice(0,20):agent.data.capabilities,enabled:i.enabled??agent.data.enabled};if(!patch.enabled)for(const req of s.all<ResponseRequest>('request').filter(r=>r.data.agentId===agent.id))stopRequest(s,req.id);return s.patch(agent.id,patch,i.expectedRevision);}
- if(type==='conversation.create'){const ids=[...new Set(strings(i.agentIds))];if(!ids.length||ids.length>12)throw new AppError(400,'Choose 1–12 participants.');ids.forEach(id=>s.get(id,'agent'));return s.add('conversation',{title:bounded(i.title,120),kind:ids.length===1?'dm':'group',agentIds:ids,spaceId:i.spaceId,projectId:i.projectId,stopped:false,mode:'auto'});}
- if(type==='conversation.update'){const c=s.get<Conversation>(i.id,'conversation');const ids=i.agentIds?strings(i.agentIds):c.data.agentIds;ids.forEach(id=>s.get(id,'agent'));const removed=c.data.agentIds.filter(id=>!ids.includes(id));for(const req of s.all<ResponseRequest>('request').filter(r=>r.data.conversationId===c.id&&removed.includes(r.data.agentId)))stopRequest(s,req.id);return s.patch(i.id,{title:i.title??c.data.title,agentIds:ids,projectId:i.projectId??c.data.projectId,spaceId:i.spaceId??c.data.spaceId},i.expectedRevision);}
- if(type==='message.send'){
- const c=s.get<Conversation>(i.conversationId,'conversation');const body=bounded(i.body);if(c.data.stopped&&!i.continue)throw new AppError(409,'This conversation is stopped. Choose Continue before sending.');
- if(i.continue)s.patch(c.id,{stopped:false});const decision=route(s,c,{...i,body});
- // Only an owner message creates a new allowance. Dispatch and retries use this persisted burst.
- const acknowledgment=/^(thanks|thank you|ok|okay|got it|nice|cool|great|acknowledged|yes|no)[.! ]*$/i.test(body)&&!(c.data as any).pendingQuestion;const burst=acknowledgment&&c.data.burstId?s.get(c.data.burstId,'burst'):s.add('burst',{conversationId:c.id,remaining:6,stopped:false,mode:i.mode||'auto',participants:decision.ids,published:false});if(acknowledgment)decision.ids=[];
- const message=s.add('message',{conversationId:c.id,authorId:'owner',body,replyTo:i.replyTo,forwardedFrom:i.forwardedFrom,attachments:attachments(s,a,i.attachments),burstId:burst.id});
- if(i.corrects){const prior=s.get(i.corrects,'message');if(prior.data.conversationId!==c.id)throw new AppError(400,'Correction belongs to another conversation.');for(const req of s.all<ResponseRequest>('request').filter(r=>r.data.messageId===prior.id&&['pending','claimed','running'].includes(r.data.status))){if(req.data.status==='pending')s.patch(req.id,{status:'superseded'});else{stopRequest(s,req.id);if(req.data.runId)s.patch(req.data.runId,{correctionMessageId:message.id});}}}
- const snapshotIds=s.all<Message>('message').filter(m=>m.data.conversationId===c.id&&!m.data.staged).map(m=>m.id);
- const requests=decision.ids.map(agentId=>s.add('request',{conversationId:c.id,messageId:message.id,agentId,burstId:burst.id,status:'pending',mode:i.mode||'auto',reason:decision.reason,snapshotIds,resourcePins:Object.fromEntries(s.all<Resource>('resource').filter(r=>r.data.conversationIds.includes(c.id)&&r.data.agentIds.includes(agentId)&&!r.data.stagedFor).map(r=>[r.id,r.data.latestRevisionId])),generation:1}));
- s.patch(c.id,{burstId:burst.id,...(decision.ids.length===1?{focusAgentId:decision.ids[0]}:{})});
- if(decision.ambiguous&&!acknowledgment)s.add('message',{conversationId:c.id,authorId:'system',body:'Who should take this? Choose a recipient or “Everyone” in the composer.',attachments:[]});
- return {message,requests,routing:decision};
- }
- if(type==='conversation.stop'){const c=s.get<Conversation>(i.id,'conversation');s.patch(c.id,{stopped:true});for(const b of s.all('burst').filter(b=>b.data.conversationId===c.id))s.patch(b.id,{stopped:true});for(const r of s.all<ResponseRequest>('request').filter(r=>r.data.conversationId===c.id))stopRequest(s,r.id);return s.get(c.id);}
- if(type==='conversation.continue'){const c=s.get<Conversation>(i.id,'conversation');s.patch(c.id,{stopped:false});if(i.burstId||c.data.burstId){const b=s.get(i.burstId||c.data.burstId,'burst');if(b.data.conversationId!==c.id)throw new AppError(400,'Burst belongs to another conversation.');s.patch(b.id,{stopped:false,remaining:b.data.remaining+6});}return s.get(c.id);}
- if(type==='conversation.finishRound'){const c=s.get<Conversation>(i.id,'conversation');if(c.data.burstId){for(const req of s.all<ResponseRequest>('request').filter(r=>r.data.burstId===c.data.burstId))stopRequest(s,req.id);publishRound(s,c.data.burstId,true);}return s.get(c.id);}
- if(type==='resource.grant'){const r=s.get<Resource>(i.id,'resource');for(const request of s.all<ResponseRequest>('request').filter(q=>['claimed','running'].includes(q.data.status)&&r.data.conversationIds.includes(q.data.conversationId)&&r.data.agentIds.includes(q.data.agentId)&&(!strings(i.conversationIds).includes(q.data.conversationId)||!strings(i.agentIds).includes(q.data.agentId)))){if(request.data.runId)s.patch(request.data.runId,{stopRequested:true,accessRevoked:true});}return s.patch(r.id,{conversationIds:strings(i.conversationIds),agentIds:strings(i.agentIds),projectIds:strings(i.projectIds),spaceIds:strings(i.spaceIds)},i.expectedRevision);}
- if(type==='space.create'||type==='project.create'){const kind=type.split('.')[0] as 'space'|'project';return s.add(kind,{name:bounded(i.name,120),description:String(i.description||''),color:i.color||'#55806b',spaceId:i.spaceId,repository:i.repository,targetBranch:i.targetBranch||'main',github:i.github});}
- if(type==='space.update'||type==='project.update'){const r=s.get(i.id,type.split('.')[0] as 'space'|'project');return s.patch(r.id,{...r.data,...i,id:undefined,expectedRevision:undefined},i.expectedRevision);}
- if(type==='task.create'){const t=taskDefaults(i);validateTask(s,t);if(t.projectId)s.get(t.projectId,'project');t.resources=attachments(s,a,t.resources);return s.add('task',t);}
- if(type==='task.update'){const r=s.get<Task>(i.id,'task');if(r.data.status==='running')throw new AppError(409,'Stop the active session before changing this task.');const allowed=['title','description','projectId','parentId','kind','status','criteria','dependencies','resources','parallel','locks','blocker','selected','execution','position'];const patch=Object.fromEntries(Object.entries(i).filter(([k])=>allowed.includes(k)));const t={...r.data,...patch};const specificationChanged=taskSpecification(r.data)!==taskSpecification(t);if(specificationChanged&&r.data.status==='accepted'){t.status='draft';t.integratedCommit=undefined;}if(specificationChanged||(r.data.status==='accepted'&&t.status!=='accepted')){for(const run of s.all<Run>('run').filter(r=>r.data.kind==='task'&&['prepared','dispatching','running'].includes(r.data.status))){if(run.data.taskId&&dependencySpecifications(s,s.get<Task>(run.data.taskId,'task').data)[r.id])s.patch(run.id,{stopRequested:true,approvalInvalidated:true});}}if(t.status==='accepted'&&r.data.status!=='review')throw new AppError(400,'Only reviewed work can be accepted.');t.resources=attachments(s,a,t.resources);validateTask(s,t,r.id);return s.patch(r.id,t,i.expectedRevision);}
- if(type==='proposal.apply'){const p=s.get(i.id,'proposal');if(p.data.status!=='proposed')throw new AppError(409,'Proposal already resolved.');const selected=Array.isArray(i.selectedIndexes)?i.selectedIndexes:p.data.tasks.map((_:any,n:number)=>n);const added=selected.map((n:number)=>s.add('task',taskDefaults({...p.data.tasks[n],projectId:p.data.projectId,dependencies:[],resources:attachments(s,a,p.data.tasks[n].resources||[])})));for(let n=0;n<added.length;n++){const raw=p.data.tasks[selected[n]],depIndexes=raw.dependencyIndexes||[];const deps=depIndexes.map((index:number)=>{const pos=selected.indexOf(index);if(pos<0)throw new AppError(400,'Selected task depends on an unselected proposal item.');return added[pos].id});s.patch(added[n].id,{dependencies:deps});}for(const t of added)validateTask(s,s.get<Task>(t.id).data,t.id);s.patch(p.id,{status:'applied',taskIds:added.map((r:any)=>r.id)});return added.map((r:any)=>s.get(r.id));}
- if(type==='proposal.dismiss')return s.patch(i.id,{status:'dismissed'},i.expectedRevision);
- if(type==='scope.approve'){
- const ids=strings(i.taskIds);if(!ids.length||ids.length>100)throw new AppError(400,'Select 1–100 tasks.');const tasks=ids.map(id=>s.get<Task>(id,'task'));for(const t of tasks){if(!t.data.description.trim()||!t.data.criteria.length)throw new AppError(400,`Define outcome and criteria for ${t.data.title}.`);}
- return s.add('scope',{title:bounded(i.title||'Approved work',240),taskIds:ids,revisions:Object.fromEntries(tasks.map(t=>[t.id,t.revision])),dependencySpecifications:Object.assign({},...tasks.map(t=>dependencySpecifications(s,t.data))),projects:Object.fromEntries(tasks.filter(t=>t.data.projectId).map(t=>{const p=s.get(t.data.projectId!,'project');return [p.id,{revision:p.revision,repository:p.data.repository,targetBranch:p.data.targetBranch}]})),approvedAt:new Date().toISOString(),approvedBy:'owner',maxWorkers:Math.min(2,Math.max(1,Number(i.maxWorkers)||2)),minutes:Math.min(120,Math.max(1,Number(i.minutes)||60)),reservePercent:20,publish:false});
- }
- if(type==='session.start'){const scope=s.get(i.scopeId,'scope');if(s.all('workSession').some(r=>r.data.status==='active'))throw new AppError(409,'A work session is already active.');for(const id of scope.data.taskIds)if(s.get(id,'task').revision!==scope.data.revisions[id])throw new AppError(409,'Approved tasks changed. Review and approve a new scope.');for(const [id,digest] of Object.entries(scope.data.dependencySpecifications||{})){if(taskSpecification(s.get<Task>(id,'task').data)!==digest)throw new AppError(409,'Prerequisite specification changed after approval.');}for(const [id,p] of Object.entries(scope.data.projects||{}) as [string,any][]){if(s.get(id,'project').revision!==p.revision)throw new AppError(409,'Project configuration changed after approval.');}return s.add('workSession',{scopeId:scope.id,status:'active',deadline:new Date(Date.now()+scope.data.minutes*60000).toISOString(),maxWorkers:scope.data.maxWorkers,reservePercent:scope.data.reservePercent,taskIds:scope.data.taskIds,startedAt:new Date().toISOString()});}
- if(type==='session.stop'){const session=s.get(i.id,'workSession');s.patch(session.id,{status:'stopping'});for(const run of s.all<Run>('run').filter(r=>r.data.sessionId===session.id&&['prepared','dispatching','running'].includes(r.data.status)))s.patch(run.id,{stopRequested:true});return s.get(session.id);}
- if(type==='run.reconcile'){const r=s.get<Run>(i.id,'run');if(r.data.status!=='needs_reconciliation')throw new AppError(409,'Run does not need reconciliation.');if(!i.confirmedStopped)throw new AppError(400,'Confirm that the previous runtime stopped before resolving.');s.patch(r.id,{status:'cancelled',error:'Owner confirmed runtime stopped. Previous output retained.'});if(r.data.requestId)s.patch(r.data.requestId,{status:'cancelled'});if(r.data.taskId)s.patch(r.data.taskId,{status:'review',blocker:'Review preserved work from interrupted attempt.'});return s.get(r.id);}
- if(type==='task.verifyIntegration'){const task=s.get<Task>(i.id,'task');if(task.data.status!=='accepted'||!task.data.commit||!task.data.projectId)throw new AppError(400,'Accept a task with a recorded commit before verifying integration.');const project=s.get(task.data.projectId,'project');const evidence=await verifyIntegration(project.data.repository,project.data.targetBranch||'main',task.data.commit);return s.patch(task.id,{integratedCommit:evidence.commit,integrationEvidence:evidence},i.expectedRevision);}
- if(type==='task.retry'){const task=s.get<Task>(i.id,'task');if(task.data.runId){const run=s.get<Run>(task.data.runId,'run');if(['prepared','dispatching','running','needs_reconciliation'].includes(run.data.status))throw new AppError(409,'The prior run must be stopped and reconciled before retry.');}return s.patch(task.id,{status:'draft',runId:undefined,blocker:undefined,priorRunIds:[...(task.data as any).priorRunIds||[],...(task.data.runId?[task.data.runId]:[])]},i.expectedRevision);}
- if(type==='github.link'){if(!i.taskId&&!i.projectId)throw new AppError(400,'Choose a task or project for this pull request.');if(i.taskId)s.get(i.taskId,'task');if(i.projectId)s.get(i.projectId,'project');const pull=await github.readPull(i.url);return s.add('link',{taskId:i.taskId,projectId:i.projectId,url:i.url,pull,source:'live GitHub',verifiedAt:new Date().toISOString()});}
- if(type==='settings.dispatch'){await s.client.query("INSERT INTO settings(key,value) VALUES('dispatchEnabled',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[JSON.stringify(!!i.enabled)]);return {enabled:!!i.enabled};}
- throw new AppError(400,`Unknown command: ${type}`);
+import { revisionContent } from "../storage/content.js";
+import { github } from "../connectors/github.js";
+import { verifyIntegration } from "./repository.js";
+import { pool } from "../db.js";
+import { randomUUID } from "node:crypto";
+import type {
+  Command,
+  Task,
+  Conversation,
+  Resource,
+  ResponseRequest,
+  Message,
+  Run,
+} from "../../../../packages/shared/src/index.js";
+import { Store, AppError, hash } from "./store.js";
+import {
+  requireOwner,
+  requestContext,
+  resourceAccess,
+  readiness,
+  route,
+  validateTask,
+  type Actor,
+} from "./policy.js";
+const bounded = (value: unknown, max = 20000) => {
+  if (typeof value !== "string" || !value.trim() || value.length > max)
+    throw new AppError(400, `Text must contain 1–${max} characters.`);
+  return value.trim();
+};
+const strings = (v: any) =>
+  Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+const attachments = (s: Store, actor: Actor, values: any = []) => {
+  if (!Array.isArray(values) || values.length > 20)
+    throw new AppError(400, "Too many attachments.");
+  return values.map((v) => {
+    resourceAccess(s, actor, v.resourceId);
+    const rev = s.get(v.revisionId, "revision");
+    if (rev.data.resourceId !== v.resourceId)
+      throw new AppError(400, "Revision belongs to a different Resource.");
+    return { resourceId: v.resourceId, revisionId: v.revisionId };
+  });
+};
+export async function transact<T>(
+  fn: (s: Store) => Promise<T> | T,
+  type = "change",
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(431055439)");
+    const s = new Store(client);
+    await s.load();
+    const value = await fn(s);
+    const cursor = await s.commit(type);
+    await client.query("COMMIT");
+    return { value, cursor };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
-export function taskDefaults(i:any):Task{return {title:bounded(i.title,240),description:String(i.description||''),projectId:i.projectId,parentId:i.parentId,kind:['feature','bug','research','chore'].includes(i.kind)?i.kind:'feature',status:'draft',criteria:strings(i.criteria),dependencies:strings(i.dependencies),resources:i.resources||[],parallel:i.parallel!==false,locks:strings(i.locks),blocker:i.blocker,selected:i.selected!==false,execution:i.execution==='code'?'code':'chat',position:Number(i.position)||Date.now()};}
-export function stopRequest(s:Store,id:string){const req=s.get<ResponseRequest>(id,'request');if(req.data.status==='pending')s.patch(id,{status:'cancelled'});if(['claimed','running'].includes(req.data.status)&&req.data.runId)s.patch(req.data.runId,{stopRequested:true});}
-export function publishRound(s:Store,burstId:string,force=false){const reqs=s.all<ResponseRequest>('request').filter(r=>r.data.burstId===burstId);if(!force&&reqs.some(r=>['pending','claimed','running','needs_reconciliation'].includes(r.data.status)))return;for(const m of s.all<Message>('message').filter(m=>m.data.burstId===burstId&&m.data.staged))s.patch(m.id,{staged:false});for(const r of s.all<Resource>('resource').filter(r=>reqs.some(q=>q.id===r.data.stagedFor)))s.patch(r.id,{stagedFor:undefined});s.patch(burstId,{published:true});}
-export async function seed(){return transact(s=>{if(s.all('agent').length)return;const atlas=s.add('agent',{name:'Atlas',role:'Plans, researches and makes complex work easier to follow.',color:'#527868',capabilities:['plan','research','roadmap','strategy','design'],enabled:true});const ember=s.add('agent',{name:'Ember',role:'Builds, checks and questions the details.',color:'#b36e4b',capabilities:['code','bug','test','implementation','review'],enabled:true});s.add('conversation',{title:'Atlas',kind:'dm',agentIds:[atlas.id],stopped:false,mode:'auto'});s.add('conversation',{title:'Ember',kind:'dm',agentIds:[ember.id],stopped:false,mode:'auto'});s.add('conversation',{title:'The workroom',kind:'group',agentIds:[atlas.id,ember.id],stopped:false,mode:'auto'});},'setup');}
+export async function execute(actor: Actor, command: Command) {
+  if (!command.id || command.id.length > 160)
+    throw new AppError(400, "Command id required.");
+  return transact(async (s) => {
+    const digest = hash({ type: command.type, input: command.input });
+    const old = await s.client.query("SELECT * FROM commands WHERE id=$1", [
+      `${actor.id}:${command.id}`,
+    ]);
+    if (old.rowCount) {
+      if (old.rows[0].digest !== digest)
+        throw new AppError(
+          409,
+          "Command id was already used with different input.",
+        );
+      return old.rows[0].result;
+    }
+    const value = await apply(s, actor, command.type, command.input);
+    await s.client.query(
+      "INSERT INTO commands(id,actor,digest,result) VALUES($1,$2,$3,$4)",
+      [
+        `${actor.id}:${command.id}`,
+        actor.id,
+        digest,
+        JSON.stringify(value ?? null),
+      ],
+    );
+    return value;
+  }, command.type);
+}
+export async function apply(
+  s: Store,
+  a: Actor,
+  type: string,
+  i: any,
+): Promise<any> {
+  if (type === "conversation.read") {
+    const { req, c } = requestContext(s, a);
+    const allowed = s
+      .all<Message>("message")
+      .filter(
+        (m) =>
+          m.data.conversationId === c.id &&
+          (!m.data.staged || m.data.requestId === req.id) &&
+          (req.data.mode !== "independent" ||
+            req.data.snapshotIds.includes(m.id) ||
+            m.data.requestId === req.id),
+      );
+    const before = i.beforeId
+      ? allowed.findIndex((m) => m.id === i.beforeId)
+      : allowed.length;
+    if (before < 0)
+      throw new AppError(
+        404,
+        "Message cursor is outside this conversation snapshot.",
+      );
+    const limit = Math.min(50, Math.max(1, Number(i.limit) || 30));
+    const items = allowed.slice(Math.max(0, before - limit), before);
+    return {
+      items,
+      nextBeforeId: before > items.length ? items[0]?.id : null,
+      totalAllowed: allowed.length,
+    };
+  }
+  if (type === "resource.list") {
+    if (a.owner) return s.all("resource");
+    const { c, req } = requestContext(s, a);
+    return s
+      .all<Resource>("resource")
+      .filter(
+        (r) =>
+          r.data.agentIds.includes(a.id) &&
+          r.data.conversationIds.includes(c.id) &&
+          (!r.data.stagedFor || r.data.stagedFor === req.id) &&
+          (req.data.mode !== "independent" ||
+            r.data.stagedFor === req.id ||
+            (req.data as any).resourcePins?.[r.id]),
+      )
+      .map((r) =>
+        req.data.mode === "independent" &&
+        (req.data as any).resourcePins?.[r.id]
+          ? {
+              ...r,
+              data: {
+                ...r.data,
+                latestRevisionId: (req.data as any).resourcePins[r.id],
+              },
+            }
+          : r,
+      );
+  }
+  if (type === "resource.read") {
+    const r = resourceAccess(s, a, i.id);
+    let revisionId = i.revisionId || r.data.latestRevisionId;
+    if (!a.owner) {
+      const { req } = requestContext(s, a);
+      if (req.data.mode === "independent" && r.data.stagedFor !== req.id) {
+        const frozen = (req.data as any).resourcePins?.[r.id];
+        if (!frozen || (i.revisionId && i.revisionId !== frozen))
+          throw new AppError(
+            404,
+            "Resource revision is outside this independent snapshot.",
+          );
+        revisionId = frozen;
+      }
+    }
+    const rev = s.get(revisionId, "revision");
+    if (rev.data.resourceId !== r.id)
+      throw new AppError(404, "Revision not found");
+    return {
+      resource: r,
+      revision: { ...rev, data: await revisionContent(rev.data) },
+    };
+  }
+  if (type === "resource.create") {
+    let projectIds = strings(i.projectIds),
+      spaceIds = strings(i.spaceIds);
+    let conversationIds = strings(i.conversationIds),
+      agentIds = strings(i.agentIds),
+      stagedFor: undefined | string;
+    if (!a.owner) {
+      const { c, req } = requestContext(s, a);
+      conversationIds = [c.id];
+      agentIds = [...c.data.agentIds];
+      projectIds = c.data.projectId ? [c.data.projectId] : [];
+      spaceIds = c.data.spaceId ? [c.data.spaceId] : [];
+      if (req.data.mode === "independent") stagedFor = req.id;
+    }
+    for (const id of conversationIds) {
+      const c = s.get<Conversation>(id, "conversation");
+      if (a.owner && !i.agentIds) agentIds.push(...c.data.agentIds);
+    }
+    const body = typeof i.text === "string" ? i.text : "";
+    if (body.length > 256000)
+      throw new AppError(413, "Resource text exceeds 256 KB.");
+    if (!a.owner && i.storageKey)
+      throw new AppError(
+        403,
+        "Agent file upload is unavailable through this tool.",
+      );
+    const resource = s.add("resource", {
+      title: bounded(i.title, 240),
+      type: i.storageKey
+        ? "file"
+        : ["note", "paste", "output"].includes(i.type)
+          ? i.type
+          : "note",
+      latestRevisionId: "",
+      conversationIds,
+      agentIds: [...new Set(agentIds)],
+      projectIds,
+      spaceIds,
+      ...(stagedFor ? { stagedFor } : {}),
+    });
+    const rev = s.add("revision", {
+      resourceId: resource.id,
+      text: i.storageKey ? undefined : body,
+      storageKey: i.storageKey,
+      filename: i.filename,
+      mimeType: i.mimeType,
+      size: i.size ?? Buffer.byteLength(body),
+      checksum: i.checksum || hash(body),
+      authorId: a.id,
+      number: 1,
+    });
+    s.patch(resource.id, { latestRevisionId: rev.id });
+    return { resource: s.get(resource.id), revision: rev };
+  }
+  if (type === "resource.revise") {
+    const r = resourceAccess(s, a, i.id);
+    if (!a.owner) {
+      const { req } = requestContext(s, a);
+      if (req.data.mode === "independent" && r.data.stagedFor !== req.id)
+        throw new AppError(
+          403,
+          "Shared inputs are read-only during independent opinions.",
+        );
+    }
+    if (r.revision !== i.expectedRevision)
+      throw new AppError(
+        409,
+        "Resource changed. Your draft is preserved; reload before saving.",
+      );
+    if (r.data.type === "file")
+      throw new AppError(
+        400,
+        "Upload a new file Resource; byte revisions are immutable.",
+      );
+    const text = String(i.text ?? "");
+    if (text.length > 256000)
+      throw new AppError(413, "Resource text exceeds 256 KB.");
+    const prev = s.get(r.data.latestRevisionId, "revision");
+    const rev = s.add("revision", {
+      resourceId: r.id,
+      text,
+      size: Buffer.byteLength(text),
+      checksum: hash(text),
+      authorId: a.id,
+      number: prev.data.number + 1,
+    });
+    s.patch(
+      r.id,
+      {
+        title: i.title ? bounded(i.title, 240) : r.data.title,
+        latestRevisionId: rev.id,
+      },
+      i.expectedRevision,
+    );
+    return { resource: s.get(r.id), revision: rev };
+  }
+  if (type === "plan.propose" || type === "proposal.create") {
+    let conversationId = i.conversationId,
+      projectId = i.projectId;
+    if (!a.owner) {
+      const { c } = requestContext(s, a);
+      conversationId = c.id;
+      projectId = c.data.projectId;
+    }
+    if (!Array.isArray(i.tasks) || i.tasks.length < 1 || i.tasks.length > 100)
+      throw new AppError(400, "A proposal needs 1–100 tasks.");
+    return s.add("proposal", {
+      title: bounded(i.title, 240),
+      conversationId,
+      projectId,
+      status: "proposed",
+      tasks: i.tasks.map((t: any) => ({ ...t, title: bounded(t.title, 240) })),
+      sourceId: a.requestId,
+      authorId: a.id,
+    });
+  }
+  if (type === "task.list") {
+    if (a.owner) return s.all("task");
+    const { c } = requestContext(s, a);
+    return c.data.projectId
+      ? s.all<Task>("task").filter((t) => t.data.projectId === c.data.projectId)
+      : [];
+  }
+  requireOwner(a);
+  if (type === "agent.create") {
+    const name = bounded(i.name, 40);
+    if (
+      !/^[a-zA-Z][a-zA-Z0-9 _-]*$/.test(name) ||
+      s
+        .all("agent")
+        .some((r) => r.data.name.toLowerCase() === name.toLowerCase())
+    )
+      throw new AppError(
+        400,
+        "Choose a unique agent name using letters, numbers, spaces or hyphens.",
+      );
+    return s.add("agent", {
+      name,
+      role: bounded(i.role || "A helpful workspace collaborator.", 2000),
+      capabilities: strings(i.capabilities)
+        .filter((x) => /^[a-zA-Z][a-zA-Z0-9 -]{1,30}$/.test(x))
+        .slice(0, 20),
+      color: i.color || "#527868",
+      enabled: true,
+    });
+  }
+  if (type === "agent.update") {
+    const agent = s.get(i.id, "agent");
+    const patch = {
+      role: i.role ?? agent.data.role,
+      capabilities: i.capabilities
+        ? strings(i.capabilities)
+            .filter((x) => /^[a-zA-Z][a-zA-Z0-9 -]{1,30}$/.test(x))
+            .slice(0, 20)
+        : agent.data.capabilities,
+      enabled: i.enabled ?? agent.data.enabled,
+    };
+    if (!patch.enabled)
+      for (const req of s
+        .all<ResponseRequest>("request")
+        .filter((r) => r.data.agentId === agent.id))
+        stopRequest(s, req.id);
+    if (!patch.enabled)
+      for (const run of s
+        .all<Run>("run")
+        .filter(
+          (r) =>
+            r.data.agentId === agent.id &&
+            ["prepared", "dispatching", "running"].includes(r.data.status),
+        ))
+        s.patch(run.id, { stopRequested: true });
+    return s.patch(agent.id, patch, i.expectedRevision);
+  }
+  if (type === "conversation.create") {
+    const ids = [...new Set(strings(i.agentIds))];
+    if (!ids.length || ids.length > 12)
+      throw new AppError(400, "Choose 1–12 participants.");
+    ids.forEach((id) => s.get(id, "agent"));
+    return s.add("conversation", {
+      title: bounded(i.title, 120),
+      kind: ids.length === 1 ? "dm" : "group",
+      agentIds: ids,
+      spaceId: i.spaceId,
+      projectId: i.projectId,
+      stopped: false,
+      mode: "auto",
+    });
+  }
+  if (type === "conversation.update") {
+    const c = s.get<Conversation>(i.id, "conversation");
+    const ids = i.agentIds ? strings(i.agentIds) : c.data.agentIds;
+    ids.forEach((id) => s.get(id, "agent"));
+    const removed = c.data.agentIds.filter((id) => !ids.includes(id));
+    for (const req of s
+      .all<ResponseRequest>("request")
+      .filter(
+        (r) =>
+          r.data.conversationId === c.id && removed.includes(r.data.agentId),
+      ))
+      stopRequest(s, req.id);
+    return s.patch(
+      i.id,
+      {
+        title: i.title ?? c.data.title,
+        agentIds: ids,
+        projectId: "projectId" in i ? i.projectId : c.data.projectId,
+        spaceId: "spaceId" in i ? i.spaceId : c.data.spaceId,
+      },
+      i.expectedRevision,
+    );
+  }
+  if (type === "message.send") {
+    const c = s.get<Conversation>(i.conversationId, "conversation");
+    const body = bounded(i.body);
+    if (c.data.stopped && !i.continue)
+      throw new AppError(
+        409,
+        "This conversation is stopped. Choose Continue before sending.",
+      );
+    if (i.continue) s.patch(c.id, { stopped: false });
+    const decision = route(s, c, { ...i, body });
+    // Only an owner message creates a new allowance. Dispatch and retries use this persisted burst.
+    const acknowledgment =
+      /^(thanks|thank you|ok|okay|got it|nice|cool|great|acknowledged|yes|no)[.! ]*$/i.test(
+        body,
+      ) && !(c.data as any).pendingQuestion;
+    const burst =
+      acknowledgment && c.data.burstId
+        ? s.get(c.data.burstId, "burst")
+        : s.add("burst", {
+            conversationId: c.id,
+            remaining: 6,
+            stopped: false,
+            mode: i.mode || "auto",
+            participants: decision.ids,
+            published: false,
+          });
+    if (acknowledgment) decision.ids = [];
+    const message = s.add("message", {
+      conversationId: c.id,
+      authorId: "owner",
+      body,
+      replyTo: i.replyTo,
+      forwardedFrom: i.forwardedFrom,
+      attachments: attachments(s, a, i.attachments),
+      burstId: burst.id,
+    });
+    if (i.corrects) {
+      const prior = s.get(i.corrects, "message");
+      if (prior.data.conversationId !== c.id)
+        throw new AppError(400, "Correction belongs to another conversation.");
+      for (const answered of s
+        .all<ResponseRequest>("request")
+        .filter(
+          (r) => r.data.messageId === prior.id && r.data.status === "answered",
+        )) {
+        for (const reply of s
+          .all<Message>("message")
+          .filter((m) => m.data.requestId === answered.id))
+          s.patch(reply.id, { predatesCorrection: true });
+        if (answered.data.runId)
+          s.patch(answered.data.runId, { correctionMessageId: message.id });
+      }
+      for (const req of s
+        .all<ResponseRequest>("request")
+        .filter(
+          (r) =>
+            r.data.messageId === prior.id &&
+            ["pending", "claimed", "running"].includes(r.data.status),
+        )) {
+        if (req.data.status === "pending")
+          s.patch(req.id, { status: "superseded" });
+        else {
+          stopRequest(s, req.id);
+          if (req.data.runId)
+            s.patch(req.data.runId, { correctionMessageId: message.id });
+        }
+      }
+    }
+    const snapshotIds = s
+      .all<Message>("message")
+      .filter((m) => m.data.conversationId === c.id && !m.data.staged)
+      .map((m) => m.id);
+    const requests = decision.ids.map((agentId) =>
+      s.add("request", {
+        conversationId: c.id,
+        messageId: message.id,
+        agentId,
+        burstId: burst.id,
+        status: "pending",
+        mode: i.mode || "auto",
+        reason: decision.reason,
+        snapshotIds,
+        resourcePins: Object.fromEntries(
+          s
+            .all<Resource>("resource")
+            .filter(
+              (r) =>
+                r.data.conversationIds.includes(c.id) &&
+                r.data.agentIds.includes(agentId) &&
+                !r.data.stagedFor,
+            )
+            .map((r) => [r.id, r.data.latestRevisionId]),
+        ),
+        generation: 1,
+        intent: i.intent === "planning" ? "planning" : "conversation",
+      }),
+    );
+    s.patch(c.id, {
+      burstId: burst.id,
+      ...(decision.ids.length === 1 ? { focusAgentId: decision.ids[0] } : {}),
+    });
+    if (decision.ambiguous && !acknowledgment)
+      s.add("message", {
+        conversationId: c.id,
+        authorId: "system",
+        body: "Who should take this? Choose a recipient or “Everyone” in the composer.",
+        attachments: [],
+      });
+    return { message, requests, routing: decision };
+  }
+  if (type === "conversation.stop") {
+    const c = s.get<Conversation>(i.id, "conversation");
+    s.patch(c.id, { stopped: true });
+    for (const b of s
+      .all("burst")
+      .filter((b) => b.data.conversationId === c.id))
+      s.patch(b.id, { stopped: true });
+    for (const r of s
+      .all<ResponseRequest>("request")
+      .filter((r) => r.data.conversationId === c.id))
+      stopRequest(s, r.id);
+    return s.get(c.id);
+  }
+  if (type === "conversation.continue") {
+    const c = s.get<Conversation>(i.id, "conversation");
+    s.patch(c.id, { stopped: false });
+    if (i.burstId || c.data.burstId) {
+      const b = s.get(i.burstId || c.data.burstId, "burst");
+      if (b.data.conversationId !== c.id)
+        throw new AppError(400, "Burst belongs to another conversation.");
+      s.patch(b.id, { stopped: false, remaining: b.data.remaining + 6 });
+    }
+    return s.get(c.id);
+  }
+  if (type === "conversation.finishRound") {
+    const c = s.get<Conversation>(i.id, "conversation");
+    if (c.data.burstId) {
+      for (const req of s
+        .all<ResponseRequest>("request")
+        .filter((r) => r.data.burstId === c.data.burstId))
+        stopRequest(s, req.id);
+      publishRound(s, c.data.burstId, true);
+    }
+    return s.get(c.id);
+  }
+  if (type === "resource.grant") {
+    const r = s.get<Resource>(i.id, "resource");
+    for (const request of s
+      .all<ResponseRequest>("request")
+      .filter(
+        (q) =>
+          ["claimed", "running"].includes(q.data.status) &&
+          r.data.conversationIds.includes(q.data.conversationId) &&
+          r.data.agentIds.includes(q.data.agentId) &&
+          (!strings(i.conversationIds).includes(q.data.conversationId) ||
+            !strings(i.agentIds).includes(q.data.agentId)),
+      )) {
+      if (request.data.runId)
+        s.patch(request.data.runId, {
+          stopRequested: true,
+          accessRevoked: true,
+        });
+    }
+    return s.patch(
+      r.id,
+      {
+        conversationIds: strings(i.conversationIds),
+        agentIds: strings(i.agentIds),
+        projectIds: strings(i.projectIds),
+        spaceIds: strings(i.spaceIds),
+      },
+      i.expectedRevision,
+    );
+  }
+  if (type === "space.create" || type === "project.create") {
+    const kind = type.split(".")[0] as "space" | "project";
+    return s.add(kind, {
+      name: bounded(i.name, 120),
+      description: String(i.description || ""),
+      color: i.color || "#55806b",
+      spaceId: i.spaceId,
+      repository: i.repository,
+      targetBranch: i.targetBranch || "main",
+      github: i.github,
+    });
+  }
+  if (type === "space.update" || type === "project.update") {
+    const r = s.get(i.id, type.split(".")[0] as "space" | "project");
+    if (type === "project.update")
+      for (const run of s
+        .all<Run>("run")
+        .filter(
+          (run) =>
+            run.data.taskId &&
+            ["prepared", "dispatching", "running"].includes(run.data.status) &&
+            s.get(run.data.taskId, "task").data.projectId === r.id,
+        ))
+        s.patch(run.id, { stopRequested: true, approvalInvalidated: true });
+    return s.patch(
+      r.id,
+      { ...r.data, ...i, id: undefined, expectedRevision: undefined },
+      i.expectedRevision,
+    );
+  }
+  if (type === "task.create") {
+    const t = taskDefaults(i);
+    validateTask(s, t);
+    if (t.projectId) s.get(t.projectId, "project");
+    t.resources = attachments(s, a, t.resources);
+    return s.add("task", t);
+  }
+  if (type === "task.update") {
+    const r = s.get<Task>(i.id, "task");
+    if (r.data.status === "running")
+      throw new AppError(
+        409,
+        "Stop the active session before changing this task.",
+      );
+    const allowed = [
+      "title",
+      "description",
+      "projectId",
+      "parentId",
+      "kind",
+      "status",
+      "criteria",
+      "dependencies",
+      "resources",
+      "parallel",
+      "locks",
+      "blocker",
+      "selected",
+      "execution",
+      "position",
+    ];
+    const patch = Object.fromEntries(
+      Object.entries(i).filter(([k]) => allowed.includes(k)),
+    );
+    const t = { ...r.data, ...patch };
+    const specificationChanged =
+      taskSpecification(r.data) !== taskSpecification(t);
+    if (specificationChanged && r.data.status === "accepted") {
+      t.status = "draft";
+      t.integratedCommit = undefined;
+    }
+    if (
+      specificationChanged ||
+      (r.data.status === "accepted" && t.status !== "accepted")
+    ) {
+      for (const run of s
+        .all<Run>("run")
+        .filter(
+          (r) =>
+            r.data.kind === "task" &&
+            ["prepared", "dispatching", "running"].includes(r.data.status),
+        )) {
+        if (
+          run.data.taskId &&
+          dependencySpecifications(
+            s,
+            s.get<Task>(run.data.taskId, "task").data,
+          )[r.id]
+        )
+          s.patch(run.id, { stopRequested: true, approvalInvalidated: true });
+      }
+    }
+    if (t.status === "accepted" && r.data.status !== "review")
+      throw new AppError(400, "Only reviewed work can be accepted.");
+    t.resources = attachments(s, a, t.resources);
+    validateTask(s, t, r.id);
+    return s.patch(r.id, t, i.expectedRevision);
+  }
+  if (type === "proposal.apply") {
+    const p = s.get(i.id, "proposal");
+    if (p.data.status !== "proposed")
+      throw new AppError(409, "Proposal already resolved.");
+    const selected = Array.isArray(i.selectedIndexes)
+      ? i.selectedIndexes
+      : p.data.tasks.map((_: any, n: number) => n);
+    if (
+      !selected.length ||
+      new Set(selected).size !== selected.length ||
+      selected.some(
+        (n: unknown) =>
+          !Number.isInteger(n) ||
+          Number(n) < 0 ||
+          Number(n) >= p.data.tasks.length,
+      )
+    )
+      throw new AppError(400, "Choose distinct valid proposal items.");
+    const added = selected.map((n: number) =>
+      s.add(
+        "task",
+        taskDefaults({
+          ...p.data.tasks[n],
+          projectId: p.data.projectId,
+          dependencies: [],
+          resources: attachments(s, a, p.data.tasks[n].resources || []),
+        }),
+      ),
+    );
+    for (let n = 0; n < added.length; n++) {
+      const raw = p.data.tasks[selected[n]],
+        depIndexes = raw.dependencyIndexes || [];
+      const deps = depIndexes.map((index: number) => {
+        const pos = selected.indexOf(index);
+        if (pos < 0)
+          throw new AppError(
+            400,
+            "Selected task depends on an unselected proposal item.",
+          );
+        return added[pos].id;
+      });
+      const parentPosition = Number.isInteger(raw.parentIndex)
+        ? selected.indexOf(raw.parentIndex)
+        : -1;
+      s.patch(added[n].id, {
+        dependencies: [...new Set([...strings(raw.dependencies), ...deps])],
+        parentId: parentPosition >= 0 ? added[parentPosition].id : raw.parentId,
+      });
+    }
+    for (const t of added) validateTask(s, s.get<Task>(t.id).data, t.id);
+    s.patch(p.id, { status: "applied", taskIds: added.map((r: any) => r.id) });
+    return added.map((r: any) => s.get(r.id));
+  }
+  if (type === "proposal.dismiss")
+    return s.patch(i.id, { status: "dismissed" }, i.expectedRevision);
+  if (type === "scope.approve") {
+    const ids = strings(i.taskIds);
+    if (!ids.length || ids.length > 100)
+      throw new AppError(400, "Select 1–100 tasks.");
+    const tasks = ids.map((id) => s.get<Task>(id, "task"));
+    if (
+      !i.expectedRevisions ||
+      tasks.some((t) => i.expectedRevisions[t.id] !== t.revision)
+    )
+      throw new AppError(
+        409,
+        "The selected tasks changed or were not previewed. Review the current scope before approving.",
+      );
+    if (
+      tasks.some(
+        (t) =>
+          t.data.projectId &&
+          i.expectedProjectRevisions?.[t.data.projectId] !==
+            s.get(t.data.projectId, "project").revision,
+      )
+    )
+      throw new AppError(
+        409,
+        "Project settings changed or were not previewed. Review the current scope before approving.",
+      );
+    for (const t of tasks) {
+      if (!t.data.description.trim() || !t.data.criteria.length)
+        throw new AppError(
+          400,
+          `Define outcome and criteria for ${t.data.title}.`,
+        );
+    }
+    return s.add("scope", {
+      title: bounded(i.title || "Approved work", 240),
+      taskIds: ids,
+      revisions: Object.fromEntries(tasks.map((t) => [t.id, t.revision])),
+      specifications: Object.fromEntries(
+        tasks.map((t) => [t.id, taskSpecification(t.data)]),
+      ),
+      dependencySpecifications: Object.assign(
+        {},
+        ...tasks.map((t) => dependencySpecifications(s, t.data)),
+      ),
+      projects: Object.fromEntries(
+        tasks
+          .filter((t) => t.data.projectId)
+          .map((t) => {
+            const p = s.get(t.data.projectId!, "project");
+            return [
+              p.id,
+              {
+                revision: p.revision,
+                repository: p.data.repository,
+                targetBranch: p.data.targetBranch,
+              },
+            ];
+          }),
+      ),
+      approvedAt: new Date().toISOString(),
+      approvedBy: "owner",
+      maxWorkers: Math.min(2, Math.max(1, Number(i.maxWorkers) || 2)),
+      minutes: Math.min(120, Math.max(1, Number(i.minutes) || 60)),
+      reservePercent: 20,
+      publish: false,
+    });
+  }
+  if (type === "session.start") {
+    const scope = s.get(i.scopeId, "scope");
+    if (s.all("workSession").some((r) => r.data.status === "active"))
+      throw new AppError(409, "A work session is already active.");
+    for (const id of scope.data.taskIds)
+      if (
+        scope.data.specifications
+          ? taskSpecification(s.get<Task>(id, "task").data) !==
+            scope.data.specifications[id]
+          : s.get(id, "task").revision !== scope.data.revisions[id]
+      )
+        throw new AppError(
+          409,
+          "Approved tasks changed. Review and approve a new scope.",
+        );
+    for (const [id, digest] of Object.entries(
+      scope.data.dependencySpecifications || {},
+    )) {
+      if (taskSpecification(s.get<Task>(id, "task").data) !== digest)
+        throw new AppError(
+          409,
+          "Prerequisite specification changed after approval.",
+        );
+    }
+    for (const [id, p] of Object.entries(scope.data.projects || {}) as [
+      string,
+      any,
+    ][]) {
+      if (s.get(id, "project").revision !== p.revision)
+        throw new AppError(
+          409,
+          "Project configuration changed after approval.",
+        );
+    }
+    return s.add("workSession", {
+      scopeId: scope.id,
+      status: "active",
+      deadline: new Date(Date.now() + scope.data.minutes * 60000).toISOString(),
+      maxWorkers: scope.data.maxWorkers,
+      reservePercent: scope.data.reservePercent,
+      taskIds: scope.data.taskIds,
+      startedAt: new Date().toISOString(),
+    });
+  }
+  if (type === "session.stop") {
+    const session = s.get(i.id, "workSession");
+    s.patch(session.id, { status: "stopping" });
+    for (const run of s
+      .all<Run>("run")
+      .filter(
+        (r) =>
+          r.data.sessionId === session.id &&
+          ["prepared", "dispatching", "running"].includes(r.data.status),
+      ))
+      s.patch(run.id, { stopRequested: true });
+    return s.get(session.id);
+  }
+  if (type === "run.reconcile") {
+    const r = s.get<Run>(i.id, "run");
+    if (r.data.status !== "needs_reconciliation")
+      throw new AppError(409, "Run does not need reconciliation.");
+    if (!i.confirmedStopped)
+      throw new AppError(
+        400,
+        "Confirm that the previous runtime stopped before resolving.",
+      );
+    s.patch(r.id, {
+      status: "cancelled",
+      error: "Owner confirmed runtime stopped. Previous output retained.",
+    });
+    if (r.data.requestId) s.patch(r.data.requestId, { status: "cancelled" });
+    if (r.data.taskId)
+      s.patch(r.data.taskId, {
+        status: "review",
+        blocker: "Review preserved work from interrupted attempt.",
+      });
+    return s.get(r.id);
+  }
+  if (type === "task.verifyIntegration") {
+    const task = s.get<Task>(i.id, "task");
+    if (
+      task.data.status !== "accepted" ||
+      !task.data.commit ||
+      !task.data.projectId
+    )
+      throw new AppError(
+        400,
+        "Accept a task with a recorded commit before verifying integration.",
+      );
+    const project = s.get(task.data.projectId, "project");
+    const evidence = await verifyIntegration(
+      project.data.repository,
+      project.data.targetBranch || "main",
+      task.data.commit,
+    );
+    return s.patch(
+      task.id,
+      { integratedCommit: evidence.commit, integrationEvidence: evidence },
+      i.expectedRevision,
+    );
+  }
+  if (type === "task.retry") {
+    const task = s.get<Task>(i.id, "task");
+    if (task.data.runId) {
+      const run = s.get<Run>(task.data.runId, "run");
+      if (
+        ["prepared", "dispatching", "running", "needs_reconciliation"].includes(
+          run.data.status,
+        )
+      )
+        throw new AppError(
+          409,
+          "The prior run must be stopped and reconciled before retry.",
+        );
+    }
+    return s.patch(
+      task.id,
+      {
+        status: "draft",
+        runId: undefined,
+        blocker: undefined,
+        attemptGeneration: ((task.data as any).attemptGeneration || 0) + 1,
+        priorRunIds: [
+          ...((task.data as any).priorRunIds || []),
+          ...(task.data.runId ? [task.data.runId] : []),
+        ],
+      },
+      i.expectedRevision,
+    );
+  }
+  if (type === "github.link") {
+    if (!i.taskId && !i.projectId)
+      throw new AppError(
+        400,
+        "Choose a task or project for this pull request.",
+      );
+    if (i.taskId) s.get(i.taskId, "task");
+    if (i.projectId) s.get(i.projectId, "project");
+    const pull = await github.readPull(i.url);
+    return s.add("link", {
+      taskId: i.taskId,
+      projectId: i.projectId,
+      url: i.url,
+      pull,
+      source: "live GitHub",
+      verifiedAt: new Date().toISOString(),
+    });
+  }
+  if (type === "settings.dispatch") {
+    await s.client.query(
+      "INSERT INTO settings(key,value) VALUES('dispatchEnabled',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      [JSON.stringify(!!i.enabled)],
+    );
+    return { enabled: !!i.enabled };
+  }
+  throw new AppError(400, `Unknown command: ${type}`);
+}
+export function taskDefaults(i: any): Task {
+  return {
+    title: bounded(i.title, 240),
+    description: String(i.description || ""),
+    projectId: i.projectId,
+    parentId: i.parentId,
+    kind: ["feature", "bug", "research", "chore"].includes(i.kind)
+      ? i.kind
+      : "feature",
+    status: "draft",
+    criteria: strings(i.criteria),
+    dependencies: strings(i.dependencies),
+    resources: i.resources || [],
+    parallel: i.parallel !== false,
+    locks: strings(i.locks),
+    blocker: i.blocker,
+    selected: i.selected !== false,
+    execution: i.execution === "code" ? "code" : "chat",
+    position: Number(i.position) || Date.now(),
+  };
+}
+export function stopRequest(s: Store, id: string) {
+  const req = s.get<ResponseRequest>(id, "request");
+  if (req.data.status === "pending") s.patch(id, { status: "cancelled" });
+  if (["claimed", "running"].includes(req.data.status) && req.data.runId)
+    s.patch(req.data.runId, { stopRequested: true });
+}
+export function publishRound(s: Store, burstId: string, force = false) {
+  const reqs = s
+    .all<ResponseRequest>("request")
+    .filter((r) => r.data.burstId === burstId);
+  if (
+    !force &&
+    reqs.some((r) =>
+      ["pending", "claimed", "running", "needs_reconciliation"].includes(
+        r.data.status,
+      ),
+    )
+  )
+    return;
+  for (const m of s
+    .all<Message>("message")
+    .filter((m) => m.data.burstId === burstId && m.data.staged))
+    s.patch(m.id, { staged: false });
+  for (const r of s
+    .all<Resource>("resource")
+    .filter((r) => reqs.some((q) => q.id === r.data.stagedFor)))
+    s.patch(r.id, { stagedFor: undefined });
+  s.patch(burstId, { published: true });
+}
+export async function seed() {
+  return transact((s) => {
+    if (s.all("agent").length) return;
+    const atlas = s.add("agent", {
+      name: "Atlas",
+      role: "Plans, researches and makes complex work easier to follow.",
+      color: "#527868",
+      capabilities: ["plan", "research", "roadmap", "strategy", "design"],
+      enabled: true,
+    });
+    const ember = s.add("agent", {
+      name: "Ember",
+      role: "Builds, checks and questions the details.",
+      color: "#b36e4b",
+      capabilities: ["code", "bug", "test", "implementation", "review"],
+      enabled: true,
+    });
+    s.add("conversation", {
+      title: "Atlas",
+      kind: "dm",
+      agentIds: [atlas.id],
+      stopped: false,
+      mode: "auto",
+    });
+    s.add("conversation", {
+      title: "Ember",
+      kind: "dm",
+      agentIds: [ember.id],
+      stopped: false,
+      mode: "auto",
+    });
+    s.add("conversation", {
+      title: "The workroom",
+      kind: "group",
+      agentIds: [atlas.id, ember.id],
+      stopped: false,
+      mode: "auto",
+    });
+  }, "setup");
+}
 
-export function taskSpecification(t:Task){return hash({title:t.title,description:t.description,criteria:t.criteria,resources:t.resources,dependencies:t.dependencies,projectId:t.projectId,execution:t.execution,parallel:t.parallel,locks:t.locks,selected:t.selected});}
-export function dependencySpecifications(s:Store,t:Task,seen:Record<string,string>={}){for(const id of t.dependencies){if(seen[id])continue;const dep=s.get<Task>(id,'task');seen[id]=taskSpecification(dep.data);dependencySpecifications(s,dep.data,seen);}return seen;}
+export function taskSpecification(t: Task) {
+  return hash({
+    title: t.title,
+    description: t.description,
+    criteria: t.criteria,
+    resources: t.resources,
+    dependencies: t.dependencies,
+    projectId: t.projectId,
+    execution: t.execution,
+    parallel: t.parallel,
+    locks: t.locks,
+    selected: t.selected,
+    blocker: t.blocker,
+    attemptGeneration: (t as any).attemptGeneration || 0,
+  });
+}
+export function dependencySpecifications(
+  s: Store,
+  t: Task,
+  seen: Record<string, string> = {},
+) {
+  for (const id of t.dependencies) {
+    if (seen[id]) continue;
+    const dep = s.get<Task>(id, "task");
+    seen[id] = taskSpecification(dep.data);
+    dependencySpecifications(s, dep.data, seen);
+  }
+  return seen;
+}

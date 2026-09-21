@@ -1,29 +1,52 @@
 {
-  "startedAt": "2026-09-21T07:41:18.244Z",
-  "database": "workspace_live_1789976477976",
+  "startedAt": "2026-09-21T08:25:10.337Z",
+  "database": "workspace_live_1789979109992",
   "live": true,
   "checks": [
     {
       "name": "Live DM and database Resource create/read",
       "passed": true,
-      "resourceId": "31c1f952-6e0b-4a70-8851-0fdf00664f4f"
+      "resourceId": "1b5b0207-eb81-4d9f-8c41-aea4c66a5536"
     },
     {
       "name": "Real independent group, separate runtime threads, private DM exclusion",
       "passed": true,
       "threads": [
-        "01a0c2ea-2b4e-7520-a959-b73a24e9cafd",
-        "01a0c2ea-2b46-7661-a8ac-7ab0cba85606"
+        "01a0c312-51b9-7301-abc3-cff741afb2fa",
+        "01a0c312-838a-7aa1-9b19-2160edf9346a"
       ]
     },
     {
       "name": "Real bounded local work session and isolated worktree write",
       "passed": true,
-      "worktree": "/Users/mischanelson/Documents/ChatGPT/workspace/.local/qualification/workspace_live_1789976477976/worktrees/3c2bfeda-8481-40ea-b17b-134a898ca426",
-      "sessionId": "9d883928-ca28-40c5-a4d4-e6ac16306034",
+      "worktree": "/Users/mischanelson/Documents/ChatGPT/workspace/.local/qualification/workspace_live_1789979109992/worktrees/df5dc8ea-ab80-4c65-b5c0-2fddd5a319cb",
+      "commit": "f8d5df23f7fe7c3017ee59e67281f829a99e17d3",
+      "resultResourceId": "6d03b0c4-0fd3-4a7b-8cdb-d4d30bc07998",
+      "sessionId": "9b10ee87-3c4c-47af-af53-f6931c7152ae",
       "limitation": "repo.check performs patch formatting checks; arbitrary project test commands remain disabled."
+    },
+    {
+      "name": "Two overlapping real coding runs with separate worktrees and checkpoints",
+      "passed": true,
+      "sessionId": "df9c70a1-afe5-4c7e-95ad-a174decc5945",
+      "runs": [
+        {
+          "runId": "e717fbbb-2b70-44a5-8b53-4f6dfb45c695",
+          "worktree": "/Users/mischanelson/Documents/ChatGPT/workspace/.local/qualification/workspace_live_1789979109992/worktrees/e717fbbb-2b70-44a5-8b53-4f6dfb45c695",
+          "commit": "c8dac093456497581a0a8e0884880cef30e302d3",
+          "started": "2026-09-21T08:26:43.008Z",
+          "finished": "2026-09-21T08:27:05.863Z"
+        },
+        {
+          "runId": "583088b5-6e0d-42d8-973e-1124af637cfb",
+          "worktree": "/Users/mischanelson/Documents/ChatGPT/workspace/.local/qualification/workspace_live_1789979109992/worktrees/583088b5-6e0d-42d8-973e-1124af637cfb",
+          "commit": "78a157eb422cc5612093301a2a4c2ab49f01fc04",
+          "started": "2026-09-21T08:26:46.377Z",
+          "finished": "2026-09-21T08:27:20.478Z"
+        }
+      ]
     }
   ],
   "passed": true,
-  "finishedAt": "2026-09-21T07:42:35.315Z"
+  "finishedAt": "2026-09-21T08:27:21.645Z"
 }

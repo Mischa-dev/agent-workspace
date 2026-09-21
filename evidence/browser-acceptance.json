@@ -1,0 +1,28 @@
+{
+  "verifiedAt": "2026-09-21T08:28:00Z",
+  "browser": "Codex in-app browser",
+  "dataset": "workspace_browser_1789977483396 and its isolated restored copy",
+  "liveModelPlanningAndTaskExecution": true,
+  "checks": [
+    "Owner sign-in",
+    "Space and project creation",
+    "Real agent plan proposal and reviewed application",
+    "Exact revision scope preview, approve, separate start",
+    "First task result saved and reviewed; dependency held until acceptance",
+    "Dependent real task consumed prerequisite Resource and saved output",
+    "Resource edit and immutable revision history",
+    "Message draft survives refresh; keyboard clearing works",
+    "Text file upload through native file chooser",
+    "Live GitHub PR metadata and persisted project association",
+    "Two-editor conflict preserves unsaved draft",
+    "Revision 3 attachment opens revision 3 after revision 4 exists",
+    "Paused dispatch retains queued message; Stop cancels it",
+    "Restored app requires fresh login and shows dispatch paused",
+    "1280px desktop visual inspection",
+    "390px layout has no horizontal document overflow",
+    "No application console errors in final browser check"
+  ],
+  "githubReadReference": "https://github.com/openai/codex/pull/46959",
+  "remoteWrites": false,
+  "physicalPhoneTest": false
+}

@@ -35,6 +35,7 @@
     "@types/node": "24.13.6",
     "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.10",
+    "prettier": "3.9.8",
     "tsx": "4.23.14",
     "typescript": "5.9.3"
   }

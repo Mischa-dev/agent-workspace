@@ -1,0 +1,31 @@
+{
+  "probe": "read-only account capacity telemetry",
+  "observedAt": "2026-09-21T08:15:24.407Z",
+  "elapsedMs": 5155,
+  "source": "codex.account/rateLimits/read",
+  "format": "unavailable",
+  "unavailableReason": "read-failed",
+  "buckets": [],
+  "assessment": {
+    "status": "unknown",
+    "admission": "bounded-only",
+    "fresh": true,
+    "applicableBucketIds": []
+  },
+  "boundary": {
+    "modelThreads": 0,
+    "modelTurns": 0,
+    "billingCalls": 0,
+    "resetCalls": 0,
+    "credentialsCopied": false,
+    "rawResponseRecorded": false,
+    "allowedProviderMethods": [
+      "initialize",
+      "account/rateLimits/read"
+    ],
+    "allowedProviderNotifications": [
+      "initialized"
+    ]
+  },
+  "validation": "Method allowlist independently exercised by fixture tests. This live attempt timed out before delivering a telemetry snapshot; phase was not retained. Availability and quota values remain unqualified. No model invocation or billing/reset path exists in capacity()."
+}

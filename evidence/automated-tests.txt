@@ -1,0 +1,63 @@
+Command: ./workspace test
+Fixture runtimes; actual isolated PostgreSQL, HTTP, filesystem and Git operations.
+
+✔ fresh applicable windows normalize consumed percentages and permit bounded admission (0.692625ms)
+✔ an exhausted applicable window holds work even if another window has room (0.590625ms)
+✔ multi-bucket view is authoritative and unrelated exhausted limits do not block Codex (0.274ms)
+✔ legacy fallback applies only when the multi-bucket view is unavailable (0.197292ms)
+✔ missing, null, string, nonfinite and out-of-range usage is unknown, never zero (0.462ms)
+✔ stale positive telemetry cannot promise availability and future timestamps are invalid (0.123542ms)
+✔ a predicted reset cannot replenish exhausted telemetry, including after staleness (0.087125ms)
+✔ failed telemetry refresh preserves a prior exhausted hold; fresh actual recovery releases it (0.116958ms)
+✔ normalization drops billing values, credentials and reset credit identifiers (0.137542ms)
+✔ capacity reads initialize and account telemetry only, with no model or billing methods (267.723625ms)
+✔ capacity transport timeout returns unknown and cleans up without retries (174.690833ms)
+✔ restricted profile disables ambient tools and does not expose application environment (0.921417ms)
+✔ fresh runtime records durable dispatch before turn and dispatches bound tools (269.743167ms)
+✔ duplicate provider call id invokes one application command (154.474125ms)
+✔ runtime rejects wrong-thread command before callback (198.378959ms)
+✔ runtime rejects repo command before callback (142.765708ms)
+✔ operator stop waits for observed interrupted turn (192.040916ms)
+✔ transport death after dispatch is uncertain and is not retried (191.658ms)
+✔ unqualified version fails before model dispatch (105.875ms)
+✔ unqualified instructions fails before model dispatch (144.762667ms)
+✔ protocol request timeout terminates waiting without an unbounded retry (43.594459ms)
+✔ startup is serialized but accepted model turns remain concurrent (1055.191042ms)
+✔ queued startup cancellation never enters initialize and active startup cancellation is prompt (277.745708ms)
+✔ bootstrap deadline fails once with sanitized phase diagnostics (179.816375ms)
+✔ quota read and update events contain only normalized capacity (117.265ms)
+✔ command retries return original message and conflicting reuse rejects (14.99725ms)
+✔ routing honors explicit mentions, replies, focus and inert quote mentions (8.402209ms)
+✔ acknowledgements cannot renew a burst; substantive owner input can (8.833792ms)
+✔ atomic claims and Stop prevent duplicate dispatch; stop persists across new messages (13.356167ms)
+✔ chat tools create persistent Resources but cannot access another conversation (15.255583ms)
+✔ Resource revisions conflict and old pinned inputs stay unchanged (9.771458ms)
+✔ independent opinions freeze shared revisions and hide peers through retrieval (14.514708ms)
+✔ dependency cycles reject, cancelled prerequisites stay blocked, changed approval rejects (15.190292ms)
+✔ HTTP authentication, origin and CSRF enforced; events survive new server (105.562708ms)
+✔ execution path blocks traversal, credentials and symlink reads (7.64575ms)
+✔ fixture connector uses checked DB commands and preserves terminal outcome (14.027208ms)
+✔ proposal application rejects mismatched Resource revision ownership (8.602709ms)
+✔ Stop after claim prevents the runtime invocation (10.259167ms)
+✔ Resource revocation after claim prevents dispatch of frozen content (12.033333ms)
+✔ research tasks on repository-linked projects never receive execution mode or checkout (18.871083ms)
+✔ scope approval requires the displayed task and project revisions (11.352875ms)
+✔ parallel tasks respect shared locks and release admission after review (17.719375ms)
+✔ task outputs deduplicate tools and flow as pinned prerequisite input (32.683ms)
+✔ work webhook is authenticated and duplicate deliveries start only one session (12.610791ms)
+✔ authenticated upload preserves bytes, rejects checksum damage and quarantines orphans (15.803958ms)
+✔ SSE replays committed changes and reconciles cursors beyond restored history (27.7475ms)
+✔ real worktree checkpoint preserves the target and rejects host checkout filters (538.246625ms)
+✔ context retrieval is bounded, private, and ordinary pending requests catch up at claim (24.354708ms)
+✔ correction after completion labels the old response and preserves its initial manifest (15.239375ms)
+✔ project change or disabling a claimed task agent prevents runtime dispatch (21.782791ms)
+✔ known exhausted capacity holds dispatch without a model call (14.111166ms)
+✔ GitHub publishing remains denied and malformed read URLs reject locally (7.15975ms)
+ℹ tests 52
+ℹ suites 0
+ℹ pass 52
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3164.142084

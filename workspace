@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+workspace_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+workspace_node="$HOME/.local/share/fnm/node-versions/v24.18.1/installation/bin"
+if [ -x "$workspace_node/node" ]; then
+  PATH="$workspace_node:/opt/homebrew/bin:$PATH"
+  export PATH
+fi
+DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export DEVELOPER_DIR
+cd "$workspace_dir"
+exec pnpm "$@"
