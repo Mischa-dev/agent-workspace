@@ -76,4 +76,4 @@ Current implementation evidence remains in [ACCEPTANCE.md](../ACCEPTANCE.md). Su
 
 ## Implementation checkpoint — September 21
 
-L01–L03 and the expanded L06 interface are implemented and tested. Local HTTP/MCP, cross-agent file handoff, and isolated backup/restore pass. L04 remote activation and L05 actual third-party connections await the host/domain and client setup; these are not marked complete. See [CONNECTED_RELEASE.md](CONNECTED_RELEASE.md) for evidence and the remaining concrete steps.
+L01–L03 and the expanded L06 interface are implemented and tested. Local HTTP/MCP, cross-agent file handoff, and isolated backup/restore pass. L04 is now deployed on Red Hat at https://workspace.mischanelson.dev with public OAuth/MCP, daily backups and a live isolated restore verified. L05 actual third-party client setup remains pending. See [CONNECTED_RELEASE.md](CONNECTED_RELEASE.md) for evidence and the remaining concrete steps.

@@ -81,6 +81,12 @@ export async function buildServer() {
     if (!hosts.includes(req.headers.host || ""))
       throw new AppError(403, "Invalid host.");
     const pathname = req.url.split("?")[0];
+    if (
+      pathname.startsWith("/api/") ||
+      pathname.startsWith("/oauth/") ||
+      pathname === "/mcp"
+    )
+      reply.header("Cache-Control", "no-store");
     const agentRoute =
       pathname === "/mcp" || pathname.startsWith("/api/agent/");
     if (agentRoute) {

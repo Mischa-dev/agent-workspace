@@ -1,0 +1,53 @@
+{
+  "passed": true,
+  "verifiedAt": "2026-09-21T20:21:57.200656+00:00",
+  "origin": "https://workspace.mischanelson.dev",
+  "health": {
+    "ok": true,
+    "workerOnline": true,
+    "dispatchEnabled": true
+  },
+  "backup": "/home/cloud-user/agent-workspace/.local/deployment/backups/2026-09-21T20-21-53.850Z-5ad1f959",
+  "backupService": "Result=success\nExecMainStatus=0",
+  "enabledUserServices": [
+    "enabled",
+    "enabled"
+  ],
+  "tunnelEnabled": "enabled",
+  "tunnelActive": "active",
+  "containers": [
+    "workspace-server localhost/agent-workspace:release-20260921-verified 402653184 unless-stopped",
+    "workspace-worker localhost/agent-workspace:release-20260921-verified 402653184 unless-stopped",
+    "workspace-postgres docker.io/library/postgres:18.6 402653184 unless-stopped"
+  ],
+  "healthProbe": "healthy",
+  "checks": [
+    "Imported all five local records before enabling hosted dispatch",
+    "Public HTTPS OAuth/MCP and file handoff passed in hosted-protocol.json",
+    "Public owner event stream and signed-in browser verified",
+    "Separate restore retained all 16 qualification records with identical fingerprint",
+    "Restored uploaded file checksum matched",
+    "Restored server and worker ran paused with no active work or valid credentials",
+    "Daily backup service completed and waited for API/worker health",
+    "Off-server backup copy checksum verified on the Mac",
+    "Original Cloudflare tunnel and unrelated applications kept running"
+  ],
+  "restore": {
+    "database": "workspace_restore_20260921",
+    "records": 16,
+    "fingerprint": "5071138112ed1126b222a5e4ca5a8c4d",
+    "fileChecksum": "0f46bf3aa758414f47fa33dc3cb9c90559339ccf87565d020f90faa91917715c",
+    "dispatchEnabled": false,
+    "liveCredentials": 0,
+    "oauthEntries": 0,
+    "activeWork": 0,
+    "containersStopped": true
+  },
+  "limits": [
+    "No shared-host reboot performed",
+    "No new model execution or actual third-party heartbeat configured",
+    "Automatic Podman health timers disabled for this host; operations use explicit probes",
+    "Daily backups briefly stop the app and worker",
+    "Off-server backup copying is currently manual"
+  ]
+}

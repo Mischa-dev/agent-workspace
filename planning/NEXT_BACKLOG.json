@@ -2,12 +2,12 @@
   "schema_version": 1,
   "title": "First deployed workspace release",
   "updated_at": "2026-09-21",
-  "status": "implemented_locally_remote_setup_pending",
+  "status": "deployed_actual_client_setup_pending",
   "plan": "NEXT_IMPLEMENTATION_PLAN.md",
   "deferred_roadmap": "LONG_TERM_BACKLOG.json",
   "baseline": "Preserve the existing local core described in ACCEPTANCE.md. The broader W-series roadmap does not gate this release.",
   "external_requirements": {
-    "reachable_host": "A reviewed host and reachable endpoint, supported client authentication, and authorization for the concrete activation.",
+    "reachable_host": "Satisfied: workspace.mischanelson.dev on Red Hat through a dedicated Cloudflare tunnel; authenticated MCP and OAuth verified.",
     "launch_accounts": "Actual connections for the selected launch roster. Muse custom MCP/heartbeat is owner-confirmed; each connection still needs a real round trip.",
     "immediate_connection": "One intended existing runtime with a supported configured immediate wakeup; do not claim deeper AgentOS integration from this."
   },
@@ -126,7 +126,7 @@
     {
       "id": "L04",
       "title": "Reachable deployment and recovery",
-      "status": "local_recovery_verified_remote_target_pending",
+      "status": "deployed_and_recovery_verified",
       "depends_on": [
         "L02"
       ],
@@ -160,7 +160,7 @@
     {
       "id": "L05",
       "title": "Connect and qualify the actual launch agents",
-      "status": "protocol_verified_actual_client_setup_pending",
+      "status": "hosted_protocol_verified_actual_client_setup_pending",
       "depends_on": [
         "L03",
         "L04"
@@ -196,7 +196,7 @@
     {
       "id": "L06",
       "title": "Verify daily use and release",
-      "status": "ui_and_local_flows_verified_remote_qualification_pending",
+      "status": "hosted_ui_and_handoff_verified_actual_client_qualification_pending",
       "depends_on": [
         "L05"
       ],

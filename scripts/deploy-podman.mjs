@@ -22,6 +22,19 @@ const action = process.argv[2] || "help";
 const image =
   process.env.WORKSPACE_IMAGE || "localhost/agent-workspace:connected";
 const prefix = process.env.WORKSPACE_CONTAINER_PREFIX || "workspace";
+const hostPort = Number(process.env.WORKSPACE_HOST_PORT || 4310);
+if (!Number.isInteger(hostPort) || hostPort < 1024 || hostPort > 65535)
+  throw new Error("WORKSPACE_HOST_PORT must be an unprivileged TCP port.");
+const limits = (role) => [
+  "--restart",
+  "unless-stopped",
+  "--memory",
+  process.env[`WORKSPACE_${role}_MEMORY`] || "384m",
+  "--cpus",
+  process.env[`WORKSPACE_${role}_CPUS`] || "1",
+  "--pids-limit",
+  "256",
+];
 if (!/^[a-z][a-z0-9-]{0,40}$/.test(prefix))
   throw new Error("Use a simple lowercase container prefix.");
 const envFile = path.join(directory, "runtime.env");
@@ -50,7 +63,17 @@ const databaseReady = async () => {
     if (
       spawnSync(
         "podman",
-        ["exec", names.db, "pg_isready", "-U", "workspace", "-d", "workspace"],
+        [
+          "exec",
+          names.db,
+          "pg_isready",
+          "-h",
+          "127.0.0.1",
+          "-U",
+          "workspace",
+          "-d",
+          "workspace",
+        ],
         { stdio: "ignore" },
       ).status === 0
     )
@@ -59,6 +82,29 @@ const databaseReady = async () => {
   }
   throw new Error(
     "PostgreSQL did not become ready; inspect its container log.",
+  );
+};
+const applicationReady = async (expectWorker = true) => {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const result = spawnSync(
+      "podman",
+      [
+        "exec",
+        names.server,
+        "node",
+        "dist/apps/server/src/healthcheck.js",
+        ...(expectWorker ? ["--worker"] : []),
+      ],
+      { stdio: "ignore", timeout: 5000 },
+    );
+    if (result.status === 0) {
+      run(["healthcheck", "run", names.server], { stdio: "ignore" });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(
+    "Application did not become healthy; inspect the server and worker logs.",
   );
 };
 if (action === "prepare") {
@@ -77,7 +123,8 @@ if (action === "prepare") {
   )
     throw new Error("Set PUBLIC_ORIGIN to an HTTPS origin, or loopback HTTP.");
   const databasePassword = randomBytes(32).toString("base64url"),
-    ownerToken = randomBytes(32).toString("base64url");
+    ownerToken = randomBytes(32).toString("base64url"),
+    workHookToken = randomBytes(32).toString("base64url");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   writeFileSync(
@@ -88,6 +135,7 @@ if (action === "prepare") {
       `POSTGRES_PASSWORD=${databasePassword}`,
       `DATABASE_URL=postgresql://workspace:${databasePassword}@${names.db}:5432/workspace`,
       `OWNER_TOKEN_HASH=${createHash("sha256").update(ownerToken).digest("hex")}`,
+      `WORK_HOOK_TOKEN_HASH=${createHash("sha256").update(workHookToken).digest("hex")}`,
       `PUBLIC_ORIGIN=${origin}`,
       `BIND_HOST=0.0.0.0`,
       `DATA_DIR=/var/lib/workspace`,
@@ -99,11 +147,27 @@ if (action === "prepare") {
     mode: 0o600,
     flag: "wx",
   });
+  writeFileSync(
+    path.join(directory, "work-hook-token.txt"),
+    workHookToken + "\n",
+    {
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
   console.log(
     `Prepared private deployment files in ${directory}. No service started; no credential printed.`,
   );
 } else if (action === "build")
-  run(["build", "--file", "Containerfile", "--tag", image, "."]);
+  run([
+    "build",
+    "--format=docker",
+    "--file",
+    "Containerfile",
+    "--tag",
+    image,
+    ".",
+  ]);
 else if (action === "start") {
   if (!existsSync(envFile)) throw new Error("Run prepare first.");
   if (exists("container", names.server) || exists("container", names.worker))
@@ -120,6 +184,7 @@ else if (action === "start") {
       "-d",
       "--name",
       names.db,
+      ...limits("DATABASE"),
       "--network",
       names.network,
       "--env-file",
@@ -127,25 +192,13 @@ else if (action === "start") {
       "--volume",
       `${names.postgres}:/var/lib/postgresql`,
       "docker.io/library/postgres:18.6",
+      "postgres",
+      "-c",
+      "shared_buffers=64MB",
+      "-c",
+      "max_connections=50",
     ]);
-  let ready = false;
-  for (let i = 0; i < 30; i++) {
-    if (
-      spawnSync(
-        "podman",
-        ["exec", names.db, "pg_isready", "-U", "workspace", "-d", "workspace"],
-        { stdio: "ignore" },
-      ).status === 0
-    ) {
-      ready = true;
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  if (!ready)
-    throw new Error(
-      "PostgreSQL did not become ready; inspect its container log.",
-    );
+  await databaseReady();
   const shared = [
     "--network",
     names.network,
@@ -157,6 +210,7 @@ else if (action === "start") {
   run([
     "run",
     "--rm",
+    "--no-healthcheck",
     ...shared,
     image,
     "node",
@@ -169,9 +223,14 @@ else if (action === "start") {
     "-d",
     "--name",
     names.server,
+    "--health-interval",
+    process.env.WORKSPACE_HEALTH_INTERVAL || "disable",
+    ...limits("SERVER"),
     ...shared,
+    "--env",
+    "NODE_OPTIONS=--max-old-space-size=256",
     "--publish",
-    "127.0.0.1:4310:4310",
+    `127.0.0.1:${hostPort}:4310`,
     image,
   ]);
   run([
@@ -179,11 +238,16 @@ else if (action === "start") {
     "-d",
     "--name",
     names.worker,
+    ...limits("WORKER"),
+    "--no-healthcheck",
     ...shared,
+    "--env",
+    "NODE_OPTIONS=--max-old-space-size=256",
     image,
     "node",
     "dist/apps/server/src/worker.js",
   ]);
+  await applicationReady();
   console.log(
     "Containers started on host loopback only. Configure a trusted HTTPS proxy separately after host approval.",
   );
@@ -196,6 +260,7 @@ else if (action === "start") {
   run(["start", names.db]);
   await databaseReady();
   run(["start", names.server, names.worker]);
+  await applicationReady();
 } else if (action === "backup") {
   if (!existsSync(envFile))
     throw new Error("Deployment configuration is missing.");
@@ -248,6 +313,7 @@ else if (action === "start") {
     capture("files.tar.gz", [
       "run",
       "--rm",
+      "--no-healthcheck",
       "--volume",
       `${names.files}:/var/lib/workspace:ro`,
       image,
@@ -258,17 +324,23 @@ else if (action === "start") {
       "-",
       ".",
     ]);
-    verify("database.dump", [
-      "exec",
+    verify("database.dump", ["exec", "-i", names.db, "pg_restore", "--list"]);
+    verify("files.tar.gz", [
+      "run",
+      "--rm",
+      "--no-healthcheck",
       "-i",
-      names.db,
-      "pg_restore",
-      "--list",
-      "/dev/stdin",
+      image,
+      "tar",
+      "-tzf",
+      "-",
     ]);
-    verify("files.tar.gz", ["run", "--rm", "-i", image, "tar", "-tzf", "-"]);
     const files = ["database.dump", "files.tar.gz"];
-    for (const filename of ["runtime.env", "owner-token.txt"]) {
+    for (const filename of [
+      "runtime.env",
+      "owner-token.txt",
+      "work-hook-token.txt",
+    ]) {
       const source = path.join(directory, filename);
       if (existsSync(source)) {
         copyFileSync(source, path.join(target, filename));
@@ -305,6 +377,8 @@ else if (action === "start") {
     );
   } finally {
     if (running.length) run(["start", ...running]);
+    if (running.includes(names.server))
+      await applicationReady(running.includes(names.worker));
   }
 } else if (action === "stop")
   run(["stop", "--time", "30", names.worker, names.server]);

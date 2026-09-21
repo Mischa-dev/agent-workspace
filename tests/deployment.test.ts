@@ -10,8 +10,47 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
+
+test("container health checks preserve the public Host and wait for the worker when requested", async () => {
+  let workerOnline = false;
+  const server = createServer((request, response) => {
+    response.statusCode =
+      request.headers.host === "workspace.example" ? 200 : 403;
+    response.end(JSON.stringify({ ok: true, workerOnline }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as { port: number };
+  const probe = (worker = false) =>
+    promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "apps/server/src/healthcheck.ts",
+        ...(worker ? ["--worker"] : []),
+      ],
+      {
+        env: {
+          ...process.env,
+          PORT: String(address.port),
+          PUBLIC_ORIGIN: "https://workspace.example",
+        },
+        timeout: 5000,
+      },
+    );
+  try {
+    await probe();
+    await assert.rejects(probe(true));
+    workerOnline = true;
+    await probe(true);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 for (const fail of [false, true])
   test(`portable backup ${fail ? "preserves partial files and restarts on failure" : "writes private verified archives and a checksum manifest"}`, async () => {
@@ -69,11 +108,10 @@ if(args.includes('-i'))process.stdin.resume();
             !args.includes("workspace-postgres"),
         ),
       );
-      assert.deepEqual(commands.at(-1), [
-        "start",
-        "workspace-server",
-        "workspace-worker",
-      ]);
+      assert.deepEqual(
+        commands.findLast((args) => args[0] === "start"),
+        ["start", "workspace-server", "workspace-worker"],
+      );
       assert.ok(
         !commands.some((args) => args[0] === "rm" || args[0] === "rmi"),
       );

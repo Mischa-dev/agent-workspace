@@ -6,7 +6,9 @@ Implementation follows the [launch plan](planning/NEXT_IMPLEMENTATION_PLAN.md) a
 
 ## Open it
 
-Open http://127.0.0.1:4310. The owner token is stored privately in `.local/owner-token`. To copy it without printing it:
+The primary app is [workspace.mischanelson.dev](https://workspace.mischanelson.dev), with MCP at `https://workspace.mischanelson.dev/mcp`. The hosted owner credential is privately saved on this Mac in `.local/hosted/owner-token`; copy it with `pbcopy < .local/hosted/owner-token`. The in-app browser is already signed in. See [Red Hat operations](deploy/REDHAT.md) for services, backups and recovery.
+
+For the preserved local development instance, start it with `./workspace start`, then open http://127.0.0.1:4310. The owner token is stored privately in `.local/owner-token`. To copy it without printing it:
 
 ```sh
 cd /Users/mischanelson/Documents/ChatGPT/workspace
@@ -17,13 +19,13 @@ Paste the token into the sign-in screen. It stays out of the browser bundle, Git
 
 ## Daily use
 
-1. Open **Messages** and talk to Atlas or Ember. Both are separate identities using the qualified local Codex runtime. The workroom contains both. Auto selects one relevant recipient; mentions, replies, and the recipient menu let you override it. Group controls offer independent opinions and a discussion. Stop closes admission until Continue.
+1. Open **Messages** and talk to Atlas or Ember. On Red Hat they are editable polling identities that wait for you to connect an external client. The preserved Mac installation uses its qualified local Codex runtime. The workroom contains both. Auto selects one relevant recipient; mentions, replies, and the recipient menu let you override it. Group controls offer independent opinions and a discussion. Stop closes admission until Continue.
 2. Save useful notes, pastes, and files as **Resources**. Share deliberately with a conversation or link a project/space. Agent notes use the same persistent records. Attachments retain the chosen revision; later edits do not replace it.
 3. Use a **Space** as a shared artifact board: pin/tag notes and files, then attach them to channels or tasks. Create a **Project** with an outcome and use its Outline, Board or Dependencies view. Capture a task with just a title or use **Plan with an agent**. Review a proposed outline before applying it. Add outcomes, acceptance criteria, dependencies, required Resource revisions, blockers, alternatives, and shared locks as work becomes clear.
 4. Use **Start work session** to preview exact task and project revisions and approve a bounded scope. Start it immediately or keep the scope for a later webhook. Default limits are two workers, 60 minutes, and a 20% finishing/review reserve. Tasks wait on prerequisites and locks. Results land in Inbox and the project Activity view for review.
-5. Code tasks need a local repository and target ref in Project settings. The worker creates a separate worktree and generated local branch, saves a checkpoint, and leaves your target checkout untouched. Review the output and diff. Accepting a code result does not integrate it; after you integrate its commit yourself, **Verify integration** checks actual ancestry before dependencies can run.
+5. Managed code execution is currently qualified on the Mac, not on the hosted server. Code tasks need a local repository and target ref in Project settings. The worker creates a separate worktree and generated local branch, saves a checkpoint, and leaves your target checkout untouched. Review the output and diff. Accepting a code result does not integrate it; after you integrate its commit yourself, **Verify integration** checks actual ancestry before dependencies can run.
 6. Add your own identity in **Agents**, select local execution, scheduled inbox checks, or a supported webhook receiver, and open **Connection & access**. Connect any MCP/HTTP client using its own credential or OAuth consent. Configure the actual heartbeat in that client. See [connection instructions](deploy/AGENT_CONNECTIONS.md).
-7. **Link pull request** reads a real existing GitHub PR using the locally signed-in `gh` account. Links do not accept tasks or publish code.
+7. **Link pull request** reads a real existing GitHub PR using the locally signed-in `gh` account. That authentication remains on the Mac; the hosted server needs its own configured connection. Links do not accept tasks or publish code.
 
 ## Commands
 
@@ -47,7 +49,7 @@ PostgreSQL uses this app's dedicated native cluster `.local/postgres`, bound to 
 /opt/homebrew/bin/pg_ctl -D "$PWD/.local/postgres" -m fast -w stop
 ```
 
-`./workspace start` starts it again. There is no login item, launch daemon, or public deployment.
+`./workspace start` starts it again. There is no local login item or launch daemon. The separate Red Hat deployment uses systemd and Cloudflare Tunnel.
 
 ## Installation and configuration
 

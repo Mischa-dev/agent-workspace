@@ -1,6 +1,6 @@
 # Local release acceptance
 
-Verified on this Mac on September 21, 2026. The connected workspace release is running locally with the expanded messaging, artifact boards, planning views and agent access. Hosted deployment and actual third-party client connections remain pending. No other project was edited, no remote branch or PR was published, and no paid infrastructure or billing change was made.
+Verified on this Mac on September 21, 2026. The connected workspace release is running locally with the expanded messaging, artifact boards, planning views and agent access. Hosted deployment is now verified on Red Hat at https://workspace.mischanelson.dev; actual third-party client connections remain pending. No other project was edited, no remote branch or PR was published, and no paid infrastructure or billing change was made.
 
 ## Real agents and services
 
@@ -20,7 +20,7 @@ A repeated concurrent group test exposed CLI initialize timeouts before model di
 
 ## Automated integration and protocol tests
 
-**79 tests passed**, with TypeScript checks and the production build passing. `./workspace test` uses separate disposable PostgreSQL databases; it does not change the owner workspace. The final test summary is in `evidence/connected-automated-tests.txt`.
+**80 tests passed**, with TypeScript checks and the production build passing. `./workspace test` uses separate disposable PostgreSQL databases; it does not change the owner workspace. The latest test summary is in `evidence/hosted-automated-tests.txt`; the earlier connected-release summary is also retained.
 
 Database, HTTP, storage, and Git operations in domain tests are real. The runtime responses in these tests are explicit fixtures. Tests cover:
 
@@ -68,7 +68,7 @@ A queue claim never proves exactly-once provider execution. Uncertain results re
 ## Open qualification and product work
 
 - Generic MCP/HTTP access and signed wakeups are implemented and protocol-tested. Actual Muse, ChatGPT Work, Hermes and OpenClaw connections remain pending, as does full AgentOS integration. Local Codex retains the real runtime qualification above.
-- Remote HTTPS deployment, container build/reboot/recovery qualification and scheduled backup activation await the deployment host/domain. Persistent-volume and service templates are prepared; no remote service has been changed.
+- Red Hat HTTPS deployment, container build, service restart, scheduled backups and isolated restore are verified. A full shared-host reboot was not performed. Actual third-party client setup is still pending.
 - GitHub publishing, event synchronization, PR checks, and multi-branch candidate integration are pending. Existing PR reads and local commit ancestry are working.
 - Project test scripts and arbitrary shell execution are unavailable in this scoped profile. Its checks cover patch formatting and JSON syntax. This release is not an unattended general-purpose build/test environment.
 - Model-assisted invitations/speaker selection, generated briefs, explicit decision records and sophisticated paste highlighting remain roadmap work. Channels, threads and explicit handoffs are now implemented.
@@ -76,3 +76,9 @@ A queue claim never proves exactly-once provider execution. Uncertain results re
 - The standalone capacity probe reached its bounded deadline. Some live runs returned telemetry with one missing usage window. The UI therefore reports unknown where appropriate; time and worker limits still apply. No credit consumption, reset redemption, or billing change occurred.
 
 These limits are also documented in README.md. The source plan remains intact so the next implementation can proceed from evidence rather than treating the broader roadmap as finished.
+
+## Hosted deployment qualification
+
+The public Cloudflare route passed owner sign-in, Secure cookies, OAuth discovery/registration/PKCE/refresh, the official MCP client, authenticated file transfer and cross-account handoff. The owner event stream and signed-in browser were also checked. Temporary qualification credentials were revoked; no model call was used. See `evidence/hosted-protocol.json`.
+
+The first live backup check exposed a PostgreSQL stdin verification issue and systemd cleanup of detached Podman helpers. Both were fixed before acceptance. The final monitoring pass also corrected the public Host header used by the health probe and retained HEALTHCHECK metadata in Docker-format images. The scheduled service then completed successfully. An isolated restored database matched all 16 production record fingerprints, its file checksum matched, and its actual worker remained paused with no replay. An off-server backup copy was checksum-verified on this Mac. See `evidence/hosted-deployment.json` and `deploy/REDHAT.md`.

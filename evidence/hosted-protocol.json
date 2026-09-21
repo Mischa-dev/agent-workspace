@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "verifiedAt": "2026-09-21T20:02:12.750Z",
+  "origin": "https://workspace.mischanelson.dev",
+  "checks": [
+    "HTTPS owner sign-in, Secure cookie and private-response cache headers",
+    "Public OAuth discovery, registration, PKCE consent, exchange and refresh",
+    "Official MCP client discovers tools and calls through Cloudflare Tunnel",
+    "Real hosted inbox claim, file upload/download checksum, cross-account handoff and result",
+    "Temporary credentials revoked and subsequent access denied"
+  ],
+  "externalModelCalls": 0,
+  "fileChecksum": "0f46bf3aa758414f47fa33dc3cb9c90559339ccf87565d020f90faa91917715c",
+  "recordCount": 16
+}

@@ -1,0 +1,9 @@
+# Replace the tunnel identifier and hostname with the deployment's values.
+tunnel: TUNNEL_ID
+credentials-file: /root/.cloudflared/TUNNEL_ID.json
+ingress:
+  - hostname: workspace.example.com
+    service: http://127.0.0.1:4310
+    originRequest:
+      httpHostHeader: workspace.example.com
+  - service: http_status:404

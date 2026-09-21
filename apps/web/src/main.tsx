@@ -266,7 +266,7 @@ function App() {
                 autoComplete="current-password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                placeholder="Paste your local access token"
+                placeholder="Paste your workspace access token"
                 required
               />
             </label>
@@ -276,8 +276,7 @@ function App() {
           </form>
           {error && <p className="error">{error}</p>}
           <small>
-            Your token is saved on this Mac in <code>.local/owner-token</code>.
-            Use the token from the workspace host to sign in.
+            Use the access token provided when this workspace was set up.
           </small>
         </div>
       </main>

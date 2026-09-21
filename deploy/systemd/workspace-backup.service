@@ -4,6 +4,8 @@ After=workspace.service
 
 [Service]
 Type=oneshot
+Delegate=yes
+KillMode=process
 WorkingDirectory=/home/OWNER/agent-workspace
 Environment=WORKSPACE_DEPLOY_DIR=/home/OWNER/agent-workspace/.local/deployment
 ExecStart=/usr/bin/node /home/OWNER/agent-workspace/scripts/deploy-podman.mjs backup

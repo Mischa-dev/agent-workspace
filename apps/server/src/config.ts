@@ -58,7 +58,8 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL || local.databaseUrl || "",
   dataDir:
     process.env.DATA_DIR || local.dataDir || path.join(root, ".local/data"),
-  webhookTokenHash: local.webhookTokenHash || "",
+  webhookTokenHash:
+    process.env.WORK_HOOK_TOKEN_HASH || local.webhookTokenHash || "",
   ownerTokenHash: process.env.OWNER_TOKEN_HASH || local.ownerTokenHash || "",
   codexPath: process.env.CODEX_PATH || local.codexPath || "codex",
   test: process.env.NODE_ENV === "test",

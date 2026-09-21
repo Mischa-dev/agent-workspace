@@ -13,5 +13,5 @@ ENV NODE_ENV=production BIND_HOST=0.0.0.0 PORT=4310 DATA_DIR=/var/lib/workspace 
 USER node
 VOLUME /var/lib/workspace
 EXPOSE 4310
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:4310/health',{headers:{host:new URL(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:4310').host}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD ["node", "dist/apps/server/src/healthcheck.js"]
 CMD ["node", "dist/apps/server/src/server.js"]

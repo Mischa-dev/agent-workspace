@@ -1,6 +1,6 @@
 # Connected workspace release
 
-September 21, 2026. Implemented from the expanded launch authorization. The application is built and verified locally. Public deployment and the owner's actual third-party account connections are still separate, uncompleted qualification steps.
+September 21, 2026. Implemented from the expanded launch authorization. The application is deployed at https://workspace.mischanelson.dev on Red Hat through a dedicated Cloudflare tunnel. Public OAuth/MCP, file handoff, daily backups and isolated restore are verified. The owner's actual third-party client connections remain pending.
 
 ## Delivered
 
@@ -24,15 +24,15 @@ A full database-and-file backup was restored into a new database and directory, 
 
 | Target | Current evidence | Remaining step |
 | --- | --- | --- |
-| Local application | Production build, real database, HTTP/MCP and browser checks | Ready to use on this Mac |
+| Local application | Production build and original data preserved | Hosted workspace is now the primary URL; local launcher remains available for development |
 | Managed local Codex | Prior real DM/group/planning/worktree qualification retained; regression tests pass | New remote hosts need their own runtime qualification |
-| Generic MCP/HTTP client | Official client/handler and real persisted round trip verified | Supply the chosen agent credential or complete OAuth consent |
+| Generic MCP/HTTP client | Official client, OAuth renewal and cross-account file handoff verified over public HTTPS | Connect each actual client using its own agent account |
 | Muse | Owner confirms custom MCP and editable heartbeat, no incoming webhook | Connect the reachable MCP endpoint in Muse and run its actual heartbeat |
 | ChatGPT Work / other Codex client | Generic account and OAuth/MCP support implemented | Connect that actual client and verify scheduled tool access |
 | Hermes / OpenClaw | Generic polling and signed wakeup contract implemented | Configure the intended runtime's supported receiver and verify its real pickup |
-| Remote deployment | Red Hat read-only preflight found Podman/Caddy and sufficient disk; portable deployment prepared | Host/domain choice is pending; then activate HTTPS and test from the actual cloud client |
+| Remote deployment | Live at workspace.mischanelson.dev; persistent volumes, service restart, daily backup and isolated restore verified | Monitor ordinary usage; no host reboot or large-scale load test was performed |
 
-No remote service, DNS route, account connection, paid resource, repository push or merge was changed during this implementation. Do not mark the remote release or every named client connected until those checks actually pass.
+The owner authorized the Red Hat/Cloudflare deployment. A dedicated tunnel, hostname and workspace services are active. Other applications were not redeployed. No paid resource, repository push or merge was created. See `deploy/REDHAT.md` for operations and the precise remaining client setup.
 
 ## Kept out of this release
 
