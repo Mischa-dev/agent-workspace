@@ -55,7 +55,7 @@ const cmd = async (type: string, input: any, id = randomUUID()) => {
 let agents: any[], conv: any;
 beforeEach(async () => {
   await pool.query(
-    "TRUNCATE records,events,commands,connector_credentials,owner_sessions RESTART IDENTITY",
+    "TRUNCATE records,events,commands,connector_credentials,owner_sessions,agent_credentials,agent_connections,webhook_deliveries,oauth_state RESTART IDENTITY",
   );
   await seed();
   const result = await transact((s) => ({
@@ -762,8 +762,14 @@ test("authenticated upload preserves bytes, rejects checksum damage and quaranti
     });
     const cookie = `workspace=${login.cookies[0].value}`;
     const boundary = "workspace-test-boundary";
+    const space = (
+      await cmd("space.create", {
+        name: "File board",
+        agentIds: [agents[0].id],
+      })
+    ).value;
     const body = Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nUploaded note\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="note.txt"\r\nContent-Type: text/plain\r\n\r\nimmutable bytes\r\n--${boundary}--\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nUploaded note\r\n--${boundary}\r\nContent-Disposition: form-data; name="spaceIds"\r\n\r\n${JSON.stringify([space.id])}\r\n--${boundary}\r\nContent-Disposition: form-data; name="agentIds"\r\n\r\n${JSON.stringify([agents[0].id])}\r\n--${boundary}\r\nContent-Disposition: form-data; name="tags"\r\n\r\n["shared-file"]\r\n--${boundary}\r\nContent-Disposition: form-data; name="pinned"\r\n\r\ntrue\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="note.txt"\r\nContent-Type: text/plain\r\n\r\nimmutable bytes\r\n--${boundary}--\r\n`,
     );
     const upload = await app.inject({
       method: "POST",
@@ -778,6 +784,10 @@ test("authenticated upload preserves bytes, rejects checksum damage and quaranti
     });
     assert.equal(upload.statusCode, 200, upload.body);
     const { resource, revision } = upload.json().value;
+    assert.deepEqual(resource.data.agentIds, [agents[0].id]);
+    assert.deepEqual(resource.data.spaceIds, [space.id]);
+    assert.deepEqual(resource.data.tags, ["shared-file"]);
+    assert.equal(resource.data.pinned, true);
     const url = `/api/resources/${resource.id}/revisions/${revision.id}/download`;
     assert.equal((await app.inject({ url, headers })).statusCode, 401);
     assert.equal(
@@ -1090,4 +1100,662 @@ test("GitHub publishing remains denied and malformed read URLs reject locally", 
     github.readPull("https://attacker.example/pull/1"),
     /GitHub pull request URL/,
   );
+});
+
+async function connectedAgent(index = 0, mode = "poll") {
+  const { authenticateAgent } =
+    await import("../apps/server/src/domain/agent-access.js");
+  const current = (await transact((s) => s.get(agents[index].id, "agent")))
+    .value;
+  await cmd("agent.configure", {
+    id: current.id,
+    expectedRevision: current.revision,
+    deliveryMode: mode,
+    checkInMinutes: 60,
+    ...(mode === "webhook"
+      ? {
+          webhookUrl: "https://receiver.example/wake",
+          webhookSecret: "test-signing-secret-for-wakeup",
+        }
+      : {}),
+  });
+  const credential = (
+    await cmd("credential.issue", {
+      agentId: current.id,
+      label: "Test connection",
+    })
+  ).value;
+  return { actor: await authenticateAgent(credential.token), credential };
+}
+async function agentCommand(
+  actor: any,
+  type: string,
+  input: any = {},
+  id = randomUUID(),
+) {
+  return execute(actor, { id, type, input });
+}
+
+test("agent credentials are shown once, expire or revoke, and never enter the command journal", async () => {
+  const { authenticateAgent } =
+    await import("../apps/server/src/domain/agent-access.js");
+  const id = randomUUID(),
+    input = {
+      agentId: agents[0].id,
+      label: "One-time credential",
+      expiresInDays: 2,
+    };
+  const issued = (await cmd("credential.issue", input, id)).value;
+  assert.match(issued.token, /^aw_/);
+  const replay = (await cmd("credential.issue", input, id)).value;
+  assert.equal(replay.token, undefined);
+  assert.equal(replay.oneTimeTokenUnavailable, true);
+  const saved = (
+    await pool.query("SELECT result FROM commands WHERE id=$1", [`owner:${id}`])
+  ).rows[0].result;
+  assert.equal(JSON.stringify(saved).includes(issued.token), false);
+  assert.equal((await authenticateAgent(issued.token)).id, agents[0].id);
+  await cmd("credential.revoke", { id: issued.id });
+  await assert.rejects(authenticateAgent(issued.token), /expired, revoked/);
+});
+
+test("polling accounts claim once through the shared admission path and reply as themselves", async () => {
+  const { actor } = await connectedAgent();
+  const sent = await cmd("message.send", {
+    conversationId: conv.id,
+    body: "Please research this",
+    recipientIds: [actor.id],
+  });
+  const req = sent.value.requests[0];
+  assert.equal((await claimResponse(req.id)).value, null);
+  const inbox = (await agentCommand(actor, "inbox.list")).value;
+  assert.equal(inbox.requests[0].request.id, req.id);
+  const claims = await Promise.allSettled([
+    agentCommand(actor, "request.claim", { id: req.id }),
+    agentCommand(actor, "request.claim", { id: req.id }),
+  ]);
+  assert.equal(claims.filter((x) => x.status === "fulfilled").length, 1);
+  const success = claims.find(
+    (x) => x.status === "fulfilled",
+  ) as PromiseFulfilledResult<any>;
+  assert.equal(
+    success.value.value.context.request.text,
+    "Please research this",
+  );
+  const result = (
+    await agentCommand({ ...actor, requestId: req.id }, "message.reply", {
+      body: "Here is the research.",
+    })
+  ).value;
+  assert.equal(result.message.data.authorId, actor.id);
+  assert.equal(result.request.data.status, "answered");
+  assert.equal(
+    (await agentCommand(actor, "inbox.list")).value.requests.length,
+    0,
+  );
+});
+
+test("handoffs preserve the owner's allowance and another account picks up the same context", async () => {
+  const first = await connectedAgent(0),
+    second = await connectedAgent(1);
+  const sent = await cmd("message.send", {
+    conversationId: conv.id,
+    body: "Investigate a design",
+    recipientIds: [first.actor.id],
+  });
+  const req = sent.value.requests[0];
+  await agentCommand(first.actor, "request.claim", { id: req.id });
+  const handed = (
+    await agentCommand(
+      { ...first.actor, requestId: req.id },
+      "request.handoff",
+      { agentId: second.actor.id, body: "Please review the findings." },
+    )
+  ).value;
+  assert.equal(handed.requests.length, 1);
+  assert.equal(
+    (await transact((s) => s.get(req.data.burstId, "burst").data.remaining))
+      .value,
+    5,
+  );
+  const claimed = (
+    await agentCommand(second.actor, "request.claim", {
+      id: handed.requests[0].id,
+    })
+  ).value;
+  assert.equal(
+    claimed.context.recentMessages.some(
+      (m: any) => m.body === "Investigate a design",
+    ),
+    true,
+  );
+  assert.equal(
+    (await transact((s) => s.get(req.data.burstId, "burst").data.remaining))
+      .value,
+    4,
+  );
+  await assert.rejects(
+    agentCommand({ ...second.actor, requestId: req.id }, "message.reply", {
+      body: "Wrong request",
+    }),
+    /no longer active/,
+  );
+});
+
+test("space artifacts have explicit audiences and agents cannot mint storage access or approvals", async () => {
+  const first = await connectedAgent(0),
+    second = await connectedAgent(1);
+  const space = (
+    await cmd("space.create", {
+      name: "Research room",
+      agentIds: [first.actor.id, second.actor.id],
+    })
+  ).value;
+  const artifact = (
+    await agentCommand(first.actor, "resource.create", {
+      title: "Shared findings",
+      text: "A durable note",
+      spaceIds: [space.id],
+      agentIds: [second.actor.id],
+      tags: ["research"],
+      pinned: true,
+    })
+  ).value;
+  assert.equal(artifact.resource.data.pinned, true);
+  assert.equal(
+    (
+      await agentCommand(second.actor, "resource.read", {
+        id: artifact.resource.id,
+      })
+    ).value.revision.data.text,
+    "A durable note",
+  );
+  const privateNote = (
+    await agentCommand(first.actor, "resource.create", {
+      title: "Private",
+      text: "private",
+      spaceIds: [space.id],
+    })
+  ).value;
+  await assert.rejects(
+    agentCommand(second.actor, "resource.read", {
+      id: privateNote.resource.id,
+    }),
+    /not found/,
+  );
+  await assert.rejects(
+    agentCommand(first.actor, "resource.create", {
+      title: "Forged file",
+      storageKey: randomUUID(),
+    }),
+    /file upload/,
+  );
+  await assert.rejects(
+    agentCommand(first.actor, "scope.approve", { taskIds: [] }),
+    /unavailable/,
+  );
+  const organized = await cmd("resource.organize", {
+    id: privateNote.resource.id,
+    expectedRevision: privateNote.resource.revision,
+    spaceIds: [space.id],
+    pinned: true,
+  });
+  assert.deepEqual(organized.value.data.agentIds, [first.actor.id]);
+});
+
+test("trusted uploads are idempotent by content and downloads recheck Resource grants", async () => {
+  const { actor } = await connectedAgent();
+  const { executeUploadedResource, authorizedDownload } =
+    await import("../apps/server/src/domain/agent-access.js");
+  const { storage } = await import("../apps/server/src/storage/local.js");
+  const bytes = Buffer.from("saved file\n"),
+    one = await storage.put(bytes),
+    two = await storage.put(bytes);
+  const command = {
+    id: randomUUID(),
+    type: "resource.create",
+    input: { title: "File" },
+  };
+  const metadata = (r: any) => ({
+    storageKey: r.key,
+    checksum: r.checksum,
+    size: r.size,
+    filename: "file.txt",
+    mimeType: "text/plain",
+  });
+  const first = await executeUploadedResource(actor, command, metadata(one));
+  const retry = await executeUploadedResource(actor, command, metadata(two));
+  assert.equal(first.value.resource.id, retry.value.resource.id);
+  assert.equal(
+    (await authorizedDownload(actor, first.value.resource.id)).storageKey,
+    one.key,
+  );
+  await cmd("resource.grant", {
+    id: first.value.resource.id,
+    expectedRevision: first.value.resource.revision,
+    agentIds: [],
+    conversationIds: [],
+    spaceIds: [],
+    projectIds: [],
+  });
+  await assert.rejects(
+    authorizedDownload(actor, first.value.resource.id),
+    /not found/,
+  );
+});
+
+test("expired external work is held, and late results are preserved without completing it", async () => {
+  const { actor } = await connectedAgent();
+  const sent = await cmd("message.send", {
+    conversationId: conv.id,
+    body: "Investigate",
+    recipientIds: [actor.id],
+  });
+  const req = sent.value.requests[0];
+  await agentCommand(actor, "request.claim", { id: req.id });
+  await transact((s) =>
+    s.patch(req.id, { leaseUntil: new Date(Date.now() - 1000).toISOString() }),
+  );
+  const { expireExternalClaims } =
+    await import("../apps/server/src/domain/delivery.js");
+  await expireExternalClaims();
+  await assert.rejects(
+    agentCommand(actor, "request.claim", { id: req.id }),
+    /already claimed/,
+  );
+  const result = (
+    await agentCommand({ ...actor, requestId: req.id }, "result.submit", {
+      summary: "Partial result survived",
+    })
+  ).value;
+  assert.equal(result.preserved, true);
+  assert.equal(result.accepted, false);
+  assert.equal(
+    (await transact((s) => s.get(req.id, "request").data.status)).value,
+    "needs_reconciliation",
+  );
+  assert.equal(
+    (
+      await transact(
+        (s) =>
+          s.get(result.resource.data.latestRevisionId, "revision").data.text,
+      )
+    ).value,
+    "Partial result survived",
+  );
+});
+
+test("revocation and stop prevent live replies and old read retries use current permissions", async () => {
+  const { actor, credential } = await connectedAgent();
+  const note = (
+    await agentCommand(actor, "resource.create", {
+      title: "Draft",
+      text: "restricted",
+    })
+  ).value;
+  const readId = randomUUID();
+  await agentCommand(actor, "resource.read", { id: note.resource.id }, readId);
+  await cmd("resource.grant", {
+    id: note.resource.id,
+    expectedRevision: note.resource.revision,
+    agentIds: [],
+    conversationIds: [],
+  });
+  await assert.rejects(
+    agentCommand(actor, "resource.read", { id: note.resource.id }, readId),
+    /not found/,
+  );
+  const sent = await cmd("message.send", {
+    conversationId: conv.id,
+    body: "Take a look",
+    recipientIds: [actor.id],
+  });
+  await agentCommand(actor, "request.claim", { id: sent.value.requests[0].id });
+  await cmd("conversation.stop", { id: conv.id });
+  await assert.rejects(
+    agentCommand(
+      { ...actor, requestId: sent.value.requests[0].id },
+      "message.reply",
+      { body: "stopped" },
+    ),
+    /stopped/,
+  );
+  await cmd("credential.revoke", { id: credential.id });
+  await assert.rejects(agentCommand(actor, "inbox.list"), /revoked/);
+});
+
+test("external accounts can pick up assigned chat tasks but cannot accept results or code without approval", async () => {
+  const { actor } = await connectedAgent();
+  const project = (
+    await cmd("project.create", {
+      name: "Agent research",
+      agentIds: [actor.id],
+    })
+  ).value;
+  const task = (
+    await cmd("task.create", {
+      title: "Compare designs",
+      description: "Produce a comparison",
+      criteria: ["Explain choices"],
+      projectId: project.id,
+      assigneeId: actor.id,
+      execution: "chat",
+    })
+  ).value;
+  await assert.rejects(
+    agentCommand(actor, "request.claim", { taskId: task.id }),
+    /ready/,
+  );
+  await cmd("task.update", {
+    id: task.id,
+    expectedRevision: task.revision,
+    status: "ready",
+  });
+  const claim = (
+    await agentCommand(actor, "request.claim", { taskId: task.id })
+  ).value;
+  await agentCommand(
+    { ...actor, requestId: claim.request.id },
+    "result.submit",
+    { summary: "The comparison is ready." },
+  );
+  const final = (await transact((s) => s.get(task.id, "task"))).value;
+  assert.equal(final.data.status, "review");
+  await assert.rejects(
+    agentCommand(actor, "task.update", {
+      id: task.id,
+      status: "accepted",
+      expectedRevision: final.revision,
+    }),
+    /Only draft|owner/,
+  );
+});
+
+test("channels and threads are real conversations and thread creation never dispatches", async () => {
+  const channel = (
+    await cmd("conversation.create", {
+      title: "Design",
+      kind: "channel",
+      agentIds: agents.map((a) => a.id),
+    })
+  ).value;
+  assert.equal(channel.data.kind, "channel");
+  const original = (
+    await cmd("message.send", {
+      conversationId: channel.id,
+      body: "A question",
+      recipientIds: [agents[0].id],
+    })
+  ).value;
+  const count = (await transact((s) => s.all("request").length)).value;
+  const thread = (
+    await cmd("conversation.thread", { messageId: original.message.id })
+  ).value;
+  assert.equal(thread.data.kind, "thread");
+  assert.equal(thread.data.parentConversationId, channel.id);
+  assert.equal(
+    (await cmd("conversation.thread", { messageId: original.message.id })).value
+      .id,
+    thread.id,
+  );
+  assert.equal((await transact((s) => s.all("request").length)).value, count);
+});
+
+test("webhook wakeups are signed, durable, limited to request references, and do not claim work", async () => {
+  const { actor } = await connectedAgent(0, "webhook");
+  const sent = await cmd("message.send", {
+    conversationId: conv.id,
+    body: "Private request text",
+    recipientIds: [actor.id],
+  });
+  const originalFetch = globalThis.fetch,
+    calls: any[] = [];
+  globalThis.fetch = (async (url: any, init: any) => {
+    calls.push({ url, init });
+    return new Response("", { status: 202 });
+  }) as typeof fetch;
+  try {
+    const { deliverWebhooks } =
+      await import("../apps/server/src/domain/delivery.js");
+    await deliverWebhooks();
+    await deliverWebhooks();
+    assert.equal(calls.length, 1);
+    const { createHmac } = await import("node:crypto");
+    const headers = calls[0].init.headers;
+    assert.equal(
+      headers["X-Workspace-Signature"],
+      `sha256=${createHmac("sha256", "test-signing-secret-for-wakeup").update(`${headers["X-Workspace-Timestamp"]}.${calls[0].init.body}`).digest("hex")}`,
+    );
+    assert.equal(calls[0].init.body.includes("Private request text"), false);
+    assert.equal(
+      (
+        await transact(
+          (s) => s.get(sent.value.requests[0].id, "request").data.status,
+        )
+      ).value,
+      "pending",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("real HTTP and MCP routes use durable agent credentials and deny owner APIs", async () => {
+  const { actor, credential } = await connectedAgent();
+  const app = await buildServer();
+  const headers = {
+    host: "127.0.0.1:4310",
+    authorization: `Bearer ${credential.token}`,
+  };
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/commands",
+      headers,
+      payload: { id: randomUUID(), type: "agent.me", input: {} },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().value.agent.id, actor.id);
+    assert.equal(
+      (await app.inject({ method: "GET", url: "/api/snapshot", headers }))
+        .statusCode,
+      401,
+    );
+    const initialized = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: { ...headers, accept: "application/json, text/event-stream" },
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "connected-release-check", version: "1" },
+        },
+      },
+    });
+    const rpc = (response: any) =>
+      response.headers["content-type"]?.startsWith("text/event-stream")
+        ? JSON.parse(
+            response.body
+              .split("\n")
+              .find((line: string) => line.startsWith("data: "))
+              .slice(6),
+          )
+        : response.json();
+    assert.equal(initialized.statusCode, 200);
+    assert.equal(rpc(initialized).result.serverInfo.name, "agent-workspace");
+    const call = await app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: {
+        ...headers,
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-03-26",
+      },
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "agent_me",
+          arguments: { commandId: randomUUID(), input: {} },
+        },
+      },
+    });
+    assert.equal(call.statusCode, 200);
+    assert.equal(
+      JSON.parse(rpc(call).result.content[0].text).value.agent.id,
+      actor.id,
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("standalone assignment is visible and task wakeup does not grant broader project access", async () => {
+  const { actor } = await connectedAgent(0, "webhook");
+  const task = (
+    await cmd("task.create", {
+      title: "Read a note",
+      description: "Summarize the idea",
+      criteria: ["One summary"],
+      assigneeId: actor.id,
+    })
+  ).value;
+  await cmd("task.update", {
+    id: task.id,
+    expectedRevision: task.revision,
+    status: "ready",
+  });
+  const inbox = (await agentCommand(actor, "inbox.list")).value;
+  assert.equal(inbox.tasks[0].task.id, task.id);
+  const originalFetch = globalThis.fetch,
+    calls: any[] = [];
+  globalThis.fetch = (async (_url: any, init: any) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  try {
+    const { deliverWebhooks } =
+      await import("../apps/server/src/domain/delivery.js");
+    await deliverWebhooks();
+    assert.equal(calls[0].taskId, task.id);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const claimed = (
+    await agentCommand(actor, "request.claim", { taskId: task.id })
+  ).value;
+  assert.equal(claimed.claimed, true);
+  assert.equal(
+    (
+      await agentCommand(
+        { ...actor, requestId: claimed.request.id },
+        "task.list",
+      )
+    ).value.items.length,
+    1,
+  );
+  assert.equal(
+    (await agentCommand(actor, "project.list")).value.items.length,
+    0,
+  );
+});
+
+test("parent membership edits revoke thread access and renamed accounts keep identity", async () => {
+  const sent = (
+    await cmd("message.send", {
+      conversationId: conv.id,
+      body: "Discuss this",
+      recipientIds: [agents[0].id],
+    })
+  ).value;
+  const thread = (
+    await cmd("conversation.thread", { messageId: sent.message.id })
+  ).value;
+  const current = (await transact((s) => s.get(conv.id, "conversation"))).value;
+  await cmd("conversation.update", {
+    id: conv.id,
+    expectedRevision: current.revision,
+    agentIds: [agents[1].id],
+  });
+  assert.deepEqual(
+    (await transact((s) => s.get(thread.id, "conversation").data.agentIds))
+      .value,
+    [agents[1].id],
+  );
+  const agent = (await transact((s) => s.get(agents[0].id, "agent"))).value;
+  const updated = (
+    await cmd("agent.update", {
+      id: agent.id,
+      expectedRevision: agent.revision,
+      name: "Custom account",
+      color: "#336699",
+    })
+  ).value;
+  assert.equal(updated.id, agent.id);
+  assert.equal(updated.data.name, "Custom account");
+  assert.equal(updated.data.color, "#336699");
+});
+
+test("agents discover permitted colleagues without private endpoints and lists have bounded cursors", async () => {
+  const { actor } = await connectedAgent();
+  const hidden = (
+    await cmd("agent.create", {
+      name: "Private specialist",
+      role: "Not in this room",
+    })
+  ).value;
+  const visible = (await agentCommand(actor, "agent.list")).value;
+  assert.equal(
+    visible.items.some((r: any) => r.id === hidden.id),
+    false,
+  );
+  assert.equal(
+    visible.items.some((r: any) => r.id === agents[1].id),
+    true,
+  );
+  assert.equal(
+    visible.items.some((r: any) => "webhookUrl" in r.data),
+    false,
+  );
+  for (let n = 0; n < 3; n++)
+    await agentCommand(actor, "resource.create", {
+      title: `Note ${n}`,
+      text: "saved",
+    });
+  const first = (await agentCommand(actor, "resource.list", { limit: 2 }))
+    .value;
+  assert.equal(first.items.length, 2);
+  assert(first.nextAfterId);
+  const second = (
+    await agentCommand(actor, "resource.list", {
+      limit: 2,
+      afterId: first.nextAfterId,
+    })
+  ).value;
+  assert.equal(second.items.length, 1);
+  assert.equal(second.nextAfterId, null);
+});
+
+test("OAuth access rotation preserves connection identity and revocation while replacing the bearer", async () => {
+  const { credential } = await connectedAgent();
+  const { refreshAgentCredential, authenticateAgent } =
+    await import("../apps/server/src/domain/agent-access.js");
+  await pool.query(
+    "UPDATE agent_credentials SET expires_at=now()-interval '1 minute' WHERE id=$1",
+    [credential.id],
+  );
+  const renewed = await refreshAgentCredential(credential.id);
+  assert.equal(renewed.id, credential.id);
+  await assert.rejects(authenticateAgent(credential.token), /expired, revoked/);
+  assert.equal(
+    (await authenticateAgent(renewed.token)).credentialId,
+    credential.id,
+  );
+  await cmd("credential.revoke", { id: credential.id });
+  await assert.rejects(refreshAgentCredential(credential.id), /revoked/);
 });

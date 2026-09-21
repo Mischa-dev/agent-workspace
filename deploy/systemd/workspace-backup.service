@@ -1,0 +1,12 @@
+[Unit]
+Description=Verified private agent workspace backup
+After=workspace.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/OWNER/agent-workspace
+Environment=WORKSPACE_DEPLOY_DIR=/home/OWNER/agent-workspace/.local/deployment
+ExecStart=/usr/bin/node /home/OWNER/agent-workspace/scripts/deploy-podman.mjs backup
+TimeoutStartSec=30min
+TimeoutStopSec=90
+UMask=0077

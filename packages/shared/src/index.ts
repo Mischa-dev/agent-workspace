@@ -32,10 +32,17 @@ export interface Agent {
   color: string;
   capabilities: string[];
   enabled: boolean;
+  deliveryMode?: "managed" | "poll" | "webhook";
+  checkInMinutes?: number;
+  lastSeenAt?: string;
+  webhookUrl?: string;
+  webhookConfigured?: boolean;
 }
 export interface Conversation {
   title: string;
-  kind: "dm" | "group" | "channel";
+  kind: "dm" | "group" | "channel" | "thread";
+  parentConversationId?: string;
+  rootMessageId?: string;
   agentIds: string[];
   spaceId?: string;
   projectId?: string;
@@ -77,6 +84,9 @@ export interface ResponseRequest {
   runId?: string;
   error?: string;
   generation: number;
+  credentialId?: string;
+  leaseUntil?: string;
+  taskId?: string;
 }
 export interface Resource {
   title: string;
@@ -87,6 +97,8 @@ export interface Resource {
   spaceIds: string[];
   agentIds: string[];
   stagedFor?: string;
+  pinned?: boolean;
+  tags?: string[];
 }
 export interface ResourceRevision {
   resourceId: string;
@@ -103,6 +115,7 @@ export interface Space {
   name: string;
   description: string;
   color: string;
+  agentIds?: string[];
 }
 export interface Project {
   name: string;
@@ -111,8 +124,10 @@ export interface Project {
   repository?: string;
   targetBranch?: string;
   github?: string;
+  agentIds?: string[];
 }
 export interface Task {
+  assigneeId?: string;
   waitingReason?: string;
   outputResources?: Attachment[];
   title: string;

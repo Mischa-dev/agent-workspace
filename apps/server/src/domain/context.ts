@@ -28,7 +28,10 @@ export async function responsePacket(s: Store, requestId: string) {
         );
       const revision = s.get(pin.revisionId, "revision");
       const content = await revisionContent(revision.data);
-      if (content.contentAvailability !== "text")
+      if (
+        content.contentAvailability !== "text" &&
+        (a.data.deliveryMode || "managed") === "managed"
+      )
         throw new AppError(400, content.contentReason);
       return {
         resourceId: r.id,
@@ -37,6 +40,13 @@ export async function responsePacket(s: Store, requestId: string) {
         text: content.text,
         filename: revision.data.filename,
         checksum: revision.data.checksum,
+        contentAvailability: content.contentAvailability,
+        ...(content.contentAvailability !== "text"
+          ? {
+              downloadPath: `/api/agent/resources/${r.id}/revisions/${revision.id}/download`,
+              contentReason: content.contentReason,
+            }
+          : {}),
       };
     }),
   );

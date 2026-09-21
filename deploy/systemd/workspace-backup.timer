@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily private agent workspace backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=workspace-backup.service
+
+[Install]
+WantedBy=timers.target

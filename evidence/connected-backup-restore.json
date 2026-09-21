@@ -1,0 +1,62 @@
+{
+  "passed": true,
+  "verifiedAt": "2026-09-21T17:37:00.493Z",
+  "backup": "/Users/mischanelson/Documents/ChatGPT/workspace/.local/backup-2026-09-21T17-36-52.609Z",
+  "originalDatabase": "workspace_browser_1790011596085",
+  "restoredDatabase": "workspace_restore_1790012213116",
+  "counts": [
+    {
+      "kind": "agent",
+      "n": 3
+    },
+    {
+      "kind": "burst",
+      "n": 2
+    },
+    {
+      "kind": "conversation",
+      "n": 5
+    },
+    {
+      "kind": "message",
+      "n": 5
+    },
+    {
+      "kind": "project",
+      "n": 1
+    },
+    {
+      "kind": "request",
+      "n": 5
+    },
+    {
+      "kind": "resource",
+      "n": 3
+    },
+    {
+      "kind": "revision",
+      "n": 3
+    },
+    {
+      "kind": "run",
+      "n": 3
+    },
+    {
+      "kind": "space",
+      "n": 1
+    },
+    {
+      "kind": "task",
+      "n": 3
+    }
+  ],
+  "filesVerified": 1,
+  "checks": [
+    "New database and file directory; originals preserved",
+    "Main application config untouched",
+    "All record counts and attachment checksums retained",
+    "Owner sessions and scoped runtime credentials cleared; all agent credentials revoked and OAuth state cleared",
+    "Pending request cancelled; unknown execution held",
+    "Built server and real worker restarted with dispatch disabled; no replay"
+  ]
+}

@@ -11,6 +11,15 @@ export interface Actor {
   requestId?: string;
   runId?: string;
   owner?: boolean;
+  participant?: boolean;
+  credentialId?: string;
+  uploadedBlob?: {
+    storageKey: string;
+    checksum: string;
+    size: number;
+    filename: string;
+    mimeType: string;
+  };
 }
 export function requireOwner(actor: Actor) {
   if (!actor.owner)
@@ -25,6 +34,15 @@ export function requestContext(s: Store, actor: Actor) {
     !["running", "claimed"].includes(req.data.status)
   )
     throw new AppError(403, "Request is no longer active.");
+  if (
+    actor.participant &&
+    (req.data.credentialId !== actor.credentialId ||
+      !req.data.leaseUntil ||
+      Date.parse(req.data.leaseUntil) <= Date.now())
+  )
+    throw new AppError(403, "Claim expired or belongs to another connection.");
+  if (req.data.runId && s.get(req.data.runId, "run").data.stopRequested)
+    throw new AppError(403, "Run is stopped.");
   const c = s.get<Conversation>(req.data.conversationId, "conversation");
   if (c.data.stopped || !c.data.agentIds.includes(actor.id))
     throw new AppError(403, "Conversation access ended.");
@@ -36,6 +54,8 @@ export function canReadResource(
   row: RecordRow<Resource>,
 ) {
   if (actor.owner) return true;
+  if (actor.participant && !actor.requestId)
+    return !row.data.stagedFor && row.data.agentIds.includes(actor.id);
   const { req, c } = requestContext(s, actor);
   if (row.data.stagedFor && row.data.stagedFor !== req.id) return false;
   return (
@@ -179,4 +199,31 @@ export function route(s: Store, c: RecordRow<Conversation>, input: any) {
   if (ids.some((id) => !roster.includes(id)))
     throw new AppError(400, "Recipient is not an available participant.");
   return { ids, reason, ambiguous: ids.length === 0 };
+}
+
+export function canAccessProject(s: Store, actor: Actor, id: string) {
+  const p = s.get(id, "project");
+  return (
+    !!actor.owner ||
+    !!p.data.agentIds?.includes(actor.id) ||
+    !!(
+      p.data.spaceId &&
+      s.get(p.data.spaceId, "space").data.agentIds?.includes(actor.id)
+    )
+  );
+}
+export function canAccessTask(s: Store, actor: Actor, row: RecordRow<Task>) {
+  if (actor.owner) return true;
+  if (actor.requestId) {
+    const { c, req } = requestContext(s, actor);
+    if (req.data.taskId) {
+      const task = s.get<Task>(req.data.taskId, "task");
+      return row.id === task.id || task.data.dependencies.includes(row.id);
+    }
+    return !!c.data.projectId && row.data.projectId === c.data.projectId;
+  }
+  return (
+    row.data.assigneeId === actor.id ||
+    (!!row.data.projectId && canAccessProject(s, actor, row.data.projectId))
+  );
 }

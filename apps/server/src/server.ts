@@ -13,9 +13,19 @@ import { AppError, hash } from "./domain/store.js";
 import { readiness } from "./domain/policy.js";
 import { storage } from "./storage/local.js";
 import { github } from "./connectors/github.js";
+import {
+  authenticateAgent,
+  executeUploadedResource,
+  authorizedDownload,
+  refreshAgentCredential,
+} from "./domain/agent-access.js";
+import { registerAgentHttp } from "./transport/agent-http.js";
+import { registerMcp } from "./transport/mcp.js";
+import { registerOAuth, postgresOAuthState } from "./transport/oauth.js";
 const owner = { id: "owner", owner: true };
 export async function buildServer() {
   const app = Fastify({
+    trustProxy: config.trustProxy,
     logger: {
       level: "info",
       redact: [
@@ -27,6 +37,22 @@ export async function buildServer() {
     bodyLimit: 1024 * 1024,
   });
   await app.register(cookie);
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      const values = new URLSearchParams(String(body));
+      const result: Record<string, string> = Object.create(null);
+      for (const [key, value] of values) {
+        if (Object.hasOwn(result, key)) {
+          done(new AppError(400, "Duplicate form parameter."));
+          return;
+        }
+        result[key] = value;
+      }
+      done(null, result);
+    },
+  );
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 12 },
   });
@@ -51,16 +77,65 @@ export async function buildServer() {
         "Content-Security-Policy",
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
       );
-    const hosts = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
+    const hosts = config.allowedHosts;
     if (!hosts.includes(req.headers.host || ""))
       throw new AppError(403, "Invalid host.");
+    const pathname = req.url.split("?")[0];
+    const agentRoute =
+      pathname === "/mcp" || pathname.startsWith("/api/agent/");
+    if (agentRoute) {
+      const requestOrigin = req.headers.origin;
+      if (
+        requestOrigin &&
+        ![...config.allowedOrigins, ...config.agentOrigins].includes(
+          requestOrigin,
+        )
+      )
+        throw new AppError(403, "Invalid agent request origin.");
+      if (requestOrigin)
+        reply
+          .header("Access-Control-Allow-Origin", requestOrigin)
+          .header("Vary", "Origin")
+          .header(
+            "Access-Control-Expose-Headers",
+            "WWW-Authenticate,Mcp-Protocol-Version,Mcp-Session-Id",
+          );
+      if (req.method === "OPTIONS")
+        return reply
+          .header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+          .header(
+            "Access-Control-Allow-Headers",
+            "Authorization,Content-Type,Mcp-Protocol-Version,Mcp-Session-Id,Last-Event-Id",
+          )
+          .code(204)
+          .send();
+      if (
+        req.method === "POST" &&
+        !req.headers["content-type"]?.startsWith("application/json") &&
+        !req.headers["content-type"]?.startsWith("multipart/form-data")
+      )
+        throw new AppError(415, "JSON or file upload required.");
+      return;
+    }
+    if (
+      pathname.startsWith("/.well-known/") ||
+      pathname.startsWith("/oauth/")
+    ) {
+      if (
+        req.headers.origin &&
+        ![...config.allowedOrigins, ...config.agentOrigins].includes(
+          req.headers.origin,
+        ) &&
+        !["GET", "HEAD"].includes(req.method)
+      )
+        throw new AppError(403, "Invalid authorization request origin.");
+      return;
+    }
     const hook = req.url === "/api/hooks/work";
     if (hook) {
       if (
         req.headers.origin &&
-        ![origin, `http://localhost:${config.port}`].includes(
-          req.headers.origin,
-        )
+        !config.allowedOrigins.includes(req.headers.origin)
       )
         throw new AppError(403, "Invalid hook origin.");
       const bearer = req.headers.authorization?.replace(/^Bearer /, "") || "";
@@ -71,15 +146,7 @@ export async function buildServer() {
       return;
     }
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-      if (
-        ![
-          origin,
-          `http://localhost:${config.port}`,
-          ...(process.env.WORKSPACE_DEV === "1"
-            ? ["http://127.0.0.1:4311"]
-            : []),
-        ].includes(req.headers.origin || "")
-      )
+      if (!config.allowedOrigins.includes(req.headers.origin || ""))
         throw new AppError(403, "Invalid request origin.");
       if (
         !req.headers["content-type"]?.startsWith("application/json") &&
@@ -146,7 +213,8 @@ export async function buildServer() {
     );
     reply.setCookie("workspace", token, {
       httpOnly: true,
-      sameSite: "strict",
+      sameSite: "lax",
+      secure: config.secureCookies,
       path: "/",
       maxAge: 14 * 86400,
     });
@@ -156,16 +224,24 @@ export async function buildServer() {
     await pool.query("DELETE FROM owner_sessions WHERE hash=$1", [
       hash(req.cookies.workspace || ""),
     ]);
-    reply.clearCookie("workspace", { path: "/" });
+    reply.clearCookie("workspace", { path: "/", secure: config.secureCookies });
     return { ok: true };
   });
   app.get("/api/snapshot", async () => {
+    const lastSeen = new Map(
+      (
+        await pool.query(
+          "SELECT agent_id,max(last_seen_at) last_seen_at FROM agent_credentials GROUP BY agent_id",
+        )
+      ).rows.map((row) => [row.agent_id, row.last_seen_at?.toISOString()]),
+    );
     const snapshot = await transact(
       (s) =>
         [...s.rows.values()].map((r) => ({
           ...r,
           data: {
             ...r.data,
+            ...(r.kind === "agent" ? { lastSeenAt: lastSeen.get(r.id) } : {}),
             ...(r.kind === "task" ? { readiness: readiness(s, r as any) } : {}),
           },
         })),
@@ -213,10 +289,17 @@ export async function buildServer() {
     let conversationIds: string[] = [];
     let projectIds: string[] = [];
     let spaceIds: string[] = [];
+    let agentIds: string[] | undefined;
+    let tags: string[] = [];
     try {
       conversationIds = JSON.parse(field("conversationIds") || "[]");
       projectIds = JSON.parse(field("projectIds") || "[]");
       spaceIds = JSON.parse(field("spaceIds") || "[]");
+      agentIds =
+        field("agentIds") === undefined
+          ? undefined
+          : JSON.parse(field("agentIds"));
+      tags = JSON.parse(field("tags") || "[]");
     } catch {
       throw new AppError(400, "Invalid conversation selection.");
     }
@@ -228,6 +311,9 @@ export async function buildServer() {
         conversationIds,
         projectIds,
         spaceIds,
+        agentIds,
+        tags,
+        pinned: field("pinned") === "true",
         storageKey: saved.key,
         size: saved.size,
         checksum: saved.checksum,
@@ -267,6 +353,83 @@ export async function buildServer() {
   );
   app.get("/api/github/pull", async (req) =>
     github.readPull(String((req.query as any).url || "")),
+  );
+  const participantDependencies = {
+    authenticate: authenticateAgent,
+    execute,
+    storage,
+    upload: executeUploadedResource,
+    download: async (
+      actor: Parameters<typeof authorizedDownload>[0],
+      id: string,
+      revisionId: string,
+    ) => {
+      const revision = await authorizedDownload(actor, id, revisionId);
+      if (!revision.storageKey) throw new AppError(404, "File not found.");
+      return {
+        storageKey: revision.storageKey,
+        checksum: revision.checksum,
+        filename: revision.filename,
+      };
+    },
+  };
+  await registerAgentHttp(app, participantDependencies);
+  await registerMcp(app, participantDependencies, origin);
+  app.options("/mcp", async (_req, reply) => reply.code(204).send());
+  app.options("/api/agent/*", async (_req, reply) => reply.code(204).send());
+  await registerOAuth(
+    app,
+    {
+      state: postgresOAuthState(pool),
+      ownerSession: async (req) => {
+        const token = req.cookies.workspace;
+        if (!token) return null;
+        return (
+          (
+            await pool.query(
+              "SELECT csrf FROM owner_sessions WHERE hash=$1 AND expires_at>now()",
+              [hash(token)],
+            )
+          ).rows[0] || null
+        );
+      },
+      agents: async () =>
+        (
+          await transact(
+            (s) =>
+              s
+                .all("agent")
+                .filter(
+                  (a) =>
+                    a.data.enabled &&
+                    ["poll", "webhook"].includes(a.data.deliveryMode),
+                )
+                .map((a) => ({
+                  id: a.id,
+                  name: a.data.name,
+                  enabled: a.data.enabled,
+                })),
+            "read",
+          )
+        ).value,
+      issue: async (agentId, label, commandId) =>
+        (
+          await execute(owner, {
+            id: commandId,
+            type: "credential.issue",
+            input: { agentId, label, expiresInDays: 1 },
+          })
+        ).value,
+      refresh: refreshAgentCredential,
+      revoke: async (id) => {
+        await execute(owner, {
+          id: `oauth-revoke:${id}`,
+          type: "credential.revoke",
+          input: { id },
+        });
+      },
+    },
+    origin,
   );
   app.get("/api/events", async (req, reply) => {
     let after = Number(
@@ -343,7 +506,7 @@ if (process.argv[1] && /server\.(ts|js)$/.test(process.argv[1])) {
   await seed();
   await auditStorage();
   const app = await buildServer();
-  await app.listen({ host: "127.0.0.1", port: config.port });
+  await app.listen({ host: config.bindHost, port: config.port });
   for (const signal of ["SIGINT", "SIGTERM"])
     process.on(signal, async () => {
       app.server.closeAllConnections();

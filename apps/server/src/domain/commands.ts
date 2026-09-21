@@ -1,3 +1,12 @@
+import {
+  validateParticipant,
+  credentialCommand,
+  configureAgent,
+} from "./agent-access.js";
+import {
+  participantCommand,
+  participantResourceScope,
+} from "./participants.js";
 import { revisionContent } from "../storage/content.js";
 import { github } from "../connectors/github.js";
 import { verifyIntegration } from "./repository.js";
@@ -64,8 +73,39 @@ export async function transact<T>(
 export async function execute(actor: Actor, command: Command) {
   if (!command.id || command.id.length > 160)
     throw new AppError(400, "Command id required.");
+  if (actor.participant && command.input?.requestId) {
+    if (actor.requestId && actor.requestId !== command.input.requestId)
+      throw new AppError(400, "Request binding does not match.");
+    actor = { ...actor, requestId: command.input.requestId };
+  }
   return transact(async (s) => {
-    const digest = hash({ type: command.type, input: command.input });
+    if (actor.participant) await validateParticipant(s, actor);
+    if (
+      actor.participant &&
+      [
+        "agent.me",
+        "agent.list",
+        "inbox.list",
+        "conversation.list",
+        "conversation.read",
+        "space.list",
+        "project.list",
+        "resource.list",
+        "resource.read",
+        "task.list",
+      ].includes(command.type)
+    )
+      return apply(s, actor, command.type, command.input);
+    const digestInput = actor.uploadedBlob
+      ? { ...command.input, storageKey: undefined }
+      : command.input;
+    const digest = hash({
+      type: command.type,
+      input: digestInput,
+      ...(actor.participant
+        ? { requestId: actor.requestId, credentialId: actor.credentialId }
+        : {}),
+    });
     const old = await s.client.query("SELECT * FROM commands WHERE id=$1", [
       `${actor.id}:${command.id}`,
     ]);
@@ -75,6 +115,16 @@ export async function execute(actor: Actor, command: Command) {
           409,
           "Command id was already used with different input.",
         );
+      if (
+        actor.participant &&
+        command.type === "request.claim" &&
+        old.rows[0].result?.claimed
+      ) {
+        const id = old.rows[0].result.request.id;
+        requestContext(s, { ...actor, requestId: id });
+        for (const pin of old.rows[0].result.context.requiredResources || [])
+          resourceAccess(s, { ...actor, requestId: id }, pin.resourceId);
+      }
       return old.rows[0].result;
     }
     const value = await apply(s, actor, command.type, command.input);
@@ -84,7 +134,11 @@ export async function execute(actor: Actor, command: Command) {
         `${actor.id}:${command.id}`,
         actor.id,
         digest,
-        JSON.stringify(value ?? null),
+        JSON.stringify(
+          command.type === "credential.issue"
+            ? { ...value, token: undefined, oneTimeTokenUnavailable: true }
+            : (value ?? null),
+        ),
       ],
     );
     return value;
@@ -96,6 +150,12 @@ export async function apply(
   type: string,
   i: any,
 ): Promise<any> {
+  if (!i || typeof i !== "object" || Array.isArray(i))
+    throw new AppError(400, "Command input must be an object.");
+  if (a.participant) {
+    const result = await participantCommand(s, a, type, i);
+    if (result.handled) return result.value;
+  }
   if (type === "conversation.read") {
     const { req, c } = requestContext(s, a);
     const allowed = s
@@ -154,7 +214,7 @@ export async function apply(
   if (type === "resource.read") {
     const r = resourceAccess(s, a, i.id);
     let revisionId = i.revisionId || r.data.latestRevisionId;
-    if (!a.owner) {
+    if (!a.owner && a.requestId) {
       const { req } = requestContext(s, a);
       if (req.data.mode === "independent" && r.data.stagedFor !== req.id) {
         const frozen = (req.data as any).resourcePins?.[r.id];
@@ -180,7 +240,10 @@ export async function apply(
     let conversationIds = strings(i.conversationIds),
       agentIds = strings(i.agentIds),
       stagedFor: undefined | string;
-    if (!a.owner) {
+    if (a.participant && !a.requestId) {
+      const scope = participantResourceScope(s, a, i);
+      ({ projectIds, spaceIds, conversationIds, agentIds } = scope);
+    } else if (!a.owner) {
       const { c, req } = requestContext(s, a);
       conversationIds = [c.id];
       agentIds = [...c.data.agentIds];
@@ -192,10 +255,17 @@ export async function apply(
       const c = s.get<Conversation>(id, "conversation");
       if (a.owner && !i.agentIds) agentIds.push(...c.data.agentIds);
     }
+    for (const id of spaceIds) s.get(id, "space");
+    for (const id of projectIds) s.get(id, "project");
+    for (const id of agentIds) s.get(id, "agent");
     const body = typeof i.text === "string" ? i.text : "";
     if (body.length > 256000)
       throw new AppError(413, "Resource text exceeds 256 KB.");
-    if (!a.owner && i.storageKey)
+    if (
+      !a.owner &&
+      i.storageKey &&
+      (!a.uploadedBlob || i.storageKey !== a.uploadedBlob.storageKey)
+    )
       throw new AppError(
         403,
         "Agent file upload is unavailable through this tool.",
@@ -212,6 +282,10 @@ export async function apply(
       agentIds: [...new Set(agentIds)],
       projectIds,
       spaceIds,
+      pinned: !!i.pinned,
+      tags: strings(i.tags)
+        .map((t) => t.slice(0, 40))
+        .slice(0, 20),
       ...(stagedFor ? { stagedFor } : {}),
     });
     const rev = s.add("revision", {
@@ -220,8 +294,8 @@ export async function apply(
       storageKey: i.storageKey,
       filename: i.filename,
       mimeType: i.mimeType,
-      size: i.size ?? Buffer.byteLength(body),
-      checksum: i.checksum || hash(body),
+      size: i.storageKey ? i.size : Buffer.byteLength(body),
+      checksum: i.storageKey ? i.checksum : hash(body),
       authorId: a.id,
       number: 1,
     });
@@ -230,7 +304,7 @@ export async function apply(
   }
   if (type === "resource.revise") {
     const r = resourceAccess(s, a, i.id);
-    if (!a.owner) {
+    if (!a.owner && a.requestId) {
       const { req } = requestContext(s, a);
       if (req.data.mode === "independent" && r.data.stagedFor !== req.id)
         throw new AppError(
@@ -273,7 +347,7 @@ export async function apply(
   if (type === "plan.propose" || type === "proposal.create") {
     let conversationId = i.conversationId,
       projectId = i.projectId;
-    if (!a.owner) {
+    if (!a.owner && a.requestId) {
       const { c } = requestContext(s, a);
       conversationId = c.id;
       projectId = c.data.projectId;
@@ -298,6 +372,8 @@ export async function apply(
       : [];
   }
   requireOwner(a);
+  if (type.startsWith("credential.")) return credentialCommand(s, type, i);
+  if (type === "agent.configure") return configureAgent(s, i);
   if (type === "agent.create") {
     const name = bounded(i.name, 40);
     if (
@@ -318,12 +394,38 @@ export async function apply(
         .slice(0, 20),
       color: i.color || "#527868",
       enabled: true,
+      deliveryMode: ["managed", "poll", "webhook"].includes(i.deliveryMode)
+        ? i.deliveryMode === "webhook"
+          ? "poll"
+          : i.deliveryMode
+        : "managed",
+      checkInMinutes: 60,
     });
   }
   if (type === "agent.update") {
     const agent = s.get(i.id, "agent");
+    const name = i.name === undefined ? agent.data.name : bounded(i.name, 40);
+    if (
+      !/^[a-zA-Z][a-zA-Z0-9 _-]*$/.test(name) ||
+      s
+        .all("agent")
+        .some(
+          (r) =>
+            r.id !== agent.id &&
+            r.data.name.toLowerCase() === name.toLowerCase(),
+        )
+    )
+      throw new AppError(
+        400,
+        "Choose a unique agent name using letters, numbers, spaces or hyphens.",
+      );
     const patch = {
-      role: i.role ?? agent.data.role,
+      name,
+      color:
+        typeof i.color === "string" && /^#[0-9a-f]{6}$/i.test(i.color)
+          ? i.color
+          : agent.data.color,
+      role: i.role === undefined ? agent.data.role : bounded(i.role, 2000),
       capabilities: i.capabilities
         ? strings(i.capabilities)
             .filter((x) => /^[a-zA-Z][a-zA-Z0-9 -]{1,30}$/.test(x))
@@ -354,7 +456,8 @@ export async function apply(
     ids.forEach((id) => s.get(id, "agent"));
     return s.add("conversation", {
       title: bounded(i.title, 120),
-      kind: ids.length === 1 ? "dm" : "group",
+      kind:
+        i.kind === "channel" ? "channel" : ids.length === 1 ? "dm" : "group",
       agentIds: ids,
       spaceId: i.spaceId,
       projectId: i.projectId,
@@ -362,10 +465,85 @@ export async function apply(
       mode: "auto",
     });
   }
+  if (type === "conversation.thread") {
+    const message = s.get<Message>(i.messageId, "message");
+    if (message.data.staged)
+      throw new AppError(
+        409,
+        "Wait until this opinion is published before opening a thread.",
+      );
+    const existing = s
+      .all<Conversation>("conversation")
+      .find((c) => c.data.rootMessageId === message.id);
+    if (existing) return existing;
+    const parent = s.get<Conversation>(
+      message.data.conversationId,
+      "conversation",
+    );
+    const thread = s.add("conversation", {
+      title: String(i.title || message.data.body).slice(0, 120),
+      kind: "thread",
+      parentConversationId: parent.id,
+      rootMessageId: message.id,
+      agentIds: parent.data.agentIds,
+      spaceId: parent.data.spaceId,
+      projectId: parent.data.projectId,
+      stopped: false,
+      mode: "auto",
+    });
+    for (const pin of message.data.attachments) {
+      const r = s.get<Resource>(pin.resourceId, "resource");
+      s.patch(r.id, {
+        conversationIds: [...new Set([...r.data.conversationIds, thread.id])],
+      });
+    }
+    s.add("message", {
+      conversationId: thread.id,
+      authorId: "system",
+      body: `Thread opened from ${parent.data.title}:\n\n${message.data.body}`,
+      forwardedFrom: message.id,
+      attachments: message.data.attachments,
+    });
+    return thread;
+  }
   if (type === "conversation.update") {
     const c = s.get<Conversation>(i.id, "conversation");
     const ids = i.agentIds ? strings(i.agentIds) : c.data.agentIds;
     ids.forEach((id) => s.get(id, "agent"));
+    if (!ids.length || ids.length > 12)
+      throw new AppError(400, "Choose 1–12 participants.");
+    if (c.data.kind === "thread" && c.data.parentConversationId)
+      throw new AppError(400, "Edit participation on the parent conversation.");
+    const childIds = new Set<string>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const child of s.all<Conversation>("conversation"))
+        if (
+          child.data.parentConversationId &&
+          (child.data.parentConversationId === c.id ||
+            childIds.has(child.data.parentConversationId)) &&
+          !childIds.has(child.id)
+        ) {
+          childIds.add(child.id);
+          changed = true;
+        }
+    }
+    for (const childId of childIds) {
+      const child = s.get<Conversation>(childId, "conversation");
+      for (const req of s
+        .all<ResponseRequest>("request")
+        .filter(
+          (r) =>
+            r.data.conversationId === childId && !ids.includes(r.data.agentId),
+        ))
+        stopRequest(s, req.id);
+      s.patch(child.id, {
+        agentIds: ids,
+        projectId: "projectId" in i ? i.projectId : c.data.projectId,
+        spaceId: "spaceId" in i ? i.spaceId : c.data.spaceId,
+      });
+    }
     const removed = c.data.agentIds.filter((id) => !ids.includes(id));
     for (const req of s
       .all<ResponseRequest>("request")
@@ -395,6 +573,17 @@ export async function apply(
       );
     if (i.continue) s.patch(c.id, { stopped: false });
     const decision = route(s, c, { ...i, body });
+    if (
+      i.mode === "independent" &&
+      decision.ids.some(
+        (id) =>
+          (s.get(id, "agent").data.deliveryMode || "managed") !== "managed",
+      )
+    )
+      throw new AppError(
+        400,
+        "Independent opinions require managed agents with isolated request context. Choose a normal or discussion message for connected accounts.",
+      );
     // Only an owner message creates a new allowance. Dispatch and retries use this persisted burst.
     const acknowledgment =
       /^(thanks|thank you|ok|okay|got it|nice|cool|great|acknowledged|yes|no)[.! ]*$/i.test(
@@ -530,6 +719,30 @@ export async function apply(
     }
     return s.get(c.id);
   }
+  if (type === "resource.organize") {
+    const r = s.get<Resource>(i.id, "resource");
+    for (const id of strings(i.spaceIds)) s.get(id, "space");
+    for (const id of strings(i.projectIds)) s.get(id, "project");
+    return s.patch(
+      r.id,
+      {
+        spaceIds:
+          i.spaceIds === undefined ? r.data.spaceIds : strings(i.spaceIds),
+        projectIds:
+          i.projectIds === undefined
+            ? r.data.projectIds
+            : strings(i.projectIds),
+        pinned: i.pinned === undefined ? r.data.pinned : !!i.pinned,
+        tags:
+          i.tags === undefined
+            ? r.data.tags
+            : strings(i.tags)
+                .map((t) => t.slice(0, 40))
+                .slice(0, 20),
+      },
+      i.expectedRevision,
+    );
+  }
   if (type === "resource.grant") {
     const r = s.get<Resource>(i.id, "resource");
     for (const request of s
@@ -561,7 +774,9 @@ export async function apply(
   }
   if (type === "space.create" || type === "project.create") {
     const kind = type.split(".")[0] as "space" | "project";
+    strings(i.agentIds).forEach((id) => s.get(id, "agent"));
     return s.add(kind, {
+      agentIds: strings(i.agentIds),
       name: bounded(i.name, 120),
       description: String(i.description || ""),
       color: i.color || "#55806b",
@@ -573,6 +788,7 @@ export async function apply(
   }
   if (type === "space.update" || type === "project.update") {
     const r = s.get(i.id, type.split(".")[0] as "space" | "project");
+    if (i.agentIds) strings(i.agentIds).forEach((id) => s.get(id, "agent"));
     if (type === "project.update")
       for (const run of s
         .all<Run>("run")
@@ -592,6 +808,7 @@ export async function apply(
   if (type === "task.create") {
     const t = taskDefaults(i);
     validateTask(s, t);
+    if (t.assigneeId) s.get(t.assigneeId, "agent");
     if (t.projectId) s.get(t.projectId, "project");
     t.resources = attachments(s, a, t.resources);
     return s.add("task", t);
@@ -605,6 +822,7 @@ export async function apply(
       );
     const allowed = [
       "title",
+      "assigneeId",
       "description",
       "projectId",
       "parentId",
@@ -655,6 +873,7 @@ export async function apply(
       throw new AppError(400, "Only reviewed work can be accepted.");
     t.resources = attachments(s, a, t.resources);
     validateTask(s, t, r.id);
+    if (t.assigneeId) s.get(t.assigneeId, "agent");
     return s.patch(r.id, t, i.expectedRevision);
   }
   if (type === "proposal.apply") {
@@ -938,6 +1157,7 @@ export async function apply(
 export function taskDefaults(i: any): Task {
   return {
     title: bounded(i.title, 240),
+    assigneeId: i.assigneeId,
     description: String(i.description || ""),
     projectId: i.projectId,
     parentId: i.parentId,
@@ -1029,6 +1249,7 @@ export async function seed() {
 export function taskSpecification(t: Task) {
   return hash({
     title: t.title,
+    assigneeId: t.assigneeId,
     description: t.description,
     criteria: t.criteria,
     resources: t.resources,

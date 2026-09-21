@@ -1,6 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Hash,
   MessageSquare,
   Inbox,
   FolderOpen,
@@ -42,6 +49,7 @@ import type {
   Message,
 } from "../../../packages/shared/src/index";
 import "./style.css";
+import { SpacesView, checkInLabel } from "./connected";
 import {
   ProjectView,
   TaskRow,
@@ -213,7 +221,12 @@ function App() {
   };
   const filtered = (rows: Row[]) =>
     rows.filter((r) =>
-      JSON.stringify([r.data.name, r.data.title, r.data.description])
+      JSON.stringify([
+        r.data.name,
+        r.data.title,
+        r.data.description,
+        r.data.tags,
+      ])
         .toLowerCase()
         .includes(search.toLowerCase()),
     );
@@ -264,7 +277,7 @@ function App() {
           {error && <p className="error">{error}</p>}
           <small>
             Your token is saved on this Mac in <code>.local/owner-token</code>.
-            This app is available only on this computer.
+            Use the token from the workspace host to sign in.
           </small>
         </div>
       </main>
@@ -340,7 +353,7 @@ function App() {
         >
           <span className="avatar owner-avatar">Y</span>
           <span>
-            Your workspace<small>Private · on this Mac</small>
+            Your workspace<small>Private · your workspace</small>
           </span>
         </button>
       </aside>
@@ -410,39 +423,72 @@ function App() {
                   <Plus size={19} />
                 </button>
               </div>
-              {filtered(all("conversation")).map((c) => {
-                const members = c.data.agentIds.map((id: string) => name(id));
-                const latest = all("message")
-                  .filter((m) => m.data.conversationId === c.id)
-                  .at(-1);
-                return (
-                  <button
-                    key={c.id}
-                    className={`conversation-item ${view?.id === c.id ? "selected" : ""}`}
-                    onClick={() => {
-                      setSelected(c.id);
-                      setPanel(null);
-                    }}
-                  >
-                    <span
-                      className={`avatar ${c.data.kind === "group" ? "group-avatar" : ""}`}
-                    >
-                      {c.data.kind === "group" ? (
-                        <Users size={18} />
-                      ) : (
-                        members[0]?.[0]
+              {filtered(all("conversation"))
+                .sort(
+                  (a, b) =>
+                    (({ channel: 0, group: 1, dm: 2, thread: 3 })[
+                      a.data.kind as string
+                    ] ?? 4) -
+                    ({ channel: 0, group: 1, dm: 2, thread: 3 }[
+                      b.data.kind as string
+                    ] ?? 4),
+                )
+                .map((c, index, conversations) => {
+                  const group = (kind: string) =>
+                    kind === "channel"
+                      ? "Channels"
+                      : kind === "thread"
+                        ? "Threads"
+                        : "Direct & group";
+                  const members = c.data.agentIds.map((id: string) => name(id));
+                  const latest = all("message")
+                    .filter((m) => m.data.conversationId === c.id)
+                    .at(-1);
+                  return (
+                    <React.Fragment key={c.id}>
+                      {(index === 0 ||
+                        group(conversations[index - 1].data.kind) !==
+                          group(c.data.kind)) && (
+                        <p className="conversation-group-label">
+                          {group(c.data.kind)}
+                        </p>
                       )}
-                    </span>
-                    <span>
-                      <strong>{c.data.title}</strong>
-                      <small>{latest?.data.body || members.join(" & ")}</small>
-                    </span>
-                    {activeRequests.some(
-                      (r) => r.data.conversationId === c.id,
-                    ) && <span className="activity-dot" />}
-                  </button>
-                );
-              })}
+                      <button
+                        key={c.id}
+                        className={`conversation-item ${view?.id === c.id ? "selected" : ""}`}
+                        onClick={() => {
+                          setSelected(c.id);
+                          setPanel(null);
+                        }}
+                      >
+                        <span
+                          className={`avatar ${c.data.kind === "group" ? "group-avatar" : ""}`}
+                        >
+                          {c.data.kind === "channel" ? (
+                            <Hash size={18} />
+                          ) : c.data.kind === "thread" ? (
+                            <CornerUpLeft size={17} />
+                          ) : c.data.kind === "group" ? (
+                            <Users size={18} />
+                          ) : (
+                            members[0]?.[0]
+                          )}
+                        </span>
+                        <span>
+                          <strong>{c.data.title}</strong>
+                          <small>
+                            {c.data.kind === "thread"
+                              ? `Thread · ${get(c.data.parentConversationId)?.data.title || "Conversation"}`
+                              : latest?.data.body || members.join(" & ")}
+                          </small>
+                        </span>
+                        {activeRequests.some(
+                          (r) => r.data.conversationId === c.id,
+                        ) && <span className="activity-dot" />}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
               <p className="list-footer">
                 A conversation keeps its own context.
                 <br />
@@ -452,6 +498,7 @@ function App() {
             {view ? (
               <Chat
                 key={view.id}
+                onNavigate={go}
                 conversation={view}
                 rows={state.records}
                 command={command}
@@ -589,7 +636,9 @@ function App() {
                         ? "SHARED"
                         : r.data.projectIds.length
                           ? "PROJECT"
-                          : "ONLY YOU"}
+                          : r.data.spaceIds.length
+                            ? "SPACE"
+                            : "ONLY YOU"}
                   </small>
                   <h3>{r.data.title}</h3>
                   <p>
@@ -621,57 +670,15 @@ function App() {
           </div>
         )}
         {section === "Spaces" && (
-          <div className="page">
-            <PageTitle
-              eyebrow="ROOM FOR EVERYTHING"
-              title="Your spaces"
-              description="Gather related projects, conversations and material without duplicating them."
-              action="New space"
-              onClick={() => setModal({ type: "space" })}
-            />
-            <div className="project-grid">
-              {filtered(all("space")).map((s) => (
-                <article className="project-card" key={s.id}>
-                  <span
-                    className="space-icon"
-                    style={{ background: s.data.color }}
-                  >
-                    <Layers size={21} />
-                  </span>
-                  <h2>{s.data.name}</h2>
-                  <p>{s.data.description}</p>
-                  {all("project")
-                    .filter((p) => p.data.spaceId === s.id)
-                    .map((p) => (
-                      <button
-                        className="inline-link"
-                        key={p.id}
-                        onClick={() => go("Projects", p.id)}
-                      >
-                        <FolderOpen size={15} />
-                        {p.data.name}
-                        <ArrowRight size={14} />
-                      </button>
-                    ))}
-                  <button
-                    className="quiet"
-                    onClick={() => setModal({ type: "project", spaceId: s.id })}
-                  >
-                    <Plus size={14} /> Add project
-                  </button>
-                </article>
-              ))}
-            </div>
-            {!all("space").length && (
-              <Empty
-                icon={Layers}
-                title="Make a little room"
-                detail="A space can hold a side project, an area of life, or a long-term ambition."
-                action="Create space"
-                onClick={() => setModal({ type: "space" })}
-              />
-            )}
-          </div>
+          <SpacesView
+            rows={state.records}
+            selected={selected}
+            search={search}
+            onNavigate={go}
+            openModal={setModal}
+            setPanel={setPanel}
+            command={command}
+          />
         )}
         {section === "Projects" && (
           <div className="page project-page">
@@ -786,14 +793,29 @@ function App() {
                   </div>
                   <small>
                     {a.data.enabled
-                      ? "Codex · isolated workspace tools"
+                      ? a.data.deliveryMode === "poll"
+                        ? `Check-in expected ${checkInLabel(a.data.checkInMinutes || 5)}`
+                        : a.data.deliveryMode === "webhook"
+                          ? a.data.lastSeenAt
+                            ? `Webhook · seen ${new Date(a.data.lastSeenAt).toLocaleDateString()}`
+                            : "Webhook · awaiting first check-in"
+                          : "Local Codex · responds on demand"
                       : "Paused · no new responses"}
                   </small>
+                  {a.data.enabled &&
+                    a.data.deliveryMode &&
+                    a.data.deliveryMode !== "managed" && (
+                      <small className="agent-last-seen">
+                        {a.data.lastSeenAt
+                          ? `Last seen ${new Date(a.data.lastSeenAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                          : "Awaiting first check-in"}
+                      </small>
+                    )}
                   <button
                     className="quiet"
                     onClick={() => setModal({ type: "agent", edit: a })}
                   >
-                    <Settings size={14} /> Edit identity
+                    <Settings size={14} /> Identity & connection
                   </button>
                   <button
                     className="secondary"
@@ -820,8 +842,8 @@ function App() {
               ))}
             </div>
             <p className="muted">
-              AgentOS / Hermes can be added through the connector contract. They
-              are not connected in this build.
+              Connected agents use their own runtimes. Conversation context and
+              shared material stay scoped to each identity.
             </p>
           </div>
         )}
@@ -857,12 +879,16 @@ function App() {
                 link: "Link a pull request",
                 plan: "Plan with an agent",
                 agent: "Agent identity",
+                "space-existing": "Add existing material",
+                "resource-attach": "Attach material",
+                "resource-organize": "Organize Resource",
               } as Record<string, string>
             )[modal.type] || "Workspace"
           }
           close={() => setModal(null)}
         >
           <ModalContent
+            updateModal={setModal}
             onNavigate={go}
             modal={modal}
             rows={state.records}
@@ -990,6 +1016,7 @@ function Chat({
   busy,
   openModal,
   setPanel,
+  onNavigate,
 }: any) {
   const [draft, setDraft] = useState(
       localStorage.getItem(`draft:${c.id}`) || "",
@@ -1004,7 +1031,14 @@ function Chat({
     scroller = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true);
   const messages = rows.filter(
-    (r: Row) => r.kind === "message" && r.data.conversationId === c.id,
+    (r: Row) =>
+      r.kind === "message" &&
+      r.data.conversationId === c.id &&
+      !(
+        c.data.kind === "thread" &&
+        r.data.authorId === "system" &&
+        r.data.forwardedFrom === c.data.rootMessageId
+      ),
   );
   const requests = rows.filter(
     (r: Row) =>
@@ -1014,6 +1048,21 @@ function Chat({
         r.data.status,
       ),
   );
+  useLayoutEffect(() => {
+    const saved = sessionStorage.getItem(`scroll:${c.id}`),
+      element = scroller.current;
+    if (saved !== null && element) {
+      element.scrollTop = Number(saved);
+      nearBottom.current =
+        element.scrollHeight - element.scrollTop - element.clientHeight < 140;
+    }
+  }, [c.id]);
+  const hasConnectedParticipants = c.data.agentIds.some(
+    (id: string) => (get(id)?.data.deliveryMode || "managed") !== "managed",
+  );
+  useEffect(() => {
+    if (mode === "independent" && hasConnectedParticipants) setMode("auto");
+  }, [mode, hasConnectedParticipants]);
   useEffect(() => {
     localStorage.setItem(`draft:${c.id}`, draft);
   }, [draft, c.id]);
@@ -1045,8 +1094,21 @@ function Chat({
   return (
     <section className="chat">
       <header className="chat-header">
+        {c.data.kind === "thread" && (
+          <button
+            className="thread-back"
+            aria-label="Back to parent conversation"
+            onClick={() => onNavigate("Messages", c.data.parentConversationId)}
+          >
+            <ArrowLeft size={17} />
+          </button>
+        )}
         <span className="avatar group-avatar">
-          {c.data.kind === "dm" ? (
+          {c.data.kind === "channel" ? (
+            <Hash size={20} />
+          ) : c.data.kind === "thread" ? (
+            <CornerUpLeft size={20} />
+          ) : c.data.kind === "dm" ? (
             name(c.data.agentIds[0])[0]
           ) : (
             <Users size={20} />
@@ -1056,7 +1118,12 @@ function Chat({
           <h2>{c.data.title}</h2>
           <small>
             {c.data.agentIds.map(name).join(" · ")}
-            <span className="sep">/</span>Private conversation
+            <span className="sep">/</span>
+            {c.data.kind === "thread"
+              ? "Thread"
+              : c.data.kind === "channel"
+                ? "Channel"
+                : "Private conversation"}
           </small>
         </div>
         <button
@@ -1073,12 +1140,36 @@ function Chat({
         ref={scroller}
         onScroll={() => {
           const el = scroller.current;
-          if (el)
+          if (el) {
             nearBottom.current =
               el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+            sessionStorage.setItem(`scroll:${c.id}`, String(el.scrollTop));
+          }
         }}
       >
-        {!messages.length && (
+        {c.data.rootMessageId && get(c.data.rootMessageId) && (
+          <div className="thread-source">
+            <small>
+              Thread from {name(get(c.data.rootMessageId).data.authorId)} in{" "}
+              {get(c.data.parentConversationId)?.data.title}
+            </small>
+            <RichText text={get(c.data.rootMessageId).data.body} />
+            {(get(c.data.rootMessageId).data.attachments || []).map(
+              (pin: Attachment) => (
+                <button
+                  className="attachment"
+                  key={pin.revisionId}
+                  onClick={() => showResource(pin.resourceId, pin.revisionId)}
+                >
+                  <FileText size={14} />
+                  {get(pin.resourceId)?.data.title}
+                  <small>v{get(pin.revisionId)?.data.number}</small>
+                </button>
+              ),
+            )}
+          </div>
+        )}
+        {!messages.length && c.data.kind !== "thread" && (
           <div className="chat-welcome">
             <span className="eyebrow">A FRESH CONVERSATION</span>
             <h1>
@@ -1165,7 +1256,45 @@ function Chat({
                     pin.revisionId && <small>Newer available</small>}
                 </button>
               ))}
+              {rows
+                .filter(
+                  (r: Row) =>
+                    r.kind === "conversation" && r.data.rootMessageId === m.id,
+                )
+                .map((thread: Row) => (
+                  <button
+                    className="thread-link"
+                    key={thread.id}
+                    onClick={() => onNavigate("Messages", thread.id)}
+                  >
+                    <MessageSquare size={13} />
+                    {
+                      rows.filter(
+                        (r: Row) =>
+                          r.kind === "message" &&
+                          r.data.conversationId === thread.id &&
+                          r.data.authorId !== "system",
+                      ).length
+                    }{" "}
+                    thread replies <ArrowRight size={12} />
+                  </button>
+                ))}
               <div className="message-actions">
+                <button
+                  title="Open thread"
+                  onClick={() =>
+                    command("conversation.thread", { messageId: m.id })
+                      .then((result: any) =>
+                        onNavigate(
+                          "Messages",
+                          (result.conversation || result).id,
+                        ),
+                      )
+                      .catch(() => {})
+                  }
+                >
+                  <MessageSquare size={14} />
+                </button>
                 {m.data.authorId === "owner" && (
                   <button
                     title="Correct message"
@@ -1224,7 +1353,12 @@ function Chat({
             <strong>{name(r.data.agentId)}</strong>
             <span>
               {r.data.status === "pending"
-                ? "Waiting to respond"
+                ? (get(r.data.agentId)?.data.deliveryMode || "managed") ===
+                  "managed"
+                  ? "Waiting to respond"
+                  : get(r.data.agentId)?.data.deliveryMode === "webhook"
+                    ? "Waiting for webhook agent"
+                    : `Waiting for check-in · expected ${checkInLabel(get(r.data.agentId)?.data.checkInMinutes || 5)}`
                 : r.data.status === "needs_reconciliation"
                   ? "Needs reconciliation"
                   : "Working on this"}
@@ -1383,7 +1517,21 @@ function Chat({
                   }}
                 >
                   <option value="auto">Conversation</option>
-                  <option value="independent">Independent opinions</option>
+                  <option
+                    value="independent"
+                    disabled={c.data.agentIds.some(
+                      (id: string) =>
+                        (get(id)?.data.deliveryMode || "managed") !== "managed",
+                    )}
+                  >
+                    Independent opinions
+                    {c.data.agentIds.some(
+                      (id: string) =>
+                        (get(id)?.data.deliveryMode || "managed") !== "managed",
+                    )
+                      ? " · local agents only"
+                      : ""}
+                  </option>
                   <option value="discuss">Discuss together</option>
                 </select>
               )}

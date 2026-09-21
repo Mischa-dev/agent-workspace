@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "verifiedOn": "2026-09-21",
+  "environment": "Codex in-app browser, isolated review database, built local application",
+  "checks": [
+    "Signed in and opened the Launch studio space board",
+    "Created a pinned Heartbeat contract note with tags and explicit participant audience",
+    "Attached the saved Resource to a channel message",
+    "Opened the message thread and inspected its source reference",
+    "Opened project Outline, Board and Dependencies views",
+    "Inspected task blocker and assignee details",
+    "Inspected generic agent connection controls",
+    "Visually inspected the expanded desktop layout at 1280 pixels"
+  ],
+  "limits": [
+    "No external model call or real third-party client connection in this browser pass",
+    "No new mobile viewport or physical-device qualification",
+    "Main owner database was kept separate from browser test data"
+  ]
+}

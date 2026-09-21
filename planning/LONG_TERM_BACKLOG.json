@@ -1,0 +1,738 @@
+{
+  "schema_version": 1,
+  "title": "Connected workspace implementation backlog",
+  "updated_at": "2026-09-21",
+  "status": "deferred_roadmap",
+  "plan": "LONG_TERM_ROADMAP.md",
+  "baseline": "ACCEPTANCE.md records the prior local v0; these packages are unimplemented planned work.",
+  "milestones": {
+    "M0": "Shared contracts and scoped access",
+    "M1": "Connect agents with defaults",
+    "M2": "AgentOS integration",
+    "M3": "Daily collaboration and planning",
+    "M4": "Coding and GitHub delivery",
+    "M5": "Shared memory and roadmap scale",
+    "M6": "Operational release and coherent interface"
+  },
+  "external_requirements": {
+    "reachable_gateway": "Authorized activation of a reachable authenticated endpoint for cloud clients.",
+    "muse_connection": "Actual Muse account connects through MCP and executes its configured heartbeat.",
+    "chatgpt_work_connection": "Actual ChatGPT Work connection and scheduled tool access.",
+    "agentos_disposable_context": "Authorized disposable AgentOS host/context with qualified provider and collaboration-tool access.",
+    "agentos_required_support": "Any missing controller/runtime capabilities identified in W11 are implemented and qualified separately, under appropriate authorization.",
+    "github_test_remote": "Exact selected test repository and authorized publication connection/scopes."
+  },
+  "implementation_policy": {
+    "core_rule": "Configuration for existing protocols; new protocol adapters cannot change domain semantics.",
+    "default_parallel_workers": 2,
+    "first_batch": [
+      "W01",
+      "W03",
+      "W02",
+      "W04",
+      "W05",
+      "W06"
+    ],
+    "early_independent_work": [
+      "W11"
+    ],
+    "external_gate_rule": "Continue independent local work; leave the affected live qualification pending.",
+    "authority": "Deferred full roadmap. Not the active launch queue. NEXT_BACKLOG.json governs the initial deployed release.",
+    "parallelism_policy": "Dependency readiness does not authorize concurrent edits to shared files. Serialize schema/migrations, command dispatch, and shared frontend edits unless ownership has been explicitly split."
+  },
+  "tasks": [
+    {
+      "id": "W01",
+      "title": "Freeze shared contracts and editable defaults",
+      "milestone": "M0",
+      "status": "planned",
+      "depends_on": [],
+      "code_areas": [
+        "packages/shared/src/index.ts",
+        "planning/CONTRACTS.md",
+        "planning/AGENT_PARTICIPATION.md"
+      ],
+      "scope": "Define principals, grants, connection bindings, subscriptions, pickup policies, connector capabilities, task execution policies, and migration invariants. Keep brands in templates/adapters only.",
+      "acceptance": [
+        "Versioned schema distinguishes visibility, response requests, claims, and execution approval.",
+        "Define actor-scoped idempotency and exact request/attempt generations across every transport.",
+        "Existing identity and Resource revision semantics survive; substantive owner input can renew a bounded discussion burst without handoff renewal."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W02",
+      "title": "Implement participant identity and scoped authorization",
+      "milestone": "M0",
+      "status": "planned",
+      "depends_on": [
+        "W01",
+        "W03"
+      ],
+      "code_areas": [
+        "apps/server/src/domain/policy.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/server.ts",
+        "apps/server/src/worker.ts",
+        "apps/server/src/schema.ts"
+      ],
+      "scope": "Add independent connection grants, explicit internal-service authority, rotation/revocation, and account plus request scope. Preserve owner login while separating participant access.",
+      "acceptance": [
+        "An authenticated participant cannot impersonate the owner, another agent, or a different attempt.",
+        "Private DM, staged-answer, and memory boundaries apply to reads, previews, events, uploads/downloads, and mutations.",
+        "External results use explicit checked transitions rather than generic owner privilege; revoked grants fail immediately on new operations."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W03",
+      "title": "Migrate records and add bounded transactional queries",
+      "milestone": "M0",
+      "status": "planned",
+      "depends_on": [
+        "W01"
+      ],
+      "code_areas": [
+        "apps/server/src/schema.ts",
+        "apps/server/src/migrate.ts",
+        "apps/server/src/domain/store.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/db.ts"
+      ],
+      "scope": "Add indexed grants/connections/relationships/claim storage. Replace whole-workspace reads and global locking incrementally on active query and mutation paths.",
+      "acceptance": [
+        "Migration preserves existing IDs, revisions, attachments, history, and unresolved work without dispatch.",
+        "Paged inbox/task/message queries return bounded authorized rows without loading every record.",
+        "Concurrent commands retain stale-write detection, transactional reservations, and deterministic lock ordering."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W04",
+      "title": "Unify inbox claims, handoffs, and delivery intents",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W02",
+        "W03"
+      ],
+      "code_areas": [
+        "apps/server/src/worker.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/domain/context.ts",
+        "apps/server/src/schema.ts"
+      ],
+      "scope": "Implement durable participant inboxes and transactional wakeup intents over canonical requests/tasks, with shared admission for managed execution and external clients.",
+      "acceptance": [
+        "Reading does not claim; overlapping polling and push admit one current attempt.",
+        "Cancellation, resolution, correction, or revoked authority before pickup prevents stale execution.",
+        "Duplicate replies/results return stable receipts; expired started attempts require reconciliation.",
+        "Handoffs retain origin, return destination, authority, and discussion allowance; cycles cannot renew work indefinitely."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W05",
+      "title": "Expose the checked participant API and MCP server",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W02",
+        "W03",
+        "W04"
+      ],
+      "code_areas": [
+        "apps/server/src/server.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/connectors/types.ts",
+        "packages/shared/src/index.ts",
+        "tests"
+      ],
+      "scope": "Provide versioned MCP and HTTP entry points for account discovery, inbox/claims/context, replies/handoffs, Resources/files, task capture/proposals, checkpoints, and results.",
+      "acceptance": [
+        "A generic client can discover its own identity, claim a request, create a real Resource, and reply with stable IDs.",
+        "Equivalent MCP and HTTP operations enforce the same authorization, revision, idempotency, and pagination rules.",
+        "Agent tools cannot approve work scopes, accept results, administer connections, or gain repository access through ordinary chat.",
+        "Malformed input and unsupported operations return bounded actionable errors without leaking private objects."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W06",
+      "title": "Build connection registry, presets, and Add agent flow",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W05"
+      ],
+      "code_areas": [
+        "apps/server/src/connectors/types.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/main.tsx",
+        "apps/web/src/components.tsx",
+        "apps/web/src/style.css"
+      ],
+      "scope": "Create reusable editable connection presets and an agent setup UI with purpose, scope, method, generated instructions, observed capabilities, and grant management.",
+      "acceptance": [
+        "An unfamiliar agent can connect on a supported protocol with no product-specific domain code.",
+        "Two copies of one template have distinct grants and inboxes; template edits do not silently mutate existing agents.",
+        "Generated heartbeat instructions contain no credentials; connection tests distinguish authentication, tool success, and observed scheduled pickup.",
+        "Renaming an agent or changing its connection preserves history and pending request IDs."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W07",
+      "title": "Route managed Codex and immediate wakeups through connections",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W04",
+        "W06"
+      ],
+      "code_areas": [
+        "apps/server/src/worker.ts",
+        "apps/server/src/connectors/codex.ts",
+        "apps/server/src/connectors/types.ts",
+        "apps/server/src/config.ts"
+      ],
+      "scope": "Replace the single runtime instance with a capability-based registry, preserve Codex qualification, and add bounded configurable webhook wakeups to trusted destinations.",
+      "acceptance": [
+        "Both managed Codex and external participants use common claim/cancel/result semantics.",
+        "Webhook retries and polling fallback cannot create duplicate admitted attempts; delivery acknowledgment is separate from completion.",
+        "Private/runtime session limits remain enforced; unsupported isolation, steering, or cancellation is visible.",
+        "Only configured trusted destinations receive signed wakeups; redirects or supplied URLs cannot leak credentials."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W08",
+      "title": "Prepare authenticated remote access for cloud clients",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W05",
+        "W06"
+      ],
+      "code_areas": [
+        "apps/server/src/server.ts",
+        "apps/server/src/config.ts",
+        "scripts",
+        "README.md"
+      ],
+      "scope": "Package the remote MCP/HTTP gateway, client-compatible OAuth or supported scoped-token setup, TLS/proxy configuration, and connectivity diagnostics. Keep local operation.",
+      "acceptance": [
+        "Participant access never requires an owner cookie or an exposed owner-command endpoint.",
+        "Local protocol tests exercise auth expiry, audience/scope validation, reconnect, and revocation.",
+        "Document and test supported client authentication; cloud reachability is explicitly pending until actual activation.",
+        "Deployment configuration and rollback are reviewable without provisioning or publishing during implementation."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W09",
+      "title": "Qualify Muse using the generic heartbeat preset",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W06",
+        "W08"
+      ],
+      "code_areas": [
+        "evidence",
+        "ACCEPTANCE.md",
+        "README.md"
+      ],
+      "scope": "Connect Muse through the owner-confirmed custom MCP and editable heartbeat support; use the generic external participant mechanism with no incoming webhook.",
+      "acceptance": [
+        "An actual heartbeat retrieves only its own inbox, claims a current request, writes a Resource, and replies to the original thread.",
+        "A cancelled or corrected request before pickup is handled without stale execution.",
+        "Record schedule owner, observed check-in, grant scope, tool/result evidence, and connection limitations without secrets."
+      ],
+      "external_requirements": [
+        "reachable_gateway",
+        "muse_connection"
+      ]
+    },
+    {
+      "id": "W10",
+      "title": "Qualify ChatGPT Work scheduled participation",
+      "milestone": "M1",
+      "status": "planned",
+      "depends_on": [
+        "W06",
+        "W08"
+      ],
+      "code_areas": [
+        "evidence",
+        "ACCEPTANCE.md",
+        "README.md"
+      ],
+      "scope": "Connect a separately authenticated ChatGPT Work participant using the same generic API and confirm tool access in its actual scheduled environment.",
+      "acceptance": [
+        "A real scheduled run reads, claims, returns a Resource/reply, and preserves request identity.",
+        "Unavailable tools, reconnect requirements, or approvals are visible failures, not a claimed integration.",
+        "Qualification records supported tool actions and scope independently of Muse's result."
+      ],
+      "external_requirements": [
+        "reachable_gateway",
+        "chatgpt_work_connection"
+      ]
+    },
+    {
+      "id": "W11",
+      "title": "Map the actual AgentOS controller contract and gaps",
+      "milestone": "M2",
+      "status": "planned",
+      "depends_on": [
+        "W01"
+      ],
+      "code_areas": [
+        "planning/CONTRACTS.md",
+        "planning/CONTRACT_INSPECTION.json",
+        "planning/AGENTOS_INTEGRATION_GAPS.md"
+      ],
+      "scope": "Inspect current AgentOS capabilities and map identity/configuration/task/receipt operations. Document exact unsupported requirements as upstream work without changing AgentOS.",
+      "acceptance": [
+        "Map Unix/SSH transport, source revisions, durable idempotency, read/chat/edit/deploy grants, input limits, and bounded output.",
+        "Document session isolation, steering, MCP/tool delivery, provider qualification, and unknown-run reconciliation support accurately.",
+        "Every upstream gap has an operation, affected journey, acceptance criterion, and an independent-work path."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W12",
+      "title": "Implement the workspace-side AgentOS runtime adapter",
+      "milestone": "M2",
+      "status": "planned",
+      "depends_on": [
+        "W04",
+        "W07",
+        "W11"
+      ],
+      "code_areas": [
+        "apps/server/src/connectors",
+        "apps/server/src/worker.ts",
+        "tests"
+      ],
+      "scope": "Translate workspace attempts to AgentOS submissions and receipts using supported controller operations, without duplicating task authority or bypassing AgentOS.",
+      "acceptance": [
+        "Workspace task/attempt, AgentOS receipt, and provider run IDs remain distinct and linked.",
+        "Lost responses reconcile the original receipt/key; unknown acceptance never triggers blind resubmission.",
+        "Observed cancellation, transport acknowledgment, output retention/gaps, and unsupported operations remain distinct.",
+        "Protocol fixture tests preserve current context and host enforcement; payloads respect inspected limits."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W13",
+      "title": "Add AgentOS agent discovery and configuration controls",
+      "milestone": "M2",
+      "status": "planned",
+      "depends_on": [
+        "W02",
+        "W06",
+        "W11"
+      ],
+      "code_areas": [
+        "apps/server/src/connectors",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/main.tsx",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Map managed identities and expose supported declaration/assignment/status operations through AgentOS authority with previews, expected revisions, and explicit grants.",
+      "acceptance": [
+        "Stable AgentOS identities map to existing participants across renames and runtime changes.",
+        "Cached desired/effective/observed state includes source revision and observation time; drift is visible.",
+        "Supported configuration changes preview their effects and reject stale revisions; unsupported edits are explained.",
+        "Membership remains workspace-owned; secrets and host lifecycle are not copied into a competing configuration authority."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W14",
+      "title": "Qualify a real disposable AgentOS-managed agent",
+      "milestone": "M2",
+      "status": "planned",
+      "depends_on": [
+        "W08",
+        "W12",
+        "W13"
+      ],
+      "code_areas": [
+        "evidence",
+        "ACCEPTANCE.md",
+        "README.md"
+      ],
+      "scope": "Run a bounded real task and collaboration return path through the selected AgentOS connection on an authorized disposable context.",
+      "acceptance": [
+        "Submission survives client disconnection and reconnects to the same durable receipt.",
+        "Verify actual tool/file evidence and an authenticated Resource/reply, not only a runtime success string.",
+        "Cancellation and uncertain dispatch are tested or explicitly left unqualified without replay.",
+        "A direct Hermes run cannot satisfy this AgentOS gate."
+      ],
+      "external_requirements": [
+        "agentos_disposable_context",
+        "agentos_required_support"
+      ]
+    },
+    {
+      "id": "W15",
+      "title": "Complete messaging, threads, Auto routing, and the human Inbox",
+      "milestone": "M3",
+      "status": "planned",
+      "depends_on": [
+        "W04",
+        "W05",
+        "W07"
+      ],
+      "code_areas": [
+        "apps/server/src/domain/policy.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/main.tsx",
+        "apps/web/src/components.tsx",
+        "apps/web/src/style.css"
+      ],
+      "scope": "Finish channels/threads, agent discovery, replies/forwards, unread state, drafts/scroll, deep links, meaningful notifications, and bounded model-assisted routing/invitations.",
+      "acceptance": [
+        "Natural follow-ups preserve focus after unrelated progress; forwarded mentions and acknowledgments do not wake everyone.",
+        "Explicit recipients override Auto; selector failure does not broadcast or expand permission.",
+        "Independent replies remain staged; missing/late respondents and Stop/correction behavior are clear.",
+        "Actual browser checks cover draft/scroll recovery, queued agents, recipient override, and return to the source thread."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W16",
+      "title": "Add decisions, conversation briefs, and inspectable context",
+      "milestone": "M3",
+      "status": "planned",
+      "depends_on": [
+        "W03",
+        "W05"
+      ],
+      "code_areas": [
+        "packages/shared/src/index.ts",
+        "apps/server/src/domain/context.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Represent decisions, unresolved questions, alternatives, and source-linked brief coverage explicitly. Preserve original records and permission-checked retrieval.",
+      "acceptance": [
+        "Briefs expose source coverage and omissions; proposed decisions cannot silently become accepted requirements.",
+        "Context manifests distinguish initial input, later retrieval, and corrections.",
+        "Private DM and independent-round data stay inaccessible through summaries or shared memory.",
+        "Updates invalidate stale derived context while preserving original revisions and evidence."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W17",
+      "title": "Finish shared Resource and file workflows",
+      "milestone": "M3",
+      "status": "planned",
+      "depends_on": [
+        "W03",
+        "W05"
+      ],
+      "code_areas": [
+        "apps/server/src/storage",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/main.tsx",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Add bounded search, backlinks, syntax-highlighted pastes, section reads, agent file transfer, and clear pinned/latest navigation.",
+      "acceptance": [
+        "The same Resource appears in multiple permitted locations without copies or implicit grants.",
+        "Concurrent revisions conflict without losing drafts; pinned attachments retain exact bytes/text.",
+        "Agents upload and retrieve actual files through checked paths; unsupported extraction is labeled.",
+        "Search, snippets, previews, sections, and downloads all enforce current access."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W18",
+      "title": "Complete progressive planning and execution constraints",
+      "milestone": "M3",
+      "status": "planned",
+      "depends_on": [
+        "W03",
+        "W16"
+      ],
+      "code_areas": [
+        "packages/shared/src/index.ts",
+        "apps/server/src/domain/policy.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/main.tsx"
+      ],
+      "scope": "Expand milestones, alternatives, explicit blockers/questions, reviewable plan diffs, task references, execution policies, write areas, locks, and prerequisite code. Preserve title-only capture.",
+      "acceptance": [
+        "A substantial roadmap can be built incrementally in the outline, with compact board/dependency views over the same records.",
+        "Cycle/alternative/blocker handling produces actionable explanations.",
+        "Plan changes preview affected requirements/dependencies and invalidate stale approvals appropriately.",
+        "Replace the simplified parallel flag with Automatic/Isolated/Exclusive/Manual behavior and conservative treatment of unknown scope."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W19",
+      "title": "Qualify general project execution and bounded work sessions",
+      "milestone": "M4",
+      "status": "planned",
+      "depends_on": [
+        "W07",
+        "W18"
+      ],
+      "code_areas": [
+        "apps/server/src/domain/repository.ts",
+        "apps/server/src/domain/capacity.ts",
+        "apps/server/src/worker.ts",
+        "apps/server/src/connectors/codex.ts"
+      ],
+      "scope": "Add reviewed isolated build/test execution profiles, qualified worker selection, shared locks, checkpoint recovery, provider capacity pools, and review reserves.",
+      "acceptance": [
+        "Real agents run meaningful project checks with recorded commands, exit status, and commit-bound evidence.",
+        "Two compatible tasks overlap; conflicting write/host/service resources wait; target checkout and credentials remain protected.",
+        "Manual/webhook starts share approval and idempotency; reset hints do not manufacture quota or new work.",
+        "Interrupted work preserves changes; unknown provider execution holds its reservations until safe reconciliation."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W20",
+      "title": "Implement scoped GitHub connections and draft PR publication",
+      "milestone": "M4",
+      "status": "planned",
+      "depends_on": [
+        "W19"
+      ],
+      "code_areas": [
+        "apps/server/src/connectors/github.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/worker.ts",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Add selected-repository connection setup and a publisher outside worker environments. Preserve existing read integration and prepare branch/draft-PR writes for explicitly authorized remotes.",
+      "acceptance": [
+        "Publication is limited to the approved repository/attempt branch and draft PR actions.",
+        "Workers cannot read publication credentials or write target branches through another path.",
+        "Duplicate or uncertain publication reconciles the same branch/PR identity before retry.",
+        "Required scopes and connection setup are documented; fixture tests are labeled and live writes remain a separate gate."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W21",
+      "title": "Synchronize GitHub checks, reviews, and task links",
+      "milestone": "M4",
+      "status": "planned",
+      "depends_on": [
+        "W03",
+        "W05"
+      ],
+      "code_areas": [
+        "apps/server/src/connectors/github.ts",
+        "apps/server/src/server.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Implement authenticated events, deduplication, reconciliation, and exact-head PR/check/review records with related-versus-fulfilling task links.",
+      "acceptance": [
+        "Duplicate/out-of-order events converge; a missed event is repaired through reconciliation.",
+        "New head commits invalidate stale evidence; closed-unmerged PRs do not complete tasks.",
+        "Support multiple PRs per task and multiple task links per PR without duplicated execution state.",
+        "Relevant updates appear in task/project/conversation views without waking every group member."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W22",
+      "title": "Verify branch combinations and prerequisite integration",
+      "milestone": "M4",
+      "status": "planned",
+      "depends_on": [
+        "W19",
+        "W20",
+        "W21"
+      ],
+      "code_areas": [
+        "apps/server/src/domain/repository.ts",
+        "apps/server/src/domain/policy.ts",
+        "apps/server/src/worker.ts",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Add a serial integration-verification queue using disposable checkouts and exact candidate/target commits. Preserve human acceptance and manual merge.",
+      "acceptance": [
+        "Individually passing branches that fail together are reported as an integration failure.",
+        "Dependent code work waits for the required accepted/integrated prerequisite and verified ancestry.",
+        "Changed baseline/requirements invalidate stale verification; interrupted integration preserves evidence.",
+        "No automatic target-branch write, merge, or deployment is introduced."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W23",
+      "title": "Add scoped shared memory with provenance",
+      "milestone": "M5",
+      "status": "planned",
+      "depends_on": [
+        "W16",
+        "W17"
+      ],
+      "code_areas": [
+        "packages/shared/src/index.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/domain/context.ts",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Implement typed facts/preferences/decisions/lessons with source links, scopes, proposed/accepted state, retrieval, and correction/retraction history.",
+      "acceptance": [
+        "Agents can propose, search, and reuse permitted durable knowledge across sessions.",
+        "Private/group/project/workspace boundaries hold during search and context assembly.",
+        "Retraction/revocation removes stale derived retrieval access without claiming external provider erasure.",
+        "Memory cannot approve tasks, alter permissions, or override pinned requirements."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W24",
+      "title": "Qualify large-roadmap queries and interface performance",
+      "milestone": "M5",
+      "status": "planned",
+      "depends_on": [
+        "W03",
+        "W15",
+        "W18",
+        "W23"
+      ],
+      "code_areas": [
+        "apps/server/src/domain/store.ts",
+        "apps/server/src/schema.ts",
+        "apps/server/src/server.ts",
+        "apps/web/src/main.tsx",
+        "tests"
+      ],
+      "scope": "Finish indexed PostgreSQL text search, bounded event replay, pagination, virtualization, and a reproducible workload benchmark.",
+      "acceptance": [
+        "Exercise 50 agents, 10000 tasks, 100000 messages, and 10000 Resource revisions without full-workspace fetches.",
+        "Record hardware and p95 warm-read/write/claim latency under ten clients against the plan's explicit targets.",
+        "Permission filters survive pagination/search and concurrent updates.",
+        "Large outline navigation, inbox use, and search remain responsive in actual browser checks."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W25",
+      "title": "Upgrade backup, restore, deployment packaging, and diagnostics",
+      "milestone": "M6",
+      "status": "planned",
+      "depends_on": [
+        "W02",
+        "W03",
+        "W04",
+        "W08"
+      ],
+      "code_areas": [
+        "scripts",
+        "apps/server/src/config.ts",
+        "apps/server/src/storage",
+        "README.md",
+        "ACCEPTANCE.md"
+      ],
+      "scope": "Package local/private-host operation, migrations, health diagnostics, redacted bounded logs, and backup/restore for the expanded records and connection metadata.",
+      "acceptance": [
+        "Upgrade and restore preserve record identity, Resource checksums, links, and attempt receipts.",
+        "Restored dispatch is paused; uncertain work and external connections require deliberate reconciliation/reactivation.",
+        "Document external secret custody and reconnect steps rather than promising a database dump restores provider access.",
+        "Startup/shutdown and local operation work without requiring public hosting or recurring paid services."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W26",
+      "title": "Run connected-release acceptance and write the handoff",
+      "milestone": "M6",
+      "status": "planned",
+      "depends_on": [
+        "W09",
+        "W10",
+        "W14",
+        "W22",
+        "W24",
+        "W25",
+        "W27",
+        "W28"
+      ],
+      "code_areas": [
+        "tests",
+        "evidence",
+        "ACCEPTANCE.md",
+        "README.md",
+        "PROGRESS.md"
+      ],
+      "scope": "Execute the original A/B/C cases plus new participant/memory/scale journeys, record real versus fixture evidence, and leave an idle runnable release.",
+      "acceptance": [
+        "Real polling and immediate agents exchange work, Resources, and results without manual context transfer.",
+        "Approved coding produces a verified draft PR and correct review/integration state.",
+        "Interruption/restart/restore and permission revocation retain truthful state with no duplicate execution.",
+        "All required integration gates are separately reported; unqualified clients do not become complete through substitutes.",
+        "Release handoff states commands, operating limits, live/fixture proof, and remaining external setup; no test agents remain running."
+      ],
+      "external_requirements": []
+    },
+    {
+      "id": "W27",
+      "title": "Qualify live GitHub delivery on an authorized test remote",
+      "milestone": "M4",
+      "status": "planned",
+      "depends_on": [
+        "W20",
+        "W21",
+        "W22"
+      ],
+      "code_areas": [
+        "evidence",
+        "ACCEPTANCE.md"
+      ],
+      "scope": "Run a bounded approved coding task through project tests, branch publication, draft PR, review/check updates, and dependency/integration observations.",
+      "acceptance": [
+        "Verify actual remote commit and draft PR IDs match the recorded task attempt.",
+        "Observe exact-head checks and reconcile a simulated missed event against real remote state.",
+        "Exercise replay without duplicate PR creation and preserve the no-auto-merge/no-deploy policy."
+      ],
+      "external_requirements": [
+        "github_test_remote"
+      ]
+    },
+    {
+      "id": "W28",
+      "title": "Complete the unified desktop and phone experience",
+      "milestone": "M6",
+      "status": "planned",
+      "depends_on": [
+        "W06",
+        "W15",
+        "W17",
+        "W18",
+        "W22",
+        "W23"
+      ],
+      "code_areas": [
+        "apps/web/src/main.tsx",
+        "apps/web/src/components.tsx",
+        "apps/web/src/style.css",
+        "apps/web/index.html",
+        "evidence"
+      ],
+      "scope": "Unify cards/deep links/detail panels, meaningful Inbox actions, absence digest, keyboard/screen-reader behavior, phone flows, and installable web-app metadata.",
+      "acceptance": [
+        "A user can message, save material, plan, inspect a PR/result, and return without losing their draft or place.",
+        "Agent setup defaults work without opening advanced controls; waiting/blocked/unknown states provide a next action.",
+        "Source-linked return-after-absence digest distinguishes proposals, completed outputs, accepted work, and outstanding decisions.",
+        "Actual desktop/phone browser interactions cover keyboard, scrolling, errors, reconnect, and no private API caching or automatic execution replay."
+      ],
+      "external_requirements": []
+    }
+  ],
+  "active_release": "NEXT_BACKLOG.json"
+}

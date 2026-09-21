@@ -316,7 +316,7 @@ else if (action === "status") {
     "/opt/homebrew/bin/psql",
     [
       "-c",
-      `INSERT INTO settings(key,value) VALUES('dispatchEnabled','false') ON CONFLICT(key) DO UPDATE SET value='false'; DELETE FROM owner_sessions; DELETE FROM connector_credentials; UPDATE records SET data=jsonb_set(data,'{status}','"needs_reconciliation"') WHERE kind IN ('run','request','workSession') AND data->>'status' IN ('prepared','running','dispatching','claimed','active'); UPDATE records SET data=data || '{\"status\":\"cancelled\",\"error\":\"Cancelled on restore; create a new request deliberately.\"}'::jsonb WHERE kind='request' AND data->>'status'='pending';`,
+      `INSERT INTO settings(key,value) VALUES('dispatchEnabled','false') ON CONFLICT(key) DO UPDATE SET value='false'; DELETE FROM owner_sessions; DELETE FROM connector_credentials; DO $restore$ BEGIN IF to_regclass('public.agent_credentials') IS NOT NULL THEN UPDATE agent_credentials SET revoked_at=now(); END IF; IF to_regclass('public.oauth_state') IS NOT NULL THEN DELETE FROM oauth_state; END IF; END $restore$; UPDATE records SET data=jsonb_set(data,'{status}','"needs_reconciliation"') WHERE kind IN ('run','request','workSession') AND data->>'status' IN ('prepared','running','dispatching','claimed','active'); UPDATE records SET data=data || '{\"status\":\"cancelled\",\"error\":\"Cancelled on restore; create a new request deliberately.\"}'::jsonb WHERE kind='request' AND data->>'status'='pending';`,
     ],
     { env: databaseEnvironment(u.toString()) },
   );

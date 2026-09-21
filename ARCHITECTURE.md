@@ -25,3 +25,13 @@ Setup creates ignored configuration, dedicated PG data, migrations and owner boo
 Work sessions freeze approved task revisions, allowed repository and limits. Claims and reservations are transactional. Two workers and finite deadlines are hard admission bounds. Dependencies require accepted evidence and, for code, verified integration into the approved baseline. Dirty checkouts are preserved. GitHub is an adapter with authorized reads and fixture-tested write contracts; this run never pushes or opens PRs.
 
 Backup stops dispatch and captures both PG and files. Restore starts with dispatch disabled, uncertain runs held, and consistency checks required. No automatic replay of backed-up work.
+
+## Connected release
+
+The agent transport lives in `apps/server/src/transport`: bearer HTTP, the official MCP server handler and OAuth authorization/refresh. Agent credentials and webhook secrets use dedicated private tables; snapshots never include those tables. Native credential IDs remain stable across OAuth access-token rotation, so revocation applies to the connection. Stored authorization codes and refresh tokens are hashed.
+
+`domain/admission.ts` is shared by managed runs and external pickup. `domain/participants.ts` limits agent tools; `domain/agent-access.ts` authenticates identities and checks file access; `domain/delivery.ts` persists bounded webhook retries and holds expired external claims. A worker restart does not treat a still-valid external lease as a local crashed run. Remote wakeup messages contain work references, not conversation content. All recipients must claim current work again before executing.
+
+Account access and request context are distinct. Accounts can read their explicit memberships, assigned tasks and Resource grants. Binding a request narrows contextual tools and validates its current lease/credential. Strict independent opinions remain limited to the qualified managed runtime; an external client's retained memory cannot be controlled by this application. One mutable Resource identity and immutable revisions support boards, messages and task attachments.
+
+The server supports an explicitly configured HTTPS public origin, trusted-proxy list and agent browser-origin allowlist. Deployment uses an isolated database and persistent file volume. No portable image includes a personal Codex authentication store or a qualified remote coding runtime by implication.

@@ -36,6 +36,10 @@ await before.query(
     }),
   ],
 );
+await before.query(
+  "INSERT INTO oauth_state(kind,id,payload,expires_at) VALUES('client',$1,'{}',now()+interval '1 day')",
+  [randomUUID()],
+);
 const counts = (
   await before.query(
     "SELECT kind,count(*)::int n FROM records GROUP BY kind ORDER BY kind",
@@ -85,6 +89,18 @@ try {
     assert.equal(
       (await after.query("SELECT count(*)::int n FROM owner_sessions")).rows[0]
         .n,
+      0,
+    );
+    assert.equal(
+      (
+        await after.query(
+          "SELECT count(*)::int n FROM agent_credentials WHERE revoked_at IS NULL",
+        )
+      ).rows[0].n,
+      0,
+    );
+    assert.equal(
+      (await after.query("SELECT count(*)::int n FROM oauth_state")).rows[0].n,
       0,
     );
     assert.equal(
@@ -138,13 +154,13 @@ try {
         "New database and file directory; originals preserved",
         "Main application config untouched",
         "All record counts and attachment checksums retained",
-        "Owner sessions and scoped runtime credentials cleared",
+        "Owner sessions and scoped runtime credentials cleared; all agent credentials revoked and OAuth state cleared",
         "Pending request cancelled; unknown execution held",
         "Built server and real worker restarted with dispatch disabled; no replay",
       ],
     };
     writeFileSync(
-      "evidence/backup-restore.json",
+      "evidence/connected-backup-restore.json",
       JSON.stringify(report, null, 2),
     );
     console.log(JSON.stringify(report, null, 2));

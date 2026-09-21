@@ -1,3 +1,4 @@
+import { expireExternalClaims, deliverWebhooks } from "./domain/delivery.js";
 import { revisionContent } from "./storage/content.js";
 import { PgBoss } from "pg-boss";
 import { randomBytes } from "node:crypto";
@@ -15,7 +16,7 @@ import {
 } from "./domain/commands.js";
 import { Store, AppError, hash } from "./domain/store.js";
 import { readiness } from "./domain/policy.js";
-import { responsePacket } from "./domain/context.js";
+import { claimRequest } from "./domain/admission.js";
 import {
   repoTool,
   createWorktree,
@@ -113,94 +114,10 @@ async function recordEvent(
 }
 export async function claimResponse(id: string) {
   return transact(async (s) => {
-    const req = s.get<ResponseRequest>(id, "request");
-    if (req.data.status !== "pending") return null;
-    const c = s.get(req.data.conversationId, "conversation"),
-      b = s.get(req.data.burstId, "burst");
-    if (
-      !s.get(req.data.agentId, "agent").data.enabled ||
-      c.data.stopped ||
-      b.data.stopped ||
-      !c.data.agentIds.includes(req.data.agentId)
-    ) {
-      s.patch(id, { status: "cancelled" });
-      return null;
-    }
-    if (b.data.remaining <= 0) return null;
-    if (req.data.mode === "discuss") {
-      const preceding = b.data.participants.slice(
-        0,
-        b.data.participants.indexOf(req.data.agentId),
-      );
-      if (
-        s
-          .all<ResponseRequest>("request")
-          .some(
-            (r) =>
-              r.data.burstId === b.id &&
-              preceding.includes(r.data.agentId) &&
-              [
-                "pending",
-                "claimed",
-                "running",
-                "needs_reconciliation",
-              ].includes(r.data.status),
-          )
-      )
-        return null;
-      const snapshotIds = [
-        ...new Set([
-          ...req.data.snapshotIds,
-          ...s
-            .all("message")
-            .filter((m) => m.data.burstId === b.id && !m.data.staged)
-            .map((m) => m.id),
-        ]),
-      ];
-      s.patch(req.id, { snapshotIds });
-    }
-    if (req.data.mode === "auto") {
-      s.patch(req.id, {
-        snapshotIds: s
-          .all("message")
-          .filter((m) => m.data.conversationId === c.id && !m.data.staged)
-          .map((m) => m.id),
-      });
-    }
-    if (
-      s
-        .all<Run>("run")
-        .some(
-          (r) =>
-            r.data.agentId === req.data.agentId &&
-            r.data.manifest?.conversationId === c.id &&
-            [
-              "prepared",
-              "dispatching",
-              "running",
-              "needs_reconciliation",
-            ].includes(r.data.status),
-        )
-    )
-      return null;
-    try {
-      const context = await responsePacket(s, id);
-      const run = s.add("run", {
-        kind: "response",
-        requestId: id,
-        agentId: req.data.agentId,
-        status: "prepared",
-        ...context,
-        events: [],
-      });
-      s.patch(b.id, { remaining: b.data.remaining - 1 });
-      s.patch(id, { status: "running", runId: run.id });
-      return run;
-    } catch (e: any) {
-      s.patch(id, { status: "failed", error: e.message });
-      publishRound(s, req.data.burstId);
-      return null;
-    }
+    const result = await claimRequest(s, id);
+    if (s.get(id, "request").data.status === "failed")
+      publishRound(s, s.get(id, "request").data.burstId);
+    return result;
   }, "request.claim");
 }
 async function mintCredential(run: any) {
@@ -747,16 +664,30 @@ export async function claimTask(sessionId: string) {
         });
         continue;
       }
-      const enabledAgents = s.all("agent").filter((a) => a.data.enabled);
-      const agent =
-        enabledAgents.find(
+      const enabledAgents = s
+        .all("agent")
+        .filter(
           (a) =>
-            a.data.name === (t.data.execution === "code" ? "Ember" : "Atlas"),
-        ) || enabledAgents[0];
+            a.data.enabled && (a.data.deliveryMode || "managed") === "managed",
+        );
+      const agent = t.data.assigneeId
+        ? enabledAgents.find((a) => a.id === t.data.assigneeId)
+        : enabledAgents.find((a) =>
+            a.data.capabilities?.some((capability: string) =>
+              (t.data.execution === "code"
+                ? ["code", "implementation"]
+                : ["plan", "research"]
+              ).includes(capability),
+            ),
+          ) || enabledAgents[0];
       if (!agent) {
-        if (t.data.waitingReason !== "Enable an agent before starting work.")
+        if (
+          t.data.waitingReason !==
+          "Choose an enabled local agent for this work session."
+        )
           s.patch(t.id, {
-            waitingReason: "Enable an agent before starting work.",
+            waitingReason:
+              "Choose an enabled local agent for this work session.",
           });
         continue;
       }
@@ -850,59 +781,70 @@ export async function claimTask(sessionId: string) {
     return null;
   }, "task.claim");
 }
+let tickInProgress = false;
 async function tick() {
-  if (closing) return;
-  await setSetting("workerHeartbeat", Date.now());
-  const stop = await pool.query(
-    "SELECT id FROM records WHERE kind='run' AND data->>'stopRequested'='true'",
-  );
-  for (const row of stop.rows) active.get(row.id)?.abort();
-  await transact((s) => {
-    for (const session of s
-      .all("workSession")
-      .filter((r) => ["active", "stopping"].includes(r.data.status))) {
-      const runs = s
-        .all<Run>("run")
-        .filter((r) => r.data.sessionId === session.id);
-      const activeRuns = runs.filter((r) =>
-        ["prepared", "dispatching", "running", "needs_reconciliation"].includes(
-          r.data.status,
-        ),
-      );
-      if (new Date(session.data.deadline).getTime() < Date.now()) {
-        s.patch(session.id, { status: "stopping" });
-        activeRuns.forEach((r) => s.patch(r.id, { stopRequested: true }));
+  if (closing || tickInProgress) return;
+  tickInProgress = true;
+  try {
+    await setSetting("workerHeartbeat", Date.now());
+    const stop = await pool.query(
+      "SELECT id FROM records WHERE kind='run' AND data->>'stopRequested'='true'",
+    );
+    for (const row of stop.rows) active.get(row.id)?.abort();
+    await transact((s) => {
+      for (const session of s
+        .all("workSession")
+        .filter((r) => ["active", "stopping"].includes(r.data.status))) {
+        const runs = s
+          .all<Run>("run")
+          .filter((r) => r.data.sessionId === session.id);
+        const activeRuns = runs.filter((r) =>
+          [
+            "prepared",
+            "dispatching",
+            "running",
+            "needs_reconciliation",
+          ].includes(r.data.status),
+        );
+        if (new Date(session.data.deadline).getTime() < Date.now()) {
+          s.patch(session.id, { status: "stopping" });
+          activeRuns.forEach((r) => s.patch(r.id, { stopRequested: true }));
+        }
+        const updated = s.get(session.id);
+        if (
+          !activeRuns.length &&
+          (updated.data.status === "stopping" ||
+            session.data.taskIds.every((id: string) => !!s.get(id).data.runId))
+        )
+          s.patch(session.id, {
+            status: updated.data.status === "stopping" ? "stopped" : "complete",
+          });
       }
-      const updated = s.get(session.id);
-      if (
-        !activeRuns.length &&
-        (updated.data.status === "stopping" ||
-          session.data.taskIds.every((id: string) => !!s.get(id).data.runId))
-      )
-        s.patch(session.id, {
-          status: updated.data.status === "stopping" ? "stopped" : "complete",
-        });
-    }
-  }, "session.tick");
-  if (!(await setting("dispatchEnabled", true))) return;
-  const pending = await pool.query(
-    "SELECT id FROM records WHERE kind='request' AND data->>'status'='pending' ORDER BY created_at LIMIT 40",
-  );
-  for (const row of pending.rows)
-    await boss.send(
-      "response",
-      { id: row.id },
-      { singletonKey: row.id, singletonSeconds: 5, retryLimit: 0 },
+    }, "session.tick");
+    await expireExternalClaims();
+    if (!(await setting("dispatchEnabled", true))) return;
+    await deliverWebhooks();
+    const pending = await pool.query(
+      "SELECT r.id FROM records r JOIN records a ON a.id=r.data->>'agentId' WHERE r.kind='request' AND r.data->>'status'='pending' AND coalesce(a.data->>'deliveryMode','managed')='managed' ORDER BY r.created_at LIMIT 40",
     );
-  const sessions = await pool.query(
-    "SELECT id FROM records WHERE kind='workSession' AND data->>'status'='active'",
-  );
-  for (const row of sessions.rows)
-    await boss.send(
-      "work-session",
-      { id: row.id },
-      { singletonKey: row.id, singletonSeconds: 5, retryLimit: 0 },
+    for (const row of pending.rows)
+      await boss.send(
+        "response",
+        { id: row.id },
+        { singletonKey: row.id, singletonSeconds: 5, retryLimit: 0 },
+      );
+    const sessions = await pool.query(
+      "SELECT id FROM records WHERE kind='workSession' AND data->>'status'='active'",
     );
+    for (const row of sessions.rows)
+      await boss.send(
+        "work-session",
+        { id: row.id },
+        { singletonKey: row.id, singletonSeconds: 5, retryLimit: 0 },
+      );
+  } finally {
+    tickInProgress = false;
+  }
 }
 async function main() {
   const lock = await pool.connect();
@@ -914,8 +856,10 @@ async function main() {
   await transact((s) => {
     for (const r of s
       .all<Run>("run")
-      .filter((r) =>
-        ["prepared", "dispatching", "running"].includes(r.data.status),
+      .filter(
+        (r) =>
+          ["prepared", "dispatching", "running"].includes(r.data.status) &&
+          r.data.runtime?.delivery !== "external",
       )) {
       s.patch(r.id, {
         status: "needs_reconciliation",

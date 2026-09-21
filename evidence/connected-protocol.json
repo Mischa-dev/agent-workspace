@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "verifiedAt": "2026-09-21T17:36:15.468Z",
+  "transport": "Real loopback HTTP, application server, PostgreSQL and file storage; no external model call",
+  "checks": [
+    "Bearer identity and durable inbox",
+    "Shared admission and a real request context",
+    "Multipart file upload, checksum and authenticated download",
+    "Cross-account handoff with pinned file",
+    "Result returned to originating conversation"
+  ],
+  "fileChecksum": "1f143cddc4f9d5d45fc6ffddf81d653572663d508c9363fd01c2ad2566673c75",
+  "recordCount": 31,
+  "snapshot": {
+    "samples": 12,
+    "medianMs": 3.06,
+    "p95Ms": 4
+  }
+}

@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "title": "First deployed workspace release",
+  "updated_at": "2026-09-21",
+  "status": "implemented_locally_remote_setup_pending",
+  "plan": "NEXT_IMPLEMENTATION_PLAN.md",
+  "deferred_roadmap": "LONG_TERM_BACKLOG.json",
+  "baseline": "Preserve the existing local core described in ACCEPTANCE.md. The broader W-series roadmap does not gate this release.",
+  "external_requirements": {
+    "reachable_host": "A reviewed host and reachable endpoint, supported client authentication, and authorization for the concrete activation.",
+    "launch_accounts": "Actual connections for the selected launch roster. Muse custom MCP/heartbeat is owner-confirmed; each connection still needs a real round trip.",
+    "immediate_connection": "One intended existing runtime with a supported configured immediate wakeup; do not claim deeper AgentOS integration from this."
+  },
+  "implementation_policy": {
+    "core_rule": "Use editable defaults and generic MCP/HTTP access. Provider-specific protocol translation stays in adapters.",
+    "first_batch": [
+      "L01",
+      "L02",
+      "L03"
+    ],
+    "default_parallel_workers": 2,
+    "parallelism_policy": "Serialize shared schemas and commands. Deployment preparation can proceed independently once interface and authentication are stable.",
+    "authority": "The owner authorized this expanded launch implementation. Qualify the concrete deployment target and external account setup; no paid infrastructure or unrelated project changes are implied.",
+    "completion_rule": "L06 and actual per-client readiness determine this launch. Deferred W-series requirements do not apply.",
+    "performance_rule": "Keep safe existing transaction serialization. Add necessary bounded queries; measure before broad rewrites."
+  },
+  "tasks": [
+    {
+      "id": "L01",
+      "title": "Scoped agent access and minimal migrations",
+      "status": "implemented_verified",
+      "depends_on": [],
+      "code_areas": [
+        "packages/shared/src/index.ts",
+        "apps/server/src/schema.ts",
+        "apps/server/src/migrate.ts",
+        "apps/server/src/domain/policy.ts",
+        "apps/server/src/server.ts"
+      ],
+      "scope": "Add independently authenticated agent connections, permissions and per-request restrictions. Preserve existing owner operation and records. Make only the schema/query changes needed for the launch.",
+      "acceptance": [
+        "Credentials identify the actor; agents cannot impersonate owners or other agents.",
+        "Private message/Resource/task context remains scoped across reads, previews, uploads/downloads, and results.",
+        "Migration preserves history and pending/uncertain work without dispatch.",
+        "Renaming or configuring an agent does not change its stable identity."
+      ],
+      "external_requirements": [],
+      "draws_from": [
+        "W01",
+        "W02",
+        "W03"
+      ],
+      "excludes": [
+        "Full record-store rewrite",
+        "Fine-grained global-lock replacement",
+        "General identity administration"
+      ]
+    },
+    {
+      "id": "L02",
+      "title": "Durable inbox and checked MCP/HTTP collaboration tools",
+      "status": "implemented_verified",
+      "depends_on": [
+        "L01"
+      ],
+      "code_areas": [
+        "apps/server/src/server.ts",
+        "apps/server/src/domain/commands.ts",
+        "apps/server/src/domain/context.ts",
+        "apps/server/src/worker.ts",
+        "apps/server/src/storage"
+      ],
+      "scope": "Expose existing conversations, Resources/files, projects/tasks and planning through shared checked commands. Add current-request claims, replies, task assignment, handoffs, and results.",
+      "acceptance": [
+        "An arbitrary named external client claims a request, retrieves permitted context, stores a real Resource/file, and replies to its source.",
+        "Task capture, assignment, dependency reads and reviewable planning work through the same records as the UI.",
+        "Reading does not claim; duplicate requests/results are idempotent; correction/cancellation before pickup prevents obsolete execution.",
+        "Unknown started work is held for reconciliation; handoffs cannot renew budgets or approvals.",
+        "New inbox/context reads are bounded without requiring wholesale database redesign."
+      ],
+      "external_requirements": [],
+      "draws_from": [
+        "W04",
+        "W05",
+        "W17"
+      ],
+      "excludes": [
+        "New memory service",
+        "Redesign of existing working task behavior"
+      ]
+    },
+    {
+      "id": "L03",
+      "title": "Editable setup defaults and polling/immediate pickup",
+      "status": "implemented_verified",
+      "depends_on": [
+        "L02"
+      ],
+      "code_areas": [
+        "apps/server/src/connectors",
+        "apps/server/src/worker.ts",
+        "apps/web/src/main.tsx",
+        "apps/web/src/components.tsx"
+      ],
+      "scope": "Provide compact agent setup, stored editable presets, secret-free heartbeat instructions, connection tests, minimal runtime selection, and supported immediate wakeup.",
+      "acceptance": [
+        "Two agents using one preset have independent credentials/inboxes; settings can change without losing history.",
+        "A client using a supported protocol needs no product-specific domain branch.",
+        "Polling and immediate signals use the same durable claim and cannot duplicate an admitted attempt.",
+        "Existing Auto routing and Stop behavior remain; the expanded boards, channels, threads and planning interface are included.",
+        "Connection status distinguishes configured, observed working, waiting, and failed."
+      ],
+      "external_requirements": [],
+      "draws_from": [
+        "W06",
+        "W07",
+        "W15"
+      ],
+      "excludes": [
+        "Plugin marketplace or executable plugin loader",
+        "Visual automation/subscription builder",
+        "Model-assisted speaker selection",
+        "Full AgentOS configuration interface"
+      ]
+    },
+    {
+      "id": "L04",
+      "title": "Reachable deployment and recovery",
+      "status": "local_recovery_verified_remote_target_pending",
+      "depends_on": [
+        "L02"
+      ],
+      "code_areas": [
+        "apps/server/src/config.ts",
+        "apps/server/src/server.ts",
+        "scripts",
+        "README.md"
+      ],
+      "scope": "Prepare one suitable deployment and its authentication, TLS, persistent storage, startup, migration, rollback and backup/restore. Activate only when the actual target is authorized.",
+      "acceptance": [
+        "The chosen cloud-client path reaches the authenticated service; localhost-only proof is insufficient.",
+        "Supported client authentication works without sharing the owner's cookie or exposing owner commands.",
+        "Restart and restore preserve records/files and do not replay pending or uncertain agent work.",
+        "The deployed runtime inventory is truthful; moving the server does not imply moving local Codex credentials or sessions.",
+        "Prepare configuration independently of missing remote setup; record actual activation separately."
+      ],
+      "external_requirements": [
+        "reachable_host"
+      ],
+      "draws_from": [
+        "W08",
+        "W25"
+      ],
+      "excludes": [
+        "Multiple hosting providers",
+        "Paid infrastructure provisioned by inference",
+        "Custom general-purpose identity platform"
+      ]
+    },
+    {
+      "id": "L05",
+      "title": "Connect and qualify the actual launch agents",
+      "status": "protocol_verified_actual_client_setup_pending",
+      "depends_on": [
+        "L03",
+        "L04"
+      ],
+      "code_areas": [
+        "evidence",
+        "ACCEPTANCE.md",
+        "README.md"
+      ],
+      "scope": "Configure Muse, ChatGPT Work, Codex and the intended existing Hermes participant using shared tools. Add OpenClaw if present in the actual launch roster. Track each account's capabilities and limitations separately.",
+      "acceptance": [
+        "Each claimed-ready launch connection completes a real authenticated inbox, Resource/file, and reply round trip.",
+        "Observe an actual scheduled check-in and an actual supported immediate pickup.",
+        "Qualify either managed Codex on the chosen host or Codex participation via generic MCP; do not imply remote coding works without proof.",
+        "Existing managed agents use their current authority; no direct-runtime substitute is described as complete AgentOS integration.",
+        "An unavailable client retains a specific pending status while other connections and deployment proceed."
+      ],
+      "external_requirements": [
+        "launch_accounts",
+        "immediate_connection"
+      ],
+      "draws_from": [
+        "W09",
+        "W10",
+        "W12"
+      ],
+      "excludes": [
+        "AgentOS declaration/lifecycle synchronization",
+        "Upstream AgentOS changes without separate authorization",
+        "Universal provider support"
+      ]
+    },
+    {
+      "id": "L06",
+      "title": "Verify daily use and release",
+      "status": "ui_and_local_flows_verified_remote_qualification_pending",
+      "depends_on": [
+        "L05"
+      ],
+      "code_areas": [
+        "tests",
+        "evidence",
+        "ACCEPTANCE.md",
+        "README.md",
+        "apps/web/src"
+      ],
+      "scope": "Build shared space boards for notes/pastes/files/outputs, channels and focused threads, outline/board/dependency planning views, and coherent responsive UI. Verify deployment, real handoffs, privacy, interruption, and recovery.",
+      "acceptance": [
+        "A real cross-agent handoff returns useful work to the original thread without manual context transfer.",
+        "Existing DMs/groups, Resources, projects/tasks and reviewed plans remain usable on desktop and phone-width browser flows.",
+        "Revocation, duplicate delivery/results, delayed-pickup correction/cancellation, and uncertain execution are checked.",
+        "A deployment/restore drill preserves data and leaves dispatch paused as appropriate.",
+        "Report each launch client's readiness honestly and distinguish fixture from live evidence; leave no demo workers consuming capacity.",
+        "Do not require the deferred full AgentOS, GitHub automation, memory or scale milestones.",
+        "Space board posting, pinning, filtering, files, revisioned attachments, channels/threads, and project planning views work through real browser interactions."
+      ],
+      "external_requirements": [],
+      "draws_from": [
+        "W26",
+        "W28"
+      ],
+      "excludes": [
+        "Full original A/B/C roadmap as a release gate",
+        "50-agent/10000-task benchmark"
+      ]
+    }
+  ],
+  "release_status": "CONNECTED_RELEASE.md"
+}

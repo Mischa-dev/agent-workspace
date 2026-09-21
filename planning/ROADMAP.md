@@ -1,6 +1,6 @@
 # Delivery roadmap
 
-September 21, 2026. Revised around the owner's decisions. Planning only; the acceptance cases below have not been run against a new product.
+September 21, 2026. Original staged requirements and acceptance scenarios. A local v0 now exists; [ACCEPTANCE.md](../ACCEPTANCE.md) records which behavior was verified. The [next implementation plan](NEXT_IMPLEMENTATION_PLAN.md) and [dependency-linked backlog](NEXT_BACKLOG.json) govern remaining delivery, including reusable external participation and AgentOS integration. The cases below are requirements, not a claim that every case passed.
 
 [PRODUCT_PLAN.md](PRODUCT_PLAN.md) owns product behavior and fixed boundaries. [CONTRACTS.md](CONTRACTS.md) defines routing, context, delivery, and the proposed connector interface. [RESEARCH.md](RESEARCH.md) records evidence and limits. Build one application in the following three stages.
 
@@ -36,13 +36,11 @@ Use one calm, compact messaging-first design throughout. Refine it with the case
 
 These dependencies describe product delivery. They are not an instruction to start workers now. During later implementation, split packages into coherent changes and settle shared record/permission contracts before parallel edits. C2 and C3 can proceed independently after C1, followed by integration in C5.
 
-## Next bounded implementation milestone
+## Next implementation work
 
-Deliver A0-A4 as a local stage-A slice using the chosen TypeScript stack and one visual direction. Qualify the two intended connector boundaries; whichever first proves the required isolation may supply both initial identities. Do not wait for a second provider merely to obtain a second identity.
+Continue from the local release with L01-L06 in [NEXT_IMPLEMENTATION_PLAN.md](NEXT_IMPLEMENTATION_PLAN.md): scoped participant access, durable inboxes, MCP/HTTP, editable defaults, deployment, real client connections, and daily-use verification. Preserve existing working features. The W-series packages are retained in [LONG_TERM_BACKLOG.json](LONG_TERM_BACKLOG.json) as deferred roadmap work.
 
-The milestone is complete when Mischa can reopen Messages, talk in a DM and group, use a natural follow-up after a background update, request independent opinions or a short discussion, share a pinned Resource, wait for an offline participant, inspect what each run received, and stop/correct a response without losing it. Include drafts, unread state, stable scroll, keyboard operation, phone layout, and offline/error states.
-
-Keep repository execution, GitHub publication, advanced task graphs, and the work-session scheduler out of this slice. They follow through the same records in B and C. Authenticate the runtime for the demonstration through its proper flow. Actual credentials and supported host setup are implementation prerequisites, not assumed planning facts.
+The former instruction to stop after A0-A4 was superseded by the owner's unattended-build authorization. The subsequent 28-package all-features release gate was then narrowed to get the existing app deployed and usable by agents sooner. Original A/B/C cases remain useful requirements for the relevant features, but completing every future feature is not a condition of the L-series launch. Consult [ACCEPTANCE.md](../ACCEPTANCE.md) for evidence and the active backlog for sequencing.
 
 ## Stage-A acceptance specifications
 

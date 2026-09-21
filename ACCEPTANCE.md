@@ -1,6 +1,6 @@
 # Local release acceptance
 
-Verified on this Mac on September 21, 2026. The application is a usable private local core; the complete planning roadmap has additional milestones. No other project was edited, no remote branch or PR was published, and no paid infrastructure or billing change was made.
+Verified on this Mac on September 21, 2026. The connected workspace release is running locally with the expanded messaging, artifact boards, planning views and agent access. Hosted deployment and actual third-party client connections remain pending. No other project was edited, no remote branch or PR was published, and no paid infrastructure or billing change was made.
 
 ## Real agents and services
 
@@ -20,7 +20,7 @@ A repeated concurrent group test exposed CLI initialize timeouts before model di
 
 ## Automated integration and protocol tests
 
-**52 tests passed**, with TypeScript checks and the production build passing. `./workspace test` uses separate disposable PostgreSQL databases; it does not change the owner workspace.
+**79 tests passed**, with TypeScript checks and the production build passing. `./workspace test` uses separate disposable PostgreSQL databases; it does not change the owner workspace. The final test summary is in `evidence/connected-automated-tests.txt`.
 
 Database, HTTP, storage, and Git operations in domain tests are real. The runtime responses in these tests are explicit fixtures. Tests cover:
 
@@ -36,12 +36,28 @@ Database, HTTP, storage, and Git operations in domain tests are real. The runtim
 - Capacity normalization, stale/missing telemetry, known exhaustion, no inferred reset credit, and a worker-level hold without invoking a model.
 - Bounded older-message retrieval, current context after pending admission, late-correction labels, and immutable initial packets.
 - GitHub publication denial. Successful push/PR creation is not implemented or claimed as tested.
+- Native agent credentials, expiry, revocation, same-identity OAuth renewal, explicit account membership, scoped colleague discovery and bounded list cursors.
+- External inbox claims, renewable leases, stopped and late results, allowance-preserving handoffs, ready task pickup, task-specific context and parent/thread membership changes.
+- Official MCP HTTP client/handler, concrete tool schemas, OAuth PKCE/consent/refresh, replay and concurrent refresh rejection, signed wakeup verification and checked file endpoints.
+- Deployment backup failure handling, permissions and manifest creation. These runner tests use explicit Podman fixtures; they do not qualify a live Linux deployment.
+
+## Connected release verification
+
+`evidence/connected-protocol.json` records a real loopback HTTP round trip against the built server, PostgreSQL and file storage. Two separate accounts claimed work, uploaded and downloaded a file with a verified checksum, handed it off with a pinned revision and returned a result to the original conversation. No external model call was used for this protocol exercise; the real local Codex evidence above predates this expansion and is retained separately.
+
+The small review workspace contained 31 records. Twelve owner snapshot requests measured a median of 3.06 ms and p95 of 4 ms. This is an ordinary-use sample, not a large-roadmap benchmark.
+
+`evidence/connected-migration.json` verifies that the five records in the owner database retained exactly the same fingerprint after migration and that the agent access tables are available. The production server and worker were then started against the owner database; the health endpoint reported both online.
+
+`evidence/connected-backup-restore.json` records a full database/file backup restored to a separate database and directory. Record counts and the uploaded file checksum survived. Restored native credentials were revoked, OAuth state and owner sessions cleared, pending work cancelled and uncertain work held. The real server and worker restarted with dispatch disabled and no replay.
 
 ## Browser acceptance
 
 Actual interactions in the Codex in-app browser verified sign-in, spaces/projects, live AI planning, scope approval, result review, dependent work, Resource editing/version history, file upload, real GitHub linking, composer draft persistence after refresh, keyboard clearing, and Stop of queued work. Two tabs edited the same Resource revision; one saved and the other retained its draft with a visible conflict. A message attached revision 3; after revision 4 existed, opening the attachment still showed revision 3's text and offered View latest.
 
 Desktop layout was inspected visually at 1280 pixels. Phone-width inspection at 390 pixels showed the compact navigation, composer, and settings control with no horizontal document overflow. This is browser viewport testing, not qualification on a physical phone. No application console errors were observed in the final browser check. Browser data is isolated from the clean owner database.
+
+The connected release adds a separate browser pass: space board, pinned and tagged note with an explicit audience, channel attachment, thread source, project outline/board/dependency views and generic connection controls. Its desktop layout was inspected at 1280 pixels. See `evidence/connected-browser-acceptance.json`. The phone-width check above belongs to the earlier core release; this expansion has not received a new mobile or physical-device qualification.
 
 ## Recovery boundary
 
@@ -51,11 +67,12 @@ A queue claim never proves exactly-once provider execution. Uncertain results re
 
 ## Open qualification and product work
 
-- AgentOS/Hermes connectivity is pending. Only local Codex is qualified.
+- Generic MCP/HTTP access and signed wakeups are implemented and protocol-tested. Actual Muse, ChatGPT Work, Hermes and OpenClaw connections remain pending, as does full AgentOS integration. Local Codex retains the real runtime qualification above.
+- Remote HTTPS deployment, container build/reboot/recovery qualification and scheduled backup activation await the deployment host/domain. Persistent-volume and service templates are prepared; no remote service has been changed.
 - GitHub publishing, event synchronization, PR checks, and multi-branch candidate integration are pending. Existing PR reads and local commit ancestry are working.
 - Project test scripts and arbitrary shell execution are unavailable in this scoped profile. Its checks cover patch formatting and JSON syntax. This release is not an unattended general-purpose build/test environment.
-- Automatic agent invitations, model-assisted speaker selection, generated briefs, explicit decision records, separate channel/thread views, and sophisticated paste highlighting remain roadmap work.
-- Roadmap scale, database pagination/full-text search, and multi-user operation are not qualified. The v0 implementation favors consistent local records over large-scale throughput.
+- Model-assisted invitations/speaker selection, generated briefs, explicit decision records and sophisticated paste highlighting remain roadmap work. Channels, threads and explicit handoffs are now implemented.
+- Large-roadmap throughput, database-level pagination/full-text search and multiple human owners are not qualified. Agent list results have bounded response pages, but the domain still loads the workspace records for consistent decisions.
 - The standalone capacity probe reached its bounded deadline. Some live runs returned telemetry with one missing usage window. The UI therefore reports unknown where appropriate; time and worker limits still apply. No credit consumption, reset redemption, or billing change occurred.
 
 These limits are also documented in README.md. The source plan remains intact so the next implementation can proceed from evidence rather than treating the broader roadmap as finished.

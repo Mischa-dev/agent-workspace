@@ -31,6 +31,13 @@ import {
 } from "lucide-react";
 import type { RecordRow, Attachment } from "../../../packages/shared/src/index";
 
+import {
+  PlanningViews,
+  AgentConnection,
+  ResourceAttachmentForm,
+  ResourceOrganizationForm,
+  SpaceExistingForm,
+} from "./connected";
 type Row = RecordRow<any>;
 type Props = Record<string, any>;
 const list = (rows: Row[], kind: string) => rows.filter((r) => r.kind === kind);
@@ -206,6 +213,12 @@ function taskReasons(task: Row, rows: Row[]) {
   const t = task.data,
     reasons: string[] = [];
   if (!t.selected) reasons.push("Alternative not selected");
+  if (
+    t.execution === "code" &&
+    t.assigneeId &&
+    (find(rows, t.assigneeId)?.data.deliveryMode || "managed") !== "managed"
+  )
+    reasons.push("Choose a local agent for repository execution");
   if (t.blocker) reasons.push(t.blocker);
   if (!t.description?.trim()) reasons.push("Add an outcome");
   if (!t.criteria?.length) reasons.push("Add acceptance criteria");
@@ -273,7 +286,8 @@ export function ProjectView({
   search,
 }: Props) {
   const [tab, setTab] = useState("Outline"),
-    [filter, setFilter] = useState("all");
+    [filter, setFilter] = useState("all"),
+    [collapsed, setCollapsed] = useState<string[]>([]);
   const tasks = list(rows, "task")
       .filter((t) => t.data.projectId === project.id)
       .sort((a, b) => a.data.position - b.data.position),
@@ -301,14 +315,45 @@ export function ProjectView({
         return (
           <React.Fragment key={t.id}>
             {visible && (
-              <TaskRow
-                task={t}
-                depth={Math.min(depth, 8)}
-                onClick={() => setPanel(t)}
-                reasons={taskReasons(t, rows)}
-              />
+              <div
+                className="outline-node"
+                style={
+                  {
+                    "--outline-depth": Math.min(depth, 8),
+                  } as React.CSSProperties
+                }
+              >
+                {tasks.some((child) => child.data.parentId === t.id) && (
+                  <button
+                    className="tree-toggle"
+                    aria-label={`${collapsed.includes(t.id) ? "Expand" : "Collapse"} ${t.data.title}`}
+                    aria-expanded={!collapsed.includes(t.id)}
+                    onClick={() =>
+                      setCollapsed(
+                        collapsed.includes(t.id)
+                          ? collapsed.filter((id) => id !== t.id)
+                          : [...collapsed, t.id],
+                      )
+                    }
+                  >
+                    {collapsed.includes(t.id) ? (
+                      <ChevronRight size={13} />
+                    ) : (
+                      <ChevronDown size={13} />
+                    )}
+                  </button>
+                )}
+                <TaskRow
+                  task={t}
+                  depth={Math.min(depth, 8)}
+                  onClick={() => setPanel(t)}
+                  reasons={taskReasons(t, rows)}
+                />
+              </div>
             )}{" "}
-            {depth < 25 && renderTasks(t.id, depth + 1)}
+            {depth < 25 &&
+              (search || filter !== "all" || !collapsed.includes(t.id)) &&
+              renderTasks(t.id, depth + 1)}
           </React.Fragment>
         );
       });
@@ -376,15 +421,17 @@ export function ProjectView({
       </div>
       <div className="view-toolbar">
         <div className="tabs">
-          {["Outline", "Resources", "Activity"].map((t) => (
-            <button
-              key={t}
-              className={tab === t ? "active" : ""}
-              onClick={() => setTab(t)}
-            >
-              {t}
-            </button>
-          ))}
+          {["Outline", "Board", "Dependencies", "Resources", "Activity"].map(
+            (t) => (
+              <button
+                key={t}
+                className={tab === t ? "active" : ""}
+                onClick={() => setTab(t)}
+              >
+                {t}
+              </button>
+            ),
+          )}
         </div>
         <div className="toolbar-actions">
           <button
@@ -401,7 +448,7 @@ export function ProjectView({
           </button>
         </div>
       </div>
-      {tab === "Outline" && (
+      {["Outline", "Board", "Dependencies"].includes(tab) && (
         <>
           <div className="outline-toolbar">
             <select
@@ -455,33 +502,51 @@ export function ProjectView({
               </span>
             </button>
           ))}
-          <div className="task-list">
-            {renderTasks()}
-            {!tasks.length && (
-              <div className="inline-empty">
-                <FolderOpen size={26} />
-                <h3>Every big project starts somewhere.</h3>
-                <p>
-                  Capture a first task, or ask an agent to suggest a plan you
-                  can review.
-                </p>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    openModal({ type: "task", projectId: project.id })
-                  }
-                >
-                  <Plus size={15} /> Add the first task
-                </button>
+          {tab === "Outline" ? (
+            <>
+              <div className="task-list">
+                {renderTasks()}
+                {!tasks.length && (
+                  <div className="inline-empty">
+                    <FolderOpen size={26} />
+                    <h3>Every big project starts somewhere.</h3>
+                    <p>
+                      Capture a first task, or ask an agent to suggest a plan
+                      you can review.
+                    </p>
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        openModal({ type: "task", projectId: project.id })
+                      }
+                    >
+                      <Plus size={15} /> Add the first task
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <button
-            className="add-task-row"
-            onClick={() => openModal({ type: "task", projectId: project.id })}
-          >
-            <Plus size={15} /> Add task
-          </button>
+              <button
+                className="add-task-row"
+                onClick={() =>
+                  openModal({ type: "task", projectId: project.id })
+                }
+              >
+                <Plus size={15} /> Add task
+              </button>
+            </>
+          ) : (
+            <PlanningViews
+              view={tab}
+              tasks={tasks}
+              rows={rows}
+              search={search}
+              filter={filter}
+              command={command}
+              setPanel={setPanel}
+              project={project}
+              openModal={openModal}
+            />
+          )}
         </>
       )}
       {tab === "Resources" && (
@@ -1067,6 +1132,13 @@ function TaskPanel({ row, rows, command, open }: Props) {
             )}
           <div className="task-properties">
             <div>
+              <span>Assigned agent</span>
+              <strong>
+                {find(rows, r.assigneeId)?.data.name ||
+                  "Choose when work starts"}
+              </strong>
+            </div>
+            <div>
               <span>Project</span>
               <strong>
                 {find(rows, r.projectId)?.data.name || "Loose task"}
@@ -1268,7 +1340,11 @@ function TaskPanel({ row, rows, command, open }: Props) {
                   )
                 }
               >
-                Mark ready
+                {r.assigneeId &&
+                (find(rows, r.assigneeId)?.data.deliveryMode || "managed") !==
+                  "managed"
+                  ? `Send to ${find(rows, r.assigneeId)?.data.name} inbox`
+                  : "Mark ready"}
               </button>
             )}
           </div>
@@ -1445,19 +1521,26 @@ function ConversationPanel({ row, rows, command, open }: Props) {
             required
           />
         </Field>
-        <Checks
-          title="Participants"
-          items={list(rows, "agent").map((a) => ({
-            id: a.id,
-            title: a.data.name,
-            detail: a.data.role,
-          }))}
-          selected={agents}
-          setSelected={setAgents}
-        />
+        {row.data.kind === "thread" ? (
+          <p className="muted small">
+            Participants and project context follow the parent conversation.
+          </p>
+        ) : (
+          <Checks
+            title="Participants"
+            items={list(rows, "agent").map((a) => ({
+              id: a.id,
+              title: a.data.name,
+              detail: a.data.role,
+            }))}
+            selected={agents}
+            setSelected={setAgents}
+          />
+        )}
         <Field label="Project context">
           <select
             value={projectId}
+            disabled={row.data.kind === "thread"}
             onChange={(e) => setProject(e.target.value)}
           >
             <option value="">No project</option>
@@ -1469,7 +1552,11 @@ function ConversationPanel({ row, rows, command, open }: Props) {
           </select>
         </Field>
         <Field label="Space">
-          <select value={spaceId} onChange={(e) => setSpace(e.target.value)}>
+          <select
+            disabled={row.data.kind === "thread"}
+            value={spaceId}
+            onChange={(e) => setSpace(e.target.value)}
+          >
             <option value="">No space</option>
             {list(rows, "space").map((s) => (
               <option value={s.id} key={s.id}>
@@ -1688,6 +1775,7 @@ function TaskForm({ rows, task, command, onDone, projectId }: Props) {
     [project, setProject] = useState(original.projectId || projectId || ""),
     [parent, setParent] = useState(original.parentId || ""),
     [kind, setKind] = useState(original.kind || "feature"),
+    [assignee, setAssignee] = useState(original.assigneeId || ""),
     [execution, setExecution] = useState(original.execution || "chat"),
     [parallel, setParallel] = useState(original.parallel !== false),
     [selected, setSelected] = useState(original.selected !== false),
@@ -1714,6 +1802,7 @@ function TaskForm({ rows, task, command, onDone, projectId }: Props) {
             description,
             criteria: lines(criteria),
             projectId: project || null,
+            assigneeId: assignee || null,
             parentId: parent || null,
             kind,
             execution,
@@ -1779,6 +1868,33 @@ function TaskForm({ rows, task, command, onDone, projectId }: Props) {
           </select>
         </Field>
       </div>
+      <Field
+        label="Assigned agent"
+        hint="Optional. Choose the agent whose skills fit this task."
+      >
+        <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+          <option value="">Choose when work starts</option>
+          {list(rows, "agent")
+            .filter((a) => a.data.enabled)
+            .map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.data.name}
+              </option>
+            ))}
+        </select>
+      </Field>
+      {assignee &&
+        (find(rows, assignee)?.data.deliveryMode || "managed") !==
+          "managed" && (
+          <p className="audience-notice">
+            <Users size={14} />
+            <span>
+              {execution === "code"
+                ? "Choose a local agent for repository execution."
+                : `Mark this task ready to place it in ${find(rows, assignee)?.data.name}'s inbox. It will work within its own connected runtime.`}
+            </span>
+          </p>
+        )}
       <button
         className="disclosure"
         type="button"
@@ -1938,7 +2054,13 @@ export function ModalContent(props: Props) {
     setNotice,
     onNavigate,
   } = props;
-  if (modal.type === "agent") return <AgentForm {...props} />;
+  if (modal.type === "agent")
+    return <AgentForm key={modal.edit?.id || "new"} {...props} />;
+  if (modal.type === "resource-attach")
+    return <ResourceAttachmentForm {...props} />;
+  if (modal.type === "resource-organize")
+    return <ResourceOrganizationForm {...props} />;
+  if (modal.type === "space-existing") return <SpaceExistingForm {...props} />;
   if (modal.type === "task")
     return (
       <TaskForm
@@ -1970,6 +2092,9 @@ function PlaceForm({ modal, rows, command, close, setNotice }: Props) {
     [targetBranch, setBranch] = useState(original.targetBranch || "main"),
     [github, setGithub] = useState(original.github || ""),
     [color, setColor] = useState(original.color || "#527868"),
+    [agentIds, setAgentIds] = useState<string[]>(
+      original.agentIds || find(rows, modal.spaceId)?.data.agentIds || [],
+    ),
     op = useOperation();
   return (
     <form
@@ -1982,6 +2107,7 @@ function PlaceForm({ modal, rows, command, close, setNotice }: Props) {
               : {}),
             name,
             description,
+            agentIds,
             spaceId: space || null,
             repository: repository || null,
             targetBranch,
@@ -1991,7 +2117,7 @@ function PlaceForm({ modal, rows, command, close, setNotice }: Props) {
           close();
           setNotice(
             modal.edit
-              ? "Project updated. Existing approvals need a fresh review."
+              ? `${modal.type === "space" ? "Space" : "Project"} updated.${modal.type === "project" ? " Existing approvals need a fresh review." : ""}`
               : `${modal.type === "space" ? "Space" : "Project"} created.`,
           );
         });
@@ -2019,6 +2145,18 @@ function PlaceForm({ modal, rows, command, close, setNotice }: Props) {
           placeholder="What belongs here?"
         />
       </Field>
+      <Checks
+        title={`Agents in this ${modal.type}`}
+        items={list(rows, "agent")
+          .filter((a) => a.data.enabled)
+          .map((a) => ({ id: a.id, title: a.data.name, detail: a.data.role }))}
+        selected={agentIds}
+        setSelected={setAgentIds}
+      />
+      <p className="muted small">
+        These agents can participate here. Individual Resources keep their own
+        sharing settings.
+      </p>
       {modal.type === "space" ? (
         <Field label="Color">
           <input
@@ -2085,10 +2223,14 @@ function PlaceForm({ modal, rows, command, close, setNotice }: Props) {
   );
 }
 
-function ConversationForm({ rows, command, close, onNavigate }: Props) {
+function ConversationForm({ modal, rows, command, close, onNavigate }: Props) {
   const [title, setTitle] = useState(""),
-    [agents, setAgents] = useState<string[]>([]),
-    [project, setProject] = useState(""),
+    [agents, setAgents] = useState<string[]>(
+      find(rows, modal.spaceId)?.data.agentIds || [],
+    ),
+    [kind, setKind] = useState(modal.kind || "conversation"),
+    [space, setSpace] = useState(modal.spaceId || ""),
+    [project, setProject] = useState(modal.projectId || ""),
     op = useOperation();
   return (
     <form
@@ -2100,6 +2242,8 @@ function ConversationForm({ rows, command, close, onNavigate }: Props) {
               title.trim() ||
               agents.map((id) => find(rows, id)?.data.name).join(" & "),
             agentIds: agents,
+            kind: kind === "channel" ? "channel" : undefined,
+            spaceId: space || undefined,
             projectId: project || undefined,
           });
           close();
@@ -2107,6 +2251,22 @@ function ConversationForm({ rows, command, close, onNavigate }: Props) {
         });
       }}
     >
+      <div className="segmented">
+        <button
+          type="button"
+          className={kind === "conversation" ? "active" : ""}
+          onClick={() => setKind("conversation")}
+        >
+          <MessageSquare size={14} /> Conversation
+        </button>
+        <button
+          type="button"
+          className={kind === "channel" ? "active" : ""}
+          onClick={() => setKind("channel")}
+        >
+          <Users size={14} /> Channel
+        </button>
+      </div>
       <Field
         label="Name"
         hint="Optional. We'll use the participants' names if you leave this empty."
@@ -2127,6 +2287,23 @@ function ConversationForm({ rows, command, close, onNavigate }: Props) {
         selected={agents}
         setSelected={setAgents}
       />
+      <Field label="Space">
+        <select
+          value={space}
+          onChange={(e) => {
+            setSpace(e.target.value);
+            if (!agents.length)
+              setAgents(find(rows, e.target.value)?.data.agentIds || []);
+          }}
+        >
+          <option value="">No space</option>
+          {list(rows, "space").map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.data.name}
+            </option>
+          ))}
+        </select>
+      </Field>
       <Field label="Project context">
         <select value={project} onChange={(e) => setProject(e.target.value)}>
           <option value="">No project</option>
@@ -2144,7 +2321,8 @@ function ConversationForm({ rows, command, close, onNavigate }: Props) {
       <ErrorNote error={op.error} />
       <div className="form-actions">
         <Submit pending={op.pending} disabled={!agents.length || op.pending}>
-          Start conversation <ArrowRight size={15} />
+          {kind === "channel" ? "Create channel" : "Start conversation"}{" "}
+          <ArrowRight size={15} />
         </Submit>
       </div>
     </form>
@@ -2170,7 +2348,18 @@ function NewResource({
     [projects, setProjects] = useState<string[]>(
       modal.projectId ? [modal.projectId] : [],
     ),
+    [spaces, setSpaces] = useState<string[]>(
+      modal.spaceId ? [modal.spaceId] : [],
+    ),
+    [tags, setTags] = useState(""),
+    [pinned, setPinned] = useState(false),
     op = useOperation();
+  const audience = [
+    ...new Set<string>([
+      ...conversations.flatMap((id) => find(rows, id)?.data.agentIds || []),
+      ...spaces.flatMap((id) => find(rows, id)?.data.agentIds || []),
+    ]),
+  ];
   return (
     <form
       onSubmit={(e) => {
@@ -2185,6 +2374,18 @@ function NewResource({
             form.append("title", title || file.name);
             form.append("conversationIds", JSON.stringify(conversations));
             form.append("projectIds", JSON.stringify(projects));
+            form.append("spaceIds", JSON.stringify(spaces));
+            form.append("agentIds", JSON.stringify(audience));
+            form.append(
+              "tags",
+              JSON.stringify(
+                tags
+                  .split(",")
+                  .map((v) => v.trim())
+                  .filter(Boolean),
+              ),
+            );
+            form.append("pinned", String(pinned));
             form.append("file", file);
             const response = await fetch("/api/uploads", {
               method: "POST",
@@ -2201,6 +2402,13 @@ function NewResource({
               text,
               conversationIds: conversations,
               projectIds: projects,
+              spaceIds: spaces,
+              agentIds: audience,
+              pinned,
+              tags: tags
+                .split(",")
+                .map((v) => v.trim())
+                .filter(Boolean),
             });
           close();
           setPanel(result.resource || result.value?.resource || result);
@@ -2267,9 +2475,33 @@ function NewResource({
       )}
       <details
         className="form-details"
-        open={!!modal.conversationId || !!modal.projectId}
+        open={!!modal.conversationId || !!modal.projectId || !!modal.spaceId}
       >
         <summary>Share & organize</summary>
+        <Checks
+          title="Post to spaces"
+          items={list(rows, "space").map((s) => ({
+            id: s.id,
+            title: s.data.name,
+          }))}
+          selected={spaces}
+          setSelected={setSpaces}
+        />
+        <Field label="Tags">
+          <input
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="research, design, reference"
+          />
+        </Field>
+        <label className="check-option">
+          <input
+            type="checkbox"
+            checked={pinned}
+            onChange={(e) => setPinned(e.target.checked)}
+          />
+          <span>Pin to the top of its spaces</span>
+        </label>
         <Checks
           title="Share with conversations"
           items={list(rows, "conversation").map((c) => ({
@@ -2292,6 +2524,14 @@ function NewResource({
           setSelected={setProjects}
         />
       </details>
+      <p className="audience-notice">
+        <Users size={14} />
+        <span>
+          {audience.length
+            ? `Shared with ${audience.map((id) => find(rows, id)?.data.name).join(", ")}.`
+            : "Private to you until you choose a conversation or shared space."}
+        </span>
+      </p>
       <ErrorNote error={op.error} />
       <div className="form-actions">
         <Submit pending={op.pending}>
@@ -2305,6 +2545,9 @@ function NewResource({
 function ScopeForm({ modal, rows, command, close, setNotice }: Props) {
   const tasks = list(rows, "task").filter(
       (t) =>
+        (!t.data.assigneeId ||
+          (find(rows, t.data.assigneeId)?.data.deliveryMode || "managed") ===
+            "managed") &&
         (!modal.projectId || t.data.projectId === modal.projectId) &&
         !["accepted", "cancelled", "running", "review"].includes(t.data.status),
     ),
@@ -2378,6 +2621,8 @@ function ScopeForm({ modal, rows, command, close, setNotice }: Props) {
       <p className="muted">
         Choose exactly what the agents may work on. Dependencies, blockers,
         selected alternatives and shared locks still decide what can start.
+        Connected-agent assignments use their own inbox instead of a local work
+        session.
       </p>
       <Field label="Session name">
         <input
@@ -2827,7 +3072,8 @@ function SettingsForm({
         </div>
       </div>
       <p className="muted small">
-        AgentOS and Hermes are not connected in this build.
+        Connected agents receive only work and material shared with their
+        identities.
       </p>
       <details className="technical-details">
         <summary>Connection details</summary>
@@ -2874,8 +3120,20 @@ function SettingsForm({
   );
 }
 
-function AgentForm({ modal, command, close, setNotice }: Props) {
-  const agent = modal.edit,
+function AgentForm({
+  modal,
+  rows,
+  command,
+  close,
+  setNotice,
+  updateModal,
+}: Props) {
+  const agent = modal.edit
+      ? find(rows, modal.edit.id) || modal.edit
+      : undefined,
+    [tab, setTab] = useState(modal.tab || "identity"),
+    [identityRevision] = useState(agent?.revision),
+    [deliveryMode, setDeliveryMode] = useState("managed"),
     [name, setName] = useState(agent?.data.name || ""),
     [role, setRole] = useState(agent?.data.role || ""),
     [capabilities, setCapabilities] = useState(
@@ -2885,106 +3143,154 @@ function AgentForm({ modal, command, close, setNotice }: Props) {
     [color, setColor] = useState(agent?.data.color || "#527868"),
     op = useOperation();
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        op.run(async () => {
-          await command(agent ? "agent.update" : "agent.create", {
-            ...(agent
-              ? { id: agent.id, expectedRevision: agent.revision }
-              : {}),
-            name,
-            role,
-            capabilities: capabilities
-              .split(",")
-              .map((v: string) => v.trim())
-              .filter(Boolean),
-            enabled,
-            color,
-          });
-          close();
-          setNotice(
-            agent
-              ? "Agent identity updated."
-              : "Agent created. Start a conversation to work together.",
-          );
-        });
-      }}
-    >
-      <p className="muted">
-        Give an agent a useful perspective. Every identity runs through the
-        local Codex connector with separate conversation context.
-      </p>
-      <Field
-        label="Name"
-        hint={
-          agent
-            ? "The identity name stays stable."
-            : "Letters, numbers, spaces and hyphens. Start with a letter."
-        }
-      >
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-          disabled={!!agent}
-          maxLength={40}
-          autoFocus
-          pattern="[A-Za-z][A-Za-z0-9 _-]*"
-          placeholder="A name for your collaborator"
-        />
-      </Field>
-      <Field label="Role and perspective">
-        <textarea
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          required
-          maxLength={2000}
-          rows={4}
-          placeholder="What should this agent focus on? How should it approach its work?"
-        />
-      </Field>
-      <Field
-        label="Capabilities"
-        hint="Comma-separated topics help Auto choose the right person, such as research, writing, design."
-      >
-        <input
-          value={capabilities}
-          onChange={(e) => setCapabilities(e.target.value)}
-          placeholder="research, planning, design"
-        />
-      </Field>
-      {!agent && (
-        <Field label="Identity color">
-          <input
-            type="color"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-          />
-        </Field>
-      )}
+    <>
       {agent && (
-        <label className="check-option">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          <span>
-            Available for new responses
-            <small>
-              Disabling this identity also requests a stop for active responses.
-            </small>
-          </span>
-        </label>
+        <div className="agent-tabs tabs">
+          <button
+            className={tab === "identity" ? "active" : ""}
+            onClick={() => setTab("identity")}
+          >
+            Identity
+          </button>
+          <button
+            className={tab === "connection" ? "active" : ""}
+            onClick={() => setTab("connection")}
+          >
+            Connection & access
+          </button>
+        </div>
       )}
-      <ErrorNote error={op.error} />
-      <div className="form-actions">
-        <Submit pending={op.pending}>
-          {agent ? "Save identity" : "Create agent"}
-        </Submit>
-      </div>
-    </form>
+      {agent && tab === "connection" ? (
+        <AgentConnection row={agent} command={command} setNotice={setNotice} />
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            op.run(async () => {
+              let result = await command(
+                agent ? "agent.update" : "agent.create",
+                {
+                  ...(agent
+                    ? { id: agent.id, expectedRevision: identityRevision }
+                    : {}),
+                  name,
+                  role,
+                  capabilities: capabilities
+                    .split(",")
+                    .map((v: string) => v.trim())
+                    .filter(Boolean),
+                  enabled,
+                  color,
+                },
+              );
+              if (!agent && deliveryMode !== "managed") {
+                result = await command("agent.configure", {
+                  id: result.id,
+                  expectedRevision: result.revision,
+                  deliveryMode,
+                  checkInMinutes: 5,
+                });
+                updateModal({ type: "agent", edit: result, tab: "connection" });
+              } else close();
+              setNotice(
+                agent
+                  ? "Agent identity updated."
+                  : "Agent created. Start a conversation to work together.",
+              );
+            });
+          }}
+        >
+          <p className="muted">
+            Give an agent a useful perspective. Choose local Codex or connect an
+            agent with its own runtime.
+          </p>
+          <Field
+            label="Name"
+            hint={
+              agent
+                ? "Renaming keeps this agent’s conversations and access."
+                : "Letters, numbers, spaces and hyphens. Start with a letter."
+            }
+          >
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              maxLength={40}
+              autoFocus
+              pattern="[A-Za-z][A-Za-z0-9 _-]*"
+              placeholder="A name for your collaborator"
+            />
+          </Field>
+          <Field label="Role and perspective">
+            <textarea
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              required
+              maxLength={2000}
+              rows={4}
+              placeholder="What should this agent focus on? How should it approach its work?"
+            />
+          </Field>
+          <Field
+            label="Capabilities"
+            hint="Comma-separated topics help Auto choose the right person, such as research, writing, design."
+          >
+            <input
+              value={capabilities}
+              onChange={(e) => setCapabilities(e.target.value)}
+              placeholder="research, planning, design"
+            />
+          </Field>
+          {!agent && (
+            <Field label="Connection">
+              <select
+                value={deliveryMode}
+                onChange={(e) => setDeliveryMode(e.target.value)}
+              >
+                <option value="managed">
+                  Local Codex · ready on this host
+                </option>
+                <option value="poll">Connect my own agent</option>
+              </select>
+              <small>
+                Connected agents get an access token and check their inbox.
+                Webhook setup is available after creation.
+              </small>
+            </Field>
+          )}
+          <Field label="Identity color">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+            />
+          </Field>
+          {agent && (
+            <label className="check-option">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              <span>
+                Available for new responses
+                <small>
+                  Disabling this identity also requests a stop for active
+                  responses.
+                </small>
+              </span>
+            </label>
+          )}
+          <ErrorNote error={op.error} />
+          <div className="form-actions">
+            <Submit pending={op.pending}>
+              {agent ? "Save identity" : "Create agent"}
+            </Submit>
+          </div>
+        </form>
+      )}
+    </>
   );
 }
 

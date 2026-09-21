@@ -1,10 +1,12 @@
 # A shared workspace for people and AI agents
 
-September 21, 2026. Product plan, version 0.2. Working title only. Revised to apply the owner's written decisions.
+September 21, 2026. Product plan, version 0.4. Working title only. The product vision is retained; the first deployed release now has a smaller scope.
 
-The owner chose a fresh start during this review. This plan describes a new app. NANC, the existing Agent Workspace, and AgentOS are research inputs, not repositories to merge automatically. No implementation, migration, deployment, agent run, or persistent integration was started.
+The owner chose a fresh application. NANC, the existing Agent Workspace, and AgentOS are research inputs, not repositories to merge automatically. A local v0 has since been implemented; [ACCEPTANCE.md](../ACCEPTANCE.md) records its verified behavior and open work. The current revision updates planning only.
 
-This document owns product behavior and fixed boundaries. [The delivery roadmap](ROADMAP.md) owns staged delivery and acceptance tests. [The context and connector contract](CONTRACTS.md) owns context packets, delivery semantics, and the proposed versioned integration. [The research notes](RESEARCH.md) separate evidence from unverified behavior.
+This document owns product behavior and fixed boundaries. [The next implementation plan](NEXT_IMPLEMENTATION_PLAN.md) and [its backlog](NEXT_BACKLOG.json) define remaining delivery. [The original roadmap](ROADMAP.md) retains staged acceptance scenarios. [Agent participation](AGENT_PARTICIPATION.md) defines reusable connections and defaults. [The context and connector contract](CONTRACTS.md) owns context packets, delivery semantics, and the proposed versioned integration. [The research notes](RESEARCH.md) separate evidence from unverified behavior.
+
+The owner wants a useful deployed workspace soon. [The active launch plan](NEXT_IMPLEMENTATION_PLAN.md) therefore prioritizes generic agent access, reliable inboxes/handoffs, and existing messaging, Resources and tasks. Full AgentOS management, advanced GitHub execution, formal shared memory, new planning views, and large-scale optimization remain in [the longer-term roadmap](LONG_TERM_ROADMAP.md). Preserving these goals does not make them launch prerequisites.
 
 ## 1. What this app should be
 
@@ -55,6 +57,8 @@ Spaces and projects overlap through explicit links. They do not form a compulsor
 Conversation membership controls conversation access. Resource access is evaluated separately. Adding a link does not silently grant access, and placing a conversation in a space does not expose private message history. Search, previews, summaries, and agent context all use the same access checks.
 
 For AgentOS-managed agents, the workspace participant points to the AgentOS logical identity. The app stores its display details and membership, while AgentOS owns the declaration. External agents receive a workspace identity tied to their authenticated connector. One provider connection can serve several agent identities without making them the same person in chat.
+
+Keep agent identity, installed connections, event subscriptions, participation rules, and wakeup methods separate. Supply useful editable presets so ordinary setup takes a name, purpose, connection, and scope. Muse's MCP-and-heartbeat setup is an instance of the generic external participant configuration; product names never determine core behavior. Agents using an existing supported protocol require configuration rather than product-specific code. A new protocol can add an adapter without changing collaboration or task semantics. Preset updates never silently overwrite configured agents.
 
 ## 3. How the app should feel
 
@@ -108,7 +112,7 @@ Provide two actions. **Get independent opinions** gives selected agents the same
 
 Use threads for extended work, preserve substantive answers in the conversation, and collapse tool activity into a run card. Display status summaries and actual actions, not private model reasoning. Users can expand logs when troubleshooting.
 
-An exchange starts with six agent turns, configurable. Each started response invocation consumes a reserved turn. Every handoff and invited participant inherits the same exchange ID and allowance. Retries, restarts, and delayed check-ins cannot reset it. Selectors have a separate small call/time bound; execution tasks have separate budgets. Deduplicate requests, combine compatible pending follow-ups, and allow one active writer per session. If more agents are requested than turns remain, show the remaining requests as queued. At the limit offer Continue, which adds an explicit six-turn allowance by default. Ordinary acknowledgments and progress do not create new turns or exchanges.
+A discussion starts with a configurable six-turn autonomous burst. Each started response invocation consumes a reserved turn. Every handoff and invited participant inherits the same exchange and current allowance. Retries, restarts, and delayed check-ins cannot reset it. A substantive new owner request or answer to a pending question may authorize the next bounded burst without requiring a new conversation. At the limit also offer Continue, which adds six by default. Ordinary acknowledgments, agent progress, and handoffs cannot renew the allowance, and Stop remains authoritative until deliberately continued. Selectors have a separate small call/time bound; execution tasks have separate budgets. Deduplicate requests, combine compatible pending follow-ups, and allow one active writer per session. If more agents are requested than turns remain, show the remaining requests as queued.
 
 Stop immediately closes admission for that exchange, cancels queued responses, and forwards interruption to active connectors. Show Stop requested until termination is observed; preserve received text and flag any output arriving after Stop. A later scheduled check-in cannot restart the stopped exchange. Continuing it is a deliberate user action. The detailed routing, allowance, and delivery rules are in [CONTRACTS.md](CONTRACTS.md).
 
@@ -303,7 +307,7 @@ These stages are delivery gates, not three disconnected products. Each extends t
 | --- | --- |
 | Shared records with isolated sessions; no private-context crossover | Context size, recent-message window, brief refresh thresholds |
 | Auto routes speakers but never grants permissions | Confidence thresholds, capability matching, recipient overrides |
-| Bounded exchanges share allowance across handoffs | Six agent turns; Continue adds six by default |
+| Bounded bursts share allowance across handoffs | Six agent turns; substantive owner input or Continue can authorize the next burst |
 | One canonical Resource with immutable revisions and checked edits | Presentation, retention defaults, optional temporary expiry |
 | Human-approved repository scope and canonical claims | Two workers, 60-minute window, 20% review/integration reserve |
 | Draft PRs and recorded verification; no automatic merge/deploy in stages A-C | Task ordering, worker selection, retry limits within scope |
