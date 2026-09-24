@@ -102,6 +102,11 @@ export async function registerOAuth(
   origin: string,
 ) {
   const resource = `${origin}/mcp`;
+  // Refresh grants remain usable until revoked, including after a long pause.
+  // The access token still rotates daily; PostgreSQL stores a concrete date.
+  const refreshTokenLifetime = Math.floor(
+    (Date.UTC(9999, 11, 31) - Date.now()) / 1000,
+  );
   const model: any = {
     getClient: async (id: string, provided?: string) => {
       const client = await deps.state.get("client", id);
@@ -120,7 +125,7 @@ export async function registerOAuth(
         redirectUris: client.redirect_uris,
         grants: client.grant_types,
         accessTokenLifetime: 86400,
-        refreshTokenLifetime: 30 * 86400,
+        refreshTokenLifetime,
         clientName: client.client_name,
       };
     },
@@ -235,7 +240,7 @@ export async function registerOAuth(
     enablePlainPKCE: false,
     authorizationCodeLifetime: 300,
     accessTokenLifetime: 86400,
-    refreshTokenLifetime: 30 * 86400,
+    refreshTokenLifetime,
     alwaysIssueNewRefreshToken: true,
     requireClientAuthentication: {
       authorization_code: false,
@@ -420,7 +425,7 @@ export async function registerOAuth(
       .type("text/html")
       .send(
         page(
-          `<p><strong>${escape(client.client_name)}</strong> wants to participate as an agent. Access credentials last one day.${client.grant_types.includes("refresh_token") ? " This client may renew the connection using a rotating refresh credential, valid for 30 days after each renewal, until you revoke it." : ""}</p><p>Return address: ${escape(query.redirect_uri)}</p><form data-consent="${escape(consent)}" data-csrf="${escape(session.csrf)}"><label>Agent <select name="agentId" required>${choices}</select></label><button value="allow">Allow connection</button><button value="deny">Deny</button></form><p role="status"></p>`,
+          `<p><strong>${escape(client.client_name)}</strong> wants to participate as an agent. Access credentials last one day.${client.grant_types.includes("refresh_token") ? " This client may renew the connection using a rotating refresh credential until you revoke it." : ""}</p><p>Return address: ${escape(query.redirect_uri)}</p><form data-consent="${escape(consent)}" data-csrf="${escape(session.csrf)}"><label>Agent <select name="agentId" required>${choices}</select></label><button value="allow">Allow connection</button><button value="deny">Deny</button></form><p role="status"></p>`,
         ),
       );
   });

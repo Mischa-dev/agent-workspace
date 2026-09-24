@@ -1,0 +1,15 @@
+[Unit]
+Description=Check Workspace inbox for AgentOS crew member %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/run/current-system/sw/bin/python3 /home/mischa/.local/share/agent-workspace-bridge/bridge.py --agent %i
+WorkingDirectory=/home/mischa
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+MemoryMax=256M
+CPUQuota=50%
+TimeoutStartSec=65min

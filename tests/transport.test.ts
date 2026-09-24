@@ -553,6 +553,11 @@ test("OAuth discovery and explicit consent complete PKCE and issue only an agent
     assert.equal(result.statusCode, 200, result.body);
     assert.equal(result.json().access_token, token);
     assert.equal(typeof result.json().refresh_token, "string");
+    const stored = await f.state.get(
+      "refresh",
+      createHash("sha256").update(result.json().refresh_token).digest("hex"),
+    );
+    assert.equal(new Date(stored.refreshTokenExpiresAt).getUTCFullYear(), 9999);
     assert.equal(f.issues.length, 1);
     assert.equal((await f.exchange(code)).statusCode, 400);
     assert.equal(f.issues.length, 1);

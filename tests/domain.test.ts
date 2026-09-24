@@ -1159,6 +1159,20 @@ test("agent credentials are shown once, expire or revoke, and never enter the co
   await assert.rejects(authenticateAgent(issued.token), /expired, revoked/);
 });
 
+test("owner can issue an until-revoked agent credential", async () => {
+  const { authenticateAgent } =
+    await import("../apps/server/src/domain/agent-access.js");
+  const issued = (await cmd("credential.issue", {
+    agentId: agents[0].id,
+    label: "Persistent connection",
+    expiresInDays: 0,
+  })).value;
+  assert.match(issued.expiresAt, /^9999-12-31T/);
+  assert.equal((await authenticateAgent(issued.token)).id, agents[0].id);
+  await cmd("credential.revoke", { id: issued.id });
+  await assert.rejects(authenticateAgent(issued.token), /expired, revoked/);
+});
+
 test("polling accounts claim once through the shared admission path and reply as themselves", async () => {
   const { actor } = await connectedAgent();
   const sent = await cmd("message.send", {

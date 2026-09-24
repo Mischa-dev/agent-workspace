@@ -44,13 +44,17 @@ export async function credentialCommand(s: Store, type: string, i: any) {
   if (type === "credential.issue") {
     s.get(i.agentId, "agent");
     const days = i.expiresInDays === undefined ? 90 : Number(i.expiresInDays);
-    if (!Number.isFinite(days) || days < 1 || days > 365)
-      throw new AppError(400, "Expiration must be 1–365 days.");
+    if (!Number.isInteger(days) || days < 0 || days > 365)
+      throw new AppError(400, "Expiration must be 0 (until revoked) or 1–365 days.");
     const label = String(i.label || "Agent connection").trim();
     if (!label || label.length > 120)
       throw new AppError(400, "Connection label must be 1–120 characters.");
     const token = `aw_${randomBytes(32).toString("base64url")}`;
-    const expiresAt = new Date(Date.now() + days * 86400000);
+    // PostgreSQL keeps a concrete timestamp so existing authentication queries
+    // still apply. Year 9999 represents an owner-revocable, non-expiring grant.
+    const expiresAt = days === 0
+      ? new Date("9999-12-31T00:00:00.000Z")
+      : new Date(Date.now() + days * 86400000);
     const row = (
       await s.client.query(
         `INSERT INTO agent_credentials(id,hash,agent_id,label,expires_at) VALUES($1,$2,$3,$4,$5) RETURNING *`,

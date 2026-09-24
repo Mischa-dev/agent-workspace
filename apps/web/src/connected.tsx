@@ -1176,6 +1176,7 @@ export function AgentConnection({ row, command, setNotice }: Props) {
                 <option value={7}>7 days</option>
                 <option value={30}>30 days</option>
                 <option value={90}>90 days</option>
+                <option value={0}>Until revoked</option>
               </select>
             </label>
             <button className="primary" disabled={op.pending}>
@@ -1245,7 +1246,9 @@ export function AgentConnection({ row, command, setNotice }: Props) {
                 <small>
                   {c.revokedAt
                     ? "Revoked"
-                    : c.expiresAt
+                    : c.expiresAt?.startsWith("9999-")
+                      ? "Until revoked"
+                      : c.expiresAt
                       ? `Expires ${date(c.expiresAt)}`
                       : "No expiration recorded"}
                   {c.lastSeenAt ? ` · used ${date(c.lastSeenAt)}` : ""}

@@ -1,0 +1,32 @@
+{
+  "mara": {
+    "origin": "https://workspace.mischanelson.dev",
+    "workspace_agent_id": "de4cf737-0a5a-4414-a29a-2aae12de2e39",
+    "agentos_id": "agent-adbc4659597f49aeb96f2fccd807e497",
+    "token_file": "/home/mischa/.local/share/agent-workspace-bridge/tokens/mara"
+  },
+  "rook": {
+    "origin": "https://workspace.mischanelson.dev",
+    "workspace_agent_id": "e41446f8-4de5-444b-8be1-9fe1e824e496",
+    "agentos_id": "agent-6d3ae13adae94001843e66339ca519c5",
+    "token_file": "/home/mischa/.local/share/agent-workspace-bridge/tokens/rook"
+  },
+  "iona": {
+    "origin": "https://workspace.mischanelson.dev",
+    "workspace_agent_id": "4e33181b-2f66-496c-9980-b1348d405cd7",
+    "agentos_id": "agent-ec147a71799b4066b26e34f7ff618714",
+    "token_file": "/home/mischa/.local/share/agent-workspace-bridge/tokens/iona"
+  },
+  "sable": {
+    "origin": "https://workspace.mischanelson.dev",
+    "workspace_agent_id": "1ca41c6d-ab9c-4ad4-ae07-f938cfd54d69",
+    "agentos_id": "agent-e2902949afb042609e2aefee29c2580e",
+    "token_file": "/home/mischa/.local/share/agent-workspace-bridge/tokens/sable"
+  },
+  "moss": {
+    "origin": "https://workspace.mischanelson.dev",
+    "workspace_agent_id": "8957369c-8dc9-4535-bbd5-4d4c4da37ecb",
+    "agentos_id": "agent-ff1563ef644c463ab817e4b1ee161d46",
+    "token_file": "/home/mischa/.local/share/agent-workspace-bridge/tokens/moss"
+  }
+}
