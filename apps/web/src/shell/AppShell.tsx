@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 
 import type { SessionUser } from '../auth/session'
+import { DirectSidebar } from '../direct/DirectSidebar'
 import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { ProjectRail } from './ProjectRail'
@@ -26,6 +27,7 @@ function setInert(element: HTMLElement | null, inert: boolean) {
 export function AppShell({
   children,
   context,
+  direct = false,
   mainClassName = 'project-workspace',
   project = null,
   selectedChannelId,
@@ -34,6 +36,8 @@ export function AppShell({
 }: {
   children: ReactNode
   context?: ReactNode
+  /** Show the Messages sidebar (DMs and groups) instead of a Project's. */
+  direct?: boolean
   mainClassName?: string
   project?: Project | null
   selectedChannelId?: string
@@ -51,6 +55,7 @@ export function AppShell({
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const anyDrawerOpen = railOpen || sidebarOpen || contextOpen
   const realtime = useOptionalRealtime()
+  const hasSidebar = Boolean(project) || direct
 
   const closeDrawers = () => {
     setRailOpen(false)
@@ -160,7 +165,7 @@ export function AppShell({
   return (
     <div
       className="app-shell"
-      data-has-project={Boolean(project)}
+      data-has-project={hasSidebar}
       ref={shellRef}
     >
       <a
@@ -176,7 +181,7 @@ export function AppShell({
         onNavigate={closeDrawers}
         user={user}
       />
-      {project && (
+      {project ? (
         <ProjectSidebar
           mobileOpen={sidebarOpen}
           onNavigate={closeDrawers}
@@ -184,7 +189,9 @@ export function AppShell({
           selectedChannelId={selectedChannelId}
           thread={thread}
         />
-      )}
+      ) : direct ? (
+        <DirectSidebar mobileOpen={sidebarOpen} onNavigate={closeDrawers} />
+      ) : null}
       <main
         className={mainClassName}
         id="main-workspace"
@@ -205,7 +212,7 @@ export function AppShell({
           >
             Projects
           </button>
-          {project && (
+          {hasSidebar && (
             <button
               aria-controls="project-sidebar"
               aria-expanded={sidebarOpen}
@@ -217,10 +224,10 @@ export function AppShell({
               ref={sidebarButtonRef}
               type="button"
             >
-              {project.key} menu
+              {project ? `${project.key} menu` : 'Messages menu'}
             </button>
           )}
-          {project && context && (
+          {hasSidebar && context && (
             <button
               aria-controls="context-region"
               aria-expanded={contextOpen}
@@ -245,7 +252,7 @@ export function AppShell({
         )}
         {children}
       </main>
-      {project && context && (
+      {hasSidebar && context && (
         <div
           className="context-region"
           data-mobile-open={contextOpen}

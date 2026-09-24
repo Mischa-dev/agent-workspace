@@ -159,6 +159,38 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ReadStateUpdate
     ),
     policy_route!(
+        "conversations",
+        Post,
+        "/api/v1/conversations/{id}/messages",
+        MessageSend
+    ),
+    policy_route!("direct", Post, "/api/v1/direct/dms", ChannelCreate),
+    policy_route!("direct", Post, "/api/v1/direct/groups", ChannelCreate),
+    policy_route!(
+        "direct",
+        Post,
+        "/api/v1/conversations/{id}/members",
+        ChannelCreate
+    ),
+    policy_route!(
+        "direct",
+        Post,
+        "/api/v1/conversations/{id}/members/{actor_id}/remove",
+        ChannelCreate
+    ),
+    policy_route!(
+        "replies",
+        Post,
+        "/api/v1/conversations/{id}/continue",
+        MessageSend
+    ),
+    policy_route!(
+        "replies",
+        Post,
+        "/api/v1/reply-requests/{id}/retry",
+        MessageSend
+    ),
+    policy_route!(
         "repositories",
         Post,
         "/api/v1/projects/{project_id}/repositories",
@@ -276,6 +308,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "external_agents",
         Post,
         "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
+        ExternalAgentManage
+    ),
+    policy_route!(
+        "external_agents",
+        Post,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",
         ExternalAgentManage
     ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
@@ -410,6 +448,8 @@ mod tests {
         ("api", include_str!("api.rs")),
         ("auth", include_str!("auth/mod.rs")),
         ("conversations", include_str!("conversations.rs")),
+        ("direct", include_str!("direct.rs")),
+        ("replies", include_str!("replies.rs")),
         ("github", include_str!("github.rs")),
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),

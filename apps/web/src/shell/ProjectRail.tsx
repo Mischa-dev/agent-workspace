@@ -8,6 +8,7 @@ import {
   logout,
   type SessionUser,
 } from '../auth/session'
+import { useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
 import {
   useProjects,
@@ -49,6 +50,10 @@ export function ProjectRail({
   user: SessionUser
 }) {
   const projectsQuery = useProjects()
+  const direct = useDirectOverview()
+  const unreadConversations =
+    direct.data?.conversations.filter((conversation) => conversation.unread)
+      .length ?? 0
   const switchProject = useSwitchProject()
   const updateNavigation = useUpdateProjectNavigation()
   const queryClient = useQueryClient()
@@ -151,6 +156,23 @@ export function ProjectRail({
           to="/home"
         >
           A
+        </Link>
+        <Link
+          aria-current={
+            location.pathname.startsWith('/messages') ? 'page' : undefined
+          }
+          aria-label={`Messages${unreadConversations ? `, ${unreadConversations} unread` : ''}`}
+          className="project-button"
+          data-active={location.pathname.startsWith('/messages')}
+          onClick={onNavigate}
+          to="/messages"
+        >
+          <span aria-hidden="true">✉</span>
+          {unreadConversations > 0 && (
+            <span aria-hidden="true" className="rail-attention">
+              {unreadConversations > 9 ? '9+' : unreadConversations}
+            </span>
+          )}
         </Link>
         <div className="project-list" aria-label="Pinned and recent Projects">
           {projectsQuery.isPending && (

@@ -16,8 +16,8 @@ export type ExternalAgentConnection = {
   displayName: string
   handle: string
   role: ExternalAgentRole
-  runtimeKind: 'hermes'
-  runtimeVersion: '0.20.0'
+  runtimeKind: string
+  runtimeVersion: string
   scopes: ExternalAgentScope[]
   status: 'active' | 'disabled' | 'removed'
   version: number
@@ -27,6 +27,9 @@ export type ExternalAgentConnection = {
   removedAt: string | null
   createdAt: string
   updatedAt: string
+  webhookUrl?: string | null
+  lastWakeupAt?: string | null
+  lastWakeupError?: string | null
 }
 
 export type OneTimeCredential = {
@@ -98,5 +101,20 @@ export function removeExternalAgent(
   return requestJson<ExternalAgentMutation>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/external-agents/${encodeURIComponent(connectionId)}/remove`,
     { method: 'POST', json: { expectedVersion } },
+  )
+}
+
+/** Set (or clear, with null) where wakeups are sent. Returns a new signing secret. */
+export function setExternalAgentWebhook(
+  projectId: string,
+  connectionId: string,
+  url: string | null,
+) {
+  return requestJson<{
+    connection: ExternalAgentConnection
+    webhookSecret: string | null
+  }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/external-agents/${encodeURIComponent(connectionId)}/webhook`,
+    { method: 'POST', json: { url } },
   )
 }

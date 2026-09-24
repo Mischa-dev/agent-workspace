@@ -159,6 +159,15 @@ describe('ExternalAgentSettings', () => {
 
     renderSettings()
     await screen.findByText('No external agent connections have been created.')
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Hermes M9' },
+    })
+    fireEvent.change(screen.getByLabelText('Display name'), {
+      target: { value: 'Hermes teammate' },
+    })
+    fireEvent.change(screen.getByLabelText('Handle'), {
+      target: { value: 'hermes' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Connect external agent' }))
     expect(await screen.findByText(token)).toBeVisible()
     expect(paths.every((path) => !path.includes('aw_ext_'))).toBe(true)

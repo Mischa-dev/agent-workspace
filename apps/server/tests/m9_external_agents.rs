@@ -108,7 +108,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .to_owned();
     assert!(first_token.starts_with("aw_ext_"));
     assert_eq!(created["connection"]["handle"], "hermes_teammate");
-    assert_eq!(created["connection"]["runtimeVersion"], "0.20.0");
+    assert_eq!(created["connection"]["runtimeKind"], "mcp");
     assert_eq!(created["connection"]["version"], 1);
     assert_eq!(
         sqlx::query_scalar::<_, i64>(

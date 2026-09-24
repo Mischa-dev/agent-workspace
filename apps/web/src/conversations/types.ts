@@ -67,11 +67,13 @@ export type ConversationTimelineEntry = {
   workerEvent: ConversationWorkerEvent | null
 }
 
+export type ConversationKind = 'channel' | 'thread' | 'dm' | 'group'
+
 export type ConversationTimelinePage = {
   conversation: {
     id: string
     projectId: string
-    kind: 'channel' | 'thread'
+    kind: ConversationKind
     parentChannelId: string | null
     originMessageId: string | null
     name: string
@@ -92,6 +94,29 @@ export type ConversationTimelinePage = {
     archive: boolean
     markSeen: boolean
   }
+  /** DMs and groups: who has been asked to answer, and how it's going. */
+  replyRequests: ReplyRequest[]
+  /** Groups: agent messages left before a person has to say Continue. */
+  agentTurnsRemaining: number | null
+}
+
+export type ReplyRequestStatus =
+  | 'pending'
+  | 'claimed'
+  | 'replied'
+  | 'passed'
+  | 'released'
+  | 'expired'
+
+export type ReplyRequest = {
+  id: string
+  messageId: string
+  agent: ConversationActor
+  required: boolean
+  status: ReplyRequestStatus
+  reason: string | null
+  updatedAt: string
+  agentLastSeenAt: string | null
 }
 
 export type MentionSearchPage = {

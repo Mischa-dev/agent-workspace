@@ -31,6 +31,7 @@ use crate::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
         MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    replies::{self, ReplyRequestView},
 };
 
 // A valid v1 Message can contain 20,000 four-byte Unicode scalar values plus
@@ -62,6 +63,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/channels/{id}/messages", post(send_channel_message))
         .route("/api/v1/threads/{id}/messages", post(send_thread_message))
+        .route(
+            "/api/v1/conversations/{id}/messages",
+            post(send_direct_message),
+        )
         .route("/api/v1/channels/{id}/threads", post(create_thread))
         .route("/api/v1/channels/{id}/archive", post(archive_channel))
         .route("/api/v1/threads/{id}/archive", post(archive_thread))
@@ -85,10 +90,10 @@ struct ProjectAccessRow {
 }
 
 #[derive(Clone, Debug, FromRow)]
-struct ConversationAccessRow {
+pub(crate) struct ConversationAccessRow {
     id: Uuid,
-    project_id: Uuid,
-    kind: String,
+    pub(crate) project_id: Uuid,
+    pub(crate) kind: String,
     parent_channel_id: Option<Uuid>,
     origin_message_id: Option<Uuid>,
     name: String,
@@ -307,6 +312,8 @@ struct TimelineResponse {
     latest_terminal_run: Option<RunView>,
     approvals: Vec<ApprovalView>,
     capabilities: ConversationCapabilities,
+    reply_requests: Vec<ReplyRequestView>,
+    agent_turns_remaining: Option<i32>,
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -929,6 +936,34 @@ async fn send_thread_message(
     .await
 }
 
+async fn send_direct_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<SendMessageRequest>,
+) -> Result<Response, AppError> {
+    // DMs and groups have no kind-specific route. Access still goes through
+    // the shared visibility check in `lock_message_conversation`.
+    require_authenticated_write(&state, &headers, &principal)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let outcome = append_message_command(
+        &state,
+        MessageCommandActor {
+            actor_id: principal.actor_id,
+            actor_kind: principal.actor_kind.clone(),
+            mcp_credential: None,
+        },
+        conversation_id,
+        None,
+        idempotency_key,
+        request.content,
+        None,
+    )
+    .await?;
+    created_message_response(outcome.status, &outcome.body)
+}
+
 async fn send_message(
     state: &AppState,
     headers: &HeaderMap,
@@ -950,6 +985,7 @@ async fn send_message(
         Some(expected_kind),
         idempotency_key,
         request.content,
+        None,
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -968,6 +1004,13 @@ pub(crate) struct MessageMcpCredential {
     pub(crate) connection_id: Uuid,
 }
 
+/// Answer a claimed reply request with this message, atomically.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReplyCompletion {
+    pub(crate) request_id: Uuid,
+    pub(crate) generation: i32,
+}
+
 pub(crate) struct MessageAppendOutcome {
     pub(crate) status: StatusCode,
     pub(crate) body: MessageAppendResponse,
@@ -981,6 +1024,7 @@ pub(crate) async fn append_message_command(
     expected_kind: Option<&'static str>,
     idempotency_key: IdempotencyKey,
     content: serde_json::Value,
+    reply: Option<ReplyCompletion>,
 ) -> Result<MessageAppendOutcome, AppError> {
     let content = MessageContent::from_json(content).map_err(message_content_error)?;
     let request_hash = RequestHash::for_value(&content)?;
@@ -1216,12 +1260,36 @@ pub(crate) async fn append_message_command(
             worker_event: None,
         },
     };
+    if let Some(reply) = reply {
+        replies::complete_with_reply(
+            &mut transaction,
+            reply.request_id,
+            reply.generation,
+            actor.actor_id,
+            conversation.id,
+            message_id,
+        )
+        .await?;
+    }
     enqueue_external_message_events(
         &mut transaction,
         &conversation,
         actor.actor_id,
         message_id,
         &mentioned_actor_ids,
+    )
+    .await?;
+    replies::ask_for_replies(
+        &mut transaction,
+        replies::NewMessage {
+            project_id: conversation.project_id,
+            conversation_id: conversation.id,
+            conversation_kind: &conversation.kind,
+            message_id,
+            author_actor_id: actor.actor_id,
+            author_kind: &actor.actor_kind,
+            mentioned_actor_ids: &mentioned_actor_ids,
+        },
     )
     .await?;
     if let Some(mcp) = actor.mcp_credential {
@@ -1321,6 +1389,7 @@ async fn lock_message_conversation(
          AND membership.actor_id = $2
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.id = $1
+          AND conversation_visible_to(conversation.id, $2)
           AND actor.kind = $3 AND actor.status = 'active'
           AND (
               -- Browser authentication, including the loopback-only development
@@ -1409,10 +1478,10 @@ async fn enqueue_external_message_events(
     .bind(author_actor_id)
     .fetch_all(&mut **transaction)
     .await?;
-    let kind = if conversation.kind == "thread" {
-        "threads"
-    } else {
-        "channels"
+    let kind = match conversation.kind.as_str() {
+        "thread" => "threads",
+        "channel" => "channels",
+        _ => "messages",
     };
     for (connection_id, _) in connections {
         enqueue_external_event(
@@ -1423,10 +1492,14 @@ async fn enqueue_external_message_events(
             "You were mentioned in a Message",
             "message",
             message_id,
-            &format!(
-                "/projects/{}/{kind}/{}",
-                conversation.project_id, conversation.id
-            ),
+            &if kind == "messages" {
+                format!("/messages/{}", conversation.id)
+            } else {
+                format!(
+                    "/projects/{}/{kind}/{}",
+                    conversation.project_id, conversation.id
+                )
+            },
         )
         .await?;
     }
@@ -1596,6 +1669,14 @@ async fn conversation_timeline(
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
+    let (reply_requests, agent_turns_remaining) =
+        if matches!(conversation.kind.as_str(), "dm" | "group") {
+            let (requests, remaining) =
+                replies::timeline_requests(&state.pool, conversation.id).await?;
+            (requests, Some(remaining))
+        } else {
+            (Vec::new(), None)
+        };
     Ok(Json(TimelineResponse {
         conversation: ConversationView::from(&conversation),
         linked_work_items,
@@ -1607,6 +1688,8 @@ async fn conversation_timeline(
         latest_terminal_run,
         approvals,
         capabilities,
+        reply_requests,
+        agent_turns_remaining,
     }))
 }
 
@@ -2390,6 +2473,7 @@ async fn fetch_conversation_access(
          AND membership.actor_id = $2
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.id = $1
+          AND conversation_visible_to(conversation.id, $2)
         "#,
     )
     .bind(conversation_id)
@@ -2398,7 +2482,7 @@ async fn fetch_conversation_access(
     .await?)
 }
 
-async fn lock_conversation_access(
+pub(crate) async fn lock_conversation_access(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &AuthenticatedActor,
     conversation_id: Uuid,
@@ -2432,6 +2516,7 @@ async fn lock_conversation_access(
          AND membership.actor_id = $2
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.id = $1
+          AND conversation_visible_to(conversation.id, $2)
         FOR UPDATE OF conversation
         FOR SHARE OF project, organization_membership, membership
         "#,
@@ -3078,7 +3163,7 @@ async fn fetch_run_projection(
     Ok((active_run, latest_terminal_run, approvals))
 }
 
-async fn enqueue_event(
+pub(crate) async fn enqueue_event(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     payload: OutboxEventPayload,
@@ -3151,7 +3236,7 @@ fn database_constraint(error: &sqlx::Error) -> Option<&str> {
     }
 }
 
-fn normalize_conversation_name(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_conversation_name(value: &str) -> Result<String, AppError> {
     let name = value.trim();
     if name.is_empty()
         || name.chars().count() > MAX_CONVERSATION_NAME_CHARACTERS
@@ -3224,7 +3309,7 @@ fn decode_mention_cursor(value: &str) -> Result<MentionCursor, AppError> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn insert_audit_event(
+pub(crate) async fn insert_audit_event(
     transaction: &mut Transaction<'_, Postgres>,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,

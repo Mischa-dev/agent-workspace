@@ -22,6 +22,8 @@ const RETRY_MAX_SECONDS: u64 = 300;
 pub enum OutboxConversationKind {
     Channel,
     Thread,
+    Dm,
+    Group,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +67,19 @@ pub struct ConversationCreatedPayload {
     pub conversation_id: Uuid,
     pub kind: OutboxConversationKind,
     pub version: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUpdatedPayload {
+    pub conversation_id: Uuid,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyRequestsUpdatedPayload {
+    pub conversation_id: Uuid,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -119,6 +134,8 @@ pub struct ProjectMembershipUpdatedPayload {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
+    ConversationUpdated(ConversationUpdatedPayload),
+    ReplyRequestsUpdated(ReplyRequestsUpdatedPayload),
     ConversationArchived(ConversationArchivedPayload),
     MessageCreated(MessageCreatedPayload),
     ReadStateUpdated(ReadStateUpdatedPayload),
@@ -131,6 +148,8 @@ impl OutboxEventPayload {
     pub fn event_type(&self) -> &'static str {
         match self {
             Self::ConversationCreated(_) => "conversation.created",
+            Self::ConversationUpdated(_) => "conversation.updated",
+            Self::ReplyRequestsUpdated(_) => "conversation.reply_requests.updated",
             Self::ConversationArchived(_) => "conversation.archived",
             Self::MessageCreated(_) => "conversation.message.created",
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
@@ -143,6 +162,8 @@ impl OutboxEventPayload {
     pub fn conversation_id(&self) -> Option<Uuid> {
         match self {
             Self::ConversationCreated(payload) => Some(payload.conversation_id),
+            Self::ConversationUpdated(payload) => Some(payload.conversation_id),
+            Self::ReplyRequestsUpdated(payload) => Some(payload.conversation_id),
             Self::ConversationArchived(payload) => Some(payload.conversation_id),
             Self::MessageCreated(payload) => Some(payload.conversation_id),
             Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
@@ -163,9 +184,10 @@ impl OutboxEventPayload {
 
     pub fn resource_kind(&self) -> OutboxResourceKind {
         match self {
-            Self::ConversationCreated(_) | Self::ConversationArchived(_) => {
-                OutboxResourceKind::Conversation
-            }
+            Self::ConversationCreated(_)
+            | Self::ConversationUpdated(_)
+            | Self::ReplyRequestsUpdated(_)
+            | Self::ConversationArchived(_) => OutboxResourceKind::Conversation,
             Self::MessageCreated(_) => OutboxResourceKind::Message,
             Self::ReadStateUpdated(_) => OutboxResourceKind::ReadState,
             Self::AgentRunUpdated(_) => OutboxResourceKind::AgentRun,
@@ -177,6 +199,8 @@ impl OutboxEventPayload {
     pub fn resource_id(&self) -> Uuid {
         match self {
             Self::ConversationCreated(payload) => payload.conversation_id,
+            Self::ConversationUpdated(payload) => payload.conversation_id,
+            Self::ReplyRequestsUpdated(payload) => payload.conversation_id,
             Self::ConversationArchived(payload) => payload.conversation_id,
             Self::MessageCreated(payload) => payload.message_id,
             // Read state is keyed by Conversation and Actor. The envelope
@@ -194,6 +218,9 @@ impl OutboxEventPayload {
         }
         match self {
             Self::ConversationCreated(payload) if payload.version < 1 => {
+                Err(OutboxEventError::MalformedPayload)
+            }
+            Self::ConversationUpdated(payload) if payload.version < 1 => {
                 Err(OutboxEventError::MalformedPayload)
             }
             Self::ConversationArchived(payload) if payload.version < 1 => {
@@ -230,6 +257,8 @@ impl OutboxEventPayload {
         self.validate()?;
         let value = match self {
             Self::ConversationCreated(payload) => serde_json::to_value(payload),
+            Self::ConversationUpdated(payload) => serde_json::to_value(payload),
+            Self::ReplyRequestsUpdated(payload) => serde_json::to_value(payload),
             Self::ConversationArchived(payload) => serde_json::to_value(payload),
             Self::MessageCreated(payload) => serde_json::to_value(payload),
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
@@ -246,6 +275,12 @@ impl OutboxEventPayload {
         validate_payload_size(&value)?;
         let payload = match event_type {
             "conversation.created" => Self::ConversationCreated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "conversation.updated" => Self::ConversationUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "conversation.reply_requests.updated" => Self::ReplyRequestsUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.archived" => Self::ConversationArchived(

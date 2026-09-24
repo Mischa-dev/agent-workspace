@@ -6,6 +6,7 @@ pub mod auth;
 pub mod bootstrap;
 pub mod config;
 pub mod conversations;
+pub mod direct;
 pub mod domain;
 pub mod error;
 pub mod execution;
@@ -30,6 +31,7 @@ pub mod provider;
 pub mod rate_limit;
 pub mod realtime;
 pub mod recovery;
+pub mod replies;
 pub mod repositories;
 pub mod retention;
 pub mod scheduler;
@@ -80,6 +82,8 @@ pub fn router(state: AppState) -> Router {
         .merge(api::router())
         .merge(account::router())
         .merge(conversations::router())
+        .merge(direct::router())
+        .merge(replies::router())
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(github::router())
@@ -120,6 +124,11 @@ pub fn router(state: AppState) -> Router {
             HeaderValue::from_static(
                 "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; worker-src 'none'",
             ),
+        ))
+        // Browsers only honor this over HTTPS, so it is harmless on loopback.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=31536000"),
         ))
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-content-type-options"),

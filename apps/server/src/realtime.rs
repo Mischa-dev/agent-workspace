@@ -444,6 +444,7 @@ async fn event_is_authorized(
                   FROM conversations c
                   WHERE c.id = $3
                     AND c.project_id = pm.project_id
+                    AND conversation_visible_to(c.id, pm.actor_id)
               )
           )
         "#,

@@ -14,6 +14,9 @@ use crate::error::AppError;
 const WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_ATTEMPTS_PER_WINDOW: u32 = 10;
 const GLOBAL_LOGIN_ATTEMPTS_PER_WINDOW: u32 = 60;
+// The app is reachable from the internet, so cap slow password guessing too.
+const LOGIN_ATTEMPTS_PER_HOUR: u32 = 30;
+const HOUR: Duration = Duration::from_secs(3_600);
 const AUTHENTICATED_WRITES_PER_WINDOW: u32 = 240;
 const EXPENSIVE_READS_PER_WINDOW: u32 = 120;
 const INVITATION_ATTEMPTS_PER_WINDOW: u32 = 20;
@@ -32,6 +35,7 @@ const CONCURRENT_PASSWORD_KDFS: usize = 2;
 #[derive(Clone)]
 pub struct RateLimiters {
     login: FixedWindowLimiter<[u8; 32]>,
+    login_hourly: FixedWindowLimiter<[u8; 32]>,
     global_login: FixedWindowLimiter<()>,
     authenticated_writes: FixedWindowLimiter<Uuid>,
     expensive_reads: FixedWindowLimiter<Uuid>,
@@ -52,7 +56,8 @@ impl RateLimiters {
             .check(())
             .map_err(AppError::rate_limited)?;
         let key: [u8; 32] = Sha256::digest(normalized_login.as_bytes()).into();
-        self.login.check(key).map_err(AppError::rate_limited)
+        self.login.check(key).map_err(AppError::rate_limited)?;
+        self.login_hourly.check(key).map_err(AppError::rate_limited)
     }
 
     pub fn try_acquire_password_kdf(&self) -> Result<OwnedSemaphorePermit, AppError> {
@@ -120,6 +125,7 @@ impl Default for RateLimiters {
     fn default() -> Self {
         Self {
             login: FixedWindowLimiter::new(LOGIN_ATTEMPTS_PER_WINDOW, WINDOW, MAX_LOGIN_KEYS),
+            login_hourly: FixedWindowLimiter::new(LOGIN_ATTEMPTS_PER_HOUR, HOUR, MAX_LOGIN_KEYS),
             global_login: FixedWindowLimiter::new(GLOBAL_LOGIN_ATTEMPTS_PER_WINDOW, WINDOW, 1),
             authenticated_writes: FixedWindowLimiter::new(
                 AUTHENTICATED_WRITES_PER_WINDOW,

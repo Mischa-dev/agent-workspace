@@ -5,6 +5,9 @@ import {
 } from './messageContentModel'
 import type {
   ConversationActor,
+  ConversationKind,
+  ReplyRequest,
+  ReplyRequestStatus,
   ConversationMessage,
   ConversationTimelineEntry,
   ConversationTimelinePage,
@@ -167,6 +170,13 @@ function normalizeTimelineEntry(
   }
 }
 
+const conversationKindLabel: Record<ConversationKind, string> = {
+  channel: 'Channel',
+  thread: 'Thread',
+  dm: 'Direct message',
+  group: 'Group',
+}
+
 export function normalizeTimelinePage(value: unknown): ConversationTimelinePage {
   const root = asRecord(value)
   const conversation = asRecord(root.conversation)
@@ -175,7 +185,7 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
   if (
     typeof conversation.id !== 'string' ||
     typeof conversation.projectId !== 'string' ||
-    (kind !== 'channel' && kind !== 'thread')
+    (kind !== 'channel' && kind !== 'thread' && kind !== 'dm' && kind !== 'group')
   ) {
     throw new Error('Timeline response is missing its Conversation boundary.')
   }
@@ -192,7 +202,7 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       kind,
       parentChannelId: nullableString(conversation.parentChannelId),
       originMessageId: nullableString(conversation.originMessageId),
-      name: string(conversation.name, kind === 'channel' ? 'Channel' : 'Thread'),
+      name: string(conversation.name, conversationKindLabel[kind]),
       archivedAt: nullableString(conversation.archivedAt),
       version: Math.max(1, integer(conversation.version, 1)),
     },
@@ -217,7 +227,61 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       archive: capability(root.capabilities, 'archive'),
       markSeen: capability(root.capabilities, 'markSeen'),
     },
+    replyRequests: Array.isArray(root.replyRequests)
+      ? root.replyRequests
+          .map(normalizeReplyRequest)
+          .filter((request): request is ReplyRequest => request !== null)
+      : [],
+    agentTurnsRemaining: Number.isSafeInteger(root.agentTurnsRemaining)
+      ? (root.agentTurnsRemaining as number)
+      : null,
   }
+}
+
+const replyStatuses: ReplyRequestStatus[] = [
+  'pending',
+  'claimed',
+  'replied',
+  'passed',
+  'released',
+  'expired',
+]
+
+function normalizeReplyRequest(value: unknown): ReplyRequest | null {
+  const record = asRecord(value)
+  const agent = normalizeConversationActor(record.agent)
+  if (
+    typeof record.id !== 'string' ||
+    typeof record.messageId !== 'string' ||
+    !agent ||
+    !replyStatuses.includes(record.status as ReplyRequestStatus)
+  ) {
+    return null
+  }
+  return {
+    id: record.id,
+    messageId: record.messageId,
+    agent,
+    required: record.required === true,
+    status: record.status as ReplyRequestStatus,
+    reason: nullableString(record.reason),
+    updatedAt: string(record.updatedAt),
+    agentLastSeenAt: nullableString(record.agentLastSeenAt),
+  }
+}
+
+export async function continueConversation(conversationId: string) {
+  await requestJson<unknown>(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}/continue`,
+    { method: 'POST' },
+  )
+}
+
+export async function retryReplyRequest(requestId: string) {
+  await requestJson<unknown>(
+    `/api/v1/reply-requests/${encodeURIComponent(requestId)}/retry`,
+    { method: 'POST' },
+  )
 }
 
 export async function getConversationTimeline(
@@ -238,11 +302,16 @@ export async function getConversationTimeline(
 
 export async function sendConversationMessage(input: {
   conversationId: string
-  kind: 'channel' | 'thread'
+  kind: ConversationKind
   content: MessageContentV1
   idempotencyKey: string
 }) {
-  const collection = input.kind === 'channel' ? 'channels' : 'threads'
+  const collection =
+    input.kind === 'channel'
+      ? 'channels'
+      : input.kind === 'thread'
+        ? 'threads'
+        : 'conversations'
   return requestJson<unknown>(
     `/api/v1/${collection}/${encodeURIComponent(input.conversationId)}/messages`,
     {

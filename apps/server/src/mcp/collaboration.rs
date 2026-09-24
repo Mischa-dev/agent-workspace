@@ -197,13 +197,13 @@ struct BoundCursor {
 }
 
 #[derive(Debug, FromRow)]
-struct ConnectionAuthorization {
+pub(super) struct ConnectionAuthorization {
     signing_key: Vec<u8>,
     membership_role: String,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum ReadFailure {
+pub(super) enum ReadFailure {
     Authorization,
     Invalid,
     NotFound,
@@ -255,15 +255,20 @@ async fn conversation_list_inner(
                conversation.name,
                conversation.version,
                conversation.next_entry_sequence - 1 AS highest_sequence,
-               '/projects/' || conversation.project_id::text || '/' ||
-                 CASE WHEN conversation.kind = 'thread' THEN 'threads/' ELSE 'channels/' END ||
-                 conversation.id::text AS canonical_path
+               CASE
+                 WHEN conversation.kind IN ('dm', 'group')
+                   THEN '/messages/' || conversation.id::text
+                 ELSE '/projects/' || conversation.project_id::text || '/' ||
+                   CASE WHEN conversation.kind = 'thread' THEN 'threads/' ELSE 'channels/' END ||
+                   conversation.id::text
+               END AS canonical_path
         FROM conversations conversation
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.project_id = $1
           AND conversation.archived_at IS NULL
           AND (conversation.kind = 'channel' OR parent.archived_at IS NULL)
           AND ($2::uuid IS NULL OR conversation.id > $2)
+          AND conversation_visible_to(conversation.id, $4)
         ORDER BY conversation.id
         LIMIT $3
         "#,
@@ -271,6 +276,7 @@ async fn conversation_list_inner(
     .bind(principal.project_id)
     .bind(after_id)
     .bind(limit + 1)
+    .bind(principal.actor_id)
     .fetch_all(&mut *transaction)
     .await
     .map_err(|_| ReadFailure::Database("conversation_list_fetch"))?;
@@ -331,18 +337,24 @@ async fn conversation_timeline_inner(
                conversation.name,
                conversation.version,
                conversation.next_entry_sequence - 1 AS highest_sequence,
-               '/projects/' || conversation.project_id::text || '/' ||
-                 CASE WHEN conversation.kind = 'thread' THEN 'threads/' ELSE 'channels/' END ||
-                 conversation.id::text AS canonical_path
+               CASE
+                 WHEN conversation.kind IN ('dm', 'group')
+                   THEN '/messages/' || conversation.id::text
+                 ELSE '/projects/' || conversation.project_id::text || '/' ||
+                   CASE WHEN conversation.kind = 'thread' THEN 'threads/' ELSE 'channels/' END ||
+                   conversation.id::text
+               END AS canonical_path
         FROM conversations conversation
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.id = $1 AND conversation.project_id = $2
           AND conversation.archived_at IS NULL
           AND (conversation.kind = 'channel' OR parent.archived_at IS NULL)
+          AND conversation_visible_to(conversation.id, $3)
         "#,
     )
     .bind(conversation_id)
     .bind(principal.project_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|_| ReadFailure::Database("conversation_timeline_access"))?
@@ -592,6 +604,7 @@ pub(super) async fn conversation_message_send(
         None,
         idempotency_key,
         content,
+        None,
     )
     .await
     {
@@ -624,7 +637,7 @@ pub(super) async fn conversation_message_send(
     }
 }
 
-async fn begin_authorized_read<'a>(
+pub(super) async fn begin_authorized_read<'a>(
     state: &'a AppState,
     principal: &McpPrincipal,
     required_scope: &str,
