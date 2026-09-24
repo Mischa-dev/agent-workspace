@@ -1,0 +1,174 @@
+:root {
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --font-size-xs: 0.6875rem;
+  --font-size-sm: 0.75rem;
+  --font-size-md: 0.875rem;
+  --font-size-lg: 1rem;
+  --font-size-xl: 1.1875rem;
+  --line-compact: 1.3;
+  --line-body: 1.55;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-pill: 999px;
+  --shadow-popover: 0 8px 8px oklch(0.08 0.02 253 / 0.34);
+  --shadow-dialog: 0 8px 8px oklch(0.06 0.02 253 / 0.46);
+
+  --motion-fast: 120ms;
+  --motion-standard: 180ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --layer-sticky: 20;
+  --layer-dropdown: 40;
+  --layer-backdrop: 60;
+  --layer-modal: 70;
+  --layer-toast: 80;
+  --layer-tooltip: 90;
+
+  --layout-rail: 4rem;
+  --layout-sidebar: 15.5rem;
+  --layout-context: 18rem;
+  --layout-content-max: 76rem;
+}
+
+:root[data-theme="dark"] {
+  --color-canvas: oklch(0.155 0.014 253);
+  --color-rail: oklch(0.125 0.012 253);
+  --color-sidebar: oklch(0.178 0.015 253);
+  --color-surface: oklch(0.202 0.016 253);
+  --color-surface-raised: oklch(0.238 0.019 253);
+  --color-surface-selected: oklch(0.285 0.046 244);
+  --color-border-subtle: oklch(0.265 0.016 253);
+  --color-border: oklch(0.335 0.02 253);
+  --color-border-strong: oklch(0.425 0.024 253);
+  --color-text: oklch(0.955 0.008 253);
+  --color-text-secondary: oklch(0.79 0.018 253);
+  --color-text-muted: oklch(0.69 0.024 253);
+  --color-accent: oklch(0.72 0.105 244);
+  --color-accent-strong: oklch(0.63 0.13 244);
+  --color-accent-ink: oklch(0.15 0.03 244);
+  --color-focus: oklch(0.78 0.12 238);
+  --color-info: oklch(0.75 0.1 244);
+  --color-success: oklch(0.76 0.115 155);
+  --color-warning: oklch(0.8 0.14 76);
+  --color-danger: oklch(0.72 0.16 24);
+  --color-overlay: oklch(0.07 0.012 253 / 0.76);
+  --color-on-danger: oklch(0.97 0.01 24);
+
+  --identity-human: oklch(0.78 0.08 244);
+  --identity-external-agent: oklch(0.79 0.11 310);
+  --identity-worker: oklch(0.78 0.12 155);
+  --identity-system: oklch(0.74 0.025 253);
+}
+
+:root[data-theme="light"] {
+  --color-canvas: oklch(0.975 0.006 253);
+  --color-rail: oklch(0.93 0.012 253);
+  --color-sidebar: oklch(0.955 0.009 253);
+  --color-surface: oklch(0.995 0.002 253);
+  --color-surface-raised: oklch(0.945 0.012 253);
+  --color-surface-selected: oklch(0.9 0.045 244);
+  --color-border-subtle: oklch(0.875 0.016 253);
+  --color-border: oklch(0.79 0.023 253);
+  --color-border-strong: oklch(0.64 0.03 253);
+  --color-text: oklch(0.22 0.025 253);
+  --color-text-secondary: oklch(0.39 0.028 253);
+  --color-text-muted: oklch(0.47 0.026 253);
+  --color-accent: oklch(0.55 0.14 244);
+  --color-accent-strong: oklch(0.47 0.145 244);
+  --color-accent-ink: oklch(0.985 0.004 244);
+  --color-focus: oklch(0.49 0.17 244);
+  --color-info: oklch(0.51 0.14 244);
+  --color-success: oklch(0.47 0.13 155);
+  --color-warning: oklch(0.5 0.14 65);
+  --color-danger: oklch(0.52 0.17 24);
+  --color-overlay: oklch(0.18 0.018 253 / 0.58);
+  --color-on-danger: oklch(0.99 0.004 24);
+
+  --identity-human: oklch(0.45 0.13 244);
+  --identity-external-agent: oklch(0.47 0.14 310);
+  --identity-worker: oklch(0.42 0.13 155);
+  --identity-system: oklch(0.43 0.03 253);
+}
+
+:root[data-density="compact"] {
+  --density-row: 2.25rem;
+  --density-control: 2rem;
+  --density-gap: 0.375rem;
+  --density-pad-x: 0.625rem;
+  --density-pad-y: 0.375rem;
+}
+
+:root[data-density="comfortable"] {
+  --density-row: 2.75rem;
+  --density-control: 2.5rem;
+  --density-gap: 0.5rem;
+  --density-pad-x: 0.75rem;
+  --density-pad-y: 0.5rem;
+}
+
+:root[data-density="spacious"] {
+  --density-row: 3.25rem;
+  --density-control: 2.75rem;
+  --density-gap: 0.75rem;
+  --density-pad-x: 0.875rem;
+  --density-pad-y: 0.625rem;
+}
+
+:root[data-theme] {
+  --bg: var(--color-canvas);
+  --rail: var(--color-rail);
+  --panel: var(--color-surface);
+  --panel-raised: var(--color-surface-raised);
+  --line: var(--color-border);
+  --line-soft: var(--color-border-subtle);
+  --line-strong: var(--color-border-strong);
+  --text: var(--color-text);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  --accent: var(--color-accent);
+  --accent-strong: var(--color-accent-strong);
+  --accent-ink: var(--color-accent-ink);
+  --warning: var(--color-warning);
+  --danger: var(--color-danger);
+  --success: var(--color-success);
+}
+
+@media (max-width: 760px) {
+  :root[data-density] {
+    --density-row: 2.75rem;
+    --density-control: 2.75rem;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --color-canvas: Canvas;
+    --color-rail: Canvas;
+    --color-sidebar: Canvas;
+    --color-surface: Canvas;
+    --color-surface-raised: Canvas;
+    --color-surface-selected: Highlight;
+    --color-border-subtle: CanvasText;
+    --color-border: CanvasText;
+    --color-border-strong: CanvasText;
+    --color-text: CanvasText;
+    --color-text-secondary: CanvasText;
+    --color-text-muted: CanvasText;
+    --color-accent: Highlight;
+    --color-accent-strong: Highlight;
+    --color-accent-ink: HighlightText;
+    --color-focus: Highlight;
+  }
+}

@@ -206,4 +206,37 @@ describe('AppShell responsive drawers', () => {
     expect(projectsButton).toHaveAttribute('aria-expanded', 'false')
     expect(projectsButton).toHaveFocus()
   })
+
+  it('opens context as a labelled modal and restores the Details trigger', async () => {
+    render(
+      <AppShell
+        context={
+          <aside aria-label="Project context" className="context-drawer">
+            <button type="button">Context action</button>
+          </aside>
+        }
+        project={project}
+        user={user}
+      >
+        <button type="button">Main action</button>
+      </AppShell>,
+    )
+
+    const detailsButton = screen.getByRole('button', { name: 'Details' })
+    fireEvent.click(detailsButton)
+
+    expect(screen.getByRole('dialog', { name: 'Details' })).toHaveAttribute(
+      'aria-modal',
+      'true',
+    )
+    expect(document.querySelector('#main-workspace')).toHaveAttribute('inert')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Close Details' })).toHaveFocus(),
+    )
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'false')
+    expect(detailsButton).toHaveFocus()
+    expect(document.querySelector('#main-workspace')).not.toHaveAttribute('inert')
+  })
 })

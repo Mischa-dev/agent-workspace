@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import { useProjectSearch } from './hooks'
 import { projectLocationHref } from './locations'
@@ -42,6 +43,12 @@ export function ProjectSwitcher({
 
   useEffect(() => {
     searchRef.current?.focus()
+    const applicationRoot = document.querySelector<HTMLElement>('#root')
+    const applicationWasInert = applicationRoot?.hasAttribute('inert') ?? false
+    applicationRoot?.setAttribute('inert', '')
+    return () => {
+      if (!applicationWasInert) applicationRoot?.removeAttribute('inert')
+    }
   }, [])
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -69,7 +76,7 @@ export function ProjectSwitcher({
     }
   }
 
-  return (
+  return createPortal(
     <div
       className="switcher-backdrop"
       onMouseDown={(event) => {
@@ -175,7 +182,8 @@ export function ProjectSwitcher({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

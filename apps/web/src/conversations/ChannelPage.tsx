@@ -399,9 +399,16 @@ function ConversationEntry({
       <article className={`message ${worker ? 'worker-message' : ''}`}>
         <header>
           <span className="avatar" aria-hidden="true">
-            {worker ? 'A' : entry.message.author.displayName.charAt(0)}
+            {worker
+              ? 'W'
+              : entry.message.author.kind === 'external_agent'
+                ? 'E'
+                : entry.message.author.displayName.charAt(0)}
           </span>
           <strong>@{entry.message.author.handle}</strong>
+          <span className="identity-kind">
+            {entry.message.author.kind.replaceAll('_', ' ')}
+          </span>
           <time dateTime={entry.createdAt}>
             {new Date(entry.createdAt).toLocaleTimeString([], {
               hour: 'numeric',

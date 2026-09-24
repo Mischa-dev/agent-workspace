@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   BrowserRouter,
@@ -6,22 +6,27 @@ import {
   Route,
   Routes,
   useNavigate,
+  useParams,
 } from 'react-router-dom'
 
 import { SessionBoundary } from '../auth/SessionBoundary'
-import { SignInPage } from '../auth/SignInPage'
-import { JoinPage } from '../invitations/JoinPage'
 import { useAuthenticatedSession } from '../auth/session'
-import { CreateProjectPage } from '../projects/CreateProjectPage'
-import { ChannelPage } from '../conversations/ChannelPage'
-import { ConversationArchivePage } from '../conversations/ConversationArchivePage'
-import { HomePage } from '../projects/HomePage'
-import { ProjectOverviewPage } from '../projects/ProjectOverviewPage'
-import { ProjectSettingsPage } from '../projects/ProjectSettingsPage'
+import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
-import { ThreadPage } from '../threads/ThreadPage'
-import { WorkItemDetailPage } from '../work-items/WorkItemDetailPage'
-import { WorkItemsPage } from '../work-items/WorkItemsPage'
+import { ThemeProvider } from '../theme/ThemeProvider'
+import { AppErrorBoundary } from './AppErrorBoundary'
+
+const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
+const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
+const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
+const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
+const ConversationArchivePage = lazy(() => import('../conversations/ConversationArchivePage').then((module) => ({ default: module.ConversationArchivePage })))
+const HomePage = lazy(() => import('../projects/HomePage').then((module) => ({ default: module.HomePage })))
+const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })))
+const ProjectSettingsPage = lazy(() => import('../projects/ProjectSettingsPage').then((module) => ({ default: module.ProjectSettingsPage })))
+const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => ({ default: module.ThreadPage })))
+const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
+const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
 
 function createQueryClient() {
   return new QueryClient({
@@ -40,48 +45,157 @@ function createQueryClient() {
 export function App() {
   const [queryClient] = useState(createQueryClient)
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<SignInPage />} path="/sign-in" />
-          <Route element={<JoinPage />} path="/join" />
-          <Route element={<SessionBoundary />}>
-            <Route element={<Navigate replace to="/home" />} path="/" />
-            <Route element={<HomePage />} path="/home" />
-            <Route element={<CreateProjectPage />} path="/projects/new" />
-            <Route
-              element={<ProjectOverviewPage />}
-              path="/projects/:projectId"
-            />
-            <Route
-              element={<ProjectSettingsPage />}
-              path="/projects/:projectId/settings"
-            />
-            <Route
-              element={<WorkItemsPage />}
-              path="/projects/:projectId/work-items"
-            />
-            <Route
-              element={<WorkItemDetailPage />}
-              path="/projects/:projectId/work-items/:workItemId"
-            />
-            <Route
-              element={<ChannelPage />}
-              path="/projects/:projectId/channels/:channelId"
-            />
-            <Route
-              element={<ConversationArchivePage />}
-              path="/projects/:projectId/conversations/archived"
-            />
-            <Route
-              element={<ThreadPage />}
-              path="/projects/:projectId/threads/:threadId"
-            />
-            <Route element={<NotFoundPage />} path="*" />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AppErrorBoundary>
+            <Routes>
+              <Route
+                element={
+                  <PublicRouteBoundary>
+                    <SignInPage />
+                  </PublicRouteBoundary>
+                }
+                path="/sign-in"
+              />
+              <Route
+                element={
+                  <PublicRouteBoundary>
+                    <JoinPage />
+                  </PublicRouteBoundary>
+                }
+                path="/join"
+              />
+              <Route element={<SessionBoundary />}>
+                <Route element={<Navigate replace to="/home" />} path="/" />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <HomePage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/home"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <CreateProjectPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/new"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ProjectOverviewPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ProjectSettingsPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/settings"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <WorkItemsPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/work-items"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <WorkItemDetailPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/work-items/:workItemId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ChannelPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/channels/:channelId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ConversationArchivePage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/conversations/archived"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <ThreadPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/threads/:threadId"
+                />
+                <Route element={<NotFoundPage />} path="*" />
+              </Route>
+            </Routes>
+          </AppErrorBoundary>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
+  )
+}
+
+function PublicRouteBoundary({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<PublicRouteFallback />}>{children}</Suspense>
+}
+
+export function AuthenticatedRouteBoundary({
+  children,
+}: {
+  children: ReactNode
+}) {
+  return (
+    <Suspense fallback={<AuthenticatedRouteFallback />}>
+      {children}
+    </Suspense>
+  )
+}
+
+function PublicRouteFallback() {
+  return (
+    <main aria-busy="true" className="session-state">
+      <div aria-hidden="true" className="brand-mark">A</div>
+      <p>Opening…</p>
+    </main>
+  )
+}
+
+function AuthenticatedRouteFallback() {
+  const session = useAuthenticatedSession()
+  const { projectId = '' } = useParams()
+  const projects = useProjects()
+  const project =
+    projects.data?.projects.find((candidate) => candidate.id === projectId) ??
+    null
+
+  return (
+    <AppShell project={project} user={session.user}>
+      <div aria-busy="true" className="page-content">
+        <p className="visually-hidden" role="status">
+          Loading workspace view.
+        </p>
+        <div aria-hidden="true" className="page-skeleton">
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+    </AppShell>
   )
 }
 

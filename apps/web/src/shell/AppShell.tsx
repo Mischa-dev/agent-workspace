@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 
 import type { SessionUser } from '../auth/session'
 import type { Project } from '../projects/types'
+import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
 
@@ -41,35 +42,45 @@ export function AppShell({
 }) {
   const [railOpen, setRailOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
   const shellRef = useRef<HTMLDivElement>(null)
   const railButtonRef = useRef<HTMLButtonElement>(null)
   const sidebarButtonRef = useRef<HTMLButtonElement>(null)
+  const contextButtonRef = useRef<HTMLButtonElement>(null)
+  const contextCloseButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const anyDrawerOpen = railOpen || sidebarOpen
+  const anyDrawerOpen = railOpen || sidebarOpen || contextOpen
+  const realtime = useOptionalRealtime()
 
   const closeDrawers = () => {
     setRailOpen(false)
     setSidebarOpen(false)
+    setContextOpen(false)
   }
+
+  const returnFocus = useCallback(() =>
+    railOpen
+      ? railButtonRef.current
+      : sidebarOpen
+        ? sidebarButtonRef.current
+        : contextButtonRef.current
+  , [railOpen, sidebarOpen])
 
   useEffect(() => {
     if (!anyDrawerOpen) return
     const activeDrawer = shellRef.current?.querySelector<HTMLElement>(
-      railOpen ? '#project-rail' : '#project-sidebar',
+      railOpen
+        ? '#project-rail'
+        : sidebarOpen
+          ? '#project-sidebar'
+          : '#context-region',
     )
 
     const handleDrawerKeyDown = (event: KeyboardEvent) => {
-      const modalDialog = shellRef.current?.querySelector<HTMLElement>(
-        '[role="dialog"][aria-modal="true"]',
-      )
-      if (modalDialog) return
-
       if (event.key === 'Escape') {
-        const returnFocus = railOpen
-          ? railButtonRef.current
-          : sidebarButtonRef.current
+        const trigger = returnFocus()
         closeDrawers()
-        window.requestAnimationFrame(() => returnFocus?.focus())
+        window.requestAnimationFrame(() => trigger?.focus())
         return
       }
 
@@ -102,39 +113,49 @@ export function AppShell({
     }
     document.addEventListener('keydown', handleDrawerKeyDown)
     return () => document.removeEventListener('keydown', handleDrawerKeyDown)
-  }, [anyDrawerOpen, railOpen])
+  }, [anyDrawerOpen, contextOpen, railOpen, returnFocus, sidebarOpen])
 
   useEffect(() => {
     const rail = shellRef.current?.querySelector<HTMLElement>('#project-rail') ?? null
     const sidebar =
       shellRef.current?.querySelector<HTMLElement>('#project-sidebar') ?? null
-    const contextDrawers = Array.from(
-      shellRef.current?.querySelectorAll<HTMLElement>(':scope > .context-drawer') ??
-        [],
-    )
+    const contextRegion =
+      shellRef.current?.querySelector<HTMLElement>('#context-region') ?? null
+    const contextDrawer =
+      contextRegion?.querySelector<HTMLElement>('.context-drawer') ?? null
 
     setInert(rail, anyDrawerOpen && !railOpen)
     setInert(sidebar, anyDrawerOpen && !sidebarOpen)
-    contextDrawers.forEach((drawer) => setInert(drawer, anyDrawerOpen))
+    setInert(contextRegion, anyDrawerOpen && !contextOpen)
+    setInert(contextDrawer, anyDrawerOpen && !contextOpen)
 
     return () => {
       setInert(rail, false)
       setInert(sidebar, false)
-      contextDrawers.forEach((drawer) => setInert(drawer, false))
+      setInert(contextRegion, false)
+      setInert(contextDrawer, false)
     }
-  }, [anyDrawerOpen, railOpen, sidebarOpen])
+  }, [anyDrawerOpen, contextOpen, railOpen, sidebarOpen])
 
   useEffect(() => {
-    if (railOpen) {
-      document
-        .querySelector<HTMLElement>('#project-rail a, #project-rail button')
-        ?.focus()
-    } else if (sidebarOpen) {
-      document
-        .querySelector<HTMLElement>('#project-sidebar a, #project-sidebar button')
-        ?.focus()
-    }
-  }, [railOpen, sidebarOpen])
+    if (!railOpen && !sidebarOpen && !contextOpen) return
+    const focusTimer = window.setTimeout(() => {
+      if (railOpen) {
+        document
+          .querySelector<HTMLElement>('#project-rail a, #project-rail button')
+          ?.focus()
+      } else if (sidebarOpen) {
+        document
+          .querySelector<HTMLElement>('#project-sidebar a, #project-sidebar button')
+          ?.focus()
+      } else if (contextOpen) {
+        const contextRegion = document.querySelector<HTMLElement>('#context-region')
+        const focusTarget = contextCloseButtonRef.current ?? contextRegion
+        focusTarget?.focus()
+      }
+    }, 50)
+    return () => window.clearTimeout(focusTimer)
+  }, [contextOpen, railOpen, sidebarOpen])
 
   return (
     <div
@@ -170,12 +191,13 @@ export function AppShell({
         inert={anyDrawerOpen}
         tabIndex={-1}
       >
-        <div className="mobile-toolbar">
+        <div className="mobile-toolbar" data-has-context={Boolean(context)}>
           <button
             aria-controls="project-rail"
             aria-expanded={railOpen}
             onClick={() => {
               setSidebarOpen(false)
+              setContextOpen(false)
               setRailOpen((open) => !open)
             }}
             ref={railButtonRef}
@@ -189,6 +211,7 @@ export function AppShell({
               aria-expanded={sidebarOpen}
               onClick={() => {
                 setRailOpen(false)
+                setContextOpen(false)
                 setSidebarOpen((open) => !open)
               }}
               ref={sidebarButtonRef}
@@ -197,20 +220,67 @@ export function AppShell({
               {project.key} menu
             </button>
           )}
+          {project && context && (
+            <button
+              aria-controls="context-region"
+              aria-expanded={contextOpen}
+              className="details-trigger"
+              onClick={() => {
+                setRailOpen(false)
+                setSidebarOpen(false)
+                setContextOpen((open) => !open)
+              }}
+              ref={contextButtonRef}
+              type="button"
+            >
+              Details
+            </button>
+          )}
         </div>
+        {realtime?.connection === 'retrying' && (
+          <div className="shell-connection-banner" role="status">
+            <span aria-hidden="true">↻</span>
+            Live updates are reconnecting. Durable workspace state is being rechecked.
+          </div>
+        )}
         {children}
       </main>
-      {project && context}
+      {project && context && (
+        <div
+          className="context-region"
+          data-mobile-open={contextOpen}
+          id="context-region"
+          role={contextOpen ? 'dialog' : undefined}
+          aria-label={contextOpen ? 'Details' : undefined}
+          aria-modal={contextOpen || undefined}
+          tabIndex={-1}
+        >
+          {contextOpen && (
+            <button
+              aria-label="Close Details"
+              autoFocus
+              className="context-close-button"
+              onClick={() => {
+                setContextOpen(false)
+                window.requestAnimationFrame(() => contextButtonRef.current?.focus())
+              }}
+              ref={contextCloseButtonRef}
+              type="button"
+            >
+              ×
+            </button>
+          )}
+          {context}
+        </div>
+      )}
       {anyDrawerOpen && (
         <button
-          aria-label="Close navigation"
+          aria-label={contextOpen ? 'Dismiss Details' : 'Close navigation'}
           className="drawer-backdrop"
           onClick={() => {
-            const returnFocus = railOpen
-              ? railButtonRef.current
-              : sidebarButtonRef.current
+            const trigger = returnFocus()
             closeDrawers()
-            window.requestAnimationFrame(() => returnFocus?.focus())
+            window.requestAnimationFrame(() => trigger?.focus())
           }}
           ref={closeButtonRef}
           type="button"

@@ -16,6 +16,7 @@ import {
   resolveInvitation,
   type ResolvedInvitation,
 } from './api'
+import { AppearanceControl } from '../shell/AppearanceControl'
 
 type JoinMode = 'new' | 'existing'
 
@@ -144,6 +145,9 @@ export function JoinPage() {
 
   return (
     <main className="sign-in-page join-page">
+      <div className="public-appearance">
+        <AppearanceControl />
+      </div>
       <section aria-labelledby="join-heading" className="sign-in-panel join-panel">
         <div className="brand-mark" aria-hidden="true">A</div>
         <div>
