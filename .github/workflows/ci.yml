@@ -12,34 +12,20 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Both jobs run on the self-hosted runner on the Red Hat host. It already has
+# the pinned Rust toolchain (rust-toolchain.toml), Node 24.18.1 and pnpm on its
+# PATH, and a PostgreSQL 18.4 test database; the tests isolate themselves in
+# per-run schemas. The repository is private, so only collaborators can start
+# jobs here.
 jobs:
   rust:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        env:
-          POSTGRES_DB: agent_workspace_test
-          POSTGRES_PASSWORD: agent_workspace_test
-          POSTGRES_USER: agent_workspace_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U agent_workspace_test -d agent_workspace_test"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 20
+    runs-on: [self-hosted, redhat-aw]
     env:
-      AGENT_WORKSPACE_DATABASE_URL: postgres://agent_workspace_test:agent_workspace_test@127.0.0.1:5432/agent_workspace_test
+      AGENT_WORKSPACE_DATABASE_URL: postgres://aw_test:aw_test@127.0.0.1:55433/aw_ci
       AGENT_WORKSPACE_ENV: test
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # dtolnay/rust-toolchain stable, pinned 2026-07-30
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: 1.97.1
-          components: clippy,rustfmt
       - run: cargo fmt --check
       - run: ./tools/verify-self-hosted-guide.sh
       - run: python3 tools/hermes-connector/verify-fixtures.py
@@ -49,20 +35,10 @@ jobs:
       - run: cargo deny check
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, redhat-aw]
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      # pnpm/action-setup v4.1.0
-      - uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
-        with:
-          version: 11.18.0
-          run_install: false
-      # actions/setup-node v7.0.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24.18.1
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
