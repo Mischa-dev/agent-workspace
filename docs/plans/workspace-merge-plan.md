@@ -1,8 +1,9 @@
 # Plan: make Agent Workspace the one app
 
-September 24, 2026. Agent Workspace (this Rust repo) becomes the only app. The
-TypeScript "Workspace" app at workspace.mischanelson.dev stays live until this
-one can do everything Mischa uses it for. After that it is retired.
+September 24, 2026. Agent Workspace (this Rust repo) is now the only app.
+It serves workspace.mischanelson.dev. The TypeScript "Workspace" app still runs
+privately on the Red Hat host (127.0.0.1:4310), with its data untouched, but it
+is no longer on the internet.
 
 This plan replaces the milestone ceremony in `PROJECT_SOURCE_OF_TRUTH.md` for
 new work. That document stays as history and as a reference for how existing
@@ -10,25 +11,29 @@ code behaves.
 
 ## Status (September 24, 2026)
 
-- **Phase 0:** mostly done. Minecraft servers stopped (18 GB of RAM free), so
-  there's no swapfile. The dev loop is rsync to `~bot/dev/agent-workspace`,
-  with a separate test Postgres on port 55433 (`aw-dev-postgres`). `AGENTS.md`
-  is trimmed. The PR #88 merge is waiting on the owner: GitHub Actions can't
-  run, so branch protection blocks it.
-- **Phase 1:** built. Migration 0037, `direct.rs`, the `/messages` pages, and
-  the visibility rule in every conversation access path.
-- **Phase 2:** built. Migration 0038 adds reply requests and webhooks
-  (`replies.rs`, `mcp/replies.rs`, reply status in the conversation page).
-  Migration 0039 adds OAuth sign-in as an agent.
-- **Phase 3:** in progress. Release `phase3-20260924` is live on Red Hat at
-  `https://redhat.tail6b11cc.ts.net:8447` (Tailscale only), with a database
-  backup in `/var/backups/agent-workspace/`. Mara, Rook, Iona, Sable and Moss
-  exist in the Messages space. They were created by `direct-agent-create`,
-  and their tokens live only on Nyx. Nyx runs `aw-crew@<agent>.timer` (every
-  5 minutes) plus `aw-crew-wakeup.service` on 100.119.56.3:8732, and signed
-  wakeups were checked end to end. The old `workspace-crew@` bridge still
-  serves the old app. Still to do: the public hostname (needs the owner's OK
-  for a DNS record), Muse over OAuth, committing and pushing, and CI.
+- **Phases 0 to 2:** done. DMs and groups (migration 0037, `direct.rs`,
+  `/messages`), reply requests and webhooks (0038, `replies.rs`,
+  `mcp/replies.rs`), and OAuth sign-in as an agent (0039).
+- **Live:** `https://workspace.mischanelson.dev`, through `workspace-tunnel.service`
+  (`/etc/cloudflared/workspace.yml` points at 127.0.0.1:3100). It's also on
+  Tailscale at `https://redhat.tail6b11cc.ts.net:8447`. Releases go out with
+  `deploy/redhat/deploy-dev-checkout.sh <label>`, which keeps a database backup
+  and the previous release. Daily dumps come from
+  `agent-workspace-daily-backup.timer` into `/var/backups/agent-workspace/`
+  and are never deleted automatically.
+- **Hardening for the public hostname:** the old test accounts are disabled,
+  login is capped at 10 a minute and 30 an hour per account, HSTS is on, and
+  rustls is at 0.23.45 (RUSTSEC-2026-0285).
+- **Crew:** Mara, Rook, Iona, Sable and Moss live in the Messages space
+  (created by `direct-agent-create`, tokens only on Nyx). Nyx runs
+  `aw-crew@<agent>.timer` (every 5 minutes) plus `aw-crew-wakeup.service` on
+  100.119.56.3:8732. The old `workspace-crew@` timers are disabled but still
+  installed.
+- **CI:** runs on the self-hosted runner `redhat-aw` (user `aw-runner`, memory
+  capped, private /tmp) with the `aw_ci` database in `aw-dev-postgres`.
+  GitHub-hosted runners don't start for this account.
+- **Next:** reconnect Muse through OAuth ("Muse (agent)" on the consent page),
+  copy the 10 vision tasks from the old app, then Phase 4.
 
 ## What we're building toward
 
