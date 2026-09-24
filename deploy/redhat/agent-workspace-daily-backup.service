@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Agent Workspace database backup
+After=agent-workspace.service
+
+[Service]
+Type=oneshot
+UMask=0077
+WorkingDirectory=/tmp
+# Custom-format dump, written to a temporary name and renamed once complete.
+# Old backups are kept; delete them by hand when you want the space.
+ExecStart=/usr/bin/bash -c 'set -euo pipefail; out=/var/backups/agent-workspace/daily-$(date +%%F).dump; PGDATABASE=agent_workspace /opt/agent-workspace/current/bin/agent-workspace-pg-dump --format=custom > "$out.partial"; test -s "$out.partial"; mv "$out.partial" "$out"'

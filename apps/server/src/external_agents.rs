@@ -24,9 +24,11 @@ use crate::{
 
 const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
-const CREDENTIAL_LIFETIME_DAYS: i32 = 30;
-const RUNTIME_KIND: &str = "hermes";
-const RUNTIME_VERSION: &str = "0.20.0";
+// Long-lived because scheduled agents run unattended; rotate from Agents.
+const CREDENTIAL_LIFETIME_DAYS: i32 = 365;
+// Informational label; any client that speaks the MCP contract can connect.
+const RUNTIME_KIND: &str = "mcp";
+const RUNTIME_VERSION: &str = "1";
 const ALLOWED_SCOPES: [&str; 5] = [
     "approval_respond",
     "events",
@@ -52,6 +54,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/external-agents/{connection_id}/remove",
             post(remove_connection),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",
+            post(set_webhook),
         )
 }
 
@@ -85,6 +91,9 @@ struct ConnectionRow {
     removed_at: Option<String>,
     created_at: String,
     updated_at: String,
+    webhook_url: Option<String>,
+    last_wakeup_at: Option<String>,
+    last_wakeup_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +142,9 @@ struct ConnectionView {
     removed_at: Option<String>,
     created_at: String,
     updated_at: String,
+    webhook_url: Option<String>,
+    last_wakeup_at: Option<String>,
+    last_wakeup_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,10 +196,6 @@ async fn create_connection(
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let normalized = validate_create(request)?;
-    let (token, token_prefix, token_digest) = generate_token();
-    let actor_id = Uuid::now_v7();
-    let connection_id = Uuid::now_v7();
-    let credential_id = Uuid::now_v7();
     let mut transaction = state.pool.begin().await?;
     lock_project(&mut transaction, project_id).await?;
     let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
@@ -197,10 +205,59 @@ async fn create_connection(
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }
+    let created = insert_agent(
+        &mut transaction,
+        access.organization_id,
+        project_id,
+        principal.actor_id,
+        &normalized,
+    )
+    .await?;
+    insert_audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        created.connection_id,
+        "external_agent.created",
+        serde_json::json!({
+            "actor_id": created.actor_id,
+            "role": normalized.role,
+            "runtime_kind": RUNTIME_KIND,
+            "runtime_version": RUNTIME_VERSION,
+            "scopes": normalized.scopes,
+        }),
+    )
+    .await?;
+    let row = load_connection_tx(&mut transaction, project_id, created.connection_id).await?;
+    transaction.commit().await?;
+    Ok(Json(ConnectionMutationResponse {
+        connection: row.into(),
+        one_time_credential: Some(created.credential),
+    }))
+}
 
+struct CreatedAgent {
+    actor_id: Uuid,
+    connection_id: Uuid,
+    credential: OneTimeCredential,
+}
+
+/// Create the agent's Actor, memberships, connection, and first credential.
+async fn insert_agent(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    project_id: Uuid,
+    created_by: Uuid,
+    normalized: &NormalizedCreate,
+) -> Result<CreatedAgent, AppError> {
+    let (token, token_prefix, token_digest) = generate_token();
+    let actor_id = Uuid::now_v7();
+    let connection_id = Uuid::now_v7();
+    let credential_id = Uuid::now_v7();
     sqlx::query("INSERT INTO actors (id, kind) VALUES ($1, 'external_agent')")
         .bind(actor_id)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     sqlx::query(
         r#"
@@ -208,9 +265,9 @@ async fn create_connection(
         VALUES ($1, $2, 'member')
         "#,
     )
-    .bind(access.organization_id)
+    .bind(organization_id)
     .bind(actor_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query(
         r#"
@@ -226,8 +283,8 @@ async fn create_connection(
     .bind(&normalized.role)
     .bind(&normalized.display_name)
     .bind(&normalized.handle)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
+    .bind(created_by)
+    .execute(&mut **transaction)
     .await
     .map_err(map_database_error)?;
     sqlx::query(
@@ -245,12 +302,12 @@ async fn create_connection(
     .bind(RUNTIME_KIND)
     .bind(RUNTIME_VERSION)
     .bind(&normalized.scopes)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
+    .bind(created_by)
+    .execute(&mut **transaction)
     .await
     .map_err(map_database_error)?;
     let expires_at = insert_credential(
-        &mut transaction,
+        transaction,
         credential_id,
         project_id,
         actor_id,
@@ -262,7 +319,7 @@ async fn create_connection(
     )
     .await?;
     enqueue_external_event(
-        &mut transaction,
+        transaction,
         connection_id,
         project_id,
         "connection.created",
@@ -272,33 +329,108 @@ async fn create_connection(
         &format!("/projects/{project_id}/settings"),
     )
     .await?;
-    insert_audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
+    Ok(CreatedAgent {
+        actor_id,
         connection_id,
-        "external_agent.created",
-        serde_json::json!({
-            "actor_id": actor_id,
-            "role": normalized.role,
-            "runtime_kind": RUNTIME_KIND,
-            "runtime_version": RUNTIME_VERSION,
-            "scopes": normalized.scopes,
-        }),
-    )
-    .await?;
-    let row = load_connection_tx(&mut transaction, project_id, connection_id).await?;
-    transaction.commit().await?;
-    Ok(Json(ConnectionMutationResponse {
-        connection: row.into(),
-        one_time_credential: Some(OneTimeCredential {
+        credential: OneTimeCredential {
             id: credential_id,
             token,
             token_prefix,
             expires_at,
-        }),
-    }))
+        },
+    })
+}
+
+/// Host command support: point a connection's wakeups at `url` and return the
+/// new signing secret.
+pub async fn set_webhook_for_host(
+    pool: &sqlx::PgPool,
+    connection_id: Uuid,
+    url: &str,
+) -> Result<String, AppError> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
+    if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
+        return Err(AppError::Validation("webhook URL"));
+    }
+    let secret = crate::replies::new_webhook_secret();
+    let updated = sqlx::query(
+        r#"
+        UPDATE external_agent_connections
+        SET webhook_url = $2, webhook_secret = $3, version = version + 1, updated_at = now()
+        WHERE id = $1 AND status = 'active'
+        "#,
+    )
+    .bind(connection_id)
+    .bind(url)
+    .bind(&secret)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::NotFound("external agent connection"));
+    }
+    Ok(secret)
+}
+
+/// An agent created from the host command line.
+#[derive(Debug)]
+pub struct ProvisionedAgent {
+    pub actor_id: Uuid,
+    pub connection_id: Uuid,
+    pub token: String,
+    pub expires_at: String,
+}
+
+/// Create an agent without a browser session, on behalf of `owner_actor_id`
+/// (who must be able to manage agents in the Project). Used by the
+/// `direct-agent-create` host command so tokens go straight to a file.
+pub async fn provision(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    owner_actor_id: Uuid,
+    display_name: &str,
+    handle: &str,
+) -> Result<ProvisionedAgent, AppError> {
+    let normalized = validate_create(CreateConnectionRequest {
+        connection_name: display_name.to_owned(),
+        display_name: display_name.to_owned(),
+        handle: handle.to_owned(),
+        role: "member".to_owned(),
+        scopes: vec!["read".to_owned(), "write".to_owned(), "events".to_owned()],
+    })?;
+    let mut transaction = pool.begin().await?;
+    lock_project(&mut transaction, project_id).await?;
+    let (organization_id, owner_role) = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT project.organization_id, membership.role
+        FROM projects project
+        JOIN project_memberships membership
+          ON membership.project_id = project.id AND membership.actor_id = $2
+        WHERE project.id = $1 AND project.archived_at IS NULL AND membership.enabled
+        "#,
+    )
+    .bind(project_id)
+    .bind(owner_actor_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("project"))?;
+    if !matches!(owner_role.as_str(), "owner" | "admin") {
+        return Err(AppError::Forbidden);
+    }
+    let created = insert_agent(
+        &mut transaction,
+        organization_id,
+        project_id,
+        owner_actor_id,
+        &normalized,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(ProvisionedAgent {
+        actor_id: created.actor_id,
+        connection_id: created.connection_id,
+        token: created.credential.token,
+        expires_at: created.credential.expires_at,
+    })
 }
 
 async fn update_connection(
@@ -337,6 +469,83 @@ async fn update_connection(
     )
     .await
     .map(Json)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WebhookRequest {
+    /// Where to send wakeups, or null to stop them.
+    url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebhookResponse {
+    connection: ConnectionView,
+    /// Shown once so the agent can verify signatures.
+    webhook_secret: Option<String>,
+}
+
+/// Set or clear the connection's wakeup webhook. Each change issues a new
+/// signing secret.
+async fn set_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
+    ApiJson(request): ApiJson<WebhookRequest>,
+) -> Result<Json<WebhookResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let url = request
+        .url
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty());
+    if let Some(url) = &url {
+        let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
+        if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
+            return Err(AppError::Validation("webhook URL"));
+        }
+    }
+    let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
+    let mut transaction = state.pool.begin().await?;
+    lock_project(&mut transaction, project_id).await?;
+    let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_management(&principal, &access, project_id)?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE external_agent_connections
+        SET webhook_url = $3, webhook_secret = $4, last_wakeup_error = NULL,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND status <> 'removed'
+        "#,
+    )
+    .bind(project_id)
+    .bind(connection_id)
+    .bind(&url)
+    .bind(&secret)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::NotFound("external agent connection"));
+    }
+    insert_audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        connection_id,
+        "external_agent.webhook_updated",
+        serde_json::json!({ "enabled": url.is_some() }),
+    )
+    .await?;
+    let row = load_connection_tx(&mut transaction, project_id, connection_id).await?;
+    transaction.commit().await?;
+    Ok(Json(WebhookResponse {
+        connection: row.into(),
+        webhook_secret: secret,
+    }))
 }
 
 async fn rotate_credential(
@@ -812,7 +1021,8 @@ fn connection_query(lock: bool) -> &'static str {
                c.last_used_at::text AS last_used_at,
                c.last_error_category, c.disabled_at::text AS disabled_at,
                c.removed_at::text AS removed_at, c.created_at::text AS created_at,
-               c.updated_at::text AS updated_at
+               c.updated_at::text AS updated_at, c.webhook_url,
+               c.last_wakeup_at::text AS last_wakeup_at, c.last_wakeup_error
         FROM external_agent_connections c
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
@@ -827,7 +1037,8 @@ fn connection_query(lock: bool) -> &'static str {
                c.last_used_at::text AS last_used_at,
                c.last_error_category, c.disabled_at::text AS disabled_at,
                c.removed_at::text AS removed_at, c.created_at::text AS created_at,
-               c.updated_at::text AS updated_at
+               c.updated_at::text AS updated_at, c.webhook_url,
+               c.last_wakeup_at::text AS last_wakeup_at, c.last_wakeup_error
         FROM external_agent_connections c
         JOIN project_memberships pm
           ON pm.project_id = c.project_id AND pm.actor_id = c.actor_id
@@ -1049,6 +1260,9 @@ impl From<ConnectionRow> for ConnectionView {
             removed_at: row.removed_at,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            webhook_url: row.webhook_url,
+            last_wakeup_at: row.last_wakeup_at,
+            last_wakeup_error: row.last_wakeup_error,
         }
     }
 }

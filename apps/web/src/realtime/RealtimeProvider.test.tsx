@@ -75,10 +75,11 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
   })
 
   it('coalesces bounded legacy provider deltas without creating another socket', async () => {

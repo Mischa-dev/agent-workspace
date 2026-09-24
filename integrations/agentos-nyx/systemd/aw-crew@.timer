@@ -1,0 +1,12 @@
+[Unit]
+Description=Fallback inbox check for AgentOS crew member %i (wakeups usually arrive first)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=aw-crew@%i.service
+
+[Install]
+WantedBy=timers.target

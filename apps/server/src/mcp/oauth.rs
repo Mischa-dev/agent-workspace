@@ -47,7 +47,11 @@ pub fn router() -> Router<AppState> {
 }
 
 fn public_origin(state: &AppState) -> String {
-    format!("http://{}", state.config.server_addr)
+    state
+        .config
+        .public_origin
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", state.config.server_addr))
 }
 
 #[derive(Serialize)]
@@ -133,11 +137,11 @@ async fn register_client(
     validate_client_name(&request.client_name)?;
     if request.redirect_uris.is_empty() || request.redirect_uris.len() > 8 {
         return Err(OAuthError::invalid_client_metadata(
-            "one to eight loopback redirect URIs are required",
+            "one to eight redirect URIs are required",
         ));
     }
     for redirect_uri in &request.redirect_uris {
-        validate_loopback_redirect(redirect_uri)?;
+        validate_redirect(redirect_uri)?;
     }
     if request
         .token_endpoint_auth_method
@@ -301,7 +305,32 @@ async fn authorize(
     let csrf = csrf_cookie(&headers)
         .ok_or_else(|| OAuthError::access_denied("the browser session is missing CSRF state"))?;
     let scope = scopes.join(" ");
-    let project_controls = if projects.len() == 1 {
+    let agents = agent_choices(&state, principal.actor_id).await?;
+    let project_controls = if !agents.is_empty() {
+        let agent_options = agents
+            .iter()
+            .map(|agent| {
+                format!(
+                    "<label><input required type=radio name=connect_as value=\"agent:{}\"> {} (agent) in {}</label><br>",
+                    agent.connection_id,
+                    escape_html(&agent.display_name),
+                    escape_html(&agent.project_name)
+                )
+            })
+            .collect::<String>();
+        let self_options = projects
+            .iter()
+            .map(|project| {
+                format!(
+                    "<label><input required type=radio name=connect_as value=\"self:{}\"> You ({}) in {}</label><br>",
+                    project.id,
+                    escape_html(&principal.display_name),
+                    escape_html(&project.name)
+                )
+            })
+            .collect::<String>();
+        format!("<fieldset><legend>Connect as</legend>{agent_options}{self_options}</fieldset>")
+    } else if projects.len() == 1 {
         format!(
             "<input type=hidden name=project_id value=\"{}\"><p><strong>Project:</strong> {} ({})</p>",
             projects[0].id,
@@ -313,7 +342,7 @@ async fn authorize(
         format!("<fieldset><legend>Choose one Project</legend>{choices}</fieldset>")
     };
     let html = format!(
-        "<!doctype html><html><head><meta charset=utf-8><title>Authorize Codex</title></head><body><main><h1>Authorize {}</h1><p>This local Codex client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {}.</p><form method=post action=/oauth/authorize>{}{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
+        "<!doctype html><html><head><meta charset=utf-8><title>Authorize</title></head><body><main><h1>Authorize {}</h1><p>This client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {} unless you connect it as one of your agents.</p><form method=post action=/oauth/authorize>{}{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
         escape_html(&client.client_name),
         escape_html(&scope),
         escape_html(&principal.display_name),
@@ -333,7 +362,9 @@ struct ConsentRequest {
     code_challenge: String,
     code_challenge_method: String,
     resource: Option<String>,
-    project_id: String,
+    project_id: Option<String>,
+    /// "self:<project id>" or "agent:<connection id>".
+    connect_as: Option<String>,
     csrf_token: String,
     decision: String,
 }
@@ -371,12 +402,32 @@ async fn consent(
             "access_denied",
         );
     }
-    let project_id = form
-        .project_id
-        .parse::<Uuid>()
-        .map_err(|_| OAuthError::access_denied("invalid Project selection"))?;
-    let membership = sqlx::query_scalar::<_, bool>(
-        r#"SELECT EXISTS(
+    let selection = form
+        .connect_as
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| form.project_id.as_deref().map(|id| format!("self:{id}")))
+        .ok_or_else(|| OAuthError::access_denied("choose who to connect as"))?;
+    let (project_id, actor_id, connection_id) = if let Some(connection) =
+        selection.strip_prefix("agent:")
+    {
+        let connection_id = connection
+            .parse::<Uuid>()
+            .map_err(|_| OAuthError::access_denied("invalid agent selection"))?;
+        let (project_id, agent_actor_id) = managed_agent(&state, principal.actor_id, connection_id)
+            .await?
+            .ok_or_else(|| OAuthError::access_denied("that agent is not available"))?;
+        (project_id, agent_actor_id, Some(connection_id))
+    } else {
+        let project_id = selection
+            .strip_prefix("self:")
+            .and_then(|id| id.parse::<Uuid>().ok())
+            .ok_or_else(|| OAuthError::access_denied("invalid Project selection"))?;
+        (project_id, principal.actor_id, None)
+    };
+    let membership = connection_id.is_some()
+        || sqlx::query_scalar::<_, bool>(
+            r#"SELECT EXISTS(
             SELECT 1 FROM projects p
             JOIN project_memberships pm ON pm.project_id = p.id
             JOIN organization_memberships om
@@ -388,12 +439,12 @@ async fn consent(
             WHERE p.id = $1 AND pm.actor_id = $2 AND p.archived_at IS NULL
               AND pm.enabled AND a.kind = 'human' AND a.status = 'active'
         )"#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(AppError::from)?;
+        )
+        .bind(project_id)
+        .bind(principal.actor_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(AppError::from)?;
     if !membership {
         return Err(OAuthError::access_denied(
             "the selected Project is not available",
@@ -404,18 +455,19 @@ async fn consent(
     sqlx::query(
         r#"INSERT INTO mcp_oauth_authorization_codes (
             id, client_id, project_id, actor_id, redirect_uri, scopes,
-            code_prefix, code_digest, code_challenge
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
+            code_prefix, code_digest, code_challenge, external_agent_connection_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
     )
     .bind(Uuid::now_v7())
     .bind(client.id)
     .bind(project_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .bind(&request.redirect_uri)
     .bind(&scopes)
     .bind(prefix)
     .bind(digest.to_vec())
     .bind(&request.code_challenge)
+    .bind(connection_id)
     .execute(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -426,7 +478,7 @@ async fn consent(
         .query_pairs_mut()
         .append_pair("code", &code)
         .append_pair("state", &request.state);
-    Ok(Redirect::to(redirect.as_str()).into_response())
+    Ok(redirect_to_client(&redirect))
 }
 
 async fn validate_authorize_request(
@@ -440,7 +492,7 @@ async fn validate_authorize_request(
     }
     validate_state(&request.state)?;
     validate_code_challenge(&request.code_challenge)?;
-    validate_loopback_redirect(&request.redirect_uri)?;
+    validate_redirect(&request.redirect_uri)?;
     if let Some(resource) = &request.resource
         && resource != &format!("{}{MCP_PATH}", public_origin(state))
     {
@@ -518,6 +570,7 @@ struct CodeRow {
     client_id: Uuid,
     project_id: Uuid,
     actor_id: Uuid,
+    external_agent_connection_id: Option<Uuid>,
     redirect_uri: String,
     scopes: Vec<String>,
     code_digest: Vec<u8>,
@@ -547,14 +600,13 @@ async fn exchange_code(
     let row = sqlx::query_as::<_, CodeRow>(
         r#"
         SELECT code.id, code.client_id, code.project_id, code.actor_id,
+               code.external_agent_connection_id,
                code.redirect_uri, code.scopes, code.code_digest, code.code_challenge
         FROM mcp_oauth_authorization_codes code
         JOIN mcp_oauth_clients client ON client.id = code.client_id
         JOIN projects project ON project.id = code.project_id
         JOIN actors actor ON actor.id = code.actor_id
-        JOIN users user_account
-          ON user_account.actor_id = code.actor_id
-         AND user_account.status = 'active'
+        LEFT JOIN users user_account ON user_account.actor_id = code.actor_id
         JOIN project_memberships membership
           ON membership.project_id = code.project_id AND membership.actor_id = code.actor_id
         JOIN organization_memberships organization_membership
@@ -563,7 +615,13 @@ async fn exchange_code(
          AND organization_membership.enabled
         WHERE code.code_prefix = $1 AND code.used_at IS NULL AND code.expires_at > now()
           AND client.status = 'active' AND project.archived_at IS NULL
-          AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
+          AND actor.status = 'active' AND membership.enabled
+          AND (
+              (actor.kind = 'human' AND user_account.status = 'active'
+               AND code.external_agent_connection_id IS NULL)
+              OR
+              (actor.kind = 'external_agent' AND code.external_agent_connection_id IS NOT NULL)
+          )
         FOR UPDATE OF code
     "#,
     )
@@ -593,13 +651,77 @@ async fn exchange_code(
         .execute(&mut *transaction)
         .await
         .map_err(AppError::from)?;
+    let backing_credential_id = match row.external_agent_connection_id {
+        Some(connection_id) => {
+            Some(create_backing_credential(&mut transaction, &row, connection_id).await?)
+        }
+        None => None,
+    };
     let grant_id = Uuid::now_v7();
-    sqlx::query("INSERT INTO mcp_oauth_grants (id, client_id, project_id, actor_id, scopes) VALUES ($1,$2,$3,$4,$5)")
-        .bind(grant_id).bind(client_id).bind(row.project_id).bind(row.actor_id).bind(&row.scopes)
-        .execute(&mut *transaction).await.map_err(AppError::from)?;
+    sqlx::query(
+        r#"INSERT INTO mcp_oauth_grants (
+            id, client_id, project_id, actor_id, scopes,
+            external_agent_connection_id, backing_credential_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7)"#,
+    )
+    .bind(grant_id)
+    .bind(client_id)
+    .bind(row.project_id)
+    .bind(row.actor_id)
+    .bind(&row.scopes)
+    .bind(row.external_agent_connection_id)
+    .bind(backing_credential_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(AppError::from)?;
     let response = issue_token_pair(&mut transaction, grant_id, &row.scopes).await?;
     transaction.commit().await.map_err(AppError::from)?;
     Ok(response)
+}
+
+/// An agent credential whose secret is never issued. It lets an OAuth grant
+/// pass the same checks as the agent's own bearer credentials, and it is
+/// revoked with them when the connection is disabled, rotated, or removed.
+async fn create_backing_credential(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &CodeRow,
+    connection_id: Uuid,
+) -> Result<Uuid, OAuthError> {
+    let scopes = sqlx::query_scalar::<_, Vec<String>>(
+        r#"
+        SELECT scopes FROM external_agent_connections
+        WHERE id = $1 AND project_id = $2 AND actor_id = $3 AND status = 'active'
+        FOR SHARE
+        "#,
+    )
+    .bind(connection_id)
+    .bind(row.project_id)
+    .bind(row.actor_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AppError::from)?
+    .ok_or_else(|| OAuthError::invalid_grant("the agent connection is no longer active"))?;
+    let (_unused_secret, prefix, digest) = generate_secret("aw_ext_");
+    let credential_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO mcp_client_credentials (
+            id, project_id, actor_id, client_name, token_prefix, token_digest,
+            scopes, expires_at, external_agent_connection_id
+        ) VALUES ($1, $2, $3, 'OAuth grant', $4, $5, $6, now() + interval '10 years', $7)
+        "#,
+    )
+    .bind(credential_id)
+    .bind(row.project_id)
+    .bind(row.actor_id)
+    .bind(prefix)
+    .bind(digest.to_vec())
+    .bind(&scopes)
+    .bind(connection_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AppError::from)?;
+    Ok(credential_id)
 }
 
 #[derive(FromRow)]
@@ -630,9 +752,9 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
         JOIN projects project ON project.id = grant_row.project_id
         JOIN actors actor ON actor.id = grant_row.actor_id
-        JOIN users user_account
-          ON user_account.actor_id = grant_row.actor_id
-         AND user_account.status = 'active'
+        LEFT JOIN users user_account ON user_account.actor_id = grant_row.actor_id
+        LEFT JOIN external_agent_connections connection
+          ON connection.id = grant_row.external_agent_connection_id
         JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
         JOIN organization_memberships organization_membership
@@ -642,7 +764,13 @@ async fn refresh(state: &AppState, request: TokenRequest) -> Result<TokenRespons
         WHERE token.token_prefix = $1 AND token.expires_at > now()
           AND grant_row.revoked_at IS NULL
           AND client.status = 'active' AND project.archived_at IS NULL
-          AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
+          AND actor.status = 'active' AND membership.enabled
+          AND (
+              (actor.kind = 'human' AND user_account.status = 'active'
+               AND grant_row.external_agent_connection_id IS NULL)
+              OR
+              (actor.kind = 'external_agent' AND connection.status = 'active')
+          )
         FOR UPDATE OF token, grant_row
     "#,
     )
@@ -773,6 +901,9 @@ struct AccessRow {
     client_name: String,
     scopes: Vec<String>,
     token_digest: Vec<u8>,
+    external_agent_connection_id: Option<Uuid>,
+    backing_credential_id: Option<Uuid>,
+    connection_scopes: Option<Vec<String>>,
 }
 
 pub async fn resolve_access_token(
@@ -785,15 +916,19 @@ pub async fn resolve_access_token(
     let rows = sqlx::query_as::<_, AccessRow>(
         r#"
         SELECT access.id AS token_id, grant_row.id AS grant_id, grant_row.actor_id,
-               grant_row.project_id, client.client_name, grant_row.scopes, access.token_digest
+               grant_row.project_id, client.client_name, grant_row.scopes, access.token_digest,
+               grant_row.external_agent_connection_id, grant_row.backing_credential_id,
+               connection.scopes AS connection_scopes
         FROM mcp_oauth_access_tokens access
         JOIN mcp_oauth_grants grant_row ON grant_row.id = access.grant_id
         JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
         JOIN projects project ON project.id = grant_row.project_id
         JOIN actors actor ON actor.id = grant_row.actor_id
-        JOIN users user_account
-          ON user_account.actor_id = grant_row.actor_id
-         AND user_account.status = 'active'
+        LEFT JOIN users user_account ON user_account.actor_id = grant_row.actor_id
+        LEFT JOIN external_agent_connections connection
+          ON connection.id = grant_row.external_agent_connection_id
+        LEFT JOIN mcp_client_credentials backing
+          ON backing.id = grant_row.backing_credential_id
         JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
         JOIN organization_memberships organization_membership
@@ -803,7 +938,14 @@ pub async fn resolve_access_token(
         WHERE access.token_prefix = $1 AND access.revoked_at IS NULL
           AND access.expires_at > now() AND grant_row.revoked_at IS NULL
           AND client.status = 'active' AND project.archived_at IS NULL
-          AND actor.kind = 'human' AND actor.status = 'active' AND membership.enabled
+          AND actor.status = 'active' AND membership.enabled
+          AND (
+              (actor.kind = 'human' AND user_account.status = 'active'
+               AND grant_row.external_agent_connection_id IS NULL)
+              OR
+              (actor.kind = 'external_agent' AND connection.status = 'active'
+               AND backing.status = 'active' AND backing.expires_at > now())
+          )
     "#,
     )
     .bind(prefix)
@@ -817,6 +959,28 @@ pub async fn resolve_access_token(
     };
     sqlx::query("UPDATE mcp_oauth_access_tokens SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
         .bind(row.token_id).execute(&state.pool).await?;
+    if let (Some(connection_id), Some(backing_credential_id), Some(scopes)) = (
+        row.external_agent_connection_id,
+        row.backing_credential_id,
+        row.connection_scopes,
+    ) {
+        // Signed in as an agent: behave exactly like that agent's own
+        // credential, including its connection's scopes.
+        sqlx::query("UPDATE external_agent_connections SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
+            .bind(connection_id).execute(&state.pool).await?;
+        return Ok(Some(McpPrincipal {
+            credential_id: backing_credential_id,
+            mcp_credential_id: Some(backing_credential_id),
+            oauth_grant_id: Some(row.grant_id),
+            actor_id: row.actor_id,
+            actor_kind: crate::policy::ActorKind::ExternalAgent,
+            project_id: row.project_id,
+            external_agent_connection_id: Some(connection_id),
+            client_name: row.client_name,
+            scopes,
+            authentication_class: "mcp_oauth",
+        }));
+    }
     Ok(Some(McpPrincipal {
         credential_id: row.grant_id,
         mcp_credential_id: None,
@@ -829,6 +993,79 @@ pub async fn resolve_access_token(
         scopes: row.scopes,
         authentication_class: "mcp_oauth",
     }))
+}
+
+#[derive(FromRow)]
+struct AgentChoice {
+    connection_id: Uuid,
+    display_name: String,
+    project_name: String,
+}
+
+/// Active agent connections in Projects this person can manage agents in.
+async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoice>, OAuthError> {
+    sqlx::query_as::<_, AgentChoice>(
+        r#"
+        SELECT connection.id AS connection_id, agent_membership.display_name,
+               project.name AS project_name
+        FROM external_agent_connections connection
+        JOIN projects project ON project.id = connection.project_id
+        JOIN project_memberships agent_membership
+          ON agent_membership.project_id = connection.project_id
+         AND agent_membership.actor_id = connection.actor_id
+         AND agent_membership.enabled
+        JOIN project_memberships manager
+          ON manager.project_id = connection.project_id
+         AND manager.actor_id = $1
+         AND manager.enabled
+         AND manager.role IN ('owner', 'admin')
+        WHERE connection.status = 'active' AND project.archived_at IS NULL
+        ORDER BY lower(agent_membership.display_name), connection.id
+        LIMIT 100
+        "#,
+    )
+    .bind(actor_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(AppError::from)
+    .map_err(Into::into)
+}
+
+/// The agent's Project and Actor, if this person may connect clients as it.
+async fn managed_agent(
+    state: &AppState,
+    manager_actor_id: Uuid,
+    connection_id: Uuid,
+) -> Result<Option<(Uuid, Uuid)>, OAuthError> {
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT connection.project_id, connection.actor_id
+        FROM external_agent_connections connection
+        JOIN projects project ON project.id = connection.project_id
+        JOIN actors agent ON agent.id = connection.actor_id AND agent.status = 'active'
+        JOIN project_memberships agent_membership
+          ON agent_membership.project_id = connection.project_id
+         AND agent_membership.actor_id = connection.actor_id
+         AND agent_membership.enabled
+        JOIN project_memberships manager
+          ON manager.project_id = connection.project_id
+         AND manager.actor_id = $2
+         AND manager.enabled
+         AND manager.role IN ('owner', 'admin')
+        JOIN organization_memberships organization_membership
+          ON organization_membership.organization_id = project.organization_id
+         AND organization_membership.actor_id = $2
+         AND organization_membership.enabled
+        WHERE connection.id = $1 AND connection.status = 'active'
+          AND project.archived_at IS NULL
+        "#,
+    )
+    .bind(connection_id)
+    .bind(manager_actor_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(AppError::from)
+    .map_err(Into::into)
 }
 
 async fn project_choices(
@@ -893,7 +1130,10 @@ fn validate_client_name(name: &str) -> Result<(), OAuthError> {
     Ok(())
 }
 
-fn validate_loopback_redirect(value: &str) -> Result<(), OAuthError> {
+/// Local clients (Codex) use exact HTTP loopback redirects with a port.
+/// Hosted clients (cloud agent products) use HTTPS. Redirects must still match
+/// the registration exactly.
+fn validate_redirect(value: &str) -> Result<(), OAuthError> {
     if value.len() > MAX_REDIRECT_URI {
         return Err(OAuthError::invalid_client_metadata(
             "redirect URI is too long",
@@ -901,19 +1141,38 @@ fn validate_loopback_redirect(value: &str) -> Result<(), OAuthError> {
     }
     let url = Url::parse(value)
         .map_err(|_| OAuthError::invalid_client_metadata("redirect URI is invalid"))?;
-    if url.scheme() != "http"
-        || !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
-        || url.port().is_none()
+    let hosted = url.scheme() == "https" && url.host_str().is_some_and(|host| !host.is_empty());
+    let loopback = is_loopback_redirect(&url) && url.query().is_none();
+    if !(loopback || hosted)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
-        || url.query().is_some()
     {
         return Err(OAuthError::invalid_client_metadata(
-            "only exact HTTP loopback redirects with an explicit port are allowed",
+            "redirects must be HTTPS, or exact HTTP loopback with an explicit port",
         ));
     }
     Ok(())
+}
+
+fn is_loopback_redirect(url: &Url) -> bool {
+    url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+        && url.port().is_some()
+}
+
+/// Send the browser back to the client. A plain redirect after the consent
+/// form can be blocked by the `form-action 'self'` policy for non-loopback
+/// clients, so those get a tiny continue page instead.
+fn redirect_to_client(redirect: &Url) -> Response {
+    if is_loopback_redirect(redirect) {
+        return Redirect::to(redirect.as_str()).into_response();
+    }
+    let target = escape_html(redirect.as_str());
+    Html(format!(
+        "<!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=\"0; url={target}\"><title>Returning</title></head><body><main><p>Returning to the app… <a href=\"{target}\">Continue</a></p></main></body></html>"
+    ))
+    .into_response()
 }
 
 fn validate_state(state: &str) -> Result<(), OAuthError> {
@@ -1034,14 +1293,14 @@ fn redirect_authorization_error(
     state: &str,
     error: &str,
 ) -> Result<Response, OAuthError> {
-    validate_loopback_redirect(redirect_uri)?;
+    validate_redirect(redirect_uri)?;
     let mut redirect = Url::parse(redirect_uri)
         .map_err(|_| OAuthError::invalid_request("invalid redirect URI"))?;
     redirect
         .query_pairs_mut()
         .append_pair("error", error)
         .append_pair("state", state);
-    Ok(Redirect::to(redirect.as_str()).into_response())
+    Ok(redirect_to_client(&redirect))
 }
 
 #[derive(Debug)]
@@ -1183,20 +1442,18 @@ mod tests {
 
     #[test]
     fn redirects_are_exact_public_loopback_uris() {
-        assert!(validate_loopback_redirect("http://127.0.0.1:1455/callback").is_ok());
-        assert!(validate_loopback_redirect("http://localhost:2345/oauth/callback").is_ok());
+        assert!(validate_redirect("http://127.0.0.1:1455/callback").is_ok());
+        assert!(validate_redirect("http://localhost:2345/oauth/callback").is_ok());
+        assert!(validate_redirect("https://agent.example.com/oauth/callback").is_ok());
         for unsafe_uri in [
-            "https://127.0.0.1:1455/callback",
             "http://example.com:1455/callback",
+            "https://user@agent.example.com/callback",
             "http://127.0.0.1/callback",
             "http://user@127.0.0.1:1455/callback",
             "http://127.0.0.1:1455/callback#code",
             "http://127.0.0.1:1455/callback?next=evil",
         ] {
-            assert!(
-                validate_loopback_redirect(unsafe_uri).is_err(),
-                "{unsafe_uri}"
-            );
+            assert!(validate_redirect(unsafe_uri).is_err(), "{unsafe_uri}");
         }
     }
 

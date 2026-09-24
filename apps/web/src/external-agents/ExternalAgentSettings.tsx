@@ -8,6 +8,7 @@ import {
   listExternalAgents,
   removeExternalAgent,
   rotateExternalAgentCredential,
+  setExternalAgentWebhook,
   updateExternalAgent,
   type ExternalAgentConnection,
   type ExternalAgentMutation,
@@ -170,9 +171,9 @@ function CreateExternalAgentForm({
   disabled: boolean
   onSubmit: (input: Parameters<typeof createExternalAgent>[1]) => void
 }) {
-  const [connectionName, setConnectionName] = useState('Hermes')
-  const [displayName, setDisplayName] = useState('Hermes teammate')
-  const [handle, setHandle] = useState('hermes')
+  const [connectionName, setConnectionName] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [handle, setHandle] = useState('')
   const [role, setRole] = useState<ExternalAgentRole>('member')
   const [scopes, setScopes] = useState<ExternalAgentScope[]>(memberScopes)
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -301,10 +302,11 @@ function ExternalAgentRow({
         <strong>{connection.displayName}</strong>
         <span>@{connection.handle}</span>
         <small>
-          {connection.status} · Hermes {connection.runtimeVersion} ·{' '}
+          {connection.status} ·{' '}
           {connection.lastUsedAt ? `last active ${connection.lastUsedAt}` : 'not used yet'}
         </small>
         <small>Permissions: {connection.scopes.join(', ')}</small>
+        {active && <WebhookField connection={connection} disabled={disabled} />}
         {active && (
           <ScopeFields
             disabled={disabled}
@@ -413,6 +415,12 @@ function OneTimeBearer({
       </p>
       <code>{credential.token}</code>
       <small>Expires {credential.expiresAt}</small>
+      <p>
+        Point the agent's MCP client at{' '}
+        <code>{`${window.location.origin}/api/v1/mcp`}</code> with this bearer.
+        It should call <code>inbox_list</code>, then <code>reply_claim</code>{' '}
+        and <code>reply_send</code> (or <code>reply_pass</code>).
+      </p>
       <div className="row-actions">
         <button
           onClick={() => {
@@ -429,5 +437,79 @@ function OneTimeBearer({
         </button>
       </div>
     </aside>
+  )
+}
+
+/**
+ * Optional push wakeups. Agents that can't receive webhooks (scheduled ones)
+ * simply check their inbox on their own schedule instead.
+ */
+function WebhookField({
+  connection,
+  disabled,
+}: {
+  connection: ExternalAgentConnection
+  disabled: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [url, setUrl] = useState(connection.webhookUrl ?? '')
+  const [secret, setSecret] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const save = (next: string | null) => {
+    setBusy(true)
+    setError(null)
+    void setExternalAgentWebhook(connection.projectId, connection.id, next)
+      .then(async (result) => {
+        setSecret(result.webhookSecret)
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.externalAgents(connection.projectId),
+        })
+      })
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : 'Webhook was not saved.'),
+      )
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div className="field webhook-field">
+      <label htmlFor={`webhook-${connection.id}`}>
+        Wakeup webhook (optional)
+      </label>
+      <input
+        disabled={disabled || busy}
+        id={`webhook-${connection.id}`}
+        onChange={(event) => setUrl(event.target.value)}
+        placeholder="https://… (leave empty for agents that check in on a schedule)"
+        type="url"
+        value={url}
+      />
+      <div className="row-actions">
+        <button
+          disabled={disabled || busy || !url.trim()}
+          onClick={() => save(url.trim())}
+          type="button"
+        >
+          Save webhook
+        </button>
+        {connection.webhookUrl ? (
+          <button disabled={disabled || busy} onClick={() => save(null)} type="button">
+            Stop wakeups
+          </button>
+        ) : null}
+      </div>
+      {connection.lastWakeupAt ? (
+        <small>
+          Last wakeup {connection.lastWakeupAt}
+          {connection.lastWakeupError ? ` failed: ${connection.lastWakeupError}` : ''}
+        </small>
+      ) : null}
+      {secret ? (
+        <small>
+          Signing secret (shown once): <code>{secret}</code>
+        </small>
+      ) : null}
+      {error ? <small role="alert">{error}</small> : null}
+    </div>
   )
 }

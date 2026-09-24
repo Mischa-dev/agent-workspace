@@ -248,6 +248,7 @@ async fn list_projects(
         WHERE pm.actor_id = $1
           AND pm.enabled
           AND p.archived_at IS NULL
+          AND p.kind = 'standard'
           AND (
               $2::text IS NULL
               OR p.name ILIKE $2
@@ -1199,7 +1200,7 @@ fn normalize_project_name(value: &str) -> Result<String, AppError> {
     Ok(name.to_owned())
 }
 
-fn membership_handle(login_name: &str) -> String {
+pub(crate) fn membership_handle(login_name: &str) -> String {
     let mut handle = login_name
         .chars()
         .filter_map(|character| {

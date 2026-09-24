@@ -77,6 +77,10 @@ pub struct AppConfig {
     pub server_addr: SocketAddr,
     pub webhook_addr: SocketAddr,
     pub allowed_origins: Vec<String>,
+    /// The address people and cloud agents use, e.g. `https://workspace.example.com`.
+    /// OAuth metadata and MCP resource URLs are built from it. Defaults to the
+    /// loopback server address.
+    pub public_origin: Option<String>,
     pub database_url: SecretString,
     pub database_max_connections: u32,
     pub data_root: PathBuf,
@@ -170,6 +174,7 @@ impl AppConfig {
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let allowed_origins = allowed_origins(values, environment)?;
+        let public_origin = public_origin(values)?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
         validate_loopback("WEBHOOK_ADDR", webhook_addr, environment)?;
@@ -250,6 +255,7 @@ impl AppConfig {
             server_addr,
             webhook_addr,
             allowed_origins,
+            public_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
             data_root,
@@ -397,6 +403,34 @@ fn validate_secret_file(
         });
     }
     Ok(())
+}
+
+fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+    let Some(value) = values
+        .get(&format!("{PREFIX}PUBLIC_ORIGIN"))
+        .map(|value| value.trim().trim_end_matches('/'))
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<http::Uri>()
+        .map_err(|error| ConfigError::Invalid {
+            key: format!("{PREFIX}PUBLIC_ORIGIN"),
+            reason: error.to_string(),
+        })?;
+    if !matches!(parsed.scheme_str(), Some("http" | "https"))
+        || parsed.authority().is_none()
+        || parsed
+            .path_and_query()
+            .is_some_and(|path| path.as_str() != "/")
+    {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}PUBLIC_ORIGIN"),
+            reason: "must be a scheme and host, such as https://workspace.example.com".into(),
+        });
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn allowed_origins(

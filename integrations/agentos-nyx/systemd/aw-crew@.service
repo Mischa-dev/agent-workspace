@@ -1,0 +1,15 @@
+[Unit]
+Description=Answer Agent Workspace reply requests for AgentOS crew member %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/run/current-system/sw/bin/python3 %h/.local/share/agent-workspace-aw-bridge/bridge.py --agent %i
+WorkingDirectory=%h
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+MemoryMax=256M
+CPUQuota=50%
+TimeoutStartSec=65min

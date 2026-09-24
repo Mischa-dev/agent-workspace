@@ -411,3 +411,130 @@
     forced-color-adjust: auto;
   }
 }
+
+/* Messages: DMs and groups */
+.new-message-form {
+  display: grid;
+  gap: var(--space-4, 16px);
+  max-width: 560px;
+}
+
+.new-message-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.new-message-form legend {
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-2, 8px);
+}
+
+.people-picker,
+.member-list {
+  display: grid;
+  gap: var(--space-1, 4px);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.people-picker label {
+  align-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+  display: flex;
+  gap: var(--space-2, 8px);
+  padding: var(--density-pad-y) var(--density-pad-x);
+}
+
+.people-picker label:has(input:checked) {
+  background: var(--color-surface-selected);
+  border-color: var(--color-accent);
+}
+
+.people-picker small,
+.conversation-members {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.people-picker small {
+  margin-left: auto;
+}
+
+.member-list li {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2, 8px);
+  justify-content: space-between;
+  padding: var(--space-1, 4px) 0;
+}
+
+/* Reply status under messages */
+.reply-status {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: calc(var(--space-1, 4px) * -1) 0 var(--space-2, 8px);
+  padding: 0 0 0 44px;
+}
+
+.reply-status li {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: var(--font-size-sm);
+  gap: var(--space-2, 8px);
+}
+
+.reply-status-dot {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  height: 6px;
+  width: 6px;
+}
+
+.reply-status li[data-status='claimed'] .reply-status-dot {
+  animation: reply-pulse 1.2s ease-in-out infinite;
+  background: var(--color-accent);
+}
+
+.reply-status li[data-status='released'],
+.reply-status li[data-status='expired'] {
+  color: var(--color-warning);
+}
+
+.reply-status .link-button {
+  background: none;
+  border: 0;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.reply-continue {
+  align-items: center;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3, 12px);
+  justify-content: space-between;
+  padding: var(--space-3, 12px);
+}
+
+@keyframes reply-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reply-status li[data-status='claimed'] .reply-status-dot {
+    animation: none;
+  }
+}

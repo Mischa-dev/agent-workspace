@@ -61,6 +61,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
       const timer = window.setTimeout(() => {
         invalidationTimers.delete(projectId)
         void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
+        // DMs and groups live in a Project the client does not list, so
+        // refresh the Messages overview on any change.
+        void queryClient.invalidateQueries({ queryKey: ['direct'] })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -72,6 +75,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
 
     const refetchAuthenticatedState = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
+      void queryClient.invalidateQueries({ queryKey: ['direct'] })
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })

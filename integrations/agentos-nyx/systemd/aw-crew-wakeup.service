@@ -1,0 +1,15 @@
+[Unit]
+Description=Receive signed Agent Workspace wakeups for the AgentOS crew
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/run/current-system/sw/bin/python3 %h/.local/share/agent-workspace-aw-bridge/wakeup.py
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=64M
+
+[Install]
+WantedBy=default.target

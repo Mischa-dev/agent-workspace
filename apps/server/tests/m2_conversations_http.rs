@@ -34,38 +34,12 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .await
         .expect("create isolated M2 HTTP schema");
     let pool = schema_pool(&database_url, &schema).await;
-    for migration in [
-        include_str!("../migrations/0001_foundation.sql"),
-        include_str!("../migrations/0002_walking_skeleton.sql"),
-        include_str!("../migrations/0003_m0_consistency.sql"),
-        include_str!("../migrations/0004_m1_identity_projects.sql"),
-        include_str!("../migrations/0005_m2_conversations.sql"),
-        include_str!("../migrations/0006_m2_message_mentions_projection.sql"),
-        include_str!("../migrations/0007_m2_archived_parent_navigation.sql"),
-        include_str!("../migrations/0008_m2_conversation_lock_boundaries.sql"),
-        include_str!("../migrations/0009_m3_execution_foundation.sql"),
-        include_str!("../migrations/0010_m3_execution_admission_hardening.sql"),
-        include_str!("../migrations/0011_m3_canonical_repository_mirrors.sql"),
-        include_str!("../migrations/0012_m3_agent_run_scheduler.sql"),
-        include_str!("../migrations/0013_m3_provider_event_idempotency.sql"),
-        include_str!("../migrations/0014_m3_run_acknowledgements.sql"),
-        include_str!("../migrations/0015_m4_work_items_foundation.sql"),
-        include_str!("../migrations/0016_m4_work_item_navigation.sql"),
-        include_str!("../migrations/0017_m4_work_item_collaboration.sql"),
-        include_str!("../migrations/0018_m4_work_item_links.sql"),
-        include_str!("../migrations/0019_m4_work_with_worker.sql"),
-        include_str!("../migrations/0020_m5_github_foundation.sql"),
-        include_str!("../migrations/0021_m5_github_installation_compat.sql"),
-        include_str!("../migrations/0022_m5_github_publishing.sql"),
-        include_str!("../migrations/0023_m5_github_pull_requests.sql"),
-        include_str!("../migrations/0024_m5_github_checks_reviews.sql"),
-        include_str!("../migrations/0025_m5_github_work_item_automation.sql"),
-    ] {
-        sqlx::raw_sql(migration)
-            .execute(&pool)
-            .await
-            .expect("apply migration");
-    }
+    // The send path now depends on later migrations (DM visibility, reply
+    // requests), so this flow runs against the full schema.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("apply migrations");
     let bootstrapped = bootstrap_admin(
         &pool,
         BootstrapCommand {

@@ -40,6 +40,7 @@ mod approvals;
 mod collaboration;
 mod oauth;
 mod reads;
+mod replies;
 mod writes;
 
 pub const MCP_PATH: &str = "/api/v1/mcp";
@@ -50,7 +51,7 @@ const MAX_TOKEN_BYTES: usize = 128;
 const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
 const LAST_USED_THROTTLE_MINUTES: i32 = 5;
 #[cfg(test)]
-const SERVER_INSTRUCTIONS: &str = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run.";
+const SERVER_INSTRUCTIONS: &str = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run. To answer people, call inbox_list, claim a request with reply_claim (it returns the conversation context), then reply_send, reply_pass, or reply_release.";
 
 #[derive(Clone, Debug)]
 pub struct McpPrincipal {
@@ -136,6 +137,111 @@ struct ProjectProjectionRow {
 
 #[tool_router]
 impl McpServer {
+    #[tool(
+        description = "List reply requests waiting for you: DMs and group messages people want you to answer",
+        annotations(
+            title = "Check inbox",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn inbox_list(
+        &self,
+        Parameters(arguments): Parameters<replies::InboxListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::InboxProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(replies::ReplyToolResult::denied());
+        };
+        Json(replies::inbox_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Claim a reply request before answering it. Returns the conversation and recent messages. Claiming again renews the 15-minute lease",
+        annotations(
+            title = "Claim reply request",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_claim(
+        &self,
+        Parameters(arguments): Parameters<replies::ReplyClaimArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::ClaimProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(replies::ReplyToolResult::denied());
+        };
+        Json(replies::reply_claim(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Answer a claimed reply request. Posts your text in the conversation as you",
+        annotations(
+            title = "Send reply",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_send(
+        &self,
+        Parameters(arguments): Parameters<replies::ReplySendArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(replies::ReplyToolResult::denied());
+        };
+        Json(replies::reply_send(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Pass on an optional group reply request when you have nothing useful to add. Posts nothing",
+        annotations(
+            title = "Pass",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_pass(
+        &self,
+        Parameters(arguments): Parameters<replies::ReplyPassArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(replies::ReplyToolResult::denied());
+        };
+        Json(replies::reply_pass(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Give back a reply request you can't answer, with a reason people will see",
+        annotations(
+            title = "Release reply request",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_release(
+        &self,
+        Parameters(arguments): Parameters<replies::ReplyReleaseArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(replies::ReplyToolResult::denied());
+        };
+        Json(replies::reply_release(&self.state, principal, arguments).await)
+    }
+
     #[tool(
         description = "Read one bounded approval addressed to the authenticated external Actor",
         annotations(
@@ -743,7 +849,7 @@ impl McpServer {
 #[tool_handler(
     name = "agent-workspace",
     version = "0.6.0",
-    instructions = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run."
+    instructions = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run. To answer people, call inbox_list, claim a request with reply_claim (it returns the conversation context), then reply_send, reply_pass, or reply_release."
 )]
 impl ServerHandler for McpServer {}
 
@@ -751,11 +857,35 @@ pub fn router(state: AppState) -> Router<AppState> {
     let handler = McpServer {
         state: state.clone(),
     };
+    // Accept the loopback names plus every configured public host, so cloud
+    // agents can reach MCP through the public hostname.
+    let mut allowed_hosts = vec![
+        "localhost".to_owned(),
+        "127.0.0.1".to_owned(),
+        "[::1]".to_owned(),
+    ];
+    for origin in state
+        .config
+        .allowed_origins
+        .iter()
+        .chain(state.config.public_origin.iter())
+    {
+        if let Some(authority) = origin
+            .parse::<http::Uri>()
+            .ok()
+            .and_then(|uri| uri.authority().cloned())
+        {
+            allowed_hosts.push(authority.as_str().to_owned());
+            allowed_hosts.push(authority.host().to_owned());
+        }
+    }
+    allowed_hosts.sort();
+    allowed_hosts.dedup();
     let service: StreamableHttpService<McpServer, LocalSessionManager> = StreamableHttpService::new(
         move || Ok(handler.clone()),
         Default::default(),
         StreamableHttpServerConfig::default()
-            .with_allowed_hosts(["localhost", "127.0.0.1", "[::1]"])
+            .with_allowed_hosts(allowed_hosts)
             .with_allowed_origins(state.config.allowed_origins.clone())
             .with_legacy_session_mode(true)
             .with_json_response(true)

@@ -5,7 +5,8 @@ import { join, relative } from 'node:path'
 export const WEB_ASSET_LIMITS = Object.freeze({
   javascriptRawBytes: 500 * 1024,
   javascriptGzipBytes: 160 * 1024,
-  cssRawBytes: 60 * 1024,
+  // Raised from 60 KiB for the Messages and reply-status styles (~10 KiB gzipped total).
+  cssRawBytes: 72 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {

@@ -160,6 +160,56 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&issued)?);
             return Ok(());
         }
+        Some("direct-agent-create") => {
+            // Creates an agent in the owner's Messages space and writes its
+            // token to a new owner-only file, so the token is never printed.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(
+                &options,
+                &["owner-login", "name", "handle", "token-file", "webhook-url"],
+            )?;
+            let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
+            let (project_id, owner_actor_id) = agent_workspace_server::direct::space_for_login(
+                &pool,
+                required_option(&options, "owner-login")?,
+            )
+            .await
+            .context("find the owner's Messages space")?;
+            let agent = agent_workspace_server::external_agents::provision(
+                &pool,
+                project_id,
+                owner_actor_id,
+                required_option(&options, "name")?,
+                required_option(&options, "handle")?,
+            )
+            .await
+            .context("create agent")?;
+            write_private_file(&token_file, &agent.token)?;
+            // With --webhook-url, the signing secret goes to "<token-file>.webhook".
+            if let Some(url) = options.get("webhook-url") {
+                let secret = agent_workspace_server::external_agents::set_webhook_for_host(
+                    &pool,
+                    agent.connection_id,
+                    url,
+                )
+                .await
+                .context("set wakeup webhook")?;
+                let mut secret_file = token_file.clone().into_os_string();
+                secret_file.push(".webhook");
+                write_private_file(std::path::Path::new(&secret_file), &secret)?;
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "projectId": project_id,
+                    "actorId": agent.actor_id,
+                    "connectionId": agent.connection_id,
+                    "tokenFile": token_file,
+                    "expiresAt": agent.expires_at,
+                }))?
+            );
+            return Ok(());
+        }
         Some("mcp-credential-list") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["project-id"])?;
@@ -263,6 +313,12 @@ async fn main() -> anyhow::Result<()> {
             agent_workspace_server::realtime::outbox_worker_id(),
             shutdown_receiver.clone(),
         ));
+    // Not supervised like the workers above: a failure here delays wakeups
+    // and lease expiry but never loses data, so it must not stop the server.
+    tokio::spawn(agent_workspace_server::replies::run(
+        state.clone(),
+        shutdown_receiver.clone(),
+    ));
     let signal_shutdown_sender = shutdown_sender.clone();
     let signal_supervisors = supervisors.clone();
     let signal_task = tokio::spawn(async move {
@@ -478,4 +534,19 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
             return;
         }
     }
+}
+
+/// Write a secret to a new owner-only file; refuses to overwrite.
+fn write_private_file(path: &std::path::Path, contents: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("create {}", path.display()))?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }

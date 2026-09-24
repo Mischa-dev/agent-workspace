@@ -21,6 +21,9 @@ const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => (
 const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
 const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
 const ConversationArchivePage = lazy(() => import('../conversations/ConversationArchivePage').then((module) => ({ default: module.ConversationArchivePage })))
+const MessagesPage = lazy(() => import('../direct/MessagesPage').then((module) => ({ default: module.MessagesPage })))
+const AgentsPage = lazy(() => import('../direct/MessagesPage').then((module) => ({ default: module.AgentsPage })))
+const DirectConversationPage = lazy(() => import('../direct/DirectConversationPage').then((module) => ({ default: module.DirectConversationPage })))
 const HomePage = lazy(() => import('../projects/HomePage').then((module) => ({ default: module.HomePage })))
 const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })))
 const ProjectSettingsPage = lazy(() => import('../projects/ProjectSettingsPage').then((module) => ({ default: module.ProjectSettingsPage })))
@@ -75,6 +78,30 @@ export function App() {
                     </AuthenticatedRouteBoundary>
                   }
                   path="/home"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <MessagesPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/messages"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <AgentsPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/messages/agents"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <DirectConversationPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/messages/:conversationId"
                 />
                 <Route
                   element={
