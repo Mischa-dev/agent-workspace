@@ -30,144 +30,109 @@ const workItem = {
 
 afterEach(cleanup)
 
+function type(value: string) {
+  const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+  fireEvent.change(box, { target: { value } })
+  return box
+}
+
 describe('StructuredComposer', () => {
   it('retains the same idempotency key and draft across a retry', async () => {
-    const onSubmit = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('Temporary failure'))
-      .mockResolvedValueOnce(undefined)
-    render(
-      <StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} />,
-    )
+    const onSubmit = vi.fn().mockRejectedValueOnce(new Error('Temporary failure')).mockResolvedValueOnce(undefined)
+    render(<StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} />)
 
-    fireEvent.change(screen.getByLabelText('Message'), {
-      target: { value: 'Hello Project' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    type('Hello Project')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Temporary failure')
     expect(screen.getByLabelText('Message')).toHaveValue('Hello Project')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2))
-    expect(onSubmit.mock.calls[0][0].idempotencyKey).toBe(
-      onSubmit.mock.calls[1][0].idempotencyKey,
-    )
+    expect(onSubmit.mock.calls[0][0].idempotencyKey).toBe(onSubmit.mock.calls[1][0].idempotencyKey)
     await waitFor(() => expect(screen.getByLabelText('Message')).toHaveValue(''))
   })
 
-  it('selects a Worker mention by keyboard and submits an Actor ID node', async () => {
+  it('picks a mention inline with the keyboard and submits an Actor ID node where it was typed', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     const searchActors = vi.fn().mockResolvedValue([human, worker])
-    render(
-      <StructuredComposer onSubmit={onSubmit} searchActors={searchActors} />,
-    )
+    render(<StructuredComposer onSubmit={onSubmit} searchActors={searchActors} />)
 
-    fireEvent.change(screen.getByLabelText('Message'), {
-      target: { value: 'Please review' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Mention Actor' }))
-    const search = await screen.findByRole('combobox')
+    const box = type('Please review @ag')
     await screen.findByRole('option', { name: /Mischa Nelson/ })
-    fireEvent.keyDown(search, { key: 'ArrowDown' })
-    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(searchActors).toHaveBeenLastCalledWith('ag')
+    fireEvent.keyDown(box, { key: 'ArrowDown' })
+    fireEvent.keyDown(box, { key: 'Enter' })
 
-    expect(screen.getByLabelText('Selected mentions')).toHaveTextContent('@agent')
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Mention Actor' })).toHaveFocus(),
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    expect(box).toHaveValue('Please review @agent ')
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
-      { type: 'text', text: 'Please review' },
-      { type: 'text', text: ' ' },
+      { type: 'text', text: 'Please review ' },
       { type: 'mention', actorId: worker.id },
     ])
   })
 
-  it('keeps literal @agent text as text when no semantic mention is selected', async () => {
+  it('keeps literal @agent text as text when no mention is picked', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
-    render(
-      <StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} />,
-    )
+    render(<StructuredComposer onSubmit={onSubmit} searchActors={vi.fn().mockResolvedValue([])} />)
 
-    fireEvent.change(screen.getByLabelText('Message'), {
-      target: { value: 'literal @agent text' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    type('literal @agent text')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
-    expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
-      { type: 'text', text: 'literal @agent text' },
-    ])
+    expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([{ type: 'text', text: 'literal @agent text' }])
   })
 
-  it('selects a Work Item by keyboard and submits only its canonical ID', async () => {
+  it('references a work item with # and submits only its canonical ID', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     render(
-      <StructuredComposer
-        onSubmit={onSubmit}
-        searchActors={vi.fn()}
-        searchWorkItems={vi.fn().mockResolvedValue([workItem])}
-      />,
+      <StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} searchWorkItems={vi.fn().mockResolvedValue([workItem])} />,
     )
-    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Track' } })
-    const trigger = screen.getByRole('button', { name: 'Reference Work Item' })
-    fireEvent.click(trigger)
-    const search = await screen.findByRole('combobox')
+    const box = type('Track #AW')
     await screen.findByRole('option', { name: /AW-42/ })
-    fireEvent.keyDown(search, { key: 'Enter' })
-    expect(screen.getByLabelText('Selected Work Item references')).toHaveTextContent('AW-42')
-    await waitFor(() => expect(trigger).toHaveFocus())
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(box).toHaveValue('Track AW-42 ')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
-      { type: 'text', text: 'Track' },
-      { type: 'text', text: ' ' },
+      { type: 'text', text: 'Track ' },
       { type: 'work_item_ref', workItemId: workItem.id },
     ])
   })
 
   it('counts Unicode scalars explicitly and preserves an over-limit draft', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
-    render(
-      <StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} />,
-    )
+    render(<StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} />)
 
     const message = screen.getByLabelText('Message')
     expect(message).not.toHaveAttribute('maxlength')
     const overLimit = '🙂'.repeat(20_001)
-    fireEvent.change(message, { target: { value: overLimit } })
+    type(overLimit)
 
     expect(message).toHaveValue(overLimit)
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Shorten this Message by 1 Unicode character.',
-    )
-    expect(screen.getByRole('button', { name: 'Send Message' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Shorten this by 1 character to send it.')
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
     expect(onSubmit).not.toHaveBeenCalled()
 
     const exactLimit = '🙂'.repeat(20_000)
-    fireEvent.change(message, { target: { value: exactLimit } })
+    type(exactLimit)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.getByText('20,000 / 20,000 Unicode characters')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    expect(screen.getByText('characters left')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
-    expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([
-      { type: 'text', text: exactLimit },
-    ])
+    expect(onSubmit.mock.calls[0][0].content.nodes).toEqual([{ type: 'text', text: exactLimit }])
   })
 
-  it('dismisses the picker with Escape and restores trigger focus', async () => {
-    render(
-      <StructuredComposer
-        onSubmit={vi.fn()}
-        searchActors={vi.fn().mockResolvedValue([])}
-      />,
-    )
-    const trigger = screen.getByRole('button', { name: 'Mention Actor' })
-    fireEvent.click(trigger)
-    const search = await screen.findByRole('combobox')
-    fireEvent.keyDown(search, { key: 'Escape' })
-
-    await waitFor(() => expect(screen.queryByRole('combobox')).toBeNull())
-    expect(trigger).toHaveFocus()
+  it('opens the mention list from its button and closes it with Escape, keeping focus in the box', async () => {
+    render(<StructuredComposer onSubmit={vi.fn()} searchActors={vi.fn().mockResolvedValue([])} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Mention someone' }))
+    const list = await screen.findByRole('listbox', { name: 'People and agents' })
+    expect(list).toBeInTheDocument()
+    const box = screen.getByLabelText('Message')
+    expect(box).toHaveValue('@')
+    await waitFor(() => expect(box).toHaveFocus())
+    fireEvent.keyDown(box, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    expect(box).toHaveFocus()
   })
 })

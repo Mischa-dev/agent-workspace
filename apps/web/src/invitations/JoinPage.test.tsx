@@ -189,7 +189,7 @@ describe('invitation acceptance', () => {
     const invalidMessage = await screen.findByText(
       'This invitation is invalid, expired, or has already been used.',
     )
-    expect(invalidMessage).toHaveAttribute('role', 'alert')
+    expect(invalidMessage.closest('[role="alert"]')).not.toBeNull()
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith('/resolve')),
     ).toBe(false)

@@ -20,14 +20,11 @@ export class AppErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.failed) {
       return (
-        <main className="session-state">
-          <div className="error-state" role="alert">
-            <h1>Workspace needs a clean reload</h1>
-            <p>
-              The current view could not be rendered. Durable Project data and
-              hosted work remain on the server.
-            </p>
-            <button onClick={() => window.location.reload()} type="button">
+        <main className="aw-boot">
+          <div role="alert">
+            <h1>Something went wrong on this page</h1>
+            <p>Reload to get back to work. Your messages and running work are safe on the server.</p>
+            <button className="aw-btn aw-btn--primary aw-btn--md" onClick={() => window.location.reload()} type="button">
               Reload workspace
             </button>
           </div>

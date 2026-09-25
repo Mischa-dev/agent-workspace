@@ -1,88 +1,57 @@
-export const APPEARANCE_STORAGE_KEY = 'agent-workspace:appearance:v1'
+import { isThemePreset, sanitizeOverrides, type ThemePreset } from './slots'
 
-export type ThemePreference = 'system' | 'dark' | 'light'
-export type DensityPreference = 'compact' | 'comfortable' | 'spacious'
+export const APPEARANCE_STORAGE_KEY = 'agent-workspace:appearance:v2'
+const LEGACY_STORAGE_KEY = 'agent-workspace:appearance:v1'
 
-export type CustomTheme = {
-  schemaVersion: 1
-  accent?: string
-  accentStrong?: string
-  accentInk?: string
-  focus?: string
-}
+/** A preset, or "system": Indigo in light mode and Midnight in dark mode. */
+export type ThemeChoice = ThemePreset | 'system'
+export type DensityPreference = 'comfortable' | 'compact'
+export type TextSizePreference = 'small' | 'default' | 'large'
 
 export type AppearancePreferences = {
-  theme: ThemePreference
+  theme: ThemeChoice
+  overrides: Record<string, string>
   density: DensityPreference
-  customTheme: CustomTheme | null
+  textSize: TextSizePreference
 }
 
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
-  theme: 'system',
+  theme: 'indigo',
+  overrides: {},
   density: 'comfortable',
-  customTheme: null,
+  textSize: 'default',
 }
-
-const colorPattern = /^(#[\da-f]{3,8}|(?:oklch|rgb|rgba|hsl|hsla)\([\d.%+\-/,\s]+\))$/i
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
-function safeColor(value: unknown) {
-  if (typeof value !== 'string' || value.length > 96) return undefined
-  const normalized = value.trim()
-  return colorPattern.test(normalized) ? normalized : undefined
-}
-
-export function normalizeCustomTheme(value: unknown): CustomTheme | null {
+export function normalizeAppearancePreferences(value: unknown): AppearancePreferences {
   const candidate = record(value)
-  if (candidate.schemaVersion !== 1) return null
-  const customTheme: CustomTheme = { schemaVersion: 1 }
-  const accent = safeColor(candidate.accent)
-  const accentStrong = safeColor(candidate.accentStrong)
-  const accentInk = safeColor(candidate.accentInk)
-  const focus = safeColor(candidate.focus)
-  if (accent) customTheme.accent = accent
-  if (accentStrong) customTheme.accentStrong = accentStrong
-  if (accentInk) customTheme.accentInk = accentInk
-  if (focus) customTheme.focus = focus
-  return Object.keys(customTheme).length > 1 ? customTheme : null
-}
-
-export function normalizeAppearancePreferences(
-  value: unknown,
-): AppearancePreferences {
-  const candidate = record(value)
-  const theme: ThemePreference =
-    candidate.theme === 'dark' ||
-    candidate.theme === 'light' ||
-    candidate.theme === 'system'
-      ? candidate.theme
-      : DEFAULT_APPEARANCE.theme
-  const density: DensityPreference =
-    candidate.density === 'compact' ||
-    candidate.density === 'comfortable' ||
-    candidate.density === 'spacious'
-      ? candidate.density
-      : DEFAULT_APPEARANCE.density
   return {
-    theme,
-    density,
-    customTheme: normalizeCustomTheme(candidate.customTheme),
+    theme: candidate.theme === 'system' || isThemePreset(candidate.theme) ? candidate.theme : DEFAULT_APPEARANCE.theme,
+    overrides: sanitizeOverrides(candidate.overrides),
+    density: candidate.density === 'compact' ? 'compact' : 'comfortable',
+    textSize: candidate.textSize === 'small' || candidate.textSize === 'large' ? candidate.textSize : 'default',
   }
 }
 
-export function readAppearancePreferences(
-  storage: Pick<Storage, 'getItem'> = window.localStorage,
-) {
+/** Carry a pre-redesign choice forward: dark stays dark, everything else gets the default two-tone. */
+function migrateLegacy(value: unknown): AppearancePreferences {
+  const legacy = record(value)
+  return {
+    ...DEFAULT_APPEARANCE,
+    theme: legacy.theme === 'dark' ? 'midnight' : 'indigo',
+    density: legacy.density === 'compact' ? 'compact' : 'comfortable',
+  }
+}
+
+export function readAppearancePreferences(storage: Pick<Storage, 'getItem'> = window.localStorage): AppearancePreferences {
   try {
     const stored = storage.getItem(APPEARANCE_STORAGE_KEY)
-    return stored
-      ? normalizeAppearancePreferences(JSON.parse(stored) as unknown)
-      : DEFAULT_APPEARANCE
+    if (stored) return normalizeAppearancePreferences(JSON.parse(stored) as unknown)
+    const legacy = storage.getItem(LEGACY_STORAGE_KEY)
+    return legacy ? migrateLegacy(JSON.parse(legacy) as unknown) : DEFAULT_APPEARANCE
   } catch {
     return DEFAULT_APPEARANCE
   }
@@ -92,8 +61,10 @@ export function writeAppearancePreferences(
   preferences: AppearancePreferences,
   storage: Pick<Storage, 'setItem'> = window.localStorage,
 ) {
-  storage.setItem(
-    APPEARANCE_STORAGE_KEY,
-    JSON.stringify(normalizeAppearancePreferences(preferences)),
-  )
+  storage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(normalizeAppearancePreferences(preferences)))
+}
+
+export function resolvePreset(theme: ThemeChoice, prefersDark: boolean): ThemePreset {
+  if (theme !== 'system') return theme
+  return prefersDark ? 'midnight' : 'indigo'
 }

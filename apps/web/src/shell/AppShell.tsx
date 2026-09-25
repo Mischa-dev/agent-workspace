@@ -4,6 +4,7 @@ import type { SessionUser } from '../auth/session'
 import { DirectSidebar } from '../direct/DirectSidebar'
 import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
+import { Banner, Icon } from '../ui'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
 
@@ -24,17 +25,22 @@ function setInert(element: HTMLElement | null, inert: boolean) {
   }
 }
 
+/**
+ * The app frame: the rail of spaces, the space's sidebar, the conversation or page,
+ * and an optional details panel. On narrow screens each side column becomes a drawer.
+ */
 export function AppShell({
   children,
   context,
   direct = false,
-  mainClassName = 'project-workspace',
+  mainClassName,
   project = null,
   selectedChannelId,
   thread = null,
   user,
 }: {
   children: ReactNode
+  /** The details panel (thread details, group members). */
   context?: ReactNode
   /** Show the Messages sidebar (DMs and groups) instead of a Project's. */
   direct?: boolean
@@ -63,22 +69,15 @@ export function AppShell({
     setContextOpen(false)
   }
 
-  const returnFocus = useCallback(() =>
-    railOpen
-      ? railButtonRef.current
-      : sidebarOpen
-        ? sidebarButtonRef.current
-        : contextButtonRef.current
-  , [railOpen, sidebarOpen])
+  const returnFocus = useCallback(
+    () => (railOpen ? railButtonRef.current : sidebarOpen ? sidebarButtonRef.current : contextButtonRef.current),
+    [railOpen, sidebarOpen],
+  )
 
   useEffect(() => {
     if (!anyDrawerOpen) return
     const activeDrawer = shellRef.current?.querySelector<HTMLElement>(
-      railOpen
-        ? '#project-rail'
-        : sidebarOpen
-          ? '#project-sidebar'
-          : '#context-region',
+      railOpen ? '#project-rail' : sidebarOpen ? '#project-sidebar' : '#context-region',
     )
 
     const handleDrawerKeyDown = (event: KeyboardEvent) => {
@@ -90,21 +89,13 @@ export function AppShell({
       }
 
       if (event.key !== 'Tab') return
-      const drawerControls = Array.from(
-        activeDrawer?.querySelectorAll<HTMLElement>(drawerFocusableSelector) ??
-          [],
-      ).filter(
-        (element) =>
-          element.tabIndex >= 0 && !element.closest('[inert], [aria-hidden="true"]'),
+      const drawerControls = Array.from(activeDrawer?.querySelectorAll<HTMLElement>(drawerFocusableSelector) ?? []).filter(
+        (element) => element.tabIndex >= 0 && !element.closest('[inert], [aria-hidden="true"]'),
       )
-      const focusable = closeButtonRef.current
-        ? [...drawerControls, closeButtonRef.current]
-        : drawerControls
+      const focusable = closeButtonRef.current ? [...drawerControls, closeButtonRef.current] : drawerControls
       if (!focusable.length) return
 
-      const currentIndex = focusable.indexOf(
-        document.activeElement as HTMLElement,
-      )
+      const currentIndex = focusable.indexOf(document.activeElement as HTMLElement)
       const nextIndex = event.shiftKey
         ? currentIndex <= 0
           ? focusable.length - 1
@@ -122,12 +113,9 @@ export function AppShell({
 
   useEffect(() => {
     const rail = shellRef.current?.querySelector<HTMLElement>('#project-rail') ?? null
-    const sidebar =
-      shellRef.current?.querySelector<HTMLElement>('#project-sidebar') ?? null
-    const contextRegion =
-      shellRef.current?.querySelector<HTMLElement>('#context-region') ?? null
-    const contextDrawer =
-      contextRegion?.querySelector<HTMLElement>('.context-drawer') ?? null
+    const sidebar = shellRef.current?.querySelector<HTMLElement>('#project-sidebar') ?? null
+    const contextRegion = shellRef.current?.querySelector<HTMLElement>('#context-region') ?? null
+    const contextDrawer = contextRegion?.querySelector<HTMLElement>('.context-drawer') ?? null
 
     setInert(rail, anyDrawerOpen && !railOpen)
     setInert(sidebar, anyDrawerOpen && !sidebarOpen)
@@ -146,13 +134,9 @@ export function AppShell({
     if (!railOpen && !sidebarOpen && !contextOpen) return
     const focusTimer = window.setTimeout(() => {
       if (railOpen) {
-        document
-          .querySelector<HTMLElement>('#project-rail a, #project-rail button')
-          ?.focus()
+        document.querySelector<HTMLElement>('#project-rail a, #project-rail button')?.focus()
       } else if (sidebarOpen) {
-        document
-          .querySelector<HTMLElement>('#project-sidebar a, #project-sidebar button')
-          ?.focus()
+        document.querySelector<HTMLElement>('#project-sidebar a, #project-sidebar button')?.focus()
       } else if (contextOpen) {
         const contextRegion = document.querySelector<HTMLElement>('#context-region')
         const focusTarget = contextCloseButtonRef.current ?? contextRegion
@@ -164,23 +148,16 @@ export function AppShell({
 
   return (
     <div
-      className="app-shell"
-      data-has-project={hasSidebar}
+      className="aw-shell"
+      data-drawer={railOpen ? 'rail' : sidebarOpen ? 'sidebar' : contextOpen ? 'context' : undefined}
+      data-has-context={Boolean(hasSidebar && context)}
+      data-has-sidebar={hasSidebar}
       ref={shellRef}
     >
-      <a
-        className="skip-link"
-        href="#main-workspace"
-        inert={anyDrawerOpen}
-      >
+      <a className="aw-skip-link" href="#main-workspace" inert={anyDrawerOpen}>
         Skip to main workspace
       </a>
-      <ProjectRail
-        currentProjectId={project?.id ?? null}
-        mobileOpen={railOpen}
-        onNavigate={closeDrawers}
-        user={user}
-      />
+      <ProjectRail currentProjectId={project?.id ?? null} mobileOpen={railOpen} onNavigate={closeDrawers} user={user} />
       {project ? (
         <ProjectSidebar
           mobileOpen={sidebarOpen}
@@ -193,15 +170,17 @@ export function AppShell({
         <DirectSidebar mobileOpen={sidebarOpen} onNavigate={closeDrawers} />
       ) : null}
       <main
-        className={mainClassName}
+        className={mainClassName ? `aw-main ${mainClassName}` : 'aw-main aw-main--page'}
+        data-region="content"
         id="main-workspace"
         inert={anyDrawerOpen}
         tabIndex={-1}
       >
-        <div className="mobile-toolbar" data-has-context={Boolean(context)}>
+        <div className="aw-mobilebar">
           <button
             aria-controls="project-rail"
             aria-expanded={railOpen}
+            className="aw-mobilebar__button"
             onClick={() => {
               setSidebarOpen(false)
               setContextOpen(false)
@@ -210,12 +189,14 @@ export function AppShell({
             ref={railButtonRef}
             type="button"
           >
-            Projects
+            <Icon name="menu" size={20} />
+            <span className="visually-hidden">Projects</span>
           </button>
           {hasSidebar && (
             <button
               aria-controls="project-sidebar"
               aria-expanded={sidebarOpen}
+              className="aw-mobilebar__button"
               onClick={() => {
                 setRailOpen(false)
                 setContextOpen(false)
@@ -224,14 +205,18 @@ export function AppShell({
               ref={sidebarButtonRef}
               type="button"
             >
-              {project ? `${project.key} menu` : 'Messages menu'}
+              <span aria-hidden="true" className="aw-mobilebar__space">
+                {project ? project.name : 'Messages'}
+                <Icon name="chevron-down" size={14} />
+              </span>
+              <span className="visually-hidden">{project ? `${project.key} menu` : 'Messages menu'}</span>
             </button>
           )}
           {hasSidebar && context && (
             <button
               aria-controls="context-region"
               aria-expanded={contextOpen}
-              className="details-trigger"
+              className="aw-mobilebar__button aw-mobilebar__details"
               onClick={() => {
                 setRailOpen(false)
                 setSidebarOpen(false)
@@ -240,33 +225,34 @@ export function AppShell({
               ref={contextButtonRef}
               type="button"
             >
+              <Icon name="panel-right" size={18} />
               Details
             </button>
           )}
         </div>
         {realtime?.connection === 'retrying' && (
-          <div className="shell-connection-banner" role="status">
-            <span aria-hidden="true">↻</span>
-            Live updates are reconnecting. Durable workspace state is being rechecked.
-          </div>
+          <Banner className="aw-shell__banner" title="Reconnecting." tone="offline">
+            Live updates are paused for a moment. Anything you send still goes through.
+          </Banner>
         )}
-        {children}
+        {mainClassName ? children : <div className="aw-legacy">{children}</div>}
       </main>
       {hasSidebar && context && (
         <div
-          className="context-region"
-          data-mobile-open={contextOpen}
-          id="context-region"
-          role={contextOpen ? 'dialog' : undefined}
           aria-label={contextOpen ? 'Details' : undefined}
           aria-modal={contextOpen || undefined}
+          className="aw-panel"
+          data-mobile-open={contextOpen}
+          data-region="content"
+          id="context-region"
+          role={contextOpen ? 'dialog' : undefined}
           tabIndex={-1}
         >
           {contextOpen && (
             <button
               aria-label="Close Details"
               autoFocus
-              className="context-close-button"
+              className="aw-iconbtn aw-panel__close"
               onClick={() => {
                 setContextOpen(false)
                 window.requestAnimationFrame(() => contextButtonRef.current?.focus())
@@ -274,7 +260,7 @@ export function AppShell({
               ref={contextCloseButtonRef}
               type="button"
             >
-              ×
+              <Icon name="x" size={18} />
             </button>
           )}
           {context}
@@ -283,7 +269,7 @@ export function AppShell({
       {anyDrawerOpen && (
         <button
           aria-label={contextOpen ? 'Dismiss Details' : 'Close navigation'}
-          className="drawer-backdrop"
+          className="aw-drawer-backdrop"
           onClick={() => {
             const trigger = returnFocus()
             closeDrawers()

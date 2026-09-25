@@ -42,14 +42,6 @@ const states = [
   ['settled', 'Seen'],
 ] as const
 
-const stateIcons = {
-  response_required: '!',
-  active: '↻',
-  failed: '×',
-  completed: '✓',
-  unread: '●',
-  settled: '·',
-} as const
 
 afterEach(() => {
   cleanup()
@@ -58,7 +50,7 @@ afterEach(() => {
 })
 
 describe('Project Conversation sidebar', () => {
-  it('renders a visible text and icon signal for every Thread attention state', async () => {
+  it('marks every Thread attention state and keeps the server label in the accessible name', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() =>
@@ -98,7 +90,7 @@ describe('Project Conversation sidebar', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
-    render(
+    const { container } = render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter
           initialEntries={[
@@ -115,17 +107,14 @@ describe('Project Conversation sidebar', () => {
       </QueryClientProvider>,
     )
 
+    await screen.findByText('Thread 1')
     for (const [attention, label] of states) {
-      const visibleLabel = await screen.findByText(label)
-      expect(visibleLabel).toBeVisible()
-      expect(visibleLabel).not.toHaveClass('visually-hidden')
-      const status = visibleLabel.closest('[data-attention]')
-      expect(status).toHaveAttribute('data-attention', attention)
-      const icon = within(status as HTMLElement).getByText(
-        stateIcons[attention],
-      )
-      expect(icon).toHaveAttribute('aria-hidden', 'true')
-      expect(icon).toHaveClass('thread-attention-icon')
+      const row = container.querySelector<HTMLElement>(`[data-attention="${attention}"]`)
+      expect(row).not.toBeNull()
+      expect(within(row as HTMLElement).getByRole('link')).toHaveAccessibleName(expect.stringContaining(label))
     }
+    expect(screen.getByText('Needs you')).toBeVisible()
+    expect(within(container.querySelector('[data-attention="unread"]') as HTMLElement).getByRole('link')).toHaveClass('is-unread')
+    expect(container.querySelector('[data-attention="active"] .aw-dots')).not.toBeNull()
   })
 })

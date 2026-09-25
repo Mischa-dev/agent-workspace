@@ -301,15 +301,12 @@ describe('M2 Channel workspace', () => {
 
     expect(await screen.findByRole('heading', { name: 'General' })).toBeVisible()
     expect(screen.getByText('Latest')).toBeVisible()
-    expect(screen.getByText('System activity')).toBeVisible()
-    expect(
-      screen.getByText('A system change was recorded in this conversation.'),
-    ).toBeVisible()
+    expect(screen.getByText('The conversation settings changed.')).toBeVisible()
     expect(screen.getAllByLabelText('Mischa <script>, @mischa')).toHaveLength(2)
     expect(container.querySelector('script')).toBeNull()
     expect(
       screen.getByRole('link', {
-        name: 'Open linked Thread: Focused reply',
+        name: /Focused reply.*open thread/,
       }),
     ).toHaveAttribute(
       'href',
@@ -324,41 +321,41 @@ describe('M2 Channel workspace', () => {
       ).toBe(true),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Load older Messages' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
     expect(
       await screen.findByText('Older <script>alert(1)</script>'),
     ).toBeVisible()
     expect(container.querySelector('script')).toBeNull()
 
-    fireEvent.change(screen.getByLabelText('Message'), {
+    fireEvent.change(screen.getByLabelText('Message #General'), {
       target: { value: 'Retry me' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Try the same Message again.',
     )
-    expect(screen.getByLabelText('Message')).toHaveValue('Retry me')
-    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }))
+    expect(screen.getByLabelText('Message #General')).toHaveValue('Retry me')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(sendAttempts).toBe(2))
     expect(sentKeys[0]).toBeTruthy()
     expect(sentKeys[1]).toBe(sentKeys[0])
 
     const latestMessage = screen.getByText('Latest').closest('article')
     expect(latestMessage).not.toBeNull()
-    const startLinkedThread = within(
-      latestMessage as HTMLElement,
-    ).getByText('Start a linked Thread')
-    fireEvent.click(startLinkedThread)
-    const linkedThreadForm = startLinkedThread.closest('details')
-    expect(linkedThreadForm).not.toBeNull()
-    fireEvent.change(
-      within(linkedThreadForm as HTMLElement).getByLabelText('Thread title'),
-      { target: { value: 'Latest follow-up' } },
-    )
     fireEvent.click(
-      within(linkedThreadForm as HTMLElement).getByRole('button', {
-        name: 'Create Thread',
+      within(latestMessage as HTMLElement).getByRole('button', {
+        name: 'Start a thread',
       }),
+    )
+    const linkedThreadForm = await screen.findByRole('dialog', {
+      name: 'Start a thread',
+    })
+    expect(within(linkedThreadForm).getByLabelText('Thread name')).not.toHaveValue('')
+    fireEvent.change(within(linkedThreadForm).getByLabelText('Thread name'), {
+      target: { value: 'Latest follow-up' },
+    })
+    fireEvent.click(
+      within(linkedThreadForm).getByRole('button', { name: 'Start thread' }),
     )
     await waitFor(() => expect(threadCommands).toHaveLength(1))
     expect(threadCommands[0]).toEqual({
