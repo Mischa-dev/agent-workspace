@@ -32,7 +32,9 @@ yet.
   approval and question cards, a Message / Run with Codex switch in threads, a
   thread details panel, and a redesigned Agents page with plain-language
   permissions and one-time tokens.
-- **Sign-in and invitations** share a two-pane brand layout.
+- **Sign-in and invitations** share a two-pane brand layout. **Archived
+  conversations** lists archived channels and threads, and archived
+  conversations open read-only with a banner and a locked composer.
 - **Appearance page** (`/settings/appearance`): presets, main or every color,
   contrast warnings with Fix, shareable theme codes, density and text size, and
   a live preview of the shell.
@@ -78,8 +80,8 @@ yet.
 ## Pass two
 
 Home, Project overview, work items (list, board, detail), Project settings
-(team, repositories, GitHub, Codex accounts, sponsored runs), Create Project and
-Archived conversations still use the legacy stylesheet through token aliases.
+(team, repositories, GitHub, Codex accounts, sponsored runs) and Create Project
+still use the legacy stylesheet through token aliases.
 They render inside the new shell and follow the theme, but haven't been
 redesigned. Pass two moves them onto `src/ui/`, then deletes `src/styles.css`,
 `src/styles/features.css` and the aliases in `tokens.css`.

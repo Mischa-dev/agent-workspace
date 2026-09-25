@@ -221,7 +221,7 @@ export function ChannelPage() {
         title={name}
       />
       {archived ? (
-        <Banner className="aw-conv__banner" title="This channel is archived." tone="offline">
+        <Banner className="aw-conv__banner" icon="archive" title="This channel is archived." tone="offline">
           You can read it, but no one can post.
         </Banner>
       ) : null}
@@ -250,7 +250,9 @@ export function ChannelPage() {
               </>
             }
           >
-            Everyone in {project.data.name} can read and post here. Mention someone with @ to ask them directly.
+            {archived
+              ? 'This channel is archived. Its history stays here to read.'
+              : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
           </ConversationIntro>
         ) : null}
         <TimelineEntries

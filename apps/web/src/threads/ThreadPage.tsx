@@ -977,7 +977,7 @@ export function ThreadPage() {
         title={threadName}
       />
       {archived ? (
-        <Banner className="aw-conv__banner" title="This thread is archived." tone="offline">
+        <Banner className="aw-conv__banner" icon="archive" title="This thread is archived." tone="offline">
           You can read it, but no one can post or run work here.
         </Banner>
       ) : null}
