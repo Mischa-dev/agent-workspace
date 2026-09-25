@@ -1048,3 +1048,12 @@ h2.aw-card__title {
     display: none;
   }
 }
+
+.aw-sync-alert {
+  flex: none;
+  margin: var(--space-2) var(--space-4) 0;
+}
+
+.aw-sync-alert .aw-banner {
+  outline: none;
+}

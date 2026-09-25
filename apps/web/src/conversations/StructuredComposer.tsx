@@ -74,7 +74,7 @@ export function StructuredComposer({
   const scalarValues = composerScalarValues(text)
   const overLimit = scalarValues > MAX_MESSAGE_SCALAR_VALUES
   const content = overLimit ? null : buildMessageContent(text, mentions, workItems)
-  const canSend = Boolean(content) && !disabled && !busy
+  const canSend = Boolean(content) && !disabled
 
   useLayoutEffect(() => {
     const element = textareaRef.current
@@ -173,18 +173,28 @@ export function StructuredComposer({
   const submit = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
     if (!content || !canSend) return
+    // Clear right away so it feels instant. A failed send puts the draft back and keeps its
+    // idempotency key, so retrying can't post it twice; the next message gets a fresh key.
+    const draft = { text, mentions, workItems }
+    const key = idempotencyKeyRef.current
+    idempotencyKeyRef.current = createIdempotencyKey()
     setBusy(true)
     setError(null)
-    void onSubmit({ content, idempotencyKey: idempotencyKeyRef.current })
-      .then(() => {
-        setText('')
-        setMentions([])
-        setWorkItems([])
-        idempotencyKeyRef.current = createIdempotencyKey()
+    setText('')
+    setMentions([])
+    setWorkItems([])
+    void onSubmit({ content, idempotencyKey: key, text: draft.text.trim() })
+      .catch((reason: unknown) => {
+        idempotencyKeyRef.current = key
+        setText((current) => (current.trim() ? current : draft.text))
+        setMentions((current) => [...draft.mentions, ...current.filter((actor) => !draft.mentions.some((m) => m.id === actor.id))])
+        setWorkItems((current) => [...draft.workItems, ...current.filter((item) => !draft.workItems.some((w) => w.id === item.id))])
+        setError(reason instanceof Error ? reason.message : 'Your message wasn’t sent.')
+      })
+      .finally(() => {
+        setBusy(false)
         queueMicrotask(() => textareaRef.current?.focus())
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Your message wasn’t sent.'))
-      .finally(() => setBusy(false))
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -284,7 +294,7 @@ export function StructuredComposer({
           aria-autocomplete="list"
           aria-controls={trigger ? listId : undefined}
           aria-expanded={Boolean(trigger)}
-          disabled={disabled || busy}
+          disabled={disabled}
           id={id}
           onBlur={() => window.setTimeout(closeSuggestions, 120)}
           onChange={(event) => {

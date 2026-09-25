@@ -52,7 +52,7 @@ export function DirectConversationPage() {
     nextCursor: null,
   })
   const [loadingOlder, setLoadingOlder] = useState(false)
-  const [pending, setPending] = useState<string[]>([])
+  const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const [membersOpen, setMembersOpen] = useState(false)
   const markedSeen = useRef({ conversationId: '', sequence: 0 })
   const page = timeline.data
@@ -116,13 +116,13 @@ export function DirectConversationPage() {
 
   const send = async (submission: ComposerSubmission) => {
     if (!page) return
-    setPending((current) => [...current, submission.idempotencyKey])
+    setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
     try {
       await sendConversationMessage({ conversationId, kind: page.conversation.kind, ...submission })
       await timeline.refetch()
       void queryClient.invalidateQueries({ queryKey: directQueryKey })
     } finally {
-      setPending((current) => current.filter((key) => key !== submission.idempotencyKey))
+      setPending((current) => current.filter((item) => item.key !== submission.idempotencyKey))
     }
   }
 
@@ -222,8 +222,14 @@ export function DirectConversationPage() {
           }
           viewerId={viewerId}
         />
-        {pending.map((key) => (
-          <PendingMessageRow key={key} name={session.user.displayName} seed={viewerId} />
+        {pending.map((item, index) => (
+          <PendingMessageRow
+            continued={index > 0 || entries.at(-1)?.message?.author.id === viewerId}
+            key={item.key}
+            name={session.user.displayName}
+            seed={viewerId}
+            text={item.text}
+          />
         ))}
       </ConversationTimeline>
       {waitingForContinue ? (

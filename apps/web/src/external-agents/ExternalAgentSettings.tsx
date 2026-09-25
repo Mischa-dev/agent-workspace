@@ -286,7 +286,7 @@ function AgentCard({
   return (
     <article className="aw-card aw-agentcard">
       <header className="aw-agentcard__head">
-        <Avatar kind="agent" name={connection.displayName} seed={connection.id} size={40} />
+        <Avatar kind="agent" name={connection.displayName} seed={connection.actorId} size={40} />
         <div className="aw-agentcard__titles">
           <div className="aw-agentcard__name">
             <strong>{connection.displayName}</strong>

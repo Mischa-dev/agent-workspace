@@ -8,6 +8,8 @@ import type {
 export type ComposerSubmission = {
   content: MessageContentV1
   idempotencyKey: string
+  /** The draft as typed, for showing the message while it sends. */
+  text?: string
 }
 
 export const MAX_MESSAGE_SCALAR_VALUES = 20_000

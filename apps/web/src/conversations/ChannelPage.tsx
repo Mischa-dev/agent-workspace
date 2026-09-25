@@ -55,7 +55,7 @@ export function ChannelPage() {
   }>({ channelId: '', entries: [], nextCursor: null })
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderError, setOlderError] = useState<string | null>(null)
-  const [optimisticKeys, setOptimisticKeys] = useState<string[]>([])
+  const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const [threadDialog, setThreadDialog] = useState<{ origin: ThreadOrigin | null } | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
@@ -146,13 +146,13 @@ export function ChannelPage() {
   }
 
   const sendMessage = async (submission: ComposerSubmission) => {
-    setOptimisticKeys((current) => [...current, submission.idempotencyKey])
+    setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
     try {
       await sendConversationMessage({ conversationId: channelId, kind: 'channel', ...submission })
       await timeline.refetch()
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
     } finally {
-      setOptimisticKeys((current) => current.filter((key) => key !== submission.idempotencyKey))
+      setPending((current) => current.filter((item) => item.key !== submission.idempotencyKey))
     }
   }
 
@@ -226,7 +226,7 @@ export function ChannelPage() {
         </Banner>
       ) : null}
 
-      <ConversationTimeline busy={timeline.isPending} label={`Messages in ${name}`} revision={`${page?.highestSequence ?? 0}:${optimisticKeys.length}:${olderState.entries.length}`}>
+      <ConversationTimeline busy={timeline.isPending} label={`Messages in ${name}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${olderState.entries.length}`}>
         {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
         {olderError ? <Banner tone="danger">{olderError}</Banner> : null}
         {timeline.isPending ? <MessageSkeleton /> : null}
@@ -289,8 +289,14 @@ export function ChannelPage() {
           }}
           viewerId={session.user.actorId}
         />
-        {optimisticKeys.map((key) => (
-          <PendingMessageRow key={key} name={session.user.displayName} seed={session.user.actorId} />
+        {pending.map((item, index) => (
+          <PendingMessageRow
+            continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}
+            key={item.key}
+            name={session.user.displayName}
+            seed={session.user.actorId}
+            text={item.text}
+          />
         ))}
       </ConversationTimeline>
 

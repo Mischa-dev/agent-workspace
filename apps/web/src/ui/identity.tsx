@@ -52,7 +52,8 @@ export function Avatar({
       role={label ? 'img' : undefined}
       style={{
         '--av-size': `${size}px`,
-        '--av-bg': `var(--swatch-${swatchFor(seed ?? name)})`,
+        // Workers (Codex runs) are always slate, so they read as the same tool everywhere.
+        '--av-bg': `var(--swatch-${kind === 'worker' ? 'slate' : swatchFor(seed ?? name)})`,
       } as CSSProperties}
     >
       {src ? <img alt="" src={src} /> : <span className="aw-avatar__initials">{initials(name)}</span>}

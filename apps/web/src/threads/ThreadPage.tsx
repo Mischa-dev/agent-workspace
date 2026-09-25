@@ -34,7 +34,7 @@ import { StructuredComposer } from '../conversations/StructuredComposer'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import { useProjectConversationSidebar } from '../conversations/hooks'
-import { ConversationTimeline, OlderMessagesButton, TimelineEntries } from '../conversations/Timeline'
+import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import {
   archiveConversation,
   markConversationSeen,
@@ -443,6 +443,7 @@ export function ThreadPage() {
   }>({ threadId: '', entries: [], nextCursor: null })
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [pendingSends, setPendingSends] = useState<{ key: string; text?: string }[]>([])
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [composerMode, setComposerMode] = useState<'message' | 'run'>('message')
   const parentSidebar = useProjectConversationSidebar(projectId, verifiedTimeline?.conversation.parentChannelId ?? '')
@@ -761,12 +762,17 @@ export function ThreadPage() {
   }
 
   const sendMessage = async (submission: ComposerSubmission) => {
-    await sendConversationMessage({
-      conversationId: threadId,
-      kind: 'thread',
-      ...submission,
-    })
-    await thread.timeline.refetch()
+    setPendingSends((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
+    try {
+      await sendConversationMessage({
+        conversationId: threadId,
+        kind: 'thread',
+        ...submission,
+      })
+      await thread.timeline.refetch()
+    } finally {
+      setPendingSends((current) => current.filter((item) => item.key !== submission.idempotencyKey))
+    }
   }
 
   if (isApiError(thread.timeline.error) && thread.timeline.error.status === 404) {
@@ -979,7 +985,7 @@ export function ThreadPage() {
       <ConversationTimeline
         busy={thread.timeline.isPending}
         label={`Messages in ${threadName}`}
-        revision={`${verifiedTimeline?.highestSequence ?? 0}:${Object.values(realtime.streaming).join('').length}:${pendingApproval?.id ?? ''}:${runForCard?.state ?? ''}`}
+        revision={`${verifiedTimeline?.highestSequence ?? 0}:${pendingSends.length}:${Object.values(realtime.streaming).join('').length}:${pendingApproval?.id ?? ''}:${runForCard?.state ?? ''}`}
       >
         {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
         {thread.timeline.isPending ? <MessageSkeleton label="Loading thread" /> : null}
@@ -996,6 +1002,15 @@ export function ThreadPage() {
           </ConversationIntro>
         ) : null}
         <TimelineEntries entries={entries} viewerId={session.user.actorId} />
+        {pendingSends.map((item, index) => (
+          <PendingMessageRow
+            continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}
+            key={item.key}
+            name={session.user.displayName}
+            seed={session.user.actorId}
+            text={item.text}
+          />
+        ))}
         {Object.entries(realtime.streaming).map(([messageId, text]) => (
           <article aria-label="Codex is writing" className="aw-msg is-streaming" key={messageId}>
             <div className="aw-msg__gutter">

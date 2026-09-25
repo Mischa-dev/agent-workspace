@@ -54,6 +54,18 @@ export function ConversationTimeline({
     }
   }, [revision, location.hash])
 
+  // Stay on the newest message when the pane resizes (a banner appears, the composer grows).
+  useEffect(() => {
+    const element = scroller.current
+    if (!element || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => {
+      if (pinned.current && !window.location.hash.startsWith('#message-')) element.scrollTop = element.scrollHeight
+    })
+    observer.observe(element)
+    for (const child of Array.from(element.children)) observer.observe(child)
+    return () => observer.disconnect()
+  }, [revision])
+
   // A copied message link scrolls to that message and highlights it.
   useEffect(() => {
     if (!location.hash.startsWith('#message-')) return
@@ -302,17 +314,29 @@ export function TimelineEntries({
   return <>{rows}</>
 }
 
-export function PendingMessageRow({ name, seed }: { name: string; seed?: string }) {
+/** A message on its way to the server, shown dimmed until the timeline confirms it. */
+export function PendingMessageRow({
+  continued = false,
+  name,
+  seed,
+  text,
+}: {
+  continued?: boolean
+  name: string
+  seed?: string
+  text?: string
+}) {
   return (
-    <article aria-label="Message sending" className="aw-msg is-pending">
-      <div className="aw-msg__gutter">
-        <Avatar name={name} seed={seed} size={36} />
-      </div>
+    <article aria-label="Message sending" className={continued ? 'aw-msg is-pending is-continued' : 'aw-msg is-pending'}>
+      <div className="aw-msg__gutter">{continued ? null : <Avatar name={name} seed={seed} size={36} />}</div>
       <div className="aw-msg__main">
-        <div className="aw-msg__meta">
-          <span className="aw-msg__author">{name}</span>
-        </div>
-        <p className="aw-msg__note">Sending…</p>
+        {continued ? null : (
+          <div className="aw-msg__meta">
+            <span className="aw-msg__author">{name}</span>
+            <span className="aw-msg__time">Sending…</span>
+          </div>
+        )}
+        {text ? <div className="aw-msg__body">{text}</div> : <p className="aw-msg__note">Sending…</p>}
       </div>
     </article>
   )

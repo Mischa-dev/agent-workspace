@@ -19,6 +19,7 @@ export function Banner({
   children,
   className,
   icon,
+  role,
   title,
   tone = 'info',
 }: {
@@ -26,13 +27,15 @@ export function Banner({
   children?: ReactNode
   className?: string
   icon?: IconName
+  /** Overrides the live-region role; danger banners are alerts, the rest are status by default. */
+  role?: 'alert' | 'status'
   title?: ReactNode
   tone?: BannerTone
 }) {
   return (
     <div
       className={['aw-banner', `aw-banner--${tone}`, className].filter(Boolean).join(' ')}
-      role={tone === 'danger' ? 'alert' : 'status'}
+      role={role ?? (tone === 'danger' ? 'alert' : 'status')}
     >
       <Icon className="aw-banner__icon" name={icon ?? BANNER_ICONS[tone]} />
       <p className="aw-banner__text">

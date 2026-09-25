@@ -6,6 +6,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import { useProjects, useSwitchProject } from './hooks'
 import type { Project } from './types'
+import { ProjectInitials } from './ProjectSwitcher'
 
 export function HomePage() {
   const session = useAuthenticatedSession()
@@ -124,9 +125,7 @@ export function HomePage() {
                     href={project.navigation.href}
                     onClick={(event) => void openProject(project, event)}
                   >
-                    <span aria-hidden="true" className="project-row-key">
-                      {project.key}
-                    </span>
+                    <ProjectInitials project={project} size={36} />
                     <span>
                       <strong>{project.name}</strong>
                       <small>
