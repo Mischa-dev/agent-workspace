@@ -16,7 +16,8 @@ import {
   resolveInvitation,
   type ResolvedInvitation,
 } from './api'
-import { AppearanceControl } from '../shell/AppearanceControl'
+import { AuthLayout } from '../auth/AuthLayout'
+import { Banner } from '../ui'
 
 type JoinMode = 'new' | 'existing'
 
@@ -144,35 +145,33 @@ export function JoinPage() {
   const invalid = !resolving && !invitation
 
   return (
-    <main className="sign-in-page join-page">
-      <div className="public-appearance">
-        <AppearanceControl />
-      </div>
-      <section aria-labelledby="join-heading" className="sign-in-panel join-panel">
-        <div className="brand-mark" aria-hidden="true">A</div>
-        <div>
-          <span className="section-label">Private invitation</span>
-          <h1 id="join-heading">Join a Project</h1>
-          {resolving && <p aria-live="polite">Checking invitation…</p>}
-          {invitation && (
-            <p className="sign-in-intro">
-              Join <strong>{invitation.projectName}</strong> in{' '}
-              {invitation.organizationName} as {invitation.role}.
-            </p>
-          )}
-        </div>
+    <AuthLayout
+      footer="Invitation links work once. The secret is removed from the address bar before anything is sent."
+      intro={
+        resolving ? (
+          <span aria-live="polite">Checking your invitation…</span>
+        ) : invitation ? (
+          <>
+            Join <strong>{invitation.projectName}</strong> in {invitation.organizationName} as {invitation.role}.
+          </>
+        ) : undefined
+      }
+      kicker="Private invitation"
+      title="Join a Project"
+      titleId="join-heading"
+    >
 
         {error && (
-          <div className="form-error-summary" ref={errorRef} role="alert" tabIndex={-1}>
-            {error}
+          <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
+            <Banner tone="danger">{error}</Banner>
           </div>
         )}
 
         {!invalid && invitation && (
-          <form onSubmit={submit}>
+          <form className="aw-auth__form" onSubmit={submit}>
             {!signedIn && (
-              <fieldset className="join-mode">
-                <legend>Identity</legend>
+              <fieldset className="aw-auth__mode">
+                <legend className="visually-hidden">Account</legend>
                 <label>
                   <input
                     checked={mode === 'new'}
@@ -267,7 +266,7 @@ export function JoinPage() {
               </div>
             )}
             <button
-              className="primary-button sign-in-submit"
+              className="aw-btn aw-btn--primary aw-btn--lg aw-auth__submit"
               disabled={
                 submitting ||
                 !handle.trim() ||
@@ -280,11 +279,6 @@ export function JoinPage() {
             </button>
           </form>
         )}
-
-        <p className="operator-note">
-          Invitation links are single-use. Agent Workspace removes the secret from the address bar before contacting the server.
-        </p>
-      </section>
-    </main>
+    </AuthLayout>
   )
 }

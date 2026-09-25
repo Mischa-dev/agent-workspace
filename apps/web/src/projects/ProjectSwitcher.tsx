@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 
+import { Badge, Icon, swatchFor } from '../ui'
 import { useProjectSearch } from './hooks'
 import { projectLocationHref } from './locations'
 import type { Project } from './types'
 
+/** Find a Project by name or key. Opens from the rail's search tile or Cmd/Ctrl+K. */
 export function ProjectSwitcher({
   currentProjectId,
   projects,
@@ -17,7 +19,7 @@ export function ProjectSwitcher({
   projects: Project[]
   error?: string | null
   onClose: () => void
-  onSelect: (project: Project, event: React.MouseEvent<HTMLAnchorElement>) => void
+  onSelect: (project: Project, event: MouseEvent<HTMLAnchorElement>) => void
   onTogglePin: (project: Project) => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -29,15 +31,13 @@ export function ProjectSwitcher({
     const timer = window.setTimeout(() => setSettledQuery(query), 200)
     return () => window.clearTimeout(timer)
   }, [query])
-  const candidateProjects =
-    settledQuery.trim() && search.data ? search.data.projects : projects
+  const candidateProjects = settledQuery.trim() && search.data ? search.data.projects : projects
   const filteredProjects = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase()
     if (!normalized) return candidateProjects
     return candidateProjects.filter(
       (project) =>
-        project.name.toLocaleLowerCase().includes(normalized) ||
-        project.key.toLocaleLowerCase().includes(normalized),
+        project.name.toLocaleLowerCase().includes(normalized) || project.key.toLocaleLowerCase().includes(normalized),
     )
   }, [candidateProjects, query])
 
@@ -51,18 +51,25 @@ export function ProjectSwitcher({
     }
   }, [])
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
       onClose()
       return
     }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const links = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('.aw-switcher__link') ?? [])
+      if (!links.length) return
+      event.preventDefault()
+      const index = links.indexOf(document.activeElement as HTMLElement)
+      const next = event.key === 'ArrowDown' ? index + 1 : index - 1
+      links[(next + links.length) % links.length]?.focus()
+      return
+    }
     if (event.key !== 'Tab') return
     const focusable = Array.from(
-      panelRef.current?.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled])',
-      ) ?? [],
+      panelRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled])') ?? [],
     )
     if (!focusable.length) return
     const first = focusable[0]
@@ -78,104 +85,78 @@ export function ProjectSwitcher({
 
   return createPortal(
     <div
-      className="switcher-backdrop"
+      className="aw-dialog-layer aw-dialog-layer--top"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target) onClose()
       }}
     >
+      <div aria-hidden="true" className="aw-scrim" />
       <div
         aria-labelledby="project-switcher-heading"
         aria-modal="true"
-        className="project-switcher"
+        className="aw-dialog aw-switcher"
         onKeyDown={handleKeyDown}
         ref={panelRef}
         role="dialog"
       >
-        <header>
-          <div>
-            <span className="section-label">Navigate</span>
-            <h2 id="project-switcher-heading">Find a Project</h2>
-          </div>
-          <button
-            aria-label="Close Project search"
-            className="icon-button"
-            onClick={onClose}
-            type="button"
-          >
-            ×
-          </button>
-        </header>
-        <label className="search-field" htmlFor="project-search">
+        <h2 className="visually-hidden" id="project-switcher-heading">
+          Find a Project
+        </h2>
+        <label className="aw-switcher__search" htmlFor="project-search">
           <span className="visually-hidden">Search Projects</span>
-          <span aria-hidden="true">⌕</span>
+          <Icon name="search" size={18} />
           <input
             autoComplete="off"
             id="project-search"
             maxLength={100}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by name or key"
+            placeholder="Find a Project by name or key"
             ref={searchRef}
             type="search"
             value={query}
           />
+          <button aria-label="Close Project search" className="aw-iconbtn aw-iconbtn--sm" onClick={onClose} type="button">
+            <Icon name="x" />
+          </button>
         </label>
         {error && (
-          <p className="inline-error switcher-error" role="alert">
+          <p className="aw-switcher__error" role="alert">
             {error}
           </p>
         )}
-        <div
-          aria-busy={search.isFetching}
-          aria-live="polite"
-          className="switcher-results"
-          data-empty={!filteredProjects.length}
-        >
+        <div aria-busy={search.isFetching} aria-live="polite" className="aw-switcher__results">
           {filteredProjects.length ? (
             <ul>
               {filteredProjects.map((project) => (
-                <li key={project.id}>
+                <li className="aw-switcher__row" key={project.id}>
                   <a
-                    aria-current={
-                      project.id === currentProjectId ? 'page' : undefined
-                    }
-                    href={projectLocationHref(
-                      project.id,
-                      project.navigation.location,
-                    )}
+                    aria-current={project.id === currentProjectId ? 'page' : undefined}
+                    className="aw-switcher__link"
+                    href={projectLocationHref(project.id, project.navigation.location)}
                     onClick={(event) => onSelect(project, event)}
                   >
                     <ProjectInitials project={project} />
-                    <span>
-                      <strong>{project.name}</strong>
-                      <small>{project.key}</small>
-                    </span>
+                    <span className="aw-switcher__name">{project.name}</span>
+                    <span className="aw-switcher__key">{project.key}</span>
                     {project.attentionCount > 0 && (
-                      <span
-                        aria-label={`${project.attentionCount} items need attention`}
-                        className="attention-count"
-                      >
-                        {project.attentionCount > 99
-                          ? '99+'
-                          : project.attentionCount}
-                      </span>
+                      <Badge count={project.attentionCount} label={`${project.attentionCount} items need attention`} />
                     )}
                   </a>
                   <button
                     aria-label={`${project.navigation.pinned ? 'Unpin' : 'Pin'} ${project.name}`}
-                    className="pin-button"
+                    aria-pressed={project.navigation.pinned}
+                    className="aw-iconbtn aw-iconbtn--sm aw-switcher__pin"
                     disabled={!project.capabilities.navigationWrite}
                     onClick={() => onTogglePin(project)}
                     type="button"
                   >
-                    <span aria-hidden="true">
-                      {project.navigation.pinned ? '★' : '☆'}
-                    </span>
+                    <Icon name="star" />
                   </button>
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="switcher-empty">
+            <div className="aw-switcher__empty">
               <strong>No matching Projects</strong>
               <p>Try a Project name or its short key.</p>
             </div>
@@ -187,9 +168,14 @@ export function ProjectSwitcher({
   )
 }
 
-export function ProjectInitials({ project }: { project: Project }) {
+/** A Project's key on its color: the same tile the rail shows. */
+export function ProjectInitials({ project, size = 28 }: { project: Project; size?: number }) {
   return (
-    <span aria-hidden="true" className="project-initials">
+    <span
+      aria-hidden="true"
+      className="aw-space-mark"
+      style={{ '--tile-bg': `var(--swatch-${swatchFor(project.id)})`, '--mark-size': `${size}px` } as CSSProperties}
+    >
       {project.key.slice(0, 2)}
     </span>
   )

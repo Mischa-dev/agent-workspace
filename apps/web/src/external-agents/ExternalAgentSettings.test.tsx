@@ -158,7 +158,7 @@ describe('ExternalAgentSettings', () => {
     )
 
     renderSettings()
-    await screen.findByText('No external agent connections have been created.')
+    await screen.findByText('No agents connected yet.')
     fireEvent.change(screen.getByLabelText('Connection name'), {
       target: { value: 'Hermes M9' },
     })
@@ -168,11 +168,11 @@ describe('ExternalAgentSettings', () => {
     fireEvent.change(screen.getByLabelText('Handle'), {
       target: { value: 'hermes' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Connect external agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Connect agent' }))
     expect(await screen.findByText(token)).toBeVisible()
     expect(paths.every((path) => !path.includes('aw_ext_'))).toBe(true)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy bearer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy token' }))
     await waitFor(() => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(token)
       expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible()

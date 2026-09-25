@@ -1,15 +1,11 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import {
-  installAuthenticatedSession,
-  isAuthenticatedSession,
-  login,
-  useSession,
-} from './session'
-import { AppearanceControl } from '../shell/AppearanceControl'
+import { Banner, Button, TextField } from '../ui'
+import { AuthLayout } from './AuthLayout'
+import { installAuthenticatedSession, isAuthenticatedSession, login, useSession } from './session'
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')
@@ -65,11 +61,7 @@ export function SignInPage() {
       if (isApiError(reason) && reason.code === 'rate_limited') {
         setError('Too many attempts. Wait a moment, then try again.')
       } else {
-        setError(
-          isApiError(reason)
-            ? reason.message
-            : 'Sign-in could not be completed. Try again.',
-        )
+        setError(isApiError(reason) ? reason.message : 'Sign-in didn’t go through. Try again.')
       }
     } finally {
       setSubmitting(false)
@@ -77,74 +69,55 @@ export function SignInPage() {
   }
 
   return (
-    <main className="sign-in-page">
-      <div className="public-appearance">
-        <AppearanceControl />
-      </div>
-      <section aria-labelledby="sign-in-heading" className="sign-in-panel">
-        <div className="brand-mark" aria-hidden="true">
-          A
+    <AuthLayout
+      footer={
+        <>
+          New host? Create the first account on the server with <code>bootstrap-admin</code>. There’s no sign-up page.
+        </>
+      }
+      intro="Welcome back. Your conversations and agents are waiting."
+      title="Sign in"
+      titleId="sign-in-heading"
+    >
+      {error && (
+        <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
+          <Banner tone="danger">{error}</Banner>
         </div>
-        <div>
-          <span className="section-label">Private workspace</span>
-          <h1 id="sign-in-heading">Sign in</h1>
-          <p className="sign-in-intro">
-            Use the administrator account created on this Project Host.
-          </p>
-        </div>
-
-        {error && (
-          <div
-            className="form-error-summary"
-            ref={errorRef}
-            role="alert"
-            tabIndex={-1}
-          >
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={submit}>
-          <div className="field">
-            <label htmlFor="login-name">Login name</label>
-            <input
-              autoComplete="username"
-              autoFocus
-              disabled={submitting}
-              id="login-name"
-              maxLength={64}
-              onChange={(event) => setLoginName(event.target.value)}
-              required
-              value={loginName}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="password">Password</label>
-            <input
-              autoComplete="current-password"
-              disabled={submitting}
-              id="password"
-              minLength={12}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              type="password"
-              value={password}
-            />
-          </div>
-          <button
-            className="primary-button sign-in-submit"
-            disabled={submitting || !loginName.trim() || password.length < 12}
-            type="submit"
-          >
-            {submitting ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
-
-        <p className="operator-note">
-          New host? The first account is created from the host-local
-          <code> bootstrap-admin</code> command. There is no browser setup route.
-        </p>
-      </section>
-    </main>
+      )}
+      <form className="aw-auth__form" onSubmit={submit}>
+        <TextField
+          autoComplete="username"
+          autoFocus
+          disabled={submitting}
+          id="login-name"
+          label="Login name"
+          maxLength={64}
+          onChange={(event) => setLoginName(event.target.value)}
+          required
+          value={loginName}
+        />
+        <TextField
+          autoComplete="current-password"
+          disabled={submitting}
+          id="password"
+          label="Password"
+          minLength={12}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          type="password"
+          value={password}
+        />
+        <Button
+          busy={submitting}
+          className="aw-auth__submit"
+          disabled={!loginName.trim() || password.length < 12}
+          size="lg"
+          type="submit"
+          variant="primary"
+        >
+          {submitting ? 'Signing in…' : 'Sign in'}
+        </Button>
+      </form>
+    </AuthLayout>
   )
 }

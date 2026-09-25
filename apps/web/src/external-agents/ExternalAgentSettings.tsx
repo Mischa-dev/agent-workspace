@@ -1,8 +1,21 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import {
+  ActorTag,
+  Avatar,
+  Banner,
+  Button,
+  ErrorState,
+  Icon,
+  MessageSkeleton,
+  Section,
+  SelectField,
+  StatusChip,
+  TextField,
+} from '../ui'
 import {
   createExternalAgent,
   listExternalAgents,
@@ -17,14 +30,22 @@ import {
   type OneTimeCredential,
 } from './api'
 
-const memberScopes: ExternalAgentScope[] = [
-  'read',
-  'write',
-  'events',
-  'approval_respond',
-  'worker_request',
-]
+const memberScopes: ExternalAgentScope[] = ['read', 'write', 'events', 'approval_respond', 'worker_request']
 const viewerScopes: ExternalAgentScope[] = ['read', 'events']
+
+const SCOPE_LABELS: Record<ExternalAgentScope, string> = {
+  read: 'Read conversations',
+  write: 'Post messages',
+  events: 'Receive live events',
+  approval_respond: 'Answer approvals',
+  worker_request: 'Ask for runs',
+}
+
+function formatWhen(iso: string | null | undefined) {
+  if (!iso) return null
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
 
 export function ExternalAgentSettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
@@ -32,10 +53,7 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
     queryKey: queryKeys.externalAgents(projectId),
     queryFn: () => listExternalAgents(projectId),
   })
-  const [oneTimeCredential, setOneTimeCredential] = useState<{
-    agentName: string
-    credential: OneTimeCredential
-  } | null>(null)
+  const [oneTimeCredential, setOneTimeCredential] = useState<{ agentName: string; credential: OneTimeCredential } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const errorRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -43,128 +61,101 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
   }, [error])
 
   const refresh = async () => {
-    await queryClient.invalidateQueries({
-      queryKey: queryKeys.externalAgents(projectId),
-    })
+    await queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(projectId) })
   }
   const handleSuccess = async (result: ExternalAgentMutation) => {
     if (result.oneTimeCredential) {
-      setOneTimeCredential({
-        agentName: result.connection.displayName,
-        credential: result.oneTimeCredential,
-      })
+      setOneTimeCredential({ agentName: result.connection.displayName, credential: result.oneTimeCredential })
     }
     await refresh()
   }
   const handleError = (reason: unknown) => {
-    setError(
-      isApiError(reason)
-        ? reason.message
-        : 'The external agent change could not be completed.',
-    )
+    setError(isApiError(reason) ? reason.message : 'That change to the agent didn’t go through. Try again.')
   }
   const createMutation = useMutation({
-    mutationFn: (input: Parameters<typeof createExternalAgent>[1]) =>
-      createExternalAgent(projectId, input),
+    mutationFn: (input: Parameters<typeof createExternalAgent>[1]) => createExternalAgent(projectId, input),
     onSuccess: handleSuccess,
     onError: handleError,
   })
   const updateMutation = useMutation({
-    mutationFn: ({
-      connection,
-      input,
-    }: {
-      connection: ExternalAgentConnection
-      input: Parameters<typeof updateExternalAgent>[2]
-    }) => updateExternalAgent(projectId, connection.id, input),
+    mutationFn: ({ connection, input }: { connection: ExternalAgentConnection; input: Parameters<typeof updateExternalAgent>[2] }) =>
+      updateExternalAgent(projectId, connection.id, input),
     onSuccess: handleSuccess,
     onError: handleError,
   })
   const rotateMutation = useMutation({
-    mutationFn: (connection: ExternalAgentConnection) =>
-      rotateExternalAgentCredential(
-        projectId,
-        connection.id,
-        connection.version,
-      ),
+    mutationFn: (connection: ExternalAgentConnection) => rotateExternalAgentCredential(projectId, connection.id, connection.version),
     onSuccess: handleSuccess,
     onError: handleError,
   })
   const removeMutation = useMutation({
-    mutationFn: (connection: ExternalAgentConnection) =>
-      removeExternalAgent(projectId, connection.id, connection.version),
+    mutationFn: (connection: ExternalAgentConnection) => removeExternalAgent(projectId, connection.id, connection.version),
     onSuccess: handleSuccess,
     onError: handleError,
   })
-  const pending =
-    createMutation.isPending ||
-    updateMutation.isPending ||
-    rotateMutation.isPending ||
-    removeMutation.isPending
+  const pending = createMutation.isPending || updateMutation.isPending || rotateMutation.isPending || removeMutation.isPending
 
-  if (connections.isPending) return <p aria-live="polite">Loading external agents…</p>
+  if (connections.isPending) return <MessageSkeleton label="Loading agents" rows={2} />
   if (connections.isError) {
     return (
-      <div className="error-state" role="alert">
-        <p>External agent settings could not be loaded.</p>
-        <button onClick={() => void connections.refetch()} type="button">
-          Try again
-        </button>
-      </div>
+      <ErrorState action={<Button onClick={() => void connections.refetch()}>Try again</Button>} title="Agents didn’t load">
+        Check your connection and try again.
+      </ErrorState>
     )
   }
 
   return (
-    <div className="external-agent-settings">
+    <div className="aw-agents">
       {error && (
-        <div className="form-error-summary" ref={errorRef} role="alert" tabIndex={-1}>
-          {error}
+        <div className="aw-agents__error" ref={errorRef} role="alert" tabIndex={-1}>
+          <Banner tone="danger">{error}</Banner>
         </div>
       )}
       {oneTimeCredential && (
-        <OneTimeBearer
+        <OneTimeToken
           agentName={oneTimeCredential.agentName}
           credential={oneTimeCredential.credential}
           onDismiss={() => setOneTimeCredential(null)}
         />
       )}
-      <CreateExternalAgentForm
-        disabled={pending}
-        onSubmit={(input) => {
-          setError(null)
-          createMutation.mutate(input)
-        }}
-      />
-      <h3>Connected teammates</h3>
-      {!connections.data.connections.length && (
-        <p>No external agent connections have been created.</p>
-      )}
-      <div className="external-agent-list">
-        {connections.data.connections.map((connection) => (
-          <ExternalAgentRow
-            connection={connection}
-            disabled={pending}
-            key={connection.id}
-            onRemove={() => {
-              setError(null)
-              removeMutation.mutate(connection)
-            }}
-            onRotate={() => {
-              setError(null)
-              rotateMutation.mutate(connection)
-            }}
-            onUpdate={(input) => {
-              setError(null)
-              updateMutation.mutate({ connection, input })
-            }}
-          />
-        ))}
-      </div>
+      <Section description="The agents that can read and post here." title="Connected agents">
+        {!connections.data.connections.length && <p className="aw-agents__empty">No agents connected yet.</p>}
+        <div className="aw-agents__list">
+          {connections.data.connections.map((connection) => (
+            <AgentCard
+              connection={connection}
+              disabled={pending}
+              key={connection.id}
+              onRemove={() => {
+                setError(null)
+                removeMutation.mutate(connection)
+              }}
+              onRotate={() => {
+                setError(null)
+                rotateMutation.mutate(connection)
+              }}
+              onUpdate={(input) => {
+                setError(null)
+                updateMutation.mutate({ connection, input })
+              }}
+            />
+          ))}
+        </div>
+      </Section>
+      <Section description="You’ll get a token for its MCP client once. It can’t be shown again." title="Connect an agent">
+        <CreateAgentForm
+          disabled={pending}
+          onSubmit={(input) => {
+            setError(null)
+            createMutation.mutate(input)
+          }}
+        />
+      </Section>
     </div>
   )
 }
 
-function CreateExternalAgentForm({
+function CreateAgentForm({
   disabled,
   onSubmit,
 }: {
@@ -185,62 +176,57 @@ function CreateExternalAgentForm({
     setScopes(nextRole === 'viewer' ? viewerScopes : memberScopes)
   }
   return (
-    <form className="external-agent-form" onSubmit={submit}>
-      <div className="field">
-        <label htmlFor="external-agent-connection-name">Connection name</label>
-        <input
+    <form className="aw-card aw-agentform" onSubmit={submit}>
+      <div className="aw-agentform__grid">
+        <TextField
           disabled={disabled}
-          id="external-agent-connection-name"
-          maxLength={80}
-          onChange={(event) => setConnectionName(event.target.value)}
-          required
-          value={connectionName}
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="external-agent-display-name">Display name</label>
-        <input
-          disabled={disabled}
+          hint="How people see it in messages."
           id="external-agent-display-name"
+          label="Display name"
           maxLength={80}
           onChange={(event) => setDisplayName(event.target.value)}
           required
           value={displayName}
         />
-      </div>
-      <div className="field">
-        <label htmlFor="external-agent-handle">Handle</label>
-        <input
+        <TextField
           disabled={disabled}
+          hint="Used for @mentions."
           id="external-agent-handle"
+          label="Handle"
           maxLength={32}
           onChange={(event) => setHandle(event.target.value)}
+          prefix="@"
           required
           spellCheck={false}
           value={handle}
         />
-      </div>
-      <div className="field">
-        <label htmlFor="external-agent-role">Project role</label>
-        <select
+        <TextField
+          disabled={disabled}
+          hint="Only you see this, for example the machine it runs on."
+          id="external-agent-connection-name"
+          label="Connection name"
+          maxLength={80}
+          onChange={(event) => setConnectionName(event.target.value)}
+          required
+          value={connectionName}
+        />
+        <SelectField
           disabled={disabled}
           id="external-agent-role"
+          label="Role"
           onChange={(event) => changeRole(event.target.value as ExternalAgentRole)}
           value={role}
         >
-          <option value="member">Member</option>
-          <option value="viewer">Viewer</option>
-        </select>
+          <option value="member">Member: reads and posts</option>
+          <option value="viewer">Viewer: reads only</option>
+        </SelectField>
       </div>
-      <ScopeFields
-        disabled={disabled}
-        onChange={setScopes}
-        role={role}
-        scopes={scopes}
-      />
-      <button className="primary-button" disabled={disabled} type="submit">
-        {disabled ? 'Connecting…' : 'Connect external agent'}
-      </button>
+      <ScopeFields disabled={disabled} onChange={setScopes} role={role} scopes={scopes} />
+      <div className="aw-form__actions">
+        <Button busy={disabled} icon="bot" type="submit" variant="primary">
+          Connect agent
+        </Button>
+      </div>
     </form>
   )
 }
@@ -258,30 +244,29 @@ function ScopeFields({
 }) {
   const allowed = role === 'viewer' ? viewerScopes : memberScopes
   return (
-    <fieldset className="external-agent-scopes">
-      <legend>Connection permissions</legend>
+    <fieldset className="aw-scopes">
+      <legend className="aw-scopes__legend">What it can do</legend>
       {allowed.map((scope) => (
-        <label key={scope}>
+        <label className="aw-scope" key={scope}>
           <input
             checked={scopes.includes(scope)}
             disabled={disabled || scope === 'read'}
             onChange={(event) =>
-              onChange(
-                event.target.checked
-                  ? [...scopes, scope]
-                  : scopes.filter((candidate) => candidate !== scope),
-              )
+              onChange(event.target.checked ? [...scopes, scope] : scopes.filter((candidate) => candidate !== scope))
             }
             type="checkbox"
           />
-          {scope.replace('_', ' ')}
+          <span className="aw-scope__box" aria-hidden="true">
+            <Icon name="check" size={12} />
+          </span>
+          {SCOPE_LABELS[scope]}
         </label>
       ))}
     </fieldset>
   )
 }
 
-function ExternalAgentRow({
+function AgentCard({
   connection,
   disabled,
   onRemove,
@@ -296,107 +281,106 @@ function ExternalAgentRow({
 }) {
   const active = connection.status === 'active'
   const [removeArmed, setRemoveArmed] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const lastUsed = formatWhen(connection.lastUsedAt)
   return (
-    <article className="external-agent-row">
-      <div>
-        <strong>{connection.displayName}</strong>
-        <span>@{connection.handle}</span>
-        <small>
-          {connection.status} ·{' '}
-          {connection.lastUsedAt ? `last active ${connection.lastUsedAt}` : 'not used yet'}
-        </small>
-        <small>Permissions: {connection.scopes.join(', ')}</small>
-        {active && <WebhookField connection={connection} disabled={disabled} />}
-        {active && (
-          <ScopeFields
-            disabled={disabled}
-            onChange={(scopes) =>
-              onUpdate({ expectedVersion: connection.version, scopes })
-            }
-            role={connection.role}
-            scopes={connection.scopes}
-          />
-        )}
-      </div>
-      {connection.status !== 'removed' && (
-        <div className="row-actions">
-          <select
+    <article className="aw-card aw-agentcard">
+      <header className="aw-agentcard__head">
+        <Avatar kind="agent" name={connection.displayName} seed={connection.actorId} size={40} />
+        <div className="aw-agentcard__titles">
+          <div className="aw-agentcard__name">
+            <strong>{connection.displayName}</strong>
+            <ActorTag kind="agent" />
+          </div>
+          <span className="aw-agentcard__sub">
+            @{connection.handle} · {connection.role === 'viewer' ? 'Viewer' : 'Member'} · {lastUsed ? `last active ${lastUsed}` : 'not used yet'}
+          </span>
+        </div>
+        <StatusChip icon={active ? 'circle-check' : 'circle-minus'} tone={active ? 'success' : 'muted'}>
+          {active ? 'Active' : connection.status === 'removed' ? 'Removed' : 'Disabled'}
+        </StatusChip>
+      </header>
+      <ul aria-label="Permissions" className="aw-agentcard__scopes">
+        {connection.scopes.map((scope) => (
+          <li key={scope}>{SCOPE_LABELS[scope] ?? scope}</li>
+        ))}
+      </ul>
+      {active && editing ? (
+        <div className="aw-agentcard__edit">
+          <SelectField
             aria-label={`Role for ${connection.displayName}`}
-            disabled={disabled || !active}
+            disabled={disabled}
+            label="Role"
             onChange={(event) => {
               const role = event.target.value as ExternalAgentRole
-              onUpdate({
-                expectedVersion: connection.version,
-                role,
-                scopes: role === 'viewer' ? viewerScopes : connection.scopes,
-              })
+              onUpdate({ expectedVersion: connection.version, role, scopes: role === 'viewer' ? viewerScopes : connection.scopes })
             }}
             value={connection.role}
           >
-            <option value="member">Member</option>
-            <option value="viewer">Viewer</option>
-          </select>
+            <option value="member">Member: reads and posts</option>
+            <option value="viewer">Viewer: reads only</option>
+          </SelectField>
+          <ScopeFields
+            disabled={disabled}
+            onChange={(scopes) => onUpdate({ expectedVersion: connection.version, scopes })}
+            role={connection.role}
+            scopes={connection.scopes}
+          />
+          <WebhookField connection={connection} disabled={disabled} />
+        </div>
+      ) : null}
+      {connection.status !== 'removed' && (
+        <footer className="aw-card__actions">
           {active ? (
             <>
-              <button disabled={disabled} onClick={onRotate} type="button">
-                Rotate bearer
-              </button>
-              <button
+              <Button icon="settings" onClick={() => setEditing(!editing)} size="sm" variant="ghost">
+                {editing ? 'Done editing' : 'Edit'}
+              </Button>
+              <Button disabled={disabled} icon="retry" onClick={onRotate} size="sm" variant="ghost">
+                New token
+              </Button>
+              <Button
                 disabled={disabled}
-                onClick={() =>
-                  onUpdate({ expectedVersion: connection.version, enabled: false })
-                }
-                type="button"
+                icon="circle-minus"
+                onClick={() => onUpdate({ expectedVersion: connection.version, enabled: false })}
+                size="sm"
+                variant="ghost"
               >
                 Disable
-              </button>
+              </Button>
             </>
           ) : (
-            <button
+            <Button
               disabled={disabled}
-              onClick={() =>
-                onUpdate({ expectedVersion: connection.version, enabled: true })
-              }
-              type="button"
+              icon="circle-check"
+              onClick={() => onUpdate({ expectedVersion: connection.version, enabled: true })}
+              size="sm"
             >
               Re-enable
-            </button>
+            </Button>
           )}
+          <span className="aw-agentcard__spacer" />
           {removeArmed ? (
             <>
-              <button
-                className="danger-button"
-                disabled={disabled}
-                onClick={onRemove}
-                type="button"
-              >
-                Confirm removal
-              </button>
-              <button
-                disabled={disabled}
-                onClick={() => setRemoveArmed(false)}
-                type="button"
-              >
+              <Button disabled={disabled} onClick={() => setRemoveArmed(false)} size="sm">
                 Cancel
-              </button>
+              </Button>
+              <Button disabled={disabled} icon="trash" onClick={onRemove} size="sm" variant="danger">
+                Confirm removal
+              </Button>
             </>
           ) : (
-            <button
-              className="danger-button"
-              disabled={disabled}
-              onClick={() => setRemoveArmed(true)}
-              type="button"
-            >
+            <Button disabled={disabled} icon="trash" onClick={() => setRemoveArmed(true)} size="sm" variant="ghost">
               Remove…
-            </button>
+            </Button>
           )}
-        </div>
+        </footer>
       )}
     </article>
   )
 }
 
-function OneTimeBearer({
+function OneTimeToken({
   agentName,
   credential,
   onDismiss,
@@ -407,50 +391,36 @@ function OneTimeBearer({
 }) {
   const [copied, setCopied] = useState(false)
   return (
-    <aside aria-labelledby="external-bearer-ready-heading" className="one-shot-secret">
-      <h3 id="external-bearer-ready-heading">Bearer ready for {agentName}</h3>
-      <p>
-        Copy it now into the external runtime’s owner-only secret file. It cannot
-        be recovered after this panel closes.
+    <aside aria-labelledby="external-bearer-ready-heading" className="aw-card aw-token">
+      <div className="aw-token__head">
+        <Icon name="shield-check" size={18} />
+        <h3 id="external-bearer-ready-heading">Token ready for {agentName}</h3>
+      </div>
+      <p>Copy it into the agent’s secret file now. It can’t be shown again after you close this.</p>
+      <code className="aw-token__value">{credential.token}</code>
+      <p className="aw-token__meta">Expires {formatWhen(credential.expiresAt) ?? credential.expiresAt}</p>
+      <p className="aw-token__help">
+        Point the agent’s MCP client at <code>{`${window.location.origin}/api/v1/mcp`}</code> with this token. It checks{' '}
+        <code>inbox_list</code>, then answers with <code>reply_claim</code> and <code>reply_send</code>, or <code>reply_pass</code>.
       </p>
-      <code>{credential.token}</code>
-      <small>Expires {credential.expiresAt}</small>
-      <p>
-        Point the agent's MCP client at{' '}
-        <code>{`${window.location.origin}/api/v1/mcp`}</code> with this bearer.
-        It should call <code>inbox_list</code>, then <code>reply_claim</code>{' '}
-        and <code>reply_send</code> (or <code>reply_pass</code>).
-      </p>
-      <div className="row-actions">
-        <button
+      <div className="aw-card__actions">
+        <Button
+          icon={copied ? 'check' : 'copy'}
           onClick={() => {
-            void navigator.clipboard
-              .writeText(credential.token)
-              .then(() => setCopied(true))
+            void navigator.clipboard.writeText(credential.token).then(() => setCopied(true))
           }}
-          type="button"
+          variant="primary"
         >
-          {copied ? 'Copied' : 'Copy bearer'}
-        </button>
-        <button onClick={onDismiss} type="button">
-          Done
-        </button>
+          {copied ? 'Copied' : 'Copy token'}
+        </Button>
+        <Button onClick={onDismiss}>Done</Button>
       </div>
     </aside>
   )
 }
 
-/**
- * Optional push wakeups. Agents that can't receive webhooks (scheduled ones)
- * simply check their inbox on their own schedule instead.
- */
-function WebhookField({
-  connection,
-  disabled,
-}: {
-  connection: ExternalAgentConnection
-  disabled: boolean
-}) {
+/** Optional push wakeups. Agents that can't receive webhooks check their inbox on a schedule instead. */
+function WebhookField({ connection, disabled }: { connection: ExternalAgentConnection; disabled: boolean }) {
   const queryClient = useQueryClient()
   const [url, setUrl] = useState(connection.webhookUrl ?? '')
   const [secret, setSecret] = useState<string | null>(null)
@@ -462,54 +432,44 @@ function WebhookField({
     void setExternalAgentWebhook(connection.projectId, connection.id, next)
       .then(async (result) => {
         setSecret(result.webhookSecret)
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.externalAgents(connection.projectId),
-        })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(connection.projectId) })
       })
-      .catch((reason: unknown) =>
-        setError(reason instanceof Error ? reason.message : 'Webhook was not saved.'),
-      )
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The webhook wasn’t saved.'))
       .finally(() => setBusy(false))
   }
+  const lastWakeup = formatWhen(connection.lastWakeupAt)
   return (
-    <div className="field webhook-field">
-      <label htmlFor={`webhook-${connection.id}`}>
-        Wakeup webhook (optional)
-      </label>
-      <input
+    <div className="aw-webhook">
+      <TextField
         disabled={disabled || busy}
+        error={error ?? undefined}
+        hint={
+          lastWakeup
+            ? `Last wakeup ${lastWakeup}${connection.lastWakeupError ? `, which failed: ${connection.lastWakeupError}` : ''}.`
+            : 'We call this when someone asks the agent for a reply. Leave it empty for agents that check in on a schedule.'
+        }
         id={`webhook-${connection.id}`}
+        label="Wakeup webhook (optional)"
         onChange={(event) => setUrl(event.target.value)}
-        placeholder="https://… (leave empty for agents that check in on a schedule)"
+        placeholder="https://…"
         type="url"
         value={url}
       />
-      <div className="row-actions">
-        <button
-          disabled={disabled || busy || !url.trim()}
-          onClick={() => save(url.trim())}
-          type="button"
-        >
+      <div className="aw-card__actions">
+        <Button disabled={disabled || busy || !url.trim()} onClick={() => save(url.trim())} size="sm">
           Save webhook
-        </button>
+        </Button>
         {connection.webhookUrl ? (
-          <button disabled={disabled || busy} onClick={() => save(null)} type="button">
+          <Button disabled={disabled || busy} onClick={() => save(null)} size="sm" variant="ghost">
             Stop wakeups
-          </button>
+          </Button>
         ) : null}
       </div>
-      {connection.lastWakeupAt ? (
-        <small>
-          Last wakeup {connection.lastWakeupAt}
-          {connection.lastWakeupError ? ` failed: ${connection.lastWakeupError}` : ''}
-        </small>
-      ) : null}
       {secret ? (
-        <small>
-          Signing secret (shown once): <code>{secret}</code>
-        </small>
+        <p className="aw-token__meta">
+          Signing secret, shown once: <code>{secret}</code>
+        </p>
       ) : null}
-      {error ? <small role="alert">{error}</small> : null}
     </div>
   )
 }

@@ -6,50 +6,46 @@ product
 
 ## Users
 
-The initial user is a technical solo operator working from a Mac while execution
-runs on a private Red Hat project host. They need to sign in, move between
-contained Projects without losing context, and start, supervise, approve,
-interrupt, and recover hosted coding work without losing durable state.
+A person who works alongside several AI agents: talking with them in DMs and
+groups, working with them in Project channels and threads, and handing them real
+work (runs on a private host that end in branches and pull requests). They use a
+Mac through long workdays and late nights, dip in and out of many conversations,
+and expect the app to feel like a mature chat product, not a control panel.
 
 ## Product Purpose
 
-Agent Workspace is a desktop-first project environment that joins durable
-conversation with hosted execution and GitHub delivery. M1 succeeds when the
-operator can use a real browser session, create and archive Projects, search and
-switch through the Project rail, restore each Project's remembered location,
-and continue using the accepted M0 Thread execution surface.
+Agent Workspace is chat for people and their agents: Slack-level messaging with
+first-class support for agents. Agents are members, not integrations. They are
+mentioned, asked for replies, post as themselves, run work in threads and ask for
+decisions. The product succeeds when talking to an agent feels as natural as
+talking to a teammate, and when you can always see what each agent is doing and
+what is waiting on you.
 
 ## Brand Personality
 
-Calm, exact, and operational. The interface should feel like a dependable
-control surface: dense enough for technical work, quiet enough for sustained
-use, and explicit about state.
+Calm, polished and trustworthy, with a warm, confident edge. Dense enough for
+long days, never cramped. It should feel professional the way Slack and Linear
+do: every pixel considered, nothing shouting.
 
 ## Anti-references
 
-Do not resemble a promotional AI chat demo, a decorative sci-fi cockpit, or a
-generic card-filled SaaS dashboard. Avoid mystery automation, excessive glow,
-gratuitous motion, and visual polish that hides durable state or execution
-boundaries.
+- An admin console or developer dashboard (tables of IDs, jargon labels,
+  "Actor", "durable", Title Case everywhere).
+- A promotional AI chat demo (sparkles, purple gradients, "AI" badges).
+- A sci-fi cockpit or terminal cosplay.
 
 ## Design Principles
 
-- Make durable state legible: Thread, run, approval, repository, branch, and
-  recovery status should be easy to distinguish.
-- Keep the operator in control: blocking questions and destructive actions must
-  have explicit, accessible controls.
-- Prefer evidence over theater: show significant commands, file changes, and
-  recovery outcomes instead of simulated token noise.
-- Preserve project context: the four-region shell keeps navigation, timeline,
-  and execution context visible without turning every datum into a card.
-- Keep identity server-owned: the browser never chooses authorship, derives
-  permissions from roles, or stores authentication tokens.
-- Fail clearly and recover honestly: reconnect, refetch, and interruption states
-  explain what is known and what was preserved.
+1. The conversation is the product. Chrome recedes.
+2. People and agents are peers, never confused: people are round, agents are
+   rounded squares and carry an Agent tag.
+3. Color means something: mentions, agent activity and things waiting on you.
+4. Every color is a slot the person can change.
+5. Dense, not cramped.
 
 ## Accessibility & Inclusion
 
-Target WCAG 2.2 AA for the M1 surface. Color is never the only status signal;
-keyboard focus is visible; native controls and semantic landmarks are used;
-hostile provider output is rendered as text; and reduced-motion preferences are
-respected.
+Text meets 4.5:1 and meaningful marks meet 3:1 in every preset; custom themes
+get a contrast check with a one-click fix. Everything works by keyboard with a
+visible focus ring, motion has a reduced-motion fallback, and identity never
+depends on color alone.

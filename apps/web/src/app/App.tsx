@@ -12,8 +12,10 @@ import {
 import { SessionBoundary } from '../auth/SessionBoundary'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
+import { BrandMark } from '../auth/AuthLayout'
 import { AppShell } from '../shell/AppShell'
 import { ThemeProvider } from '../theme/ThemeProvider'
+import { Button, EmptyState, MessageSkeleton } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
 const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
@@ -29,6 +31,7 @@ const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage')
 const ProjectSettingsPage = lazy(() => import('../projects/ProjectSettingsPage').then((module) => ({ default: module.ProjectSettingsPage })))
 const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => ({ default: module.ThreadPage })))
 const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
+const AppearancePage = lazy(() => import('../theme/AppearancePage').then((module) => ({ default: module.AppearancePage })))
 const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
 
 function createQueryClient() {
@@ -102,6 +105,14 @@ export function App() {
                     </AuthenticatedRouteBoundary>
                   }
                   path="/messages/:conversationId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <AppearancePage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/settings/appearance"
                 />
                 <Route
                   element={
@@ -195,8 +206,8 @@ export function AuthenticatedRouteBoundary({
 
 function PublicRouteFallback() {
   return (
-    <main aria-busy="true" className="session-state">
-      <div aria-hidden="true" className="brand-mark">A</div>
+    <main aria-busy="true" className="aw-boot">
+      <BrandMark />
       <p>Opening…</p>
     </main>
   )
@@ -211,16 +222,12 @@ function AuthenticatedRouteFallback() {
     null
 
   return (
-    <AppShell project={project} user={session.user}>
-      <div aria-busy="true" className="page-content">
+    <AppShell mainClassName="aw-main--page" project={project} user={session.user}>
+      <div aria-busy="true" className="aw-page">
         <p className="visually-hidden" role="status">
           Loading workspace view.
         </p>
-        <div aria-hidden="true" className="page-skeleton">
-          <span />
-          <span />
-          <span />
-        </div>
+        <MessageSkeleton decorative />
       </div>
     </AppShell>
   )
@@ -230,15 +237,19 @@ function NotFoundPage() {
   const session = useAuthenticatedSession()
   const navigate = useNavigate()
   return (
-    <AppShell user={session.user}>
-      <div className="page-content">
-        <div className="error-state" role="alert">
-          <h1>Page not found</h1>
-          <p>The requested location is not part of this workspace.</p>
-          <button onClick={() => navigate('/home')} type="button">
-            Go to Home
-          </button>
-        </div>
+    <AppShell mainClassName="aw-main--page" user={session.user}>
+      <div className="aw-page" role="alert">
+        <EmptyState
+          action={
+            <Button onClick={() => navigate('/home')} variant="primary">
+              Go to Home
+            </Button>
+          }
+          icon="search"
+          title="Page not found"
+        >
+          That address isn’t part of this workspace. It may have moved, or the link may be old.
+        </EmptyState>
       </div>
     </AppShell>
   )

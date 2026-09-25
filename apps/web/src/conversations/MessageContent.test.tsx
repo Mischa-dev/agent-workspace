@@ -35,7 +35,7 @@ describe('MessageContent', () => {
     ).toBeInTheDocument()
     expect(container.querySelector('img')).toBeNull()
     expect(screen.getByLabelText('Mischa <Owner>, @mischa')).toHaveTextContent(
-      '@mischa',
+      '@Mischa <Owner>',
     )
   })
 

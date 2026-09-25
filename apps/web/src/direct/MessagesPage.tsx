@@ -1,13 +1,26 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { ExternalAgentSettings } from '../external-agents/ExternalAgentSettings'
 import { AppShell } from '../shell/AppShell'
+import {
+  ActorTag,
+  Avatar,
+  Banner,
+  Button,
+  EmptyState,
+  ErrorState,
+  Icon,
+  MessageSkeleton,
+  PageHeader,
+  TextField,
+  actorKind,
+} from '../ui'
 import { createGroup, directQueryKey, openDm, useDirectOverview } from './api'
 
-/** Start a DM with one person or a group with several. */
+/** Start a DM with one person or agent, or a group with several. */
 export function MessagesPage() {
   const session = useAuthenticatedSession()
   const overview = useDirectOverview()
@@ -15,17 +28,19 @@ export function MessagesPage() {
   const navigate = useNavigate()
   const groupKey = useRef(crypto.randomUUID())
   const [selected, setSelected] = useState<string[]>([])
+  const [filter, setFilter] = useState('')
   const [groupName, setGroupName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const people = overview.data?.people ?? []
+  const people = useMemo(() => overview.data?.people ?? [], [overview.data?.people])
+  const needle = filter.trim().toLowerCase()
+  const visible = people.filter(
+    (person) => !needle || person.displayName.toLowerCase().includes(needle) || person.handle.toLowerCase().includes(needle),
+  )
+  const chosen = people.filter((person) => selected.includes(person.id))
 
   const toggle = (id: string) =>
-    setSelected((current) =>
-      current.includes(id)
-        ? current.filter((candidate) => candidate !== id)
-        : [...current, id],
-    )
+    setSelected((current) => (current.includes(id) ? current.filter((candidate) => candidate !== id) : [...current, id]))
 
   const start = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -35,131 +50,141 @@ export function MessagesPage() {
     const created =
       selected.length === 1
         ? openDm(selected[0])
-        : createGroup({
-            name: groupName,
-            memberIds: selected,
-            idempotencyKey: groupKey.current,
-          })
+        : createGroup({ name: groupName, memberIds: selected, idempotencyKey: groupKey.current })
     void created
       .then(async (conversationId) => {
         groupKey.current = crypto.randomUUID()
         await queryClient.invalidateQueries({ queryKey: directQueryKey })
         navigate(`/messages/${encodeURIComponent(conversationId)}`)
       })
-      .catch((reason: unknown) =>
-        setError(
-          reason instanceof Error ? reason.message : 'Could not start the conversation.',
-        ),
-      )
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The conversation didn’t start. Try again.'))
       .finally(() => setBusy(false))
   }
 
+  const submitLabel =
+    selected.length > 1
+      ? `Start group with ${selected.length}`
+      : chosen[0]
+        ? `Message ${chosen[0].displayName}`
+        : 'Start conversation'
+
   return (
-    <AppShell direct mainClassName="workspace" user={session.user}>
-      <header className="workspace-heading">
-        <div>
-          <span className="section-label">Messages</span>
-          <h1 id="workspace-heading">New message</h1>
-        </div>
-      </header>
-      {overview.isPending ? <p role="status">Loading…</p> : null}
-      {overview.isError ? (
-        <div className="error-state" role="alert">
-          <h2>Messages are unavailable</h2>
-          <button onClick={() => void overview.refetch()} type="button">
-            Try again
-          </button>
-        </div>
-      ) : null}
-      {overview.data && people.length === 0 ? (
-        <div className="empty-state">
-          <h2>No one to message yet.</h2>
-          <p>
-            Add your agents first. Each one gets its own identity and
-            connection.
-          </p>
-          {overview.data.capabilities.manageAgents ? (
-            <Link to="/messages/agents">Add an agent</Link>
-          ) : null}
-        </div>
-      ) : null}
-      {people.length > 0 ? (
-        <form className="new-message-form" onSubmit={start}>
-          <fieldset>
-            <legend>
-              Pick one person for a DM, or several for a group.
-            </legend>
-            <ul className="people-picker">
-              {people.map((person) => (
-                <li key={person.id}>
-                  <label>
-                    <input
-                      checked={selected.includes(person.id)}
-                      onChange={() => toggle(person.id)}
-                      type="checkbox"
-                    />
-                    <span>{person.displayName}</span>
-                    <small>
-                      {person.kind === 'external_agent' ? 'agent' : `@${person.handle}`}
-                    </small>
-                  </label>
-                </li>
+    <AppShell direct mainClassName="aw-main--page" user={session.user}>
+      <div className="aw-page aw-page--narrow">
+        <PageHeader icon="compose" title="New message">
+          Pick one person or agent for a direct message, or several for a group.
+        </PageHeader>
+        {overview.isPending ? <MessageSkeleton label="Loading people" rows={2} /> : null}
+        {overview.isError ? (
+          <ErrorState action={<Button onClick={() => void overview.refetch()}>Try again</Button>} title="Messages didn’t load">
+            Check your connection and try again.
+          </ErrorState>
+        ) : null}
+        {overview.data && people.length === 0 ? (
+          <EmptyState
+            action={
+              overview.data.capabilities.manageAgents ? (
+                <Link className="aw-btn aw-btn--primary aw-btn--md" to="/messages/agents">
+                  <Icon name="bot" />
+                  Connect an agent
+                </Link>
+              ) : undefined
+            }
+            icon="users"
+            title="No one to message yet"
+          >
+            Connect an agent first. Each one gets its own identity and shows up here.
+          </EmptyState>
+        ) : null}
+        {people.length > 0 ? (
+          <form className="aw-newmsg" onSubmit={start}>
+            <div className="aw-newmsg__to">
+              <span className="aw-newmsg__label">To</span>
+              {chosen.map((person) => (
+                <button
+                  aria-label={`Remove ${person.displayName}`}
+                  className="aw-newmsg__chip"
+                  key={person.id}
+                  onClick={() => toggle(person.id)}
+                  type="button"
+                >
+                  <Avatar kind={actorKind(person.kind)} name={person.displayName} seed={person.id} size={20} />
+                  {person.displayName}
+                  <Icon name="x" size={14} />
+                </button>
               ))}
-            </ul>
-          </fieldset>
-          {selected.length > 1 ? (
-            <div className="field">
-              <label htmlFor="group-name">Group name (optional)</label>
               <input
-                id="group-name"
-                maxLength={120}
-                onChange={(event) => setGroupName(event.target.value)}
-                placeholder="Named after its members if left blank"
-                value={groupName}
+                aria-label="Find people and agents"
+                className="aw-newmsg__input"
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder={chosen.length ? '' : 'Find people and agents'}
+                value={filter}
               />
             </div>
-          ) : null}
-          <button disabled={!selected.length || busy} type="submit">
-            {busy
-              ? 'Starting…'
-              : selected.length > 1
-                ? `Start group with ${selected.length}`
-                : 'Open DM'}
-          </button>
-          {error ? <p role="alert">{error}</p> : null}
-        </form>
-      ) : null}
+            <fieldset className="aw-newmsg__people">
+              <legend className="visually-hidden">People and agents</legend>
+              {visible.length === 0 ? <p className="aw-newmsg__none">No one matches “{filter}”.</p> : null}
+              {visible.map((person) => {
+                const kind = actorKind(person.kind)
+                const checked = selected.includes(person.id)
+                return (
+                  <label className={checked ? 'aw-person is-checked' : 'aw-person'} key={person.id}>
+                    <input checked={checked} onChange={() => toggle(person.id)} type="checkbox" />
+                    <Avatar kind={kind} name={person.displayName} seed={person.id} size={32} />
+                    <span className="aw-person__name">{person.displayName}</span>
+                    <ActorTag kind={kind} />
+                    <span className="aw-person__handle">@{person.handle}</span>
+                    <span aria-hidden="true" className="aw-person__check">
+                      <Icon name="check" size={14} />
+                    </span>
+                  </label>
+                )
+              })}
+            </fieldset>
+            {selected.length > 1 ? (
+              <TextField
+                hint="Leave it blank to name the group after its members."
+                id="group-name"
+                label="Group name (optional)"
+                maxLength={120}
+                onChange={(event) => setGroupName(event.target.value)}
+                value={groupName}
+              />
+            ) : null}
+            {error ? <Banner tone="danger">{error}</Banner> : null}
+            <div className="aw-form__actions">
+              <Button busy={busy} disabled={!selected.length} type="submit" variant="primary">
+                {submitLabel}
+              </Button>
+            </div>
+          </form>
+        ) : null}
+      </div>
     </AppShell>
   )
 }
 
-/** Add and manage the agents you can DM. */
+/** Connect and manage the agents you can message. */
 export function AgentsPage() {
   const session = useAuthenticatedSession()
   const overview = useDirectOverview()
   const queryClient = useQueryClient()
   // New agents should appear in the people list as soon as you leave here.
-  useEffect(
-    () => () => void queryClient.invalidateQueries({ queryKey: directQueryKey }),
-    [queryClient],
-  )
+  useEffect(() => () => void queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
   return (
-    <AppShell direct mainClassName="workspace" user={session.user}>
-      <header className="workspace-heading">
-        <div>
-          <span className="section-label">Messages</span>
-          <h1 id="workspace-heading">Agents</h1>
-        </div>
-      </header>
-      <p>
-        Each agent connects with its own credential and posts as itself. Any
-        client that speaks MCP can connect.
-      </p>
-      {overview.data?.capabilities.manageAgents ? (
-        <ExternalAgentSettings projectId={overview.data.projectId} />
-      ) : overview.data ? (
-        <p>Only the workspace owner can manage agents.</p>
-      ) : null}
+    <AppShell direct mainClassName="aw-main--page" user={session.user}>
+      <div className="aw-page">
+        <PageHeader icon="bot" title="Agents">
+          Each agent connects with its own credential and posts as itself. Any client that speaks MCP can connect.
+        </PageHeader>
+        {overview.data?.capabilities.manageAgents ? (
+          <ExternalAgentSettings projectId={overview.data.projectId} />
+        ) : overview.data ? (
+          <Banner tone="info">Only the workspace owner can connect and manage agents.</Banner>
+        ) : overview.isPending ? (
+          <MessageSkeleton label="Loading agents" rows={2} />
+        ) : null}
+      </div>
     </AppShell>
   )
 }

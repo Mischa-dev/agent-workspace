@@ -1,23 +1,15 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import {
-  clearAuthenticatedQueryCache,
-  logout,
-  type SessionUser,
-} from '../auth/session'
+import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import {
-  useProjects,
-  useSwitchProject,
-  useUpdateProjectNavigation,
-} from '../projects/hooks'
-import { ProjectInitials, ProjectSwitcher } from '../projects/ProjectSwitcher'
+import { useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
+import { ProjectSwitcher } from '../projects/ProjectSwitcher'
 import type { Project } from '../projects/types'
-import { AppearanceControl } from './AppearanceControl'
+import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
 
 function projectRecency(project: Project) {
   const value = project.navigation.lastOpenedAt
@@ -28,16 +20,58 @@ function projectHref(project: Project) {
   return projectLocationHref(project.id, project.navigation.location)
 }
 
-function unmodifiedPrimaryClick(event: React.MouseEvent<HTMLAnchorElement>) {
+function unmodifiedPrimaryClick(event: MouseEvent<HTMLAnchorElement>) {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+}
+
+function TileFace({ children, swatch }: { children: ReactNode; swatch?: string }) {
   return (
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
+    <>
+      <span aria-hidden="true" className="aw-tile__indicator" />
+      <span
+        className="aw-tile__face"
+        style={swatch ? ({ '--tile-bg': `var(--swatch-${swatch})` } as CSSProperties) : undefined}
+      >
+        {children}
+      </span>
+    </>
   )
 }
 
+function UtilityTile({
+  active = false,
+  badge,
+  icon,
+  label,
+  onClick,
+  to,
+}: {
+  active?: boolean
+  badge?: number
+  icon: IconName
+  label: string
+  onClick?: () => void
+  to: string
+}) {
+  return (
+    <Tooltip label={label} side="right">
+      <Link
+        aria-current={active ? 'page' : undefined}
+        aria-label={badge ? `${label}, ${badge} unread` : label}
+        className={`aw-tile aw-tile--utility${active ? ' is-active' : ''}${badge ? ' is-unread' : ''}`}
+        onClick={onClick}
+        to={to}
+      >
+        <TileFace>
+          <Icon name={icon} size={20} />
+        </TileFace>
+        {badge ? <Badge className="aw-tile__badge" count={badge} max={9} /> : null}
+      </Link>
+    </Tooltip>
+  )
+}
+
+/** The far-left column: Home, Messages, each Project, and the account. */
 export function ProjectRail({
   currentProjectId,
   mobileOpen,
@@ -51,9 +85,7 @@ export function ProjectRail({
 }) {
   const projectsQuery = useProjects()
   const direct = useDirectOverview()
-  const unreadConversations =
-    direct.data?.conversations.filter((conversation) => conversation.unread)
-      .length ?? 0
+  const unreadConversations = direct.data?.conversations.filter((conversation) => conversation.unread).length ?? 0
   const switchProject = useSwitchProject()
   const updateNavigation = useUpdateProjectNavigation()
   const queryClient = useQueryClient()
@@ -62,34 +94,37 @@ export function ProjectRail({
   const searchButtonRef = useRef<HTMLButtonElement>(null)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
-  const projects = (projectsQuery.data?.projects ?? []).filter(
-    (project) => !project.archivedAt,
-  )
+  const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
   const pinned = projects.filter((project) => project.navigation.pinned)
   const recent = projects
     .filter((project) => !project.navigation.pinned)
     .sort((left, right) => projectRecency(right) - projectRecency(left))
     .slice(0, 5)
-  const activeProject = projects.find(
-    (project) => project.id === currentProjectId,
-  )
+  const activeProject = projects.find((project) => project.id === currentProjectId)
   const visibleProjects = [...pinned, ...recent]
-  if (
-    activeProject &&
-    !visibleProjects.some((project) => project.id === activeProject.id)
-  ) {
+  if (activeProject && !visibleProjects.some((project) => project.id === activeProject.id)) {
     visibleProjects.push(activeProject)
   }
+
+  // Cmd/Ctrl+K finds a Project from anywhere.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && !event.shiftKey && !event.altKey) {
+        event.preventDefault()
+        setStatus(null)
+        setSwitcherOpen(true)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   const closeSwitcher = () => {
     setSwitcherOpen(false)
     window.requestAnimationFrame(() => searchButtonRef.current?.focus())
   }
 
-  const selectProject = async (
-    project: Project,
-    event: React.MouseEvent<HTMLAnchorElement>,
-  ) => {
+  const selectProject = async (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
     if (!unmodifiedPrimaryClick(event)) return
     event.preventDefault()
     setStatus(null)
@@ -109,9 +144,7 @@ export function ProjectRail({
       onNavigate()
       navigate(result.href)
     } catch (reason) {
-      setStatus(
-        isApiError(reason) ? reason.message : 'Unable to switch Projects.',
-      )
+      setStatus(isApiError(reason) ? reason.message : 'Couldn’t switch Projects. Try again.')
     }
   }
 
@@ -125,7 +158,7 @@ export function ProjectRail({
         pinned: !project.navigation.pinned,
       })
     } catch (reason) {
-      setStatus(isApiError(reason) ? reason.message : 'Unable to update the pin.')
+      setStatus(isApiError(reason) ? reason.message : 'Couldn’t update the pin. Try again.')
     }
   }
 
@@ -137,78 +170,57 @@ export function ProjectRail({
       onNavigate()
       navigate('/sign-in', { replace: true })
     } catch (reason) {
-      setStatus(isApiError(reason) ? reason.message : 'Unable to sign out.')
+      setStatus(isApiError(reason) ? reason.message : 'Couldn’t sign out. Try again.')
     }
   }
 
+  const inMessages = location.pathname.startsWith('/messages')
+
   return (
     <>
-      <nav
-        aria-label="Projects"
-        className="project-rail"
-        data-mobile-open={mobileOpen}
-        id="project-rail"
-      >
-        <Link
-          aria-label="Global Home"
-          className="brand-mark"
-          onClick={onNavigate}
-          to="/home"
-        >
-          A
-        </Link>
-        <Link
-          aria-current={
-            location.pathname.startsWith('/messages') ? 'page' : undefined
-          }
-          aria-label={`Messages${unreadConversations ? `, ${unreadConversations} unread` : ''}`}
-          className="project-button"
-          data-active={location.pathname.startsWith('/messages')}
+      <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
+        <UtilityTile active={location.pathname === '/home'} icon="home" label="Home" onClick={onNavigate} to="/home" />
+        <UtilityTile
+          active={inMessages}
+          badge={unreadConversations}
+          icon="message"
+          label="Messages"
           onClick={onNavigate}
           to="/messages"
-        >
-          <span aria-hidden="true">✉</span>
-          {unreadConversations > 0 && (
-            <span aria-hidden="true" className="rail-attention">
-              {unreadConversations > 9 ? '9+' : unreadConversations}
-            </span>
-          )}
-        </Link>
-        <div className="project-list" aria-label="Pinned and recent Projects">
-          {projectsQuery.isPending && (
-            <span aria-label="Loading Projects" className="rail-loading">
-              ···
-            </span>
-          )}
-          {visibleProjects.map((project) => (
-            <a
-              aria-current={
-                project.id === currentProjectId ? 'page' : undefined
-              }
-              aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} items need attention` : ''}`}
-              className="project-button"
-              data-active={project.id === currentProjectId}
-              href={projectHref(project)}
-              key={project.id}
-              onClick={(event) => void selectProject(project, event)}
-            >
-              <ProjectInitials project={project} />
-              {project.attentionCount > 0 && (
-                <span aria-hidden="true" className="rail-attention">
-                  {project.attentionCount > 9 ? '9+' : project.attentionCount}
-                </span>
-              )}
-            </a>
-          ))}
+        />
+        <span className="aw-rail__divider" role="separator" />
+        <div aria-label="Pinned and recent Projects" className="aw-rail__projects project-list" role="group">
+          {projectsQuery.isPending ? <span aria-label="Loading Projects" className="aw-rail__loading" role="status" /> : null}
+          {visibleProjects.map((project) => {
+            const active = project.id === currentProjectId
+            return (
+              <Tooltip key={project.id} label={project.name} side="right">
+                <a
+                  aria-current={active ? 'page' : undefined}
+                  aria-label={`${project.name}${project.attentionCount ? `, ${project.attentionCount} items need attention` : ''}`}
+                  className={`aw-tile aw-tile--space${active ? ' is-active' : ''}${project.attentionCount ? ' is-unread' : ''}`}
+                  href={projectHref(project)}
+                  onClick={(event) => void selectProject(project, event)}
+                >
+                  <TileFace swatch={swatchFor(project.id)}>{project.key.slice(0, 2)}</TileFace>
+                  {project.attentionCount > 0 ? (
+                    <Badge className="aw-tile__badge" count={project.attentionCount} max={9} />
+                  ) : null}
+                </a>
+              </Tooltip>
+            )
+          })}
         </div>
-
-        <div className="project-rail-actions">
-          <AppearanceControl />
+        {user.capabilities.createProject ? (
+          <UtilityTile icon="plus" label="Create Project" onClick={onNavigate} to="/projects/new" />
+        ) : null}
+        <span className="aw-rail__spacer" />
+        <Tooltip label="Find a Project" shortcut="⌘K" side="right">
           <button
             aria-expanded={switcherOpen}
             aria-haspopup="dialog"
             aria-label="Search Projects"
-            className="project-button"
+            className="aw-tile aw-tile--utility aw-tile--quiet"
             onClick={() => {
               setStatus(null)
               setSwitcherOpen(true)
@@ -216,34 +228,34 @@ export function ProjectRail({
             ref={searchButtonRef}
             type="button"
           >
-            <span aria-hidden="true">⌕</span>
+            <TileFace>
+              <Icon name="search" size={20} />
+            </TileFace>
           </button>
-          {user.capabilities.createProject && (
-            <Link
-              aria-label="Create Project"
-              className="project-button"
-              onClick={onNavigate}
-              to="/projects/new"
-            >
-              <span aria-hidden="true">＋</span>
-            </Link>
-          )}
-          <button
-            aria-label={`Sign out ${user.displayName}`}
-            className="project-button account-button"
-            onClick={() => void signOut()}
-            type="button"
-          >
-            <span aria-hidden="true">
-              {user.displayName.trim().charAt(0).toLocaleUpperCase() || 'U'}
-            </span>
-          </button>
-        </div>
-        <p
-          aria-live="assertive"
-          className="visually-hidden"
-          role={status ? 'alert' : undefined}
-        >
+        </Tooltip>
+        <UtilityTile
+          active={location.pathname.startsWith('/settings/appearance')}
+          icon="palette"
+          label="Appearance"
+          onClick={onNavigate}
+          to="/settings/appearance"
+        />
+        <Menu
+          items={[
+            { heading: user.displayName },
+            { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/appearance') } },
+            { separator: true },
+            { label: 'Sign out', icon: 'log-out', onSelect: () => void signOut() },
+          ]}
+          label="Account"
+          placement="right-start"
+          trigger={
+            <button aria-label={`Account: ${user.displayName}`} className="aw-rail__me" type="button">
+              <Avatar name={user.displayName} presence="online" seed={user.actorId} size={36} />
+            </button>
+          }
+        />
+        <p aria-live="assertive" className="visually-hidden" role={status ? 'alert' : undefined}>
           {status}
         </p>
       </nav>

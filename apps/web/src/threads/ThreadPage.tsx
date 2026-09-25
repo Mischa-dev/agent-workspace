@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Link,
   Navigate,
   useNavigate,
   useParams,
@@ -31,6 +32,9 @@ import {
 } from '../conversations/messageContentModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import type { ComposerSubmission } from '../conversations/composerModel'
+import { ConversationHeader } from '../conversations/ConversationHeader'
+import { useProjectConversationSidebar } from '../conversations/hooks'
+import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import {
   archiveConversation,
   markConversationSeen,
@@ -47,12 +51,20 @@ import { useConversationRealtime } from '../realtime/realtimeContext'
 import { useSetWorkItemThreadLink } from '../work-items/hooks'
 import { searchWorkItemReferences } from '../work-items/api'
 import {
-  ApprovalPrompt,
-  RunBadge,
-  ThreadContext,
-  TimelineItem,
-  TimelineSkeleton,
-} from './ThreadPresentation'
+  ActorTag,
+  Avatar,
+  Banner,
+  Button,
+  ConversationIntro,
+  Dialog,
+  Dots,
+  ErrorState,
+  Icon,
+  IconButton,
+  MessageSkeleton,
+  SegmentedControl,
+} from '../ui'
+import { ApprovalCard, RunBadge, RunCard, ThreadDetails } from './ThreadPresentation'
 
 export type RunState =
   | 'created'
@@ -430,6 +442,11 @@ export function ThreadPage() {
     nextCursor: string | null
   }>({ threadId: '', entries: [], nextCursor: null })
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [pendingSends, setPendingSends] = useState<{ key: string; text?: string }[]>([])
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const [composerMode, setComposerMode] = useState<'message' | 'run'>('message')
+  const parentSidebar = useProjectConversationSidebar(projectId, verifiedTimeline?.conversation.parentChannelId ?? '')
   const markedSeen = useRef({ threadId: '', sequence: 0 })
   const navigationSync = useRememberProjectLocation(
     projectId,
@@ -745,12 +762,17 @@ export function ThreadPage() {
   }
 
   const sendMessage = async (submission: ComposerSubmission) => {
-    await sendConversationMessage({
-      conversationId: threadId,
-      kind: 'thread',
-      ...submission,
-    })
-    await thread.timeline.refetch()
+    setPendingSends((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
+    try {
+      await sendConversationMessage({
+        conversationId: threadId,
+        kind: 'thread',
+        ...submission,
+      })
+      await thread.timeline.refetch()
+    } finally {
+      setPendingSends((current) => current.filter((item) => item.key !== submission.idempotencyKey))
+    }
   }
 
   if (isApiError(thread.timeline.error) && thread.timeline.error.status === 404) {
@@ -792,358 +814,325 @@ export function ThreadPage() {
   }
 
   const threadName = verifiedTimeline?.conversation.name ?? 'Thread'
-  const context = verifiedTimeline ? (
-    <ThreadContext
-      projectName={project.data.name}
-      run={activeRun}
-      threadId={threadId}
-      workItems={verifiedTimeline.linkedWorkItems}
-      onUnlink={verifiedTimeline.capabilities.sendMessage ? (workItemId) => {
-        workItemLink.mutate(
-          { projectId, workItemId, threadId, linked: false, idempotencyKey: crypto.randomUUID() },
-          { onSuccess: () => void thread.timeline.refetch() },
-        )
-      } : undefined}
-      unlinking={workItemLink.isPending}
-    />
-  ) : undefined
-  const showComposer = Boolean(
-    verifiedTimeline &&
-      (activeRun
-        ? activeRun.capabilities.interrupt
-        : verifiedTimeline.capabilities.workerInvoke),
+  const parentId = verifiedTimeline?.conversation.parentChannelId ?? null
+  const parentChannel = parentSidebar.data?.channels.find((channel) => channel.id === parentId)
+  const archived = Boolean(verifiedTimeline?.conversation.archivedAt)
+  const canMessage = Boolean(verifiedTimeline?.capabilities.sendMessage && !archived)
+  const showRunComposer = Boolean(
+    verifiedTimeline && !archived && (activeRun ? activeRun.capabilities.interrupt : verifiedTimeline.capabilities.workerInvoke),
   )
+  const mode: 'message' | 'run' = !canMessage ? 'run' : !showRunComposer ? 'message' : composerMode
+  const runForCard = activeRun ?? latestTerminalRun
+  const channelRoute = parentId
+    ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parentId)}`
+    : `/projects/${encodeURIComponent(projectId)}`
+
+  const details =
+    verifiedTimeline && detailsOpen ? (
+      <ThreadDetails
+        onClose={() => setDetailsOpen(false)}
+        onUnlink={
+          verifiedTimeline.capabilities.sendMessage
+            ? (workItemId) => {
+                workItemLink.mutate(
+                  { projectId, workItemId, threadId, linked: false, idempotencyKey: crypto.randomUUID() },
+                  { onSuccess: () => void thread.timeline.refetch() },
+                )
+              }
+            : undefined
+        }
+        projectName={project.data.name}
+        run={activeRun ?? latestTerminalRun}
+        threadId={threadId}
+        unlinking={workItemLink.isPending}
+        workItems={verifiedTimeline.linkedWorkItems}
+      />
+    ) : undefined
+
+  const busy = Boolean(busyAction)
+  const runActions = runForCard ? (
+    activeRun ? (
+      activeRun.capabilities.interrupt ? (
+        <Button busy={busyAction === 'interrupt'} icon="stop" onClick={interrupt} size="sm">
+          {busyAction === 'interrupt' ? 'Stopping…' : 'Stop run'}
+        </Button>
+      ) : null
+    ) : (
+      <>
+        {latestTerminalRun?.capabilities.createPullRequest ? (
+          <Button busy={busyAction === 'pull-request'} disabled={busy} icon="pull-request" onClick={createPullRequest} size="sm" variant="primary">
+            {busyAction === 'pull-request' ? 'Opening pull request…' : 'Create pull request'}
+          </Button>
+        ) : null}
+        {latestTerminalRun?.capabilities.publish && latestTerminalRun.repositoryWorkspaceId ? (
+          <Button busy={busyAction === 'publish'} disabled={busy} icon="branch" onClick={publishLastRun} size="sm">
+            {busyAction === 'publish' ? 'Publishing…' : 'Publish branch'}
+          </Button>
+        ) : null}
+        {latestTerminalRun?.capabilities.retry ? (
+          <Button busy={busyAction === 'retry'} disabled={busy} icon="retry" onClick={retryLastRun} size="sm">
+            {busyAction === 'retry' ? 'Starting again…' : 'Run again'}
+          </Button>
+        ) : null}
+        {latestTerminalRun?.pullRequestId && latestTerminalRun.capabilities.refreshPullRequest ? (
+          <Button busy={busyAction === 'pull-request-refresh'} disabled={busy} icon="retry" onClick={refreshPullRequest} size="sm" variant="ghost">
+            {busyAction === 'pull-request-refresh' ? 'Checking GitHub…' : 'Refresh GitHub status'}
+          </Button>
+        ) : null}
+        {latestFailureEvent && !latestTerminalRun?.failureAcknowledged && acknowledgedRunId !== latestTerminalRun?.id ? (
+          <Button busy={busyAction === 'acknowledge-failure'} disabled={busy} onClick={acknowledgeFailure} size="sm" variant="ghost">
+            {busyAction === 'acknowledge-failure' ? 'Dismissing…' : 'Dismiss failure'}
+          </Button>
+        ) : null}
+      </>
+    )
+  ) : null
+
+  const runNotes =
+    latestTerminalRun && !activeRun ? (
+      <>
+        {latestTerminalRun.publishFailureCategory ? (
+          <p className="aw-run__error" role="status">
+            <Icon name="circle-alert" size={14} />
+            Publishing needs attention: {latestTerminalRun.publishFailureCategory.replaceAll('_', ' ')}.
+          </p>
+        ) : null}
+        {latestTerminalRun.pullRequestRequestState && !latestTerminalRun.pullRequestUrl ? (
+          <p className="aw-run__detail">Pull request: {latestTerminalRun.pullRequestRequestState.replaceAll('_', ' ')}</p>
+        ) : null}
+        {latestTerminalRun.pullRequestFailureCategory ? (
+          <p className="aw-run__error" role="status">
+            <Icon name="circle-alert" size={14} />
+            The pull request needs attention: {latestTerminalRun.pullRequestFailureCategory.replaceAll('_', ' ')}.
+          </p>
+        ) : null}
+        {latestTerminalRun.pullRequestSyncState === 'failed' ? (
+          <p className="aw-run__error" role="status">
+            <Icon name="circle-alert" size={14} />
+            GitHub status needs attention: {(latestTerminalRun.pullRequestSyncFailureCategory ?? 'sync_failed').replaceAll('_', ' ')}.
+          </p>
+        ) : null}
+        {latestTerminalRun.pullRequestAutomationState && latestTerminalRun.pullRequestAutomationState !== 'not_evaluated' ? (
+          <p className="aw-run__detail">
+            Work item automation: {latestTerminalRun.pullRequestAutomationState.replaceAll('_', ' ')}
+            {latestTerminalRun.pullRequestAutomationReason ? ` · ${latestTerminalRun.pullRequestAutomationReason.replaceAll('_', ' ')}` : ''}
+          </p>
+        ) : null}
+      </>
+    ) : null
+
+  const modeSwitch =
+    canMessage && showRunComposer ? (
+      <SegmentedControl
+        label="What to send"
+        onChange={setComposerMode}
+        options={[
+          { value: 'message', label: 'Message', icon: 'message' },
+          { value: 'run', label: 'Run with Codex', icon: 'terminal' },
+        ]}
+        value={mode}
+      />
+    ) : null
 
   return (
     <AppShell
-      context={context}
-      mainClassName="workspace thread-workspace"
+      context={details}
+      mainClassName="aw-main--conversation"
       project={project.data}
-      selectedChannelId={
-        verifiedTimeline?.conversation.parentChannelId ?? undefined
-      }
-      thread={
-        verifiedTimeline ? { id: threadId, name: threadName } : null
-      }
+      selectedChannelId={parentId ?? undefined}
+      thread={verifiedTimeline ? { id: threadId, name: threadName } : null}
       user={session.user}
     >
       <NavigationSyncAlert {...navigationSync} />
-      <header className="workspace-heading">
-        <div>
-          <span className="section-label">Thread</span>
-          <h1 id="workspace-heading">{threadName}</h1>
-        </div>
-        {verifiedTimeline && (
-          <div className="header-status">
-            <span
-              className="connection-state"
-              data-connection={realtime.connection}
-            >
-              <span aria-hidden="true">●</span>{' '}
-              {realtime.connection === 'live' ? 'Live' : 'Reconnecting'}
-            </span>
-            <RunBadge run={activeRun} />
-            {verifiedTimeline.capabilities.archive &&
-            !verifiedTimeline.conversation.archivedAt ? (
-              <button
-                className="secondary-button"
-                onClick={() => {
-                  void archiveConversation({
-                    conversationId: threadId,
-                    kind: 'thread',
-                    expectedVersion: verifiedTimeline.conversation.version ?? 1,
-                  }).then(() => {
-                    const parent = verifiedTimeline.conversation.parentChannelId
-                    navigate(
-                      parent
-                        ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parent)}`
-                        : `/projects/${encodeURIComponent(projectId)}`,
-                      { replace: true },
-                    )
-                  })
-                }}
-                type="button"
-              >
-                Archive Thread
-              </button>
-            ) : null}
-          </div>
-        )}
-      </header>
-
-      <div
-        aria-busy={thread.timeline.isPending}
-        className="timeline"
-        data-empty={!verifiedTimeline?.entries.length}
-      >
-        {olderCursor ? (
-          <button
-            className="load-older-button"
-            disabled={loadingOlder}
-            onClick={() => void loadOlder()}
-            type="button"
-          >
-            {loadingOlder ? 'Loading…' : 'Load older Messages'}
-          </button>
-        ) : null}
-        {thread.timeline.isPending && <TimelineSkeleton />}
-        {thread.timeline.isError && (
-          <div className="error-state" role="alert">
-            <h2>Thread unavailable</h2>
-            <p>
-              The Thread does not exist in this Project or could not be loaded.
-            </p>
-            <button
-              onClick={() => void thread.timeline.refetch()}
-              type="button"
-            >
-              Try again
-            </button>
-          </div>
-        )}
-        {verifiedTimeline && !verifiedTimeline.entries.length && (
-            <div className="empty-state">
-              <span className="empty-state-mark" aria-hidden="true">
-                ◌
-              </span>
-              <h2>Start the first hosted run.</h2>
-              <p>
-                The prompt, approval, significant provider events, and final
-                worker response will be kept in this durable Thread.
-              </p>
-            </div>
-          )}
-        {entries.map((entry) => (
-          <TimelineItem entry={entry} key={entry.id} />
-        ))}
-        {Object.entries(realtime.streaming).map(([messageId, text]) => (
-          <article
-            className="message worker-message streaming-message"
-            key={messageId}
-          >
-            <header>
-              <span className="avatar" aria-hidden="true">
-                A
-              </span>
-              <strong>@agent</strong>
-              <span>Streaming</span>
-            </header>
-            <p>{text}</p>
-          </article>
-        ))}
-        {pendingApproval && (
-          <ApprovalPrompt
-            approval={pendingApproval}
-            busyAction={busyAction}
-            canRespond={pendingApproval.capabilities.respond}
-            onRespond={respond}
-          />
-        )}
-        <p aria-live="polite" className="visually-hidden">
-          {actionError}
-        </p>
-      </div>
-
-      {verifiedTimeline?.capabilities.sendMessage &&
-      !verifiedTimeline.conversation.archivedAt ? (
-        <StructuredComposer
-          onSubmit={sendMessage}
-          searchActors={async (query) =>
-            (await searchMentionableActors(projectId, query)).actors
-          }
-          searchWorkItems={(query) => searchWorkItemReferences(projectId, query)}
-        />
+      <ConversationHeader
+        actions={
+          verifiedTimeline ? (
+            <IconButton
+              icon="panel-right"
+              label={detailsOpen ? 'Hide details' : 'Show details'}
+              onClick={() => setDetailsOpen(!detailsOpen)}
+              pressed={detailsOpen}
+              side="bottom"
+            />
+          ) : null
+        }
+        icon="messages"
+        menu={
+          verifiedTimeline?.capabilities.archive && !archived
+            ? [
+                { label: parentChannel ? `Back to #${parentChannel.name}` : 'Back to the channel', icon: 'arrow-left', onSelect: () => navigate(channelRoute) },
+                { separator: true },
+                { label: 'Archive thread', icon: 'archive', danger: true, onSelect: () => setArchiveOpen(true) },
+              ]
+            : undefined
+        }
+        status={<RunBadge run={activeRun} />}
+        subtitle={
+          parentChannel ? (
+            <Link className="aw-convhead__crumb" to={channelRoute}>
+              in #{parentChannel.name}
+            </Link>
+          ) : undefined
+        }
+        title={threadName}
+      />
+      {archived ? (
+        <Banner className="aw-conv__banner" icon="archive" title="This thread is archived." tone="offline">
+          You can read it, but no one can post or run work here.
+        </Banner>
       ) : null}
 
-      {showComposer && (
-        <form className="composer" onSubmit={startRun}>
-          <label htmlFor="agent-prompt">Ask the execution worker</label>
-          <textarea
-            disabled={Boolean(activeRun) || busyAction === 'start'}
-            id="agent-prompt"
-            onChange={(event) => {
-              setPrompt(event.target.value)
-              setStartIdempotencyKey(null)
-            }}
-            placeholder={
-              activeRun
-                ? 'This Thread already has an active run.'
-                : 'Describe the isolated change to make…'
-            }
-            rows={3}
-            value={prompt}
+      <ConversationTimeline
+        busy={thread.timeline.isPending}
+        label={`Messages in ${threadName}`}
+        revision={`${verifiedTimeline?.highestSequence ?? 0}:${pendingSends.length}:${Object.values(realtime.streaming).join('').length}:${pendingApproval?.id ?? ''}:${runForCard?.state ?? ''}`}
+      >
+        {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
+        {thread.timeline.isPending ? <MessageSkeleton label="Loading thread" /> : null}
+        {thread.timeline.isError ? (
+          <ErrorState action={<Button onClick={() => void thread.timeline.refetch()}>Try again</Button>} title="This thread didn’t load">
+            It may have been removed from this Project, or it couldn’t be reached.
+          </ErrorState>
+        ) : null}
+        {verifiedTimeline && !olderCursor ? (
+          <ConversationIntro icon="messages" title={threadName}>
+            {verifiedTimeline.capabilities.workerInvoke
+              ? 'A focused conversation. Ask Codex to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
+              : 'A focused conversation inside the channel. Everything said here stays with this thread.'}
+          </ConversationIntro>
+        ) : null}
+        <TimelineEntries entries={entries} viewerId={session.user.actorId} />
+        {pendingSends.map((item, index) => (
+          <PendingMessageRow
+            continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}
+            key={item.key}
+            name={session.user.displayName}
+            seed={session.user.actorId}
+            text={item.text}
           />
-          <div className="composer-actions">
-            <span>
-              {messageTextScalarValues(prompt).toLocaleString()} / 20,000
-            </span>
-            {activeRun ? (
-              <button
-                className="danger-button"
-                disabled={busyAction === 'interrupt'}
-                onClick={interrupt}
-                type="button"
-              >
-                {busyAction === 'interrupt'
-                  ? 'Interrupting…'
-                  : 'Interrupt run'}
-              </button>
-            ) : (
-              <>
-                {latestTerminalRun?.capabilities.publish &&
-                  latestTerminalRun.repositoryWorkspaceId && (
-                    <button
-                      className="secondary-button"
-                      disabled={Boolean(busyAction)}
-                      onClick={publishLastRun}
-                      type="button"
-                    >
-                      {busyAction === 'publish'
-                        ? 'Queueing publish…'
-                        : 'Publish branch'}
-                    </button>
-                  )}
-                {latestTerminalRun?.capabilities.createPullRequest && (
-                  <button
-                    className="secondary-button"
-                    disabled={Boolean(busyAction)}
-                    onClick={createPullRequest}
-                    type="button"
-                  >
-                    {busyAction === 'pull-request'
-                      ? 'Queueing pull request…'
-                      : 'Create pull request'}
-                  </button>
-                )}
-                {latestTerminalRun?.capabilities.retry && (
-                  <button
-                    className="secondary-button"
-                    disabled={Boolean(busyAction)}
-                    onClick={retryLastRun}
-                    type="button"
-                  >
-                    {busyAction === 'retry' ? 'Retrying…' : 'Retry last run'}
-                  </button>
-                )}
-                {latestFailureEvent &&
-                  !latestTerminalRun?.failureAcknowledged &&
-                  acknowledgedRunId !== latestTerminalRun?.id && (
-                    <button
-                      className="secondary-button"
-                      disabled={Boolean(busyAction)}
-                      onClick={acknowledgeFailure}
-                      type="button"
-                    >
-                      {busyAction === 'acknowledge-failure'
-                        ? 'Acknowledging…'
-                        : 'Acknowledge failure'}
-                    </button>
-                  )}
-                <button
-                  className="primary-button"
-                  disabled={
-                    !prompt.trim() ||
-                    !isSafeMessageText(prompt.trim()) ||
-                    busyAction === 'start'
-                  }
+        ))}
+        {Object.entries(realtime.streaming).map(([messageId, text]) => (
+          <article aria-label="Codex is writing" className="aw-msg is-streaming" key={messageId}>
+            <div className="aw-msg__gutter">
+              <Avatar kind="worker" name="Codex" seed="codex" size={36} working />
+            </div>
+            <div className="aw-msg__main">
+              <div className="aw-msg__meta">
+                <span className="aw-msg__author">Codex</span>
+                <ActorTag kind="worker" />
+                <Dots label="Writing" />
+              </div>
+              <div className="aw-msg__body">{text}</div>
+            </div>
+          </article>
+        ))}
+        {runForCard ? (
+          <div className="aw-timeline__card">
+            <RunCard actions={runActions} notes={runNotes} run={runForCard} />
+          </div>
+        ) : null}
+        {pendingApproval ? (
+          <div className="aw-timeline__card">
+            <ApprovalCard
+              approval={pendingApproval}
+              busyAction={busyAction}
+              canRespond={pendingApproval.capabilities.respond}
+              onRespond={respond}
+            />
+          </div>
+        ) : null}
+        {actionError ? (
+          <div className="aw-timeline__card">
+            <Banner tone="danger">{actionError}</Banner>
+          </div>
+        ) : null}
+      </ConversationTimeline>
+
+      {mode === 'message' && canMessage ? (
+        <StructuredComposer
+          label={`Message ${threadName}`}
+          onSubmit={sendMessage}
+          placeholder={`Reply in ${threadName}`}
+          searchActors={async (query) => (await searchMentionableActors(projectId, query)).actors}
+          searchWorkItems={(query) => searchWorkItemReferences(projectId, query)}
+          toolbar={modeSwitch}
+        />
+      ) : null}
+      {mode === 'run' && showRunComposer ? (
+        <form className="aw-composer-wrap" onSubmit={startRun}>
+          {modeSwitch ? <div className="aw-composer__toolbar">{modeSwitch}</div> : null}
+          <div className="aw-composer aw-composer--run">
+            <label className="visually-hidden" htmlFor="agent-prompt">
+              Describe the change for Codex
+            </label>
+            <textarea
+              disabled={Boolean(activeRun) || busyAction === 'start'}
+              id="agent-prompt"
+              onChange={(event) => {
+                setPrompt(event.target.value)
+                setStartIdempotencyKey(null)
+              }}
+              placeholder={
+                activeRun ? 'Codex is already working in this thread. Stop the run to start a new one.' : 'Describe the change for Codex to make…'
+              }
+              rows={3}
+              value={prompt}
+            />
+            <div className="aw-composer__bar">
+              <span className="aw-composer__meta">
+                <Icon name="terminal" size={14} /> Runs in an isolated workspace on your host
+              </span>
+              <div className="aw-composer__end">
+                {messageTextScalarValues(prompt) > 18_000 ? (
+                  <span className="aw-composer__count">{(20_000 - messageTextScalarValues(prompt)).toLocaleString()}</span>
+                ) : null}
+                <Button
+                  busy={busyAction === 'start'}
+                  disabled={Boolean(activeRun) || !prompt.trim() || !isSafeMessageText(prompt.trim())}
+                  icon="terminal"
+                  size="sm"
                   type="submit"
+                  variant="primary"
                 >
                   {busyAction === 'start' ? 'Starting…' : 'Start run'}
-                </button>
-              </>
-            )}
+                </Button>
+              </div>
+            </div>
           </div>
-          {latestTerminalRun?.publishedCommit && (
-            <p className="compact-note">
-              Published commit{' '}
-              <code>{latestTerminalRun.publishedCommit.slice(0, 12)}</code>
-              {latestTerminalRun.publishedAt
-                ? ` at ${new Date(latestTerminalRun.publishedAt).toLocaleString()}`
-                : ''}
-            </p>
-          )}
-          {latestTerminalRun?.publishFailureCategory && (
-            <p className="action-error" role="status">
-              Publish needs attention:{' '}
-              {latestTerminalRun.publishFailureCategory.replaceAll('_', ' ')}.
-            </p>
-          )}
-          {latestTerminalRun?.pullRequestUrl &&
-            latestTerminalRun.pullRequestNumber && (
-              <p className="compact-note">
-                Pull request{' '}
-                <a
-                  href={latestTerminalRun.pullRequestUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  #{latestTerminalRun.pullRequestNumber}{' '}
-                  {latestTerminalRun.pullRequestTitle}
-                </a>{' '}
-                · {latestTerminalRun.pullRequestDraft ? 'draft ' : ''}
-                {latestTerminalRun.pullRequestState}
-                {' · checks '}
-                {latestTerminalRun.pullRequestChecksState ?? 'unknown'}
-                {' · review '}
-                {latestTerminalRun.pullRequestReviewState ?? 'unknown'}
-                {' · mergeability '}
-                {latestTerminalRun.pullRequestMergeabilityState ?? 'unknown'}
-              </p>
-            )}
-          {latestTerminalRun?.pullRequestId &&
-            latestTerminalRun.capabilities.refreshPullRequest && (
-              <button
-                className="secondary-button"
-                disabled={Boolean(busyAction)}
-                onClick={refreshPullRequest}
-                type="button"
-              >
-                {busyAction === 'pull-request-refresh'
-                  ? 'Refreshing GitHub state…'
-                  : 'Refresh GitHub state'}
-              </button>
-            )}
-          {latestTerminalRun?.pullRequestSyncState === 'failed' && (
-            <p className="action-error" role="status">
-              GitHub status needs attention:{' '}
-              {(latestTerminalRun.pullRequestSyncFailureCategory ?? 'sync_failed').replaceAll(
-                '_',
-                ' ',
-              )}.
-            </p>
-          )}
-          {latestTerminalRun?.pullRequestAutomationState &&
-            latestTerminalRun.pullRequestAutomationState !== 'not_evaluated' && (
-              <p className="compact-note">
-                Work Item automation: {latestTerminalRun.pullRequestAutomationState}
-                {latestTerminalRun.pullRequestAutomationReason
-                  ? ` · ${latestTerminalRun.pullRequestAutomationReason.replaceAll('_', ' ')}`
-                  : ''}
-              </p>
-            )}
-          {latestTerminalRun?.pullRequestRequestState &&
-            !latestTerminalRun.pullRequestUrl && (
-              <p className="compact-note">
-                Pull request: {latestTerminalRun.pullRequestRequestState}
-              </p>
-            )}
-          {latestTerminalRun?.pullRequestFailureCategory && (
-            <p className="action-error" role="status">
-              Pull request needs attention:{' '}
-              {latestTerminalRun.pullRequestFailureCategory.replaceAll(
-                '_',
-                ' ',
-              )}
-              .
-            </p>
-          )}
-          {actionError && (
-            <p className="action-error" role="alert">
-              {actionError}
-            </p>
-          )}
+          <p className="aw-composer__hint" aria-hidden="true" />
         </form>
-      )}
+      ) : null}
+      {verifiedTimeline && archived ? (
+        <StructuredComposer disabledReason="This thread is archived. Nobody can post here." onSubmit={async () => undefined} searchActors={async () => []} />
+      ) : null}
+
+      <Dialog
+        description="People can still read it from Archived conversations, but no one can post or start runs."
+        footer={
+          <>
+            <Button onClick={() => setArchiveOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!verifiedTimeline) return
+                void archiveConversation({
+                  conversationId: threadId,
+                  kind: 'thread',
+                  expectedVersion: verifiedTimeline.conversation.version ?? 1,
+                }).then(() => {
+                  setArchiveOpen(false)
+                  navigate(channelRoute, { replace: true })
+                })
+              }}
+              variant="danger"
+            >
+              Archive thread
+            </Button>
+          </>
+        }
+        onClose={() => setArchiveOpen(false)}
+        open={archiveOpen}
+        title={`Archive “${threadName}”?`}
+      />
     </AppShell>
   )
 }

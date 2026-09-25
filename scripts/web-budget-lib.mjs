@@ -3,10 +3,12 @@ import { lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 export const WEB_ASSET_LIMITS = Object.freeze({
-  javascriptRawBytes: 500 * 1024,
-  javascriptGzipBytes: 160 * 1024,
-  // Raised from 60 KiB for the Messages and reply-status styles (~10 KiB gzipped total).
-  cssRawBytes: 72 * 1024,
+  // Raised from 500/160 KiB for the redesign's shell, components and icons (+62 KiB raw, +22 KiB gzip).
+  javascriptRawBytes: 560 * 1024,
+  javascriptGzipBytes: 176 * 1024,
+  // Raised from 72 KiB for the design system's five theme presets and components. The legacy
+  // stylesheet (~25 KiB) still serves pages that move to the new design in pass two.
+  cssRawBytes: 104 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {

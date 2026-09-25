@@ -100,7 +100,7 @@ describe('authenticated route loading', () => {
       }),
     ).toBeVisible()
     expect(
-      screen.getByRole('main').querySelector('.page-content'),
+      screen.getByRole('main').querySelector('.aw-page'),
     ).toHaveAttribute('aria-busy', 'true')
     expect(screen.getByRole('status')).toHaveTextContent(
       'Loading workspace view.',

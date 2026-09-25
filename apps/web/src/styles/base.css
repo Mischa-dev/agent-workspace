@@ -1,50 +1,143 @@
-html {
-  background: var(--color-canvas);
-  color: var(--color-text);
-  font-family: var(--font-ui);
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  background: var(--content-bg);
+  color: var(--content-fg);
+  font: var(--t-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--color-canvas);
-  color: var(--color-text);
+  margin: 0;
+  min-width: 320px;
+  height: 100dvh;
+  background: var(--content-bg);
+  color: var(--content-fg);
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+}
+
+a {
+  color: var(--link);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }
 
 h1,
 h2,
 h3 {
-  color: var(--color-text);
-  line-height: var(--line-compact);
-  letter-spacing: -0.015em;
+  margin-top: 0;
   text-wrap: balance;
 }
 
 p {
+  margin-top: 0;
   text-wrap: pretty;
 }
 
 code,
 kbd,
-pre {
+pre,
+samp {
   font-family: var(--font-mono);
 }
 
 ::placeholder {
-  color: var(--color-text-muted);
+  color: var(--content-fg-muted);
   opacity: 1;
 }
 
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-focus);
+  outline: 2px solid var(--r-focus);
   outline-offset: 2px;
 }
 
-::selection {
-  background: var(--color-accent);
-  color: var(--color-accent-ink);
+.visually-hidden,
+.sr-only,
+.aw-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.aw-icon {
+  flex: none;
+  display: block;
+}
+
+.aw-spin {
+  animation: aw-spin 900ms linear infinite;
+}
+
+@keyframes aw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes aw-pop {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+@keyframes aw-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes aw-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html:focus-within {
-    scroll-behavior: auto;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
   }
 }

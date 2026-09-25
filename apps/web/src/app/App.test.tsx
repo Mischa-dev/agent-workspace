@@ -274,7 +274,7 @@ describe('M1 authenticated shell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
     expect(
-      screen.getByText(/first account is created from the host-local/i),
+      screen.getByText(/Create the first account on the server/i),
     ).toBeVisible()
     expect(
       (
@@ -331,8 +331,9 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Sign out Mischa Nelson' }),
+      await screen.findByRole('button', { name: 'Account: Mischa Nelson' }),
     )
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
     const logoutCall = fetchMock.mock.calls.find(([path]) =>
       String(path).endsWith('/auth/logout'),
@@ -445,7 +446,7 @@ describe('M1 authenticated shell', () => {
     fireEvent.click(searchButton)
     const search = screen.getByRole('searchbox', { name: 'Search Projects' })
     expect(search).toHaveFocus()
-    expect(search.closest('label')).toHaveClass('search-field')
+    expect(search.closest('label')).toHaveClass('aw-switcher__search')
     fireEvent.change(search, { target: { value: 'beta' } })
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByRole('link', { name: /Beta Project/ })).toBeVisible()
@@ -554,13 +555,13 @@ describe('M1 authenticated shell', () => {
     })
     fireEvent.click(projectALink)
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(window.location.pathname).toBe(
       `/projects/${projectAId}/threads/${threadId}`,
     )
 
-    fireEvent.click(screen.getByRole('link', { name: 'Global Home' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Home' }))
     fireEvent.click(
       await screen.findByRole('link', { name: 'Beta Project' }),
     )
@@ -569,14 +570,14 @@ describe('M1 authenticated shell', () => {
     ).toBeVisible()
     expect(window.location.pathname).toBe(`/projects/${projectBId}`)
 
-    fireEvent.click(screen.getByRole('link', { name: 'Global Home' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Home' }))
     fireEvent.click(
       await screen.findByRole('link', {
         name: 'Agent Workspace, 3 items need attention',
       }),
     )
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
 
     firstRender.unmount()
@@ -599,7 +600,7 @@ describe('M1 authenticated shell', () => {
       }),
     )
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(window.location.pathname).toBe(
       `/projects/${projectAId}/threads/${threadId}`,
@@ -1149,15 +1150,16 @@ describe('M1 authenticated shell', () => {
     const { container } = render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Project host' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }))
+    expect(await screen.findByRole('heading', { name: 'Details' })).toBeVisible()
     expect(
       screen.getByText('<img src=x onerror=alert(1)>'),
     ).toBeVisible()
     expect(container.querySelector('img')).toBeNull()
     expect(
-      screen.getByRole('button', { name: 'Interrupt run' }),
+      screen.getByRole('button', { name: 'Stop run' }),
     ).toBeVisible()
     expect(
       (
@@ -1223,7 +1225,7 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'Worker question' }),
+      await screen.findByRole('heading', { name: 'Codex has a question' }),
     ).toBeVisible()
     fireEvent.change(screen.getByLabelText('Your answer'), {
       target: { value: 'Aurora' },
@@ -1300,7 +1302,7 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Acknowledge failure' }),
+      await screen.findByRole('button', { name: 'Dismiss failure' }),
     )
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
@@ -1311,10 +1313,10 @@ describe('M1 authenticated shell', () => {
       })
     })
     expect(
-      screen.queryByRole('button', { name: 'Acknowledge failure' }),
+      screen.queryByRole('button', { name: 'Dismiss failure' }),
     ).toBeNull()
     fireEvent.click(
-      screen.getByRole('button', { name: 'Retry last run' }),
+      screen.getByRole('button', { name: 'Run again' }),
     )
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
@@ -1506,11 +1508,10 @@ describe('M1 authenticated shell', () => {
     })
     render(<App />)
 
-    expect(await screen.findByText(/checks success/i)).toHaveTextContent(
-      'checks success · review approved · mergeability ready',
-    )
+    expect(await screen.findByText('Checks passed')).toBeVisible()
+    expect(screen.getByText(/review approved · ready/)).toBeVisible()
     fireEvent.click(
-      screen.getByRole('button', { name: 'Refresh GitHub state' }),
+      screen.getByRole('button', { name: 'Refresh GitHub status' }),
     )
 
     await waitFor(() => {
@@ -1561,7 +1562,7 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     await waitFor(() =>
       expect(
@@ -1605,7 +1606,7 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(WebSocketStub.instances).toHaveLength(1)
     expired = true
@@ -1668,9 +1669,10 @@ describe('M1 authenticated shell', () => {
       screen.queryByRole('button', { name: 'Allow once' }),
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: 'Interrupt run' }),
+      screen.queryByRole('button', { name: 'Stop run' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Describe the change for Codex')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
     // Realtime is authenticated at the browser-session boundary, not scoped
     // to a resource that a mismatched response could cause us to subscribe to.
     expect(WebSocketStub.instances).toHaveLength(1)
@@ -1770,7 +1772,7 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     WebSocketStub.instances[0].dispatchEvent(
       new MessageEvent('message', {
@@ -1880,7 +1882,7 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(screen.getByText('Allow the isolated file change?')).toBeVisible()
     expect(
@@ -1890,9 +1892,10 @@ describe('M1 authenticated shell', () => {
       screen.queryByRole('button', { name: 'Deny' }),
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: 'Interrupt run' }),
+      screen.queryByRole('button', { name: 'Stop run' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Describe the change for Codex')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
   })
 
   it('fails Worker invocation closed when its timeline capability is absent', async () => {
@@ -1921,12 +1924,13 @@ describe('M1 authenticated shell', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'M0 walking skeleton' }),
+      await screen.findByRole('heading', { level: 1, name: 'M0 walking skeleton' }),
     ).toBeVisible()
     expect(
       screen.queryByRole('button', { name: 'Start run' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Ask the execution worker')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Describe the change for Codex')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
   })
 
   it('shows Worker invocation only when the server explicitly grants it', async () => {
@@ -1954,9 +1958,11 @@ describe('M1 authenticated shell', () => {
     })
     render(<App />)
 
+    // Without message access the thread opens straight into the run composer.
     expect(
-      await screen.findByLabelText('Ask the execution worker'),
+      await screen.findByLabelText('Describe the change for Codex'),
     ).toBeVisible()
+    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: 'Start run' }),
     ).toBeDisabled()

@@ -7,6 +7,7 @@ import {
 } from '../projects/ProjectOverviewPage'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
+import { Button, EmptyState, ErrorState, Icon, MessageSkeleton, PageHeader, Section } from '../ui'
 import { useProjectConversationSidebar } from './hooks'
 
 export function ConversationArchivePage() {
@@ -45,65 +46,54 @@ export function ConversationArchivePage() {
     !archivedChannels?.length &&
     !archivedThreads?.length
 
+  const base = `/projects/${encodeURIComponent(projectId)}`
   return (
-    <AppShell project={project.data} user={session.user}>
-      <div className="page-content">
-        <header className="page-heading">
-          <div>
-            <span className="section-label">Conversation history</span>
-            <h1>Archived Conversations</h1>
-            <p>Read-only Channels and Threads remain available as durable history.</p>
-          </div>
-        </header>
-        {conversations.isPending ? (
-          <p aria-busy="true" role="status">
-            Loading archived Conversations…
-          </p>
-        ) : null}
+    <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
+      <div className="aw-page aw-page--narrow">
+        <PageHeader icon="archive" title="Archived conversations">
+          Archived channels and threads stay readable here. Nobody can post in them.
+        </PageHeader>
+        {conversations.isPending ? <MessageSkeleton label="Loading archived conversations" rows={2} /> : null}
         {conversations.isError ? (
-          <div className="error-state" role="alert">
-            <h2>Archive unavailable</h2>
-            <button onClick={() => void conversations.refetch()} type="button">
-              Try again
-            </button>
-          </div>
+          <ErrorState action={<Button onClick={() => void conversations.refetch()}>Try again</Button>} title="The archive didn’t load">
+            Check your connection and try again.
+          </ErrorState>
         ) : null}
-        {empty ? <p className="notice">No Conversations are archived.</p> : null}
+        {empty ? (
+          <EmptyState icon="archive" title="Nothing archived">
+            When you archive a channel or thread, it moves here and stays readable.
+          </EmptyState>
+        ) : null}
         {archivedChannels?.length ? (
-          <section aria-labelledby="archived-channels-heading" className="page-section">
-            <h2 id="archived-channels-heading">Channels</h2>
-            <ul className="archive-list">
+          <Section title="Channels">
+            <ul className="aw-archive">
               {archivedChannels.map((channel) => (
                 <li key={channel.id}>
-                  <Link
-                    to={`/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}?includeArchived=true`}
-                  >
-                    <span aria-hidden="true">#</span>
-                    {channel.name}
+                  <Link className="aw-archive__row" to={`${base}/channels/${encodeURIComponent(channel.id)}?includeArchived=true`}>
+                    <Icon name="hash" />
+                    <span className="aw-archive__name">{channel.name}</span>
+                    <Icon className="aw-archive__chev" name="chevron-right" />
                   </Link>
                 </li>
               ))}
             </ul>
-          </section>
+          </Section>
         ) : null}
         {archivedThreads?.length ? (
-          <section aria-labelledby="archived-threads-heading" className="page-section">
-            <h2 id="archived-threads-heading">Threads</h2>
-            <ul className="archive-list">
+          <Section title="Threads">
+            <ul className="aw-archive">
               {archivedThreads.map((thread) => (
                 <li key={thread.id}>
-                  <Link
-                    to={`/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(thread.id)}?includeArchived=true`}
-                  >
-                    <span aria-hidden="true">↳</span>
-                    <span>
-                      {thread.name} <small>in {thread.channelName}</small>
-                    </span>
+                  <Link className="aw-archive__row" to={`${base}/threads/${encodeURIComponent(thread.id)}?includeArchived=true`}>
+                    <Icon name="messages" />
+                    <span className="aw-archive__name">{thread.name}</span>
+                    <span className="aw-archive__meta">in #{thread.channelName}</span>
+                    <Icon className="aw-archive__chev" name="chevron-right" />
                   </Link>
                 </li>
               ))}
             </ul>
-          </section>
+          </Section>
         ) : null}
       </div>
     </AppShell>

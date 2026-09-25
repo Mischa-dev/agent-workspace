@@ -1,20 +1,20 @@
-import { FormEvent, useRef, useState } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { queryKeys } from '../api/queryKeys'
 import { createChannel } from '../conversations/api'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarThread } from '../conversations/types'
 import type { Project } from '../projects/types'
+import { Button, Dialog, TextField, type MenuEntry } from '../ui'
+import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 
-const threadAttentionIcons: Record<SidebarThread['attention'], string> = {
-  response_required: '!',
-  active: '↻',
-  failed: '×',
-  completed: '✓',
-  unread: '●',
-  settled: '·',
+const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
+  response_required: 'needs-you',
+  active: 'working',
+  failed: 'failed',
+  completed: 'done',
 }
 
 export function ProjectSidebar({
@@ -31,213 +31,154 @@ export function ProjectSidebar({
   thread?: { id: string; name: string } | null
 }) {
   const location = useLocation()
+  const navigate = useNavigate()
+  const [creating, setCreating] = useState(false)
   const expandSelected = new URLSearchParams(location.search).get('threads') === 'all'
   const sidebar = useProjectConversationSidebar(project.id, selectedChannelId, {
-    expandedChannelId:
-      expandSelected && selectedChannelId ? selectedChannelId : undefined,
+    expandedChannelId: expandSelected && selectedChannelId ? selectedChannelId : undefined,
   })
+  const base = `/projects/${encodeURIComponent(project.id)}`
+  const canCreate = Boolean(sidebar.data?.capabilities.createChannel)
+  const go = (to: string) => {
+    onNavigate()
+    navigate(to)
+  }
+  const menu: MenuEntry[] = [
+    ...(canCreate ? [{ label: 'New channel', icon: 'plus' as const, onSelect: () => setCreating(true) }] : []),
+    { label: 'Archived conversations', icon: 'archive', onSelect: () => go(`${base}/conversations/archived`) },
+    { label: 'Project settings', icon: 'settings', onSelect: () => go(`${base}/settings`) },
+  ]
+  const listedThread = sidebar.data?.channels.some((channel) => channel.threads.some((candidate) => candidate.id === thread?.id))
+
   return (
-    <aside
-      aria-label={`${project.name} navigation`}
-      className="project-sidebar"
-      data-mobile-open={mobileOpen}
-      id="project-sidebar"
-    >
-      <header className="project-heading">
-        <span className="section-label">{project.key}</span>
-        <p>{project.name}</p>
-      </header>
-      <nav aria-label="Project">
-        <ul>
-          <li>
-            <NavLink
-              end
-              onClick={onNavigate}
-              to={`/projects/${encodeURIComponent(project.id)}`}
-            >
-              <span aria-hidden="true">⌂</span>
-              Overview
-            </NavLink>
-          </li>
-          <li>
-            <NavLink
-              onClick={onNavigate}
-              to={`/projects/${encodeURIComponent(project.id)}/work-items`}
-            >
-              <span aria-hidden="true">◇</span>
-              Work Items
-            </NavLink>
-          </li>
-          {sidebar.data?.channels.map((channel) => (
-            <li className="channel-navigation" key={channel.id}>
-              <NavLink
-                onClick={onNavigate}
-                to={`/projects/${encodeURIComponent(project.id)}/channels/${encodeURIComponent(channel.id)}`}
-              >
-                <span aria-hidden="true">#</span>
-                <span>{channel.name}</span>
-                {channel.unread ? (
-                  <span aria-label="Unread Messages" className="unread-dot">
-                    ●
-                  </span>
-                ) : null}
-              </NavLink>
-              {channel.threads.length > 0 ? (
-                <ul aria-label={`${channel.name} Threads`}>
-                  {channel.threads.map((channelThread) => (
-                    <li key={channelThread.id}>
-                      <NavLink
-                        className="thread-link"
-                        data-attention={channelThread.attention}
-                        onClick={onNavigate}
-                        to={`/projects/${encodeURIComponent(project.id)}/threads/${encodeURIComponent(channelThread.id)}`}
-                      >
-                        <span aria-hidden="true">↳</span>
-                        <span>{channelThread.name}</span>
-                        <span
-                          className="thread-attention"
-                          data-attention={channelThread.attention}
-                        >
-                          <span
-                            aria-hidden="true"
-                            className="thread-attention-icon"
-                          >
-                            {threadAttentionIcons[channelThread.attention]}
-                          </span>
-                          <span className="thread-attention-label">
-                            {channelThread.attentionLabel}
-                          </span>
-                        </span>
-                      </NavLink>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {channel.hasMoreThreads ? (
-                <>
-                  <NavLink
-                    className="show-more-link"
-                    onClick={onNavigate}
-                    to={`/projects/${encodeURIComponent(project.id)}/channels/${encodeURIComponent(channel.id)}?threads=all`}
-                  >
-                    Show more Threads
-                  </NavLink>
-                  <NavLink
-                    className="show-more-link"
-                    onClick={onNavigate}
-                    to={`/projects/${encodeURIComponent(project.id)}/channels/${encodeURIComponent(channel.id)}?threads=all`}
-                  >
-                    View all Threads
-                  </NavLink>
-                </>
-              ) : null}
-            </li>
-          ))}
-          {thread &&
-            !sidebar.data?.channels.some((channel) =>
-              channel.threads.some((candidate) => candidate.id === thread.id),
-            ) && (
-            <li>
-              <NavLink
-                className="thread-link"
-                onClick={onNavigate}
-                to={`/projects/${encodeURIComponent(project.id)}/threads/${encodeURIComponent(thread.id)}`}
-              >
-                <span aria-hidden="true">↳</span>
-                {thread.name}
-              </NavLink>
-            </li>
-          )}
-          {sidebar.data?.capabilities.createChannel ? (
-            <li>
-              <ChannelCreator onNavigate={onNavigate} projectId={project.id} />
-            </li>
-          ) : null}
-          <li>
-            <NavLink
-              onClick={onNavigate}
-              to={`/projects/${encodeURIComponent(project.id)}/conversations/archived`}
-            >
-              <span aria-hidden="true">□</span>
-              Archived Conversations
-            </NavLink>
-          </li>
-          <li>
-            <NavLink
-              onClick={onNavigate}
-              to={`/projects/${encodeURIComponent(project.id)}/settings`}
-            >
-              <span aria-hidden="true">⚙</span>
-              Settings
-            </NavLink>
-          </li>
-        </ul>
-      </nav>
-    </aside>
+    <SidebarFrame id="project-sidebar" label={`${project.name} navigation`} menu={menu} mobileOpen={mobileOpen} title={project.name}>
+      <ul className="aw-section__list aw-sidebar__top">
+        <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
+        <SidebarLink icon="work" label="Work items" onNavigate={onNavigate} to={`${base}/work-items`} />
+      </ul>
+      <SidebarSection addLabel="New channel" label="Channels" onAdd={canCreate ? () => setCreating(true) : undefined}>
+        {(sidebar.data?.channels ?? []).flatMap((channel) => {
+          const selected = channel.id === selectedChannelId
+          const rows = [
+            <SidebarLink
+              icon="hash"
+              keep={selected || channel.unread}
+              key={channel.id}
+              label={channel.name}
+              onNavigate={onNavigate}
+              to={`${base}/channels/${encodeURIComponent(channel.id)}`}
+              unread={channel.unread}
+            />,
+            ...channel.threads.map((channelThread) => (
+              <SidebarLink
+                attention={attentionMarks[channelThread.attention]}
+                attentionLabel={channelThread.attentionLabel}
+                dataAttention={channelThread.attention}
+                keep={channelThread.attention === 'response_required' || channelThread.id === thread?.id}
+                key={channelThread.id}
+                label={channelThread.name}
+                nested
+                onNavigate={onNavigate}
+                to={`${base}/threads/${encodeURIComponent(channelThread.id)}`}
+                unread={channelThread.attention === 'unread'}
+              />
+            )),
+          ]
+          if (channel.hasMoreThreads) {
+            rows.push(
+              <SidebarLink
+                key={`${channel.id}-more`}
+                label="All threads"
+                nested
+                onNavigate={onNavigate}
+                to={`${base}/channels/${encodeURIComponent(channel.id)}?threads=all`}
+              />,
+            )
+          }
+          return rows
+        })}
+        {thread && sidebar.data && !listedThread ? (
+          <SidebarLink
+            keep
+            key={thread.id}
+            label={thread.name}
+            nested
+            onNavigate={onNavigate}
+            to={`${base}/threads/${encodeURIComponent(thread.id)}`}
+          />
+        ) : null}
+      </SidebarSection>
+      {sidebar.isError ? <p className="aw-sidebar__note">Channels couldn’t load. They’ll retry on their own.</p> : null}
+      <ChannelCreator
+        onClose={() => setCreating(false)}
+        onCreated={(to) => go(to)}
+        open={creating}
+        projectId={project.id}
+      />
+    </SidebarFrame>
   )
 }
 
 function ChannelCreator({
-  onNavigate,
+  onClose,
+  onCreated,
+  open,
   projectId,
 }: {
-  onNavigate: () => void
+  onClose: () => void
+  onCreated: (to: string) => void
+  open: boolean
   projectId: string
 }) {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
   const idempotencyKey = useRef(crypto.randomUUID())
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const value = name.trim().replace(/^#/, '')
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const value = name.trim()
     if (!value || busy) return
     setBusy(true)
     setError(null)
-    void createChannel({
-      projectId,
-      name: value,
-      idempotencyKey: idempotencyKey.current,
-    })
+    void createChannel({ projectId, name: value, idempotencyKey: idempotencyKey.current })
       .then((channel) => {
         idempotencyKey.current = crypto.randomUUID()
         setName('')
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.conversationSidebarRoot(projectId),
-        })
-        onNavigate()
-        navigate(
-          `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}`,
-        )
+        onClose()
+        void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
+        onCreated(`/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}`)
       })
-      .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : 'Channel could not be created.')
-      })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The channel wasn’t created. Try again.'))
       .finally(() => setBusy(false))
   }
 
   return (
-    <details className="channel-creator">
-      <summary>New Channel</summary>
-      <form onSubmit={submit}>
-        <label className="visually-hidden" htmlFor={`channel-name-${projectId}`}>
-          Channel name
-        </label>
-        <input
-          id={`channel-name-${projectId}`}
+    <Dialog
+      description="Channels are where a Project’s conversations happen. Everyone in the Project can read and post."
+      onClose={onClose}
+      open={open}
+      title="New channel"
+    >
+      <form className="aw-form" id="new-channel-form" onSubmit={submit}>
+        <TextField
+          autoComplete="off"
+          error={error ?? undefined}
+          hint="Short and lowercase works best, like design or deploys."
+          label="Name"
           maxLength={120}
           onChange={(event) => setName(event.target.value)}
-          placeholder="Channel name"
+          prefix="#"
           value={name}
         />
-        <button disabled={!name.trim() || busy} type="submit">
-          {busy ? 'Creating…' : 'Create'}
-        </button>
-        {error ? <p role="alert">{error}</p> : null}
+        <div className="aw-form__actions">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button busy={busy} disabled={!value} type="submit" variant="primary">
+            Create channel
+          </Button>
+        </div>
       </form>
-    </details>
+    </Dialog>
   )
 }

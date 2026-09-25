@@ -1,69 +1,81 @@
 # Design System
 
+The full reference, with live components and every token per theme, is the
+Agent Workspace design system artifact (private to the owner). This file is the
+in-repo summary that code follows.
+
 ## Theme
 
-A restrained operational interface for technical work in mixed-light
-environments. Dark is the default product expression; Light and System are
-complete, supported modes. Theme and density are presentation-only preferences
-stored locally and cannot affect identity, authority, capabilities, or durable
-workspace state.
+Two-tone by default: a deep indigo rail and sidebar beside a light reading
+surface (the Indigo preset). Five presets ship: Indigo, Midnight (dark
+everywhere), Daylight (light everywhere), Evergreen and Graphite, plus "Match
+system" (Indigo in light mode, Midnight in dark). Every color token is a theme
+slot a person can override on the Appearance page; see
+`docs/frontend/theme-and-tokens.md`.
 
 ## Color
 
-Primitive OKLCH values feed semantic surface, text, border, action, status, and
-identity roles. Deep neutral surfaces establish hierarchy; blue marks selection
-and primary action, amber marks attention, red marks failure, green marks
-success, and gray marks settled history. Every state includes text or an icon in
-addition to color. Custom themes may override only the validated accent and
-identity roles documented in `docs/frontend/theme-and-tokens.md`.
+Tokens live in `src/styles/tokens.css`, generated from the design system's
+`tokens.json`, and are grouped by region:
+
+- Rail: `rail-bg`, `rail-fg`, `rail-tile`, `rail-tile-active`, `rail-indicator`.
+- Sidebar: `sidebar-bg`, `sidebar-fg`, `sidebar-fg-strong` (unread),
+  `sidebar-fg-muted` (labels), `sidebar-hover`, `sidebar-active-bg` +
+  `sidebar-active-fg`, `sidebar-border`.
+- Content: `content-bg`, `content-fg`, `content-fg-muted`, `content-hover`,
+  `content-border`, `control-border`, `surface-raised`, `surface-sunken`,
+  `highlight-bg` (messages that mention you).
+- Accent: `accent`, `accent-hover`, `on-accent`, `accent-soft`, `link`,
+  `focus-ring`, `mention-fg` + `mention-bg`.
+- Signals: `badge-bg` + `badge-fg` (mentions, New, Needs you), `presence-online`,
+  `agent` + `agent-soft` (the Agent tag), `agent-working` (activity),
+  `success`/`warning`/`danger` with `-soft` fills.
+- Identity swatches `swatch-*` color avatars and project tiles.
+
+Components read `--r-bg`, `--r-fg`, `--r-fg-muted`, `--r-hover` and `--r-focus`,
+which `data-region="rail|sidebar|content"` sets, so one control works in every
+region. Menus, dialogs and the composer always use the content palette.
 
 ## Typography
 
-Use the existing system sans-serif stack for all interface text. Keep the scale
-compact and fixed: 12–14px metadata and labels, 14–16px body and controls, and
-16–20px page headings. Use the monospace stack only for commits, branches,
-paths, and event payloads.
+Figtree (variable) for everything, JetBrains Mono for code, branches and IDs,
+both self-hosted. Nine styles as `--t-*` shorthands: display 28/36, title 18/24,
+heading 15/22 bold, body 15/22, ui 14/20, ui-strong 14/20 bold, small 13/18,
+caption 12/16, tag 11/14 bold. Text size scales them all through
+`--text-scale`. Sentence case everywhere; no uppercase eyebrows.
 
 ## Layout
 
-The desktop shell has four regions: 64 px Project rail, 248 px Project sidebar,
-flexible main workspace, and 288 px context region. At tablet widths context is
-an explicit modal sheet. At phone widths the main resource is the only
-persistent region and the rail, Project sidebar, and context become independent
-drawers. The main Thread surface owns scrolling while the composer stays
-available.
+Rail 72px, sidebar 264px, header 52px, details panel 420px, message line
+length capped at 760px. At 860px and below the rail, sidebar and details become
+drawers and a top bar opens them. Conversation pages own their scrolling: header
+and composer stay put, the timeline scrolls and stays on the newest message.
 
 ## Components
 
-- Project controls and Channels use one compact selection vocabulary.
-- The narrow Project rail distinguishes pinned, recent, active, and
-  attention-bearing Projects without becoming a second full sidebar.
-- Sign-in, Project creation, and archive confirmation use ordinary labelled
-  forms with focused error summaries and explicit outcomes.
-- Timeline entries are grouped by meaning, not wrapped in identical cards.
-- Provider events use quiet bordered rows with a visible event type and summary.
-- Pending approvals use a contained alert surface with explicit allow and deny
-  actions.
-- Run status uses icon, label, and semantic color.
-- Buttons, text areas, and focus rings share the same radii and state behavior.
+In `src/ui/`: `Icon` (Lucide), `Button`, `IconButton` (with tooltip),
+`Tooltip`, `Menu` (portal, arrow keys), `Dialog` (focus trap), `TextField`,
+`TextArea`, `SelectField`, `Switch`, `SegmentedControl`, `Avatar` (round for
+people, square for agents, slate for workers), `AvatarStack`, `ActorTag`,
+`Badge`, `Dots`, `StatusChip`, `Banner`, `EmptyState`, `ErrorState`,
+`ConversationIntro`, `MessageSkeleton`, `PageHeader`, `Section`.
+
+Conversation pieces in `src/conversations/`: `ConversationHeader`,
+`ConversationTimeline` + `TimelineEntries` (day dividers, New line, grouping,
+hover actions, message links), `ActivityRow` for worker and system events,
+`ReplyStatusList`, `StructuredComposer` (inline @mentions and # work items),
+`ThreadDialog`. Thread pieces in `src/threads/ThreadPresentation.tsx`:
+`RunCard`, `ApprovalCard`, `RunBadge`, `ThreadDetails`.
 
 ## Motion
 
-Use 150–200ms state transitions for hover, focus, and newly arriving timeline
-content. Avoid page choreography. Disable nonessential transitions under
-`prefers-reduced-motion`.
+120ms hovers, 180ms menus and tooltips, 260ms dialogs and drawers, all eased
+out. Motion reports state (the rail indicator, writing dots, a working agent's
+ring). Every animation has a reduced-motion fallback.
 
-## Density and interaction
+## Copy
 
-Compact, Comfortable, and Spacious adjust row and control rhythm without
-shrinking readable type or mobile targets below 44 px. Focus is always visible.
-Dialogs and drawers make inactive regions inert, contain keyboard focus, close
-on Escape or backdrop, and restore the originating control.
-
-## Product boundaries
-
-Keep one application tree, router, server-state model, and responsive shell.
-Navigation exposes accepted Project, Channel, Thread, Work Item, and settings
-behavior only. A notification center or command palette remains deferred until
-its durable server contract exists. No final public logo or decorative identity
-system is implied by this operational UI.
+Plain, specific, sentence case. Name things the way people see them: "Mention
+someone", "Start a thread", "Message #design". Agent states are plain verbs:
+"Muse is writing a reply…", "Muse passed", "Muse handed this back". Errors say
+what happened and what to do. Never "Actor", "durable" or "AI".

@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
+import { BrandMark } from './AuthLayout'
+
 import {
   AuthenticatedSessionProvider,
   clearAuthenticatedQueryCache,
@@ -45,21 +47,20 @@ export function SessionBoundary() {
 
   if (session.isPending) {
     return (
-      <main className="session-state" aria-busy="true">
-        <div className="brand-mark" aria-hidden="true">
-          A
-        </div>
-        <p>Opening workspace…</p>
+      <main className="aw-boot" aria-busy="true">
+        <BrandMark />
+        <p>Opening your workspace…</p>
       </main>
     )
   }
 
   if (session.isError) {
     return (
-      <main className="session-state">
+      <main className="aw-boot">
+        <BrandMark />
         <h1>Workspace unavailable</h1>
-        <p>The application could not confirm your session.</p>
-        <button onClick={() => void session.refetch()} type="button">
+        <p>We couldn’t confirm your session. Check your connection and try again.</p>
+        <button className="aw-btn aw-btn--primary aw-btn--md" onClick={() => void session.refetch()} type="button">
           Try again
         </button>
       </main>

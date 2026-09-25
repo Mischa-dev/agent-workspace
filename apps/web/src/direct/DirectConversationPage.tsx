@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
@@ -11,25 +11,33 @@ import {
   retryReplyRequest,
   sendConversationMessage,
 } from '../conversations/api'
+import { ConversationHeader } from '../conversations/ConversationHeader'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { useConversationTimeline } from '../conversations/hooks'
-import { MessageContent } from '../conversations/MessageContent'
+import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { SystemTimelineEntry } from '../conversations/SystemTimelineEntry'
-import type {
-  ConversationActor,
-  ConversationTimelineEntry,
-  ReplyRequest,
-} from '../conversations/types'
-import { useConversationRealtime } from '../realtime/realtimeContext'
+import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
+import type { ConversationActor, ConversationTimelineEntry, ReplyRequest } from '../conversations/types'
 import { AppShell } from '../shell/AppShell'
 import {
-  addGroupMember,
-  conversationTitle,
-  directQueryKey,
-  removeGroupMember,
-  useDirectOverview,
-} from './api'
+  ActorTag,
+  Avatar,
+  AvatarStack,
+  Banner,
+  Button,
+  ConversationIntro,
+  ErrorState,
+  IconButton,
+  MessageSkeleton,
+  SelectField,
+  actorKind,
+} from '../ui'
+import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
+
+function listNames(names: string[]) {
+  if (names.length <= 1) return names.join('')
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
 
 export function DirectConversationPage() {
   const session = useAuthenticatedSession()
@@ -38,51 +46,40 @@ export function DirectConversationPage() {
   const overview = useDirectOverview()
   const projectId = overview.data?.projectId ?? ''
   const timeline = useConversationTimeline(projectId, conversationId)
-  const realtime = useConversationRealtime(conversationId)
-  const [older, setOlder] = useState<{
-    conversationId: string
-    entries: ConversationTimelineEntry[]
-    nextCursor: string | null
-  }>({ conversationId: '', entries: [], nextCursor: null })
-  const [pending, setPending] = useState<string[]>([])
+  const [older, setOlder] = useState<{ conversationId: string; entries: ConversationTimelineEntry[]; nextCursor: string | null }>({
+    conversationId: '',
+    entries: [],
+    nextCursor: null,
+  })
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
+  const [membersOpen, setMembersOpen] = useState(false)
   const markedSeen = useRef({ conversationId: '', sequence: 0 })
   const page = timeline.data
-  const summary = overview.data?.conversations.find(
-    (conversation) => conversation.id === conversationId,
-  )
+  const viewerId = session.user.actorId
+  const summary = overview.data?.conversations.find((conversation) => conversation.id === conversationId)
   const members = summary?.members ?? []
-  const valid =
-    page?.conversation.id === conversationId &&
-    (page.conversation.kind === 'dm' || page.conversation.kind === 'group')
-  const olderCursor =
-    older.conversationId === conversationId
-      ? older.nextCursor
-      : page?.nextCursor ?? null
+  const valid = page?.conversation.id === conversationId && (page.conversation.kind === 'dm' || page.conversation.kind === 'group')
+  const olderCursor = older.conversationId === conversationId ? older.nextCursor : page?.nextCursor ?? null
+  const isGroup = (summary?.kind ?? page?.conversation.kind) === 'group'
+  const other = members.find((member) => member.id !== viewerId)
 
   const entries = useMemo(() => {
     const bySequence = new Map<number, ConversationTimelineEntry>()
-    const historical =
-      older.conversationId === conversationId ? older.entries : []
-    for (const entry of [...historical, ...(valid ? page?.entries ?? [] : [])]) {
-      bySequence.set(entry.sequence, entry)
-    }
+    const historical = older.conversationId === conversationId ? older.entries : []
+    for (const entry of [...historical, ...(valid ? page?.entries ?? [] : [])]) bySequence.set(entry.sequence, entry)
     return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence)
   }, [conversationId, older, page?.entries, valid])
 
   const requestsByMessage = useMemo(() => {
     const byMessage = new Map<string, ReplyRequest[]>()
     for (const request of valid ? page?.replyRequests ?? [] : []) {
-      byMessage.set(request.messageId, [
-        ...(byMessage.get(request.messageId) ?? []),
-        request,
-      ])
+      byMessage.set(request.messageId, [...(byMessage.get(request.messageId) ?? []), request])
     }
     return byMessage
   }, [page?.replyRequests, valid])
   const lastEntry = entries.at(-1)
-  const waitingForContinue =
-    page?.agentTurnsRemaining === 0 &&
-    lastEntry?.message?.author.kind === 'external_agent'
+  const waitingForContinue = page?.agentTurnsRemaining === 0 && lastEntry?.message?.author.kind === 'external_agent'
 
   useEffect(() => {
     if (
@@ -90,16 +87,12 @@ export function DirectConversationPage() {
       !page ||
       !page.capabilities.markSeen ||
       page.highestSequence <= page.readState.highestSeenSequence ||
-      (markedSeen.current.conversationId === conversationId &&
-        page.highestSequence <= markedSeen.current.sequence)
+      (markedSeen.current.conversationId === conversationId && page.highestSequence <= markedSeen.current.sequence)
     ) {
       return
     }
     markedSeen.current = { conversationId, sequence: page.highestSequence }
-    void markConversationSeen({
-      conversationId,
-      highestSeenSequence: page.highestSequence,
-    })
+    void markConversationSeen({ conversationId, highestSeenSequence: page.highestSequence })
       .then(() => queryClient.invalidateQueries({ queryKey: directQueryKey }))
       .catch(() => {
         markedSeen.current = { conversationId: '', sequence: 0 }
@@ -107,33 +100,29 @@ export function DirectConversationPage() {
   }, [conversationId, page, queryClient, valid])
 
   const loadOlder = async () => {
-    if (!olderCursor) return
-    const result = await getConversationTimeline(conversationId, olderCursor)
-    setOlder((current) => ({
-      conversationId,
-      entries: [
-        ...result.entries,
-        ...(current.conversationId === conversationId ? current.entries : []),
-      ],
-      nextCursor: result.nextCursor,
-    }))
+    if (!olderCursor || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const result = await getConversationTimeline(conversationId, olderCursor)
+      setOlder((current) => ({
+        conversationId,
+        entries: [...result.entries, ...(current.conversationId === conversationId ? current.entries : [])],
+        nextCursor: result.nextCursor,
+      }))
+    } finally {
+      setLoadingOlder(false)
+    }
   }
 
   const send = async (submission: ComposerSubmission) => {
     if (!page) return
-    setPending((current) => [...current, submission.idempotencyKey])
+    setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
     try {
-      await sendConversationMessage({
-        conversationId,
-        kind: page.conversation.kind,
-        ...submission,
-      })
+      await sendConversationMessage({ conversationId, kind: page.conversation.kind, ...submission })
       await timeline.refetch()
       void queryClient.invalidateQueries({ queryKey: directQueryKey })
     } finally {
-      setPending((current) =>
-        current.filter((key) => key !== submission.idempotencyKey),
-      )
+      setPending((current) => current.filter((item) => item.key !== submission.idempotencyKey))
     }
   }
 
@@ -141,131 +130,133 @@ export function DirectConversationPage() {
     return <Navigate replace to="/messages" />
   }
 
-  const title = summary
-    ? conversationTitle(summary, session.user.actorId)
-    : page?.conversation.name ?? 'Conversation'
+  const title = summary ? conversationTitle(summary, viewerId) : page?.conversation.name ?? 'Conversation'
+  const otherKind = other ? actorKind(other.kind) : 'person'
+  const memberPeople = members.map((member) => ({ id: member.id, name: member.displayName, kind: actorKind(member.kind) }))
+  const othersNames = members.filter((member) => member.id !== viewerId).map((member) => member.displayName)
+
+  const header = isGroup ? (
+    <ConversationHeader
+      actions={
+        <button
+          aria-expanded={membersOpen}
+          aria-label={`${members.length} members`}
+          className="aw-convhead__members"
+          onClick={() => setMembersOpen((open) => !open)}
+          type="button"
+        >
+          <AvatarStack max={3} people={memberPeople} size={22} />
+          <span>{members.length}</span>
+        </button>
+      }
+      icon="users"
+      subtitle={othersNames.length ? `With ${listNames(othersNames)}` : undefined}
+      title={title}
+    />
+  ) : (
+    <ConversationHeader
+      lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
+      subtitle={other ? `@${other.handle}` : undefined}
+      tag={<ActorTag kind={otherKind} />}
+      title={title}
+    />
+  )
+
+  const intro = isGroup ? (
+    <ConversationIntro icon="users" title={title}>
+      A group with {listNames(othersNames.length ? ['you', ...othersNames] : ['you'])}. Agents answer when they’re asked or mentioned, and can pass when
+      they have nothing to add.
+    </ConversationIntro>
+  ) : other ? (
+    <ConversationIntro
+      mark={<Avatar kind={otherKind} name={other.displayName} seed={other.id} size={64} />}
+      title={
+        <>
+          {other.displayName}
+          <ActorTag kind={otherKind} />
+        </>
+      }
+    >
+      {otherKind === 'agent'
+        ? `Messages here ask ${other.displayName} for a reply. You’ll see when it picks one up, and it can pass if it has nothing to add.`
+        : `This is the beginning of your conversation with ${other.displayName}. Only the two of you can see it.`}
+    </ConversationIntro>
+  ) : null
 
   return (
     <AppShell
       context={
-        summary?.kind === 'group' ? (
+        isGroup && membersOpen ? (
           <GroupMembers
             conversationId={conversationId}
             members={members}
+            onClose={() => setMembersOpen(false)}
             people={overview.data?.people ?? []}
-            viewerId={session.user.actorId}
+            viewerId={viewerId}
           />
         ) : undefined
       }
       direct
-      mainClassName="workspace conversation-workspace"
+      mainClassName="aw-main--conversation"
       user={session.user}
     >
-      <header className="workspace-heading">
-        <div>
-          <span className="section-label">
-            {summary?.kind === 'group' ? 'Group' : 'Direct message'}
-          </span>
-          <h1 id="workspace-heading">{title}</h1>
-          {summary?.kind === 'group' ? (
-            <p className="conversation-members">
-              {members.map((member) => member.displayName).join(', ')}
-            </p>
-          ) : null}
-        </div>
-        <div className="header-status">
-          <span className="connection-state" data-connection={realtime.connection}>
-            <span aria-hidden="true">●</span>{' '}
-            {realtime.connection === 'live' ? 'Live' : 'Reconnecting'}
-          </span>
-        </div>
-      </header>
-
-      <section
-        aria-busy={timeline.isPending}
-        aria-label="Conversation timeline"
-        className="timeline conversation-timeline"
-      >
-        {olderCursor ? (
-          <button
-            className="load-older-button"
-            onClick={() => void loadOlder()}
-            type="button"
-          >
-            Load older Messages
-          </button>
-        ) : null}
-        {overview.isPending || timeline.isPending ? (
-          <p role="status">Loading…</p>
-        ) : null}
+      {header}
+      <ConversationTimeline busy={timeline.isPending} label={`Messages with ${title}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${page?.replyRequests.map((request) => request.status).join(',') ?? ''}`}>
+        {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
+        {overview.isPending || timeline.isPending ? <MessageSkeleton /> : null}
         {timeline.isError && !isApiError(timeline.error) ? (
-          <div className="error-state" role="alert">
-            <h2>Conversation unavailable</h2>
-            <button onClick={() => void timeline.refetch()} type="button">
-              Try again
-            </button>
-          </div>
+          <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="This conversation didn’t load">
+            Check your connection and try again.
+          </ErrorState>
         ) : null}
-        {valid && entries.length === 0 ? (
-          <div className="empty-state">
-            <h2>Say hello.</h2>
-            <p>Only the people in this conversation can see it.</p>
-          </div>
-        ) : null}
-        {entries.map((entry) => (
-          <div key={entry.id}>
-            <TimelineEntry entry={entry} />
-            {entry.message ? (
-              <ReplyStatus
-                onRetry={(requestId) =>
-                  void retryReplyRequest(requestId).then(() => timeline.refetch())
-                }
+        {valid && !olderCursor ? intro : null}
+        <TimelineEntries
+          entries={entries}
+          renderExtras={(entry) =>
+            entry.message ? (
+              <ReplyStatusList
+                onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
                 requests={requestsByMessage.get(entry.message.id) ?? []}
               />
-            ) : null}
-          </div>
+            ) : null
+          }
+          viewerId={viewerId}
+        />
+        {pending.map((item, index) => (
+          <PendingMessageRow
+            continued={index > 0 || entries.at(-1)?.message?.author.id === viewerId}
+            key={item.key}
+            name={session.user.displayName}
+            seed={viewerId}
+            text={item.text}
+          />
         ))}
-        {waitingForContinue ? (
-          <div className="reply-continue" role="status">
-            <span>
-              The agents have used their turns for now, so they stop here
-              until you step in.
-            </span>
-            <button
-              className="secondary-button"
-              onClick={() =>
-                void continueConversation(conversationId).then(() =>
-                  timeline.refetch(),
-                )
-              }
-              type="button"
-            >
+      </ConversationTimeline>
+      {waitingForContinue ? (
+        <Banner
+          action={
+            <Button onClick={() => void continueConversation(conversationId).then(() => timeline.refetch())} size="sm" variant="primary">
               Let them continue
-            </button>
-          </div>
-        ) : null}
-        {pending.map((key) => (
-          <article aria-label="Message sending" className="message pending-message" key={key}>
-            <header>
-              <strong>@{session.user.loginName}</strong>
-              <span>Sending…</span>
-            </header>
-          </article>
-        ))}
-      </section>
-
+            </Button>
+          }
+          className="aw-conv__banner"
+          title="The agents have used their turns."
+          tone="agent"
+        >
+          They’ll wait here until someone steps in.
+        </Banner>
+      ) : null}
       {valid && page?.capabilities.sendMessage ? (
         <StructuredComposer
+          label={`Message ${title}`}
           onSubmit={send}
-          placeholder={`Message ${title}…`}
+          placeholder={`Message ${title}`}
           searchActors={async (query) => {
             const needle = query.trim().toLowerCase()
             return members.filter(
               (member) =>
-                member.id !== session.user.actorId &&
-                (!needle ||
-                  member.handle.toLowerCase().includes(needle) ||
-                  member.displayName.toLowerCase().includes(needle)),
+                member.id !== viewerId &&
+                (!needle || member.handle.toLowerCase().includes(needle) || member.displayName.toLowerCase().includes(needle)),
             )
           }}
         />
@@ -274,110 +265,16 @@ export function DirectConversationPage() {
   )
 }
 
-function TimelineEntry({ entry }: { entry: ConversationTimelineEntry }) {
-  if (entry.message) {
-    const author = entry.message.author
-    return (
-      <article
-        className={`message ${author.kind === 'execution_worker' ? 'worker-message' : ''}`}
-      >
-        <header>
-          <span className="avatar" aria-hidden="true">
-            {author.displayName.charAt(0).toLocaleUpperCase()}
-          </span>
-          <strong>{author.displayName}</strong>
-          <span className="identity-kind">
-            {author.kind === 'external_agent' ? 'agent' : `@${author.handle}`}
-          </span>
-          <time dateTime={entry.createdAt}>
-            {new Date(entry.createdAt).toLocaleTimeString([], {
-              hour: 'numeric',
-              minute: '2-digit',
-            })}
-          </time>
-        </header>
-        <p>
-          <MessageContent
-            actors={entry.message.mentionedActors}
-            content={entry.message.content}
-            fallbackPlainText={entry.message.plainText}
-            workItems={entry.message.referencedWorkItems}
-          />
-        </p>
-      </article>
-    )
-  }
-  return <SystemTimelineEntry createdAt={entry.createdAt} />
-}
-
-/** One line per agent asked about a message, until they reply. */
-function ReplyStatus({
-  onRetry,
-  requests,
-}: {
-  onRetry: (requestId: string) => void
-  requests: ReplyRequest[]
-}) {
-  const visible = requests.filter((request) => request.status !== 'replied')
-  if (!visible.length) return null
-  return (
-    <ul aria-label="Replies" className="reply-status">
-      {visible.map((request) => (
-        <li data-status={request.status} key={request.id}>
-          <span aria-hidden="true" className="reply-status-dot" />
-          <span>{describeRequest(request)}</span>
-          {request.status === 'expired' || request.status === 'released' ? (
-            <button
-              className="link-button"
-              onClick={() => onRetry(request.id)}
-              type="button"
-            >
-              Ask again
-            </button>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function describeRequest(request: ReplyRequest) {
-  const name = request.agent.displayName
-  switch (request.status) {
-    case 'claimed':
-      return `${name} is replying…`
-    case 'pending':
-      return request.agentLastSeenAt
-        ? `Waiting for ${name} (last checked in ${timeAgo(request.agentLastSeenAt)})`
-        : `Waiting for ${name} to connect`
-    case 'passed':
-      return `${name} had nothing to add`
-    case 'released':
-      return `${name} couldn't answer${request.reason ? `: ${request.reason}` : ''}`
-    case 'expired':
-      return `${name} stopped before replying`
-    default:
-      return name
-  }
-}
-
-function timeAgo(iso: string) {
-  const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
-  if (!Number.isFinite(seconds)) return 'a while ago'
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`
-  return `${Math.round(seconds / 86_400)}d ago`
-}
-
 function GroupMembers({
   conversationId,
   members,
+  onClose,
   people,
   viewerId,
 }: {
   conversationId: string
   members: ConversationActor[]
+  onClose: () => void
   people: ConversationActor[]
   viewerId: string
 }) {
@@ -387,72 +284,66 @@ function GroupMembers({
   const [error, setError] = useState<string | null>(null)
   const memberIds = new Set(members.map((member) => member.id))
   const candidates = people.filter((person) => !memberIds.has(person.id))
-  const refresh = () => queryClient.invalidateQueries({ queryKey: directQueryKey })
   const run = (action: Promise<void>, after?: () => void) => {
     setError(null)
     void action
       .then(async () => {
-        await refresh()
+        await queryClient.invalidateQueries({ queryKey: directQueryKey })
         after?.()
       })
-      .catch((reason: unknown) =>
-        setError(reason instanceof Error ? reason.message : 'That did not work.'),
-      )
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'That didn’t work. Try again.'))
   }
   return (
-    <aside aria-label="Group members" className="context-drawer">
-      <h2>Members</h2>
-      <ul className="member-list">
-        {members.map((member) => (
-          <li key={member.id}>
-            <span>
-              {member.displayName}
-              {member.id === viewerId ? ' (you)' : ''}
-            </span>
-            <button
-              className="secondary-button"
-              onClick={() =>
-                run(
-                  removeGroupMember(conversationId, member.id),
-                  member.id === viewerId ? () => navigate('/messages') : undefined,
-                )
-              }
-              type="button"
-            >
-              {member.id === viewerId ? 'Leave' : 'Remove'}
-            </button>
-          </li>
-        ))}
+    <aside aria-label="Group members" className="context-drawer aw-members">
+      <div className="aw-members__head">
+        <h2>Members</h2>
+        <IconButton icon="x" label="Close members" onClick={onClose} size="sm" />
+      </div>
+      <ul className="aw-members__list">
+        {members.map((member) => {
+          const kind = actorKind(member.kind)
+          const you = member.id === viewerId
+          return (
+            <li className="aw-members__row" key={member.id}>
+              <Avatar kind={kind} name={member.displayName} seed={member.id} size={32} />
+              <span className="aw-members__name">
+                {member.displayName}
+                {you ? <span className="aw-members__you"> (you)</span> : null}
+              </span>
+              <ActorTag kind={kind} />
+              <Button
+                onClick={() => run(removeGroupMember(conversationId, member.id), you ? () => navigate('/messages') : undefined)}
+                size="sm"
+                variant="ghost"
+              >
+                {you ? 'Leave' : 'Remove'}
+              </Button>
+            </li>
+          )
+        })}
       </ul>
       {candidates.length > 0 ? (
         <form
+          className="aw-members__add"
           onSubmit={(event) => {
             event.preventDefault()
             if (adding) run(addGroupMember(conversationId, adding), () => setAdding(''))
           }}
         >
-          <label htmlFor="group-add-member">Add someone</label>
-          <select
-            id="group-add-member"
-            onChange={(event) => setAdding(event.target.value)}
-            value={adding}
-          >
-            <option value="">Choose…</option>
+          <SelectField id="group-add-member" label="Add someone" onChange={(event) => setAdding(event.target.value)} value={adding}>
+            <option value="">Choose a person or agent…</option>
             {candidates.map((person) => (
               <option key={person.id} value={person.id}>
                 {person.displayName}
               </option>
             ))}
-          </select>
-          <button disabled={!adding} type="submit">
+          </SelectField>
+          <Button disabled={!adding} type="submit" variant="primary">
             Add
-          </button>
+          </Button>
         </form>
       ) : null}
-      {error ? <p role="alert">{error}</p> : null}
-      <p>
-        <Link to="/messages">All messages</Link>
-      </p>
+      {error ? <Banner tone="danger">{error}</Banner> : null}
     </aside>
   )
 }

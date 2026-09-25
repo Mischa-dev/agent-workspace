@@ -1,72 +1,65 @@
-import { NavLink } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
+import { SidebarFrame, SidebarLink, SidebarSection } from '../shell/SidebarParts'
+import { IconButton, actorKind } from '../ui'
 import { conversationTitle, useDirectOverview } from './api'
 
-export function DirectSidebar({
-  mobileOpen,
-  onNavigate,
-}: {
-  mobileOpen: boolean
-  onNavigate: () => void
-}) {
+export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean; onNavigate: () => void }) {
   const session = useAuthenticatedSession()
   const overview = useDirectOverview()
+  const navigate = useNavigate()
   const conversations = overview.data?.conversations ?? []
+  const viewerId = session.user.actorId
   return (
-    <aside
-      aria-label="Messages navigation"
-      className="project-sidebar"
-      data-mobile-open={mobileOpen}
+    <SidebarFrame
+      actions={
+        <IconButton
+          icon="compose"
+          label="New message"
+          onClick={() => {
+            onNavigate()
+            navigate('/messages')
+          }}
+          side="bottom"
+        />
+      }
       id="project-sidebar"
+      label="Messages navigation"
+      mobileOpen={mobileOpen}
+      title="Messages"
     >
-      <header className="project-heading">
-        <span className="section-label">Direct</span>
-        <p>Messages</p>
-      </header>
-      <nav aria-label="Messages">
-        <ul>
-          <li>
-            <NavLink end onClick={onNavigate} to="/messages">
-              <span aria-hidden="true">＋</span>
-              New message
-            </NavLink>
-          </li>
-          {overview.isPending ? (
-            <li>
-              <span className="rail-loading">Loading…</span>
-            </li>
-          ) : null}
-          {conversations.map((conversation) => (
-            <li className="channel-navigation" key={conversation.id}>
-              <NavLink
-                onClick={onNavigate}
-                to={`/messages/${encodeURIComponent(conversation.id)}`}
-              >
-                <span aria-hidden="true">
-                  {conversation.kind === 'dm' ? '@' : '◎'}
-                </span>
-                <span>
-                  {conversationTitle(conversation, session.user.actorId)}
-                </span>
-                {conversation.unread ? (
-                  <span aria-label="Unread Messages" className="unread-dot">
-                    ●
-                  </span>
-                ) : null}
-              </NavLink>
-            </li>
-          ))}
-          {overview.data?.capabilities.manageAgents ? (
-            <li>
-              <NavLink onClick={onNavigate} to="/messages/agents">
-                <span aria-hidden="true">⚙</span>
-                Agents
-              </NavLink>
-            </li>
-          ) : null}
+      <SidebarSection label="Direct messages">
+        {conversations.map((conversation) => {
+          const other = conversation.members.find((member) => member.id !== viewerId)
+          return (
+            <SidebarLink
+              avatar={
+                conversation.kind === 'dm' && other
+                  ? { name: other.displayName, kind: actorKind(other.kind), seed: other.id }
+                  : undefined
+              }
+              icon={conversation.kind === 'group' ? 'users' : 'message'}
+              keep={conversation.unread}
+              key={conversation.id}
+              label={conversationTitle(conversation, viewerId)}
+              meta={conversation.kind === 'group' ? String(conversation.members.length) : undefined}
+              onNavigate={onNavigate}
+              to={`/messages/${encodeURIComponent(conversation.id)}`}
+              unread={conversation.unread}
+            />
+          )
+        })}
+      </SidebarSection>
+      {overview.isPending ? <p className="aw-sidebar__note">Loading conversations…</p> : null}
+      {overview.data && conversations.length === 0 ? (
+        <p className="aw-sidebar__note">No conversations yet. Start one with New message.</p>
+      ) : null}
+      {overview.data?.capabilities.manageAgents ? (
+        <ul className="aw-section__list aw-sidebar__bottom">
+          <SidebarLink icon="bot" label="Agents" onNavigate={onNavigate} to="/messages/agents" />
         </ul>
-      </nav>
-    </aside>
+      ) : null}
+    </SidebarFrame>
   )
 }
