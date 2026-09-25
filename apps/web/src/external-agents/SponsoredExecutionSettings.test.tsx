@@ -106,7 +106,7 @@ describe('SponsoredExecutionSettings', () => {
       `sponsored-${requestId}-1-approve`,
     )
     expect(
-      await screen.findByText('No external Worker requests need your decision.'),
+      await screen.findByText('No run requests are waiting for you.'),
     ).toBeVisible()
   })
 })

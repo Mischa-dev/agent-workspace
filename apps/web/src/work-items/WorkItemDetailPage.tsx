@@ -1,18 +1,40 @@
-import { FormEvent, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
-import { useProjectConversationSidebar } from '../conversations/hooks'
 import { searchMentionableActors } from '../conversations/api'
-import { StructuredComposer } from '../conversations/StructuredComposer'
+import { useProjectConversationSidebar } from '../conversations/hooks'
 import { MessageContent } from '../conversations/MessageContent'
+import { StructuredComposer } from '../conversations/StructuredComposer'
+import { formatFullDate } from '../conversations/timeFormat'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
+import { ProjectPageLoading } from '../projects/ProjectPageStates'
+import { humanize } from '../projects/format'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { listRepositories } from '../repositories/api'
 import { AppShell } from '../shell/AppShell'
+import {
+  ActorTag,
+  Avatar,
+  Banner,
+  Button,
+  Checkbox,
+  Dialog,
+  ErrorState,
+  Icon,
+  IconButton,
+  MessageSkeleton,
+  Row,
+  RowList,
+  SelectField,
+  StatusChip,
+  TextArea,
+  TextField,
+  actorKind,
+} from '../ui'
 import { normalizeWorkItem, searchWorkItemReferences } from './api'
 import { buildOpenInCodexLink } from './codexDeepLink'
 import { workItemPriorities } from './constants'
@@ -28,11 +50,13 @@ import {
   useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
-  useWorkItemWorkflow,
   useWorkItemTimeline,
+  useWorkItemWorkflow,
   useWorkWithWorker,
 } from './hooks'
-import type { WorkItem, WorkItemPriority } from './types'
+import { workItemsHref } from './links'
+import type { AssignableActor, WorkItem, WorkItemPriority } from './types'
+import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 
 type Draft = {
   title: string
@@ -42,6 +66,8 @@ type Draft = {
   priority: WorkItemPriority
   assigneeActorId: string
 }
+
+type Workflow = NonNullable<ReturnType<typeof useWorkItemWorkflow>['data']>
 
 function draftFromItem(item: WorkItem): Draft {
   return {
@@ -61,6 +87,11 @@ function conflictItem(error: unknown): WorkItem | null {
   return normalizeWorkItem((details as { current: unknown }).current)
 }
 
+function shortDate(iso: string) {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
 export function WorkItemDetailPage() {
   const session = useAuthenticatedSession()
   const { projectId = '', workItemId = '' } = useParams()
@@ -70,40 +101,51 @@ export function WorkItemDetailPage() {
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'work_items' },
-    project.isSuccess &&
-      !project.data.archivedAt &&
-      project.data.capabilities.navigationWrite,
+    project.isSuccess && !project.data.archivedAt && project.data.capabilities.navigationWrite,
     project.data?.navigation,
   )
 
   if (project.isPending || itemQuery.isPending || workflow.isPending) {
-    return <AppShell user={session.user}><DetailLoading /></AppShell>
+    return (
+      <AppShell user={session.user}>
+        <ProjectPageLoading label="Loading work item" />
+      </AppShell>
+    )
   }
   if (project.isError || itemQuery.isError || workflow.isError) {
     return (
       <AppShell user={session.user}>
-        <div className="page-content"><div className="error-state" role="alert">
-          <h1>Work Item unavailable</h1>
-          <p>It does not exist, is no longer accessible, or could not be loaded.</p>
-          <button onClick={() => void Promise.all([project.refetch(), itemQuery.refetch(), workflow.refetch()])} type="button">Try again</button>
-        </div></div>
+        <div className="aw-page">
+          <ErrorState
+            action={
+              <Button onClick={() => void Promise.all([project.refetch(), itemQuery.refetch(), workflow.refetch()])}>Try again</Button>
+            }
+            title="This work item isn’t available"
+          >
+            It may have been removed, or your access may have changed. If your connection dropped, try again.
+          </ErrorState>
+        </div>
       </AppShell>
     )
   }
 
   return (
-    <AppShell
-      context={<WorkItemContext item={itemQuery.data} />}
-      project={project.data}
-      user={session.user}
-    >
-      <div className="page-content work-item-detail">
+    <AppShell project={project.data} user={session.user}>
+      <div className="aw-page aw-page--wide">
         <NavigationSyncAlert {...navigationSync} />
-        <Link className="back-link" to={`/projects/${encodeURIComponent(projectId)}/work-items`}>
-          ← Work Items
-        </Link>
+        <nav aria-label="Breadcrumb" className="aw-crumbs">
+          <Link className="aw-crumbs__link" to={workItemsHref(projectId)}>
+            <Icon name="work" size={14} />
+            Work items
+          </Link>
+          <Icon className="aw-crumbs__sep" name="chevron-right" size={14} />
+          <span aria-current="page" className="aw-crumbs__here">
+            {itemQuery.data.key}
+          </span>
+        </nav>
         <WorkItemEditor
           item={itemQuery.data}
+          key={itemQuery.data.id}
           projectArchived={Boolean(project.data.archivedAt)}
           workflow={workflow.data}
         />
@@ -112,36 +154,43 @@ export function WorkItemDetailPage() {
   )
 }
 
-function WorkItemEditor({
-  item,
-  projectArchived,
-  workflow,
-}: {
-  item: WorkItem
-  projectArchived: boolean
-  workflow: NonNullable<ReturnType<typeof useWorkItemWorkflow>['data']>
-}) {
+function WorkItemEditor({ item, projectArchived, workflow }: { item: WorkItem; projectArchived: boolean; workflow: Workflow }) {
   const update = useUpdateWorkItem()
   const archive = useSetWorkItemArchived()
   const [draft, setDraft] = useState(() => draftFromItem(item))
   const [base, setBase] = useState(item)
   const [conflict, setConflict] = useState<WorkItem | null>(null)
   const [assigneeQuery, setAssigneeQuery] = useState('')
+  const [runOpen, setRunOpen] = useState(false)
+  const runButton = useRef<HTMLButtonElement>(null)
+  const titleRef = useRef<HTMLTextAreaElement>(null)
   const assignees = useAssignableActors(item.projectId, assigneeQuery)
   const idempotencyKey = useRef(crypto.randomUUID())
   const archiveKey = useRef(crypto.randomUUID())
+  const formId = `work-item-form-${item.id}`
 
   const allowedStatuses = useMemo(() => {
     const allowed = new Set(
-      workflow.transitions
-        .filter((transition) => transition.fromStatusId === base.status.id)
-        .map((transition) => transition.toStatusId),
+      workflow.transitions.filter((transition) => transition.fromStatusId === base.status.id).map((transition) => transition.toStatusId),
     )
     allowed.add(base.status.id)
     return workflow.statuses.filter((status) => allowed.has(status.id))
   }, [base.status.id, workflow])
   const dirty = JSON.stringify(draft) !== JSON.stringify(draftFromItem(base))
   const disabled = projectArchived || Boolean(base.archivedAt) || !base.capabilities.edit
+
+  useLayoutEffect(() => {
+    const element = titleRef.current
+    if (!element) return
+    element.style.height = 'auto'
+    element.style.height = `${element.scrollHeight}px`
+  }, [draft.title])
+
+  const replaceBase = (current: WorkItem) => {
+    setBase(current)
+    setDraft(draftFromItem(current))
+    setConflict(null)
+  }
 
   const save = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -186,161 +235,287 @@ function WorkItemEditor({
       {
         onSuccess: (current) => {
           archiveKey.current = crypto.randomUUID()
-          setBase(current)
-          setDraft(draftFromItem(current))
-          setConflict(null)
+          replaceBase(current)
         },
         onError: (error) => setConflict(conflictItem(error)),
       },
     )
   }
 
+  const onTitleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
+  }
+
+  const selectedStatus = workflow.statuses.find((status) => status.id === draft.statusId) ?? base.status
+  const currentAssignee: AssignableActor | null =
+    assignees.data?.find((actor) => actor.id === draft.assigneeActorId) ??
+    (base.assignee && base.assignee.actorId === draft.assigneeActorId
+      ? { id: base.assignee.actorId, displayName: base.assignee.displayName, handle: base.assignee.handle, kind: base.assignee.kind }
+      : null)
+  const showSaveBar = !disabled && (dirty || update.isPending || (update.isError && !conflict))
+
   return (
-    <>
-      <header className="work-item-detail-heading">
-        <div>
-          <span className="work-item-key">{base.key}</span>
-          <h1>{base.title}</h1>
+    <div className="aw-workitem">
+      <div className="aw-workitem__head">
+        <div className="aw-workitem__top">
+          <span className="aw-workitem__key">{base.key}</span>
+          {base.archivedAt ? <StatusChip icon="archive">Archived</StatusChip> : null}
         </div>
-        {base.archivedAt ? <span className="archive-badge">Archived</span> : null}
-      </header>
+        {disabled ? (
+          <>
+            <h1 className="aw-workitem__heading" id="workspace-heading">
+              {base.title}
+            </h1>
+            <p className={base.description ? 'aw-workitem__text' : 'aw-workitem__text is-empty'}>{base.description || 'No description.'}</p>
+          </>
+        ) : (
+          <form className="aw-workitem__form" id={formId} onSubmit={save}>
+            <h1 className="visually-hidden" id="workspace-heading">
+              {base.key}: {base.title}
+            </h1>
+            <label className="visually-hidden" htmlFor={`${formId}-title`}>
+              Title
+            </label>
+            <textarea
+              className="aw-workitem__title"
+              id={`${formId}-title`}
+              maxLength={240}
+              onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+              onKeyDown={onTitleKeyDown}
+              placeholder="Work item title"
+              ref={titleRef}
+              required
+              rows={1}
+              value={draft.title}
+            />
+            <TextArea
+              aria-label="Description"
+              className="aw-workitem__desc"
+              maxLength={100000}
+              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+              placeholder="Add a description: the outcome you want, any limits, and useful context."
+              rows={6}
+              value={draft.description}
+            />
+          </form>
+        )}
 
-      <OpenInCodex item={base} projectArchived={projectArchived} />
-
-      {conflict ? (
-        <section className="conflict-banner" role="alert">
-          <div>
-            <strong>A newer version exists.</strong>
-            <p>Your draft is still here. Reload the latest fields, then reapply the changes you want.</p>
-          </div>
-          <button
-            className="secondary-button"
-            onClick={() => {
-              setBase(conflict)
-              setDraft(draftFromItem(conflict))
-              setConflict(null)
-              update.reset()
-            }}
-            type="button"
+        {base.archivedAt && (
+          <Banner icon="archive" title="This work item is archived.">
+            It’s hidden from lists and can’t change until it’s restored.
+          </Banner>
+        )}
+        {conflict ? (
+          <Banner
+            action={
+              <Button
+                onClick={() => {
+                  replaceBase(conflict)
+                  update.reset()
+                }}
+                size="sm"
+              >
+                Load latest version
+              </Button>
+            }
+            role="alert"
+            title="A newer version exists."
+            tone="warning"
           >
-            Load latest version
-          </button>
-        </section>
-      ) : null}
+            Someone else changed this work item. Your edits are still here: load the latest version, then make them again.
+          </Banner>
+        ) : null}
+      </div>
 
-      <form className="work-item-editor" onSubmit={save}>
-        <label className="field">
-          <span>Title</span>
-          <input disabled={disabled} maxLength={240} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required value={draft.title} />
-        </label>
-        <label className="field">
-          <span>Description</span>
-          <textarea disabled={disabled} maxLength={100000} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Describe the outcome, constraints, and useful context." rows={10} value={draft.description} />
-        </label>
-        <div className="field-grid work-item-properties">
-          <label className="field">
-            <span>Type</span>
-            <select disabled={disabled} onChange={(event) => setDraft({ ...draft, typeId: event.target.value })} value={draft.typeId}>
-              {workflow.types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
-            </select>
-          </label>
-          <label className="field">
-            <span>Status</span>
-            <select disabled={disabled} onChange={(event) => setDraft({ ...draft, statusId: event.target.value })} value={draft.statusId}>
-              {allowedStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
-            </select>
-          </label>
-          <label className="field">
-            <span>Priority</span>
-            <select disabled={disabled} onChange={(event) => setDraft({ ...draft, priority: event.target.value as WorkItemPriority })} value={draft.priority}>
-              {workItemPriorities.map((priority) => <option key={priority.value} value={priority.value}>{priority.label}</option>)}
-            </select>
-          </label>
-          <label className="field">
-            <span>Assignee</span>
-            <input disabled={disabled} maxLength={120} onChange={(event) => setAssigneeQuery(event.target.value)} placeholder="Filter people and agents" value={assigneeQuery} />
-            <select disabled={disabled} onChange={(event) => setDraft({ ...draft, assigneeActorId: event.target.value })} value={draft.assigneeActorId}>
+      <aside aria-label="Work item details" className="aw-workitem__side">
+        <div className="aw-props">
+          <SelectField
+            disabled={disabled}
+            form={formId}
+            id={`${formId}-status`}
+            label="Status"
+            onChange={(event) => setDraft({ ...draft, statusId: event.target.value })}
+            prefix={<StatusIcon category={selectedStatus.semanticCategory} />}
+            value={draft.statusId}
+          >
+            {allowedStatuses.map((status) => (
+              <option key={status.id} value={status.id}>
+                {status.name}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
+            disabled={disabled}
+            form={formId}
+            id={`${formId}-priority`}
+            label="Priority"
+            onChange={(event) => setDraft({ ...draft, priority: event.target.value as WorkItemPriority })}
+            prefix={<PriorityIcon decorative priority={draft.priority} />}
+            value={draft.priority}
+          >
+            {workItemPriorities.map((priority) => (
+              <option key={priority.value} value={priority.value}>
+                {priority.label}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
+            disabled={disabled}
+            form={formId}
+            id={`${formId}-type`}
+            label="Type"
+            onChange={(event) => setDraft({ ...draft, typeId: event.target.value })}
+            value={draft.typeId}
+          >
+            {workflow.types.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name}
+              </option>
+            ))}
+          </SelectField>
+          <div className="aw-props__assignee">
+            <SelectField
+              disabled={disabled}
+              form={formId}
+              id={`${formId}-assignee`}
+              label="Assignee"
+              onChange={(event) => setDraft({ ...draft, assigneeActorId: event.target.value })}
+              prefix={
+                currentAssignee ? (
+                  <Avatar kind={actorKind(currentAssignee.kind)} name={currentAssignee.displayName} seed={currentAssignee.id} size={18} />
+                ) : (
+                  <Icon name="unassigned" size={16} />
+                )
+              }
+              value={draft.assigneeActorId}
+            >
               <option value="">Unassigned</option>
               {base.assignee && !assignees.data?.some((actor) => actor.id === base.assignee?.actorId) ? (
-                <option value={base.assignee.actorId}>{base.assignee.displayName}{base.assignee.active ? '' : ' (inactive)'}</option>
+                <option value={base.assignee.actorId}>
+                  {base.assignee.displayName}
+                  {base.assignee.active ? '' : ' (inactive)'}
+                </option>
               ) : null}
-              {assignees.data?.map((actor) => <option key={actor.id} value={actor.id}>{actor.displayName} · @{actor.handle}</option>)}
-            </select>
-          </label>
+              {assignees.data?.map((actor) => (
+                <option key={actor.id} value={actor.id}>
+                  {actor.displayName} · @{actor.handle}
+                </option>
+              ))}
+            </SelectField>
+            {!disabled ? (
+              <TextField
+                aria-label="Search people and agents to assign"
+                className="aw-props__search"
+                maxLength={120}
+                onChange={(event) => setAssigneeQuery(event.target.value)}
+                placeholder="Search people and agents"
+                prefix={<Icon name="search" size={14} />}
+                type="search"
+                value={assigneeQuery}
+              />
+            ) : null}
+          </div>
+          <p aria-live="polite" className="aw-props__status">
+            {update.isSuccess && !dirty ? 'Saved.' : `Updated ${shortDate(base.updatedAt)}`}
+          </p>
         </div>
-        {update.isError && !conflict ? <p className="form-error-summary" role="alert">{update.error.message}</p> : null}
-        <div className="form-actions">
-          <span aria-live="polite" className="save-state">
-            {update.isSuccess && !dirty ? `Saved as version ${base.version}` : dirty ? 'Unsaved changes' : `Version ${base.version}`}
-          </span>
-          <button className="secondary-button" disabled={!dirty || update.isPending} onClick={() => setDraft(draftFromItem(base))} type="button">Discard draft</button>
-          <button className="primary-button" disabled={disabled || !dirty || !draft.title.trim() || update.isPending} type="submit">{update.isPending ? 'Saving…' : 'Save changes'}</button>
-        </div>
-      </form>
 
-      <AcceptanceCriteria
-        disabled={disabled}
-        item={base}
-        onItemChange={(current) => {
-          setBase(current)
-          setDraft(draftFromItem(current))
-          setConflict(null)
-        }}
-      />
+        <OpenInCodex item={base} projectArchived={projectArchived} />
 
-      <WorkWithWorker disabled={disabled} item={base} />
+        {!disabled ? (
+          <div className="aw-sidecard">
+            <h2 className="aw-sidecard__title">Run with Codex</h2>
+            <p className="aw-sidecard__text">Start a thread where Codex works on this on the server, with this work item as context.</p>
+            <Button icon="play" onClick={() => setRunOpen(true)} ref={runButton}>
+              Start a run
+            </Button>
+          </div>
+        ) : null}
 
-      <WorkItemLinks
-        disabled={disabled}
-        item={base}
-        onItemChange={(current) => {
-          setBase(current)
-          setDraft(draftFromItem(current))
-          setConflict(null)
-        }}
-      />
+        {base.capabilities.archive && !projectArchived ? (
+          <div className="aw-sidecard aw-sidecard--quiet">
+            <Button
+              busy={archive.isPending}
+              icon={base.archivedAt ? 'undo' : 'archive'}
+              onClick={toggleArchived}
+              size="sm"
+              variant="ghost"
+            >
+              {base.archivedAt ? 'Restore work item' : 'Archive work item'}
+            </Button>
+            {archive.isError && !conflict ? <Banner tone="danger">{archive.error.message}</Banner> : null}
+          </div>
+        ) : null}
+      </aside>
 
-      <WorkItemCollaboration disabled={disabled} item={base} />
+      <div className="aw-workitem__rest">
+        <AcceptanceCriteria disabled={disabled} item={base} onItemChange={replaceBase} />
+        <WorkItemLinks disabled={disabled} item={base} onItemChange={replaceBase} />
+        <WorkItemActivity disabled={disabled} item={base} />
 
-      {base.capabilities.archive && !projectArchived ? (
-        <section className="archive-project work-item-archive" aria-labelledby="archive-work-item-heading">
-          <h2 id="archive-work-item-heading">{base.archivedAt ? 'Restore Work Item' : 'Archive Work Item'}</h2>
-          <p>{base.archivedAt ? 'Return this item to active planning views.' : 'Hide this item from ordinary views while preserving its identity and history.'}</p>
-          {archive.isError && !conflict ? <p className="form-error-summary" role="alert">{archive.error.message}</p> : null}
-          <button className={base.archivedAt ? 'secondary-button' : 'danger-button'} disabled={archive.isPending} onClick={toggleArchived} type="button">
-            {archive.isPending ? 'Saving…' : base.archivedAt ? 'Restore Work Item' : 'Archive Work Item'}
-          </button>
-        </section>
-      ) : null}
-    </>
+        {showSaveBar ? (
+          <div aria-label="Unsaved changes" className="aw-savebar" role="region">
+            <span className="aw-savebar__text" role={update.isError ? 'alert' : undefined}>
+              {update.isPending ? 'Saving…' : update.isError && !conflict ? update.error.message : 'You have unsaved changes.'}
+            </span>
+            <Button disabled={!dirty || update.isPending} onClick={() => setDraft(draftFromItem(base))} variant="ghost">
+              Discard
+            </Button>
+            <Button busy={update.isPending} disabled={!dirty || !draft.title.trim()} form={formId} type="submit" variant="primary">
+              Save changes
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+
+      {runOpen ? <StartRunDialog item={base} onClose={() => setRunOpen(false)} returnFocus={runButton} /> : null}
+    </div>
   )
 }
 
 function OpenInCodex({ item, projectArchived }: { item: WorkItem; projectArchived: boolean }) {
   const result = projectArchived
-    ? { href: null, reason: 'Restore this Project before opening a Work Item in Codex.' }
+    ? { href: null, reason: 'Restore this Project before opening a work item in Codex.' }
     : buildOpenInCodexLink(item, window.location.origin)
   const reasonId = `open-in-codex-reason-${item.id}`
 
   return (
-    <section className="work-item-section codex-launch" aria-labelledby={`open-in-codex-heading-${item.id}`}>
-      <div>
-        <h2 id={`open-in-codex-heading-${item.id}`}>Local Codex</h2>
-        <p>Open a prefilled, unsent local task for this Work Item. This does not create a Thread or run.</p>
-      </div>
+    <section aria-labelledby={`open-in-codex-heading-${item.id}`} className="aw-sidecard">
+      <h2 className="aw-sidecard__title" id={`open-in-codex-heading-${item.id}`}>
+        Work on it locally
+      </h2>
+      <p className="aw-sidecard__text">Opens Codex on your computer with this work item ready. Nothing starts until you send it there.</p>
       {result.href ? (
-        <a className="secondary-button" href={result.href}>Open in Codex</a>
+        <a className="aw-btn aw-btn--secondary aw-btn--md" href={result.href}>
+          <Icon name="terminal" />
+          <span className="aw-btn__label">Open in Codex</span>
+        </a>
       ) : (
-        <div>
-          <button aria-describedby={reasonId} className="secondary-button" disabled type="button">Open in Codex</button>
-          <p className="compact-note" id={reasonId}>{result.reason}</p>
-        </div>
+        <>
+          <Button aria-describedby={reasonId} disabled icon="terminal">
+            Open in Codex
+          </Button>
+          <p className="aw-sidecard__note" id={reasonId}>
+            {result.reason}
+          </p>
+        </>
       )}
     </section>
   )
 }
 
-function WorkWithWorker({ disabled, item }: { disabled: boolean; item: WorkItem }) {
+function StartRunDialog({
+  item,
+  onClose,
+  returnFocus,
+}: {
+  item: WorkItem
+  onClose: () => void
+  returnFocus: RefObject<HTMLButtonElement | null>
+}) {
   const navigate = useNavigate()
   const conversations = useProjectConversationSidebar(item.projectId)
   const repositories = useQuery({
@@ -354,11 +529,7 @@ function WorkWithWorker({ disabled, item }: { disabled: boolean; item: WorkItem 
   const [prompt, setPrompt] = useState('')
   const channels = (conversations.data?.channels ?? []).filter((channel) => !channel.archivedAt)
   const availableRepositories = (repositories.data?.repositories ?? []).filter(
-    (repository) =>
-      repository.enabled &&
-      repository.trusted &&
-      repository.preparationState === 'ready' &&
-      !repository.archivedAt,
+    (repository) => repository.enabled && repository.trusted && repository.preparationState === 'ready' && !repository.archivedAt,
   )
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -376,51 +547,63 @@ function WorkWithWorker({ disabled, item }: { disabled: boolean; item: WorkItem 
       },
       {
         onSuccess: (response) => {
-          navigate(
-            `/projects/${encodeURIComponent(item.projectId)}/threads/${encodeURIComponent(response.threadId)}`,
-          )
+          navigate(`/projects/${encodeURIComponent(item.projectId)}/threads/${encodeURIComponent(response.threadId)}`)
         },
       },
     )
   }
 
-  if (disabled) return null
   return (
-    <section className="work-item-section worker-launch" aria-labelledby="work-with-worker-heading">
-      <header>
-        <div>
-          <h2 id="work-with-worker-heading">Work with Worker</h2>
-          <p>Create a linked Thread and start an isolated run with this Work Item as durable context.</p>
-        </div>
-      </header>
-      <form className="worker-launch-form" onSubmit={submit}>
-        <div className="field-grid">
-          <label className="field">
-            <span>Channel</span>
-            <select onChange={(event) => setChannelId(event.target.value)} required value={channelId}>
-              <option value="">Select Channel</option>
-              {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
-            </select>
-          </label>
-          <label className="field">
-            <span>Repository</span>
-            <select onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}>
-              <option value="">Automatic selection</option>
-              {availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.owner}/{repository.name}</option>)}
-            </select>
-          </label>
-        </div>
-        <label className="field">
-          <span>Instructions</span>
-          <textarea maxLength={18000} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe the focused change or investigation for the Worker." required rows={4} value={prompt} />
-        </label>
-        {mutation.isError ? <p className="form-error-summary" role="alert">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <span className="save-state">Only the immutable Work Item ID, key, and these instructions are sent.</span>
-          <button className="primary-button" disabled={!channelId || !prompt.trim() || mutation.isPending} type="submit">{mutation.isPending ? 'Starting…' : 'Create Thread and start'}</button>
-        </div>
-      </form>
-    </section>
+    <Dialog
+      description={`Codex works in a new thread in the channel you pick. It gets ${item.key} and your instructions, nothing else.`}
+      footer={
+        <>
+          <Button onClick={onClose} variant="ghost">
+            Cancel
+          </Button>
+          <Button busy={mutation.isPending} disabled={!channelId || !prompt.trim()} icon="play" type="submit" variant="primary">
+            Start run
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      onSubmit={submit}
+      open
+      returnFocus={returnFocus}
+      title="Start a run"
+      width={560}
+    >
+      <div className="aw-form__grid">
+        <SelectField id="start-run-channel" label="Channel" onChange={(event) => setChannelId(event.target.value)} required value={channelId}>
+          <option value="">Choose a channel</option>
+          {channels.map((channel) => (
+            <option key={channel.id} value={channel.id}>
+              #{channel.name}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField id="start-run-repository" label="Repository" onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}>
+          <option value="">Pick automatically</option>
+          {availableRepositories.map((repository) => (
+            <option key={repository.id} value={repository.id}>
+              {repository.owner}/{repository.name}
+            </option>
+          ))}
+        </SelectField>
+      </div>
+      <TextArea
+        data-autofocus
+        id="start-run-instructions"
+        label="Instructions"
+        maxLength={18000}
+        onChange={(event) => setPrompt(event.target.value)}
+        placeholder="Describe the change or investigation you want."
+        required
+        rows={5}
+        value={prompt}
+      />
+      {mutation.isError ? <Banner tone="danger">{mutation.error.message}</Banner> : null}
+    </Dialog>
   )
 }
 
@@ -441,23 +624,20 @@ function AcceptanceCriteria({
   const [editingText, setEditingText] = useState('')
   const operationKey = useRef(crypto.randomUUID())
   const busy = create.isPending || update.isPending || remove.isPending
+  const total = item.acceptanceCriteria.length
+  const done = item.acceptanceCriteria.filter((criterion) => criterion.completed).length
 
   const nextKey = () => {
     const key = operationKey.current
     operationKey.current = crypto.randomUUID()
     return key
   }
+  const base = { projectId: item.projectId, workItemId: item.id, expectedVersion: item.version }
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!text.trim() || busy) return
     create.mutate(
-      {
-        projectId: item.projectId,
-        workItemId: item.id,
-        expectedVersion: item.version,
-        text: text.trim(),
-        idempotencyKey: nextKey(),
-      },
+      { ...base, text: text.trim(), idempotencyKey: nextKey() },
       {
         onSuccess: (current) => {
           setText('')
@@ -468,32 +648,33 @@ function AcceptanceCriteria({
   }
 
   return (
-    <section className="work-item-section" aria-labelledby="acceptance-heading">
-      <header>
-        <div>
-          <h2 id="acceptance-heading">Acceptance criteria</h2>
-          <p>{item.acceptanceCriteria.filter((criterion) => criterion.completed).length} of {item.acceptanceCriteria.length} complete</p>
-        </div>
+    <section aria-labelledby="acceptance-heading" className="aw-worksection">
+      <header className="aw-worksection__head">
+        <h2 className="aw-worksection__title" id="acceptance-heading">
+          <Icon name="checklist" size={16} />
+          Acceptance criteria
+        </h2>
+        {total ? (
+          <span className="aw-progress">
+            <span className="aw-progress__text">
+              {done} of {total} done
+            </span>
+            <progress aria-hidden="true" className="aw-progress__bar" max={total} value={done} />
+          </span>
+        ) : null}
       </header>
-      {item.acceptanceCriteria.length ? (
-        <ol className="criteria-list">
+      {total ? (
+        <ol className="aw-criteria">
           {item.acceptanceCriteria.map((criterion, index) => (
-            <li key={criterion.id}>
+            <li className="aw-criterion" key={criterion.id}>
               {editingId === criterion.id ? (
                 <form
-                  className="criterion-edit-form"
+                  className="aw-inline-add"
                   onSubmit={(event) => {
                     event.preventDefault()
                     if (!editingText.trim() || busy) return
                     update.mutate(
-                      {
-                        projectId: item.projectId,
-                        workItemId: item.id,
-                        criterionId: criterion.id,
-                        expectedVersion: item.version,
-                        text: editingText.trim(),
-                        idempotencyKey: nextKey(),
-                      },
+                      { ...base, criterionId: criterion.id, text: editingText.trim(), idempotencyKey: nextKey() },
                       {
                         onSuccess: (current) => {
                           setEditingId(null)
@@ -504,81 +685,127 @@ function AcceptanceCriteria({
                     )
                   }}
                 >
-                  <label className="visually-hidden" htmlFor={`edit-criterion-${criterion.id}`}>Edit {criterion.text}</label>
-                  <input
+                  <TextField
+                    aria-label="Criterion text"
                     autoFocus
-                    id={`edit-criterion-${criterion.id}`}
                     maxLength={1000}
                     onChange={(event) => setEditingText(event.target.value)}
                     value={editingText}
                   />
-                  <button className="secondary-button" disabled={!editingText.trim() || busy} type="submit">Save</button>
-                  <button className="text-button" disabled={busy} onClick={() => setEditingId(null)} type="button">Cancel</button>
+                  <Button busy={update.isPending} disabled={!editingText.trim()} size="sm" type="submit" variant="primary">
+                    Save
+                  </Button>
+                  <Button disabled={busy} onClick={() => setEditingId(null)} size="sm" variant="ghost">
+                    Cancel
+                  </Button>
                 </form>
               ) : (
-                <label>
-                  <input
+                <>
+                  <Checkbox
                     checked={criterion.completed}
+                    description={criterion.completedBy ? `Done by ${criterion.completedBy.displayName}` : undefined}
                     disabled={disabled || busy}
-                    onChange={(event) =>
+                    label={criterion.text}
+                    onChange={(completed) =>
                       update.mutate(
-                        {
-                          projectId: item.projectId,
-                          workItemId: item.id,
-                          criterionId: criterion.id,
-                          expectedVersion: item.version,
-                          completed: event.target.checked,
-                          idempotencyKey: nextKey(),
-                        },
+                        { ...base, criterionId: criterion.id, completed, idempotencyKey: nextKey() },
                         { onSuccess: onItemChange },
                       )
                     }
-                    type="checkbox"
                   />
-                  <span>{criterion.text}</span>
-                </label>
+                  {!disabled ? (
+                    <div className="aw-criterion__actions">
+                      <IconButton
+                        disabled={busy}
+                        icon="pencil"
+                        label={`Edit ${criterion.text}`}
+                        onClick={() => {
+                          setEditingId(criterion.id)
+                          setEditingText(criterion.text)
+                        }}
+                        size="sm"
+                      />
+                      <IconButton
+                        disabled={busy || index === 0}
+                        icon="arrow-up"
+                        label={`Move ${criterion.text} up`}
+                        onClick={() =>
+                          update.mutate({ ...base, criterionId: criterion.id, position: index, idempotencyKey: nextKey() }, { onSuccess: onItemChange })
+                        }
+                        size="sm"
+                      />
+                      <IconButton
+                        disabled={busy || index === total - 1}
+                        icon="arrow-down"
+                        label={`Move ${criterion.text} down`}
+                        onClick={() =>
+                          update.mutate(
+                            { ...base, criterionId: criterion.id, position: index + 2, idempotencyKey: nextKey() },
+                            { onSuccess: onItemChange },
+                          )
+                        }
+                        size="sm"
+                      />
+                      <IconButton
+                        disabled={busy}
+                        icon="trash"
+                        label={`Remove ${criterion.text}`}
+                        onClick={() =>
+                          remove.mutate({ ...base, criterionId: criterion.id, idempotencyKey: nextKey() }, { onSuccess: onItemChange })
+                        }
+                        size="sm"
+                      />
+                    </div>
+                  ) : null}
+                </>
               )}
-              <div className="criterion-actions">
-                <button
-                  aria-label={`Edit ${criterion.text}`}
-                  disabled={disabled || busy || editingId === criterion.id}
-                  onClick={() => { setEditingId(criterion.id); setEditingText(criterion.text) }}
-                  type="button"
-                >Edit</button>
-                <button
-                  aria-label={`Move ${criterion.text} up`}
-                  disabled={disabled || busy || index === 0}
-                  onClick={() => update.mutate({ projectId: item.projectId, workItemId: item.id, criterionId: criterion.id, expectedVersion: item.version, position: index, idempotencyKey: nextKey() }, { onSuccess: onItemChange })}
-                  type="button"
-                >↑</button>
-                <button
-                  aria-label={`Move ${criterion.text} down`}
-                  disabled={disabled || busy || index === item.acceptanceCriteria.length - 1}
-                  onClick={() => update.mutate({ projectId: item.projectId, workItemId: item.id, criterionId: criterion.id, expectedVersion: item.version, position: index + 2, idempotencyKey: nextKey() }, { onSuccess: onItemChange })}
-                  type="button"
-                >↓</button>
-                <button
-                  aria-label={`Remove ${criterion.text}`}
-                  disabled={disabled || busy}
-                  onClick={() => remove.mutate({ projectId: item.projectId, workItemId: item.id, criterionId: criterion.id, expectedVersion: item.version, idempotencyKey: nextKey() }, { onSuccess: onItemChange })}
-                  type="button"
-                >×</button>
-              </div>
-              {criterion.completedBy ? <small>Completed by {criterion.completedBy.displayName}</small> : null}
             </li>
           ))}
         </ol>
-      ) : <p className="compact-note">No acceptance criteria yet.</p>}
+      ) : (
+        <p className="aw-quiet">No acceptance criteria yet. Add what has to be true for this to count as done.</p>
+      )}
       {!disabled ? (
-        <form className="inline-create-form" onSubmit={submit}>
-          <label className="visually-hidden" htmlFor={`criterion-${item.id}`}>New acceptance criterion</label>
-          <input id={`criterion-${item.id}`} maxLength={1000} onChange={(event) => setText(event.target.value)} placeholder="Add an observable outcome" value={text} />
-          <button className="secondary-button" disabled={!text.trim() || busy} type="submit">Add criterion</button>
+        <form className="aw-inline-add" onSubmit={submit}>
+          <TextField
+            aria-label="New acceptance criterion"
+            id={`criterion-${item.id}`}
+            maxLength={1000}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="Add a criterion, like “The export includes archived items”"
+            value={text}
+          />
+          <Button busy={create.isPending} disabled={!text.trim() || busy} icon="plus" size="sm" type="submit">
+            Add
+          </Button>
         </form>
       ) : null}
-      {create.isError || update.isError || remove.isError ? <p className="form-error-summary" role="alert">The checklist changed before this action completed. Reload the Work Item and reapply the change.</p> : null}
+      {create.isError || update.isError || remove.isError ? (
+        <Banner tone="warning">The checklist changed before that finished. Reload the page and try again.</Banner>
+      ) : null}
     </section>
   )
+}
+
+function pullRequestSummary(pullRequest: WorkItem['linkedPullRequests'][number]) {
+  const parts = [
+    pullRequest.draft ? 'Draft' : humanize(pullRequest.state),
+    `checks ${humanize(pullRequest.checksState).toLocaleLowerCase()}`,
+    `review ${humanize(pullRequest.reviewState).toLocaleLowerCase()}`,
+    humanize(pullRequest.mergeabilityState).toLocaleLowerCase(),
+  ]
+  if (!pullRequest.confirmed) parts.push('needs confirmation')
+  if (pullRequest.syncState === 'failed') {
+    parts.push(`sync failed: ${humanize(pullRequest.syncFailureCategory ?? 'unknown').toLocaleLowerCase()}`)
+  }
+  if (pullRequest.automationState !== 'not_evaluated') {
+    parts.push(
+      `automation ${humanize(pullRequest.automationState).toLocaleLowerCase()}${
+        pullRequest.automationReason ? `: ${humanize(pullRequest.automationReason).toLocaleLowerCase()}` : ''
+      }`,
+    )
+  }
+  return parts.join(' · ')
 }
 
 function WorkItemLinks({
@@ -611,109 +838,301 @@ function WorkItemLinks({
     (repository) => !repository.archivedAt && !item.linkedRepositories.some((link) => link.id === repository.id),
   )
   const busy = threadMutation.isPending || repositoryMutation.isPending || primaryMutation.isPending
+  const ids = { projectId: item.projectId, workItemId: item.id }
 
   return (
-    <section className="work-item-section" aria-labelledby="links-heading">
-      <header><div><h2 id="links-heading">Links</h2><p>Discussion and code context remain independent, durable records.</p></div></header>
-      <div className="work-item-link-columns">
-        <div>
-          <h3>Threads</h3>
+    <section aria-labelledby="links-heading" className="aw-worksection">
+      <header className="aw-worksection__head">
+        <h2 className="aw-worksection__title" id="links-heading">
+          <Icon name="link" size={16} />
+          Links
+        </h2>
+      </header>
+
+      <div className="aw-links">
+        <div className="aw-links__group">
+          <h3 className="aw-links__title">Threads</h3>
           {item.linkedThreads.length ? (
-            <ul className="linked-record-list">
+            <RowList label="Linked threads">
               {item.linkedThreads.map((thread) => (
-                <li key={thread.id}>
-                  <div><Link to={thread.href}>{thread.name}</Link><small>{thread.parentChannelName}{thread.newestRunState ? ` · ${thread.newestRunState}` : ''}{thread.archivedAt ? ' · archived' : ''}</small></div>
-                  {!disabled ? <button className="text-button" disabled={busy} onClick={() => threadMutation.mutate({ projectId: item.projectId, workItemId: item.id, threadId: thread.id, linked: false, idempotencyKey: crypto.randomUUID() }, { onSuccess: onItemChange })} type="button">Unlink</button> : null}
-                </li>
+                <Row
+                  actions={
+                    !disabled ? (
+                      <Button
+                        disabled={busy}
+                        icon="unlink"
+                        onClick={() =>
+                          threadMutation.mutate(
+                            { ...ids, threadId: thread.id, linked: false, idempotencyKey: crypto.randomUUID() },
+                            { onSuccess: onItemChange },
+                          )
+                        }
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Unlink
+                      </Button>
+                    ) : null
+                  }
+                  key={thread.id}
+                  leading={
+                    <span className="aw-row__tile">
+                      <Icon name="messages" size={16} />
+                    </span>
+                  }
+                  meta={`#${thread.parentChannelName}${thread.newestRunState ? ` · run ${humanize(thread.newestRunState).toLocaleLowerCase()}` : ''}${
+                    thread.archivedAt ? ' · archived' : ''
+                  }`}
+                  title={<Link to={thread.href}>{thread.name}</Link>}
+                />
               ))}
-            </ul>
-          ) : <p className="compact-note">No linked Threads.</p>}
+            </RowList>
+          ) : (
+            <p className="aw-quiet">No threads linked.</p>
+          )}
           {!disabled ? (
-            <form className="link-picker" onSubmit={(event) => { event.preventDefault(); if (!threadId) return; threadMutation.mutate({ projectId: item.projectId, workItemId: item.id, threadId, linked: true, idempotencyKey: crypto.randomUUID() }, { onSuccess: (current) => { setThreadId(''); onItemChange(current) } }) }}>
-              <label htmlFor={`thread-link-${item.id}`}>Link an active Thread</label>
-              <div><select id={`thread-link-${item.id}`} onChange={(event) => setThreadId(event.target.value)} value={threadId}><option value="">Select Thread</option>{availableThreads.map((thread) => <option key={thread.id} value={thread.id}>{thread.channelName} / {thread.name}</option>)}</select><button className="secondary-button" disabled={!threadId || busy} type="submit">Link</button></div>
+            <form
+              className="aw-inline-add"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (!threadId) return
+                threadMutation.mutate(
+                  { ...ids, threadId, linked: true, idempotencyKey: crypto.randomUUID() },
+                  {
+                    onSuccess: (current) => {
+                      setThreadId('')
+                      onItemChange(current)
+                    },
+                  },
+                )
+              }}
+            >
+              <SelectField aria-label="Thread to link" id={`thread-link-${item.id}`} onChange={(event) => setThreadId(event.target.value)} value={threadId}>
+                <option value="">Link a thread…</option>
+                {availableThreads.map((thread) => (
+                  <option key={thread.id} value={thread.id}>
+                    #{thread.channelName} / {thread.name}
+                  </option>
+                ))}
+              </SelectField>
+              <Button disabled={!threadId || busy} size="sm" type="submit">
+                Link
+              </Button>
             </form>
           ) : null}
         </div>
-        <div>
-          <h3>Repositories</h3>
+
+        <div className="aw-links__group">
+          <h3 className="aw-links__title">Repositories</h3>
           {item.linkedRepositories.length ? (
-            <ul className="linked-record-list">
+            <RowList label="Linked repositories">
               {item.linkedRepositories.map((repository) => (
-                <li key={repository.id}>
-                  <div><Link to={repository.href}>{repository.owner}/{repository.name}</Link><small>{repository.role}{repository.available ? '' : ` · ${repository.preparationState}`}{repository.archivedAt ? ' · archived' : ''}</small></div>
-                  {!disabled ? <div className="linked-record-actions">{repository.role !== 'primary' && repository.available ? <button className="text-button" disabled={busy} onClick={() => primaryMutation.mutate({ projectId: item.projectId, workItemId: item.id, repositoryId: repository.id, expectedVersion: item.version, idempotencyKey: crypto.randomUUID() }, { onSuccess: onItemChange })} type="button">Make primary</button> : null}<button className="text-button" disabled={busy} onClick={() => repositoryMutation.mutate({ projectId: item.projectId, workItemId: item.id, repositoryId: repository.id, expectedVersion: item.version, idempotencyKey: crypto.randomUUID() }, { onSuccess: onItemChange })} type="button">Unlink</button></div> : null}
-                </li>
+                <Row
+                  actions={
+                    !disabled ? (
+                      <>
+                        {repository.role !== 'primary' && repository.available ? (
+                          <Button
+                            disabled={busy}
+                            onClick={() =>
+                              primaryMutation.mutate(
+                                { ...ids, repositoryId: repository.id, expectedVersion: item.version, idempotencyKey: crypto.randomUUID() },
+                                { onSuccess: onItemChange },
+                              )
+                            }
+                            size="sm"
+                            variant="ghost"
+                          >
+                            Make primary
+                          </Button>
+                        ) : null}
+                        <Button
+                          disabled={busy}
+                          icon="unlink"
+                          onClick={() =>
+                            repositoryMutation.mutate(
+                              { ...ids, repositoryId: repository.id, expectedVersion: item.version, idempotencyKey: crypto.randomUUID() },
+                              { onSuccess: onItemChange },
+                            )
+                          }
+                          size="sm"
+                          variant="ghost"
+                        >
+                          Unlink
+                        </Button>
+                      </>
+                    ) : null
+                  }
+                  key={repository.id}
+                  leading={
+                    <span className="aw-row__tile">
+                      <Icon name="repo" size={16} />
+                    </span>
+                  }
+                  meta={`${repository.role === 'primary' ? 'Primary' : 'Related'}${
+                    repository.available ? '' : ` · ${humanize(repository.preparationState).toLocaleLowerCase()}`
+                  }${repository.archivedAt ? ' · archived' : ''}`}
+                  title={
+                    <Link to={repository.href}>
+                      {repository.owner}/{repository.name}
+                    </Link>
+                  }
+                />
               ))}
-            </ul>
-          ) : <p className="compact-note">No linked repositories.</p>}
+            </RowList>
+          ) : (
+            <p className="aw-quiet">No repositories linked.</p>
+          )}
           {!disabled ? (
-            <form className="link-picker" onSubmit={(event) => { event.preventDefault(); if (!repositoryId) return; repositoryMutation.mutate({ projectId: item.projectId, workItemId: item.id, repositoryId, expectedVersion: item.version, role: repositoryRole, idempotencyKey: crypto.randomUUID() }, { onSuccess: (current) => { setRepositoryId(''); onItemChange(current) } }) }}>
-              <label htmlFor={`repository-link-${item.id}`}>Link a repository</label>
-              <div><select id={`repository-link-${item.id}`} onChange={(event) => setRepositoryId(event.target.value)} value={repositoryId}><option value="">Select repository</option>{availableRepositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.owner}/{repository.name}</option>)}</select><select aria-label="Repository role" onChange={(event) => setRepositoryRole(event.target.value as 'primary' | 'related')} value={repositoryRole}><option value="related">Related</option><option value="primary">Primary</option></select><button className="secondary-button" disabled={!repositoryId || busy} type="submit">Link</button></div>
+            <form
+              className="aw-inline-add"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (!repositoryId) return
+                repositoryMutation.mutate(
+                  {
+                    ...ids,
+                    repositoryId,
+                    expectedVersion: item.version,
+                    role: repositoryRole,
+                    idempotencyKey: crypto.randomUUID(),
+                  },
+                  {
+                    onSuccess: (current) => {
+                      setRepositoryId('')
+                      onItemChange(current)
+                    },
+                  },
+                )
+              }}
+            >
+              <SelectField
+                aria-label="Repository to link"
+                id={`repository-link-${item.id}`}
+                onChange={(event) => setRepositoryId(event.target.value)}
+                value={repositoryId}
+              >
+                <option value="">Link a repository…</option>
+                {availableRepositories.map((repository) => (
+                  <option key={repository.id} value={repository.id}>
+                    {repository.owner}/{repository.name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField
+                aria-label="Repository role"
+                onChange={(event) => setRepositoryRole(event.target.value as 'primary' | 'related')}
+                value={repositoryRole}
+              >
+                <option value="related">Related</option>
+                <option value="primary">Primary</option>
+              </SelectField>
+              <Button disabled={!repositoryId || busy} size="sm" type="submit">
+                Link
+              </Button>
             </form>
           ) : null}
         </div>
+
+        <div className="aw-links__group">
+          <h3 className="aw-links__title">Pull requests</h3>
+          {item.linkedPullRequests.length ? (
+            <RowList label="Linked pull requests">
+              {item.linkedPullRequests.map((pullRequest) => (
+                <Row
+                  key={pullRequest.id}
+                  leading={
+                    <span className="aw-row__tile">
+                      <Icon name="pull-request" size={16} />
+                    </span>
+                  }
+                  meta={pullRequestSummary(pullRequest)}
+                  title={
+                    <a href={pullRequest.url} rel="noreferrer" target="_blank">
+                      #{pullRequest.number} {pullRequest.title}
+                    </a>
+                  }
+                />
+              ))}
+            </RowList>
+          ) : (
+            <p className="aw-quiet">No pull requests linked. Runs link the ones they open.</p>
+          )}
+        </div>
       </div>
-      <div>
-        <h3>Pull requests</h3>
-        {item.linkedPullRequests.length ? (
-          <ul className="linked-record-list">
-            {item.linkedPullRequests.map((pullRequest) => (
-              <li key={pullRequest.id}>
-                <div>
-                  <a href={pullRequest.url} rel="noreferrer" target="_blank">
-                    #{pullRequest.number} {pullRequest.title}
-                  </a>
-                  <small>
-                    {pullRequest.draft ? 'draft · ' : ''}
-                    {pullRequest.state} · {pullRequest.source}
-                    {pullRequest.confirmed ? '' : ' · needs confirmation'}
-                    {' · checks '}{pullRequest.checksState}
-                    {' · review '}{pullRequest.reviewState}
-                    {' · mergeability '}{pullRequest.mergeabilityState}
-                    {pullRequest.syncState === 'failed'
-                      ? ` · sync failed: ${(pullRequest.syncFailureCategory ?? 'unknown').replaceAll('_', ' ')}`
-                      : ''}
-                    {pullRequest.automationState !== 'not_evaluated'
-                      ? ` · automation ${pullRequest.automationState}${pullRequest.automationReason ? `: ${pullRequest.automationReason.replaceAll('_', ' ')}` : ''}`
-                      : ''}
-                  </small>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="compact-note">No linked pull requests.</p>
-        )}
-      </div>
-      {threadMutation.isError || repositoryMutation.isError || primaryMutation.isError ? <p className="form-error-summary" role="alert">The links changed before this action completed. Reload the Work Item and try again.</p> : null}
+      {threadMutation.isError || repositoryMutation.isError || primaryMutation.isError ? (
+        <Banner tone="warning">The links changed before that finished. Reload the page and try again.</Banner>
+      ) : null}
     </section>
   )
 }
 
-function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: WorkItem }) {
+function WorkItemActivity({ disabled, item }: { disabled: boolean; item: WorkItem }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
   const createComment = useCreateWorkItemComment()
   return (
-    <section className="work-item-section" aria-labelledby="activity-heading">
-      <header><div><h2 id="activity-heading">Activity</h2><p>Comments and durable changes in one ordered history.</p></div></header>
-      {timeline.isPending ? <p className="compact-note">Loading activity…</p> : null}
-      {timeline.isError ? <p className="form-error-summary" role="alert">Activity could not be loaded.</p> : null}
+    <section aria-labelledby="activity-heading" className="aw-worksection">
+      <header className="aw-worksection__head">
+        <h2 className="aw-worksection__title" id="activity-heading">
+          <Icon name="activity" size={16} />
+          Activity
+        </h2>
+      </header>
+      {timeline.isPending ? <MessageSkeleton label="Loading activity" rows={2} /> : null}
+      {timeline.isError ? <Banner tone="danger">Activity didn’t load.</Banner> : null}
       {timeline.data?.length ? (
-        <ol className="work-item-activity-list">
-          {[...timeline.data].reverse().map((entry) => (
-            <li key={entry.sequence}>
-              <span className="activity-avatar" aria-hidden="true">{(entry.comment?.author.displayName ?? entry.activity?.actor.displayName ?? 'A').charAt(0)}</span>
-              <div>
-                <p><strong>{entry.comment?.author.displayName ?? entry.activity?.actor.displayName}</strong> {entry.comment ? 'commented' : entry.activity?.summary.toLowerCase()}</p>
-                {entry.comment ? <div className="activity-comment"><MessageContent actors={entry.comment.mentionedActors.map((actor) => ({ ...actor, kind: actor.kind as 'human' | 'external_agent' | 'execution_worker' | 'integration' | 'system', avatarUrl: null }))} content={entry.comment.content} fallbackPlainText={entry.comment.plainText} workItems={entry.comment.referencedWorkItems} /></div> : null}
-                <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
-              </div>
-            </li>
-          ))}
+        <ol className="aw-activity">
+          {[...timeline.data].reverse().map((entry) => {
+            const actor = entry.comment?.author ?? entry.activity?.actor
+            const name = actor?.displayName ?? 'Someone'
+            const kind = actorKind(actor?.kind ?? 'human')
+            const when = (
+              <time className="aw-activity__time" dateTime={entry.createdAt} title={formatFullDate(entry.createdAt)}>
+                {shortDate(entry.createdAt)}
+              </time>
+            )
+            if (entry.comment) {
+              return (
+                <li className="aw-activity__comment" key={entry.sequence}>
+                  <Avatar kind={kind} name={name} seed={actor?.id} size={28} />
+                  <div className="aw-activity__body">
+                    <p className="aw-activity__line">
+                      <strong>{name}</strong>
+                      <ActorTag kind={kind} />
+                      {when}
+                    </p>
+                    <div className="aw-activity__content">
+                      <MessageContent
+                        actors={entry.comment.mentionedActors.map((mentioned) => ({
+                          ...mentioned,
+                          kind: mentioned.kind as 'human' | 'external_agent' | 'execution_worker' | 'integration' | 'system',
+                          avatarUrl: null,
+                        }))}
+                        content={entry.comment.content}
+                        fallbackPlainText={entry.comment.plainText}
+                        workItems={entry.comment.referencedWorkItems}
+                      />
+                    </div>
+                  </div>
+                </li>
+              )
+            }
+            return (
+              <li className="aw-activity__event" key={entry.sequence}>
+                <span aria-hidden="true" className="aw-activity__dot" />
+                <p className="aw-activity__line">
+                  <strong>{name}</strong>
+                  <span aria-hidden="true">·</span>
+                  {entry.activity?.summary}
+                  {when}
+                </p>
+              </li>
+            )
+          })}
         </ol>
-      ) : timeline.isSuccess ? <p className="compact-note">No activity yet.</p> : null}
+      ) : timeline.isSuccess ? (
+        <p className="aw-quiet">No activity yet.</p>
+      ) : null}
       {!disabled ? (
         <StructuredComposer
           disabled={createComment.isPending}
@@ -721,33 +1140,12 @@ function WorkItemCollaboration({ disabled, item }: { disabled: boolean; item: Wo
           onSubmit={async ({ content, idempotencyKey }) => {
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content, idempotencyKey })
           }}
-          placeholder="Add context without changing the Work Item fields."
+          placeholder="Add a comment. @mention someone or reference a work item."
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
           searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}
-          submitLabel="Post comment"
+          submitLabel="Comment"
         />
       ) : null}
     </section>
   )
-}
-
-function WorkItemContext({ item }: { item: WorkItem }) {
-  return (
-    <aside aria-label="Work Item context" className="context-drawer">
-      <span className="section-label">WORK ITEM</span>
-      <h2>{item.key}</h2>
-      <dl>
-        <div><dt>Status</dt><dd>{item.status.name}</dd></div>
-        <div><dt>Type</dt><dd>{item.itemType.name}</dd></div>
-        <div><dt>Priority</dt><dd>{item.priority.replace('_', ' ')}</dd></div>
-        <div><dt>Assignee</dt><dd>{item.assignee?.displayName ?? 'Unassigned'}</dd></div>
-        <div><dt>Version</dt><dd>{item.version}</dd></div>
-      </dl>
-      <p className="context-note">{item.linkedThreads.length} linked {item.linkedThreads.length === 1 ? 'Thread' : 'Threads'} · {item.linkedRepositories.length} linked {item.linkedRepositories.length === 1 ? 'repository' : 'repositories'}.</p>
-    </aside>
-  )
-}
-
-function DetailLoading() {
-  return <div aria-busy="true" className="page-content"><div aria-label="Loading Work Item" className="page-skeleton"><span /><span /><span /></div></div>
 }

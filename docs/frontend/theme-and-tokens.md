@@ -35,9 +35,9 @@ it in step with `preferences.ts` and `slots.ts`.
    content columns.
 3. Components read slots and region variables only; no literal colors.
 
-Aliases at the end of `tokens.css` map the pre-redesign names
-(`--color-canvas`, `--text`, `--panel` and so on) onto the new slots for pages
-that haven't moved to the new design yet. Remove them with those pages.
+Every page now uses these tokens directly. The pre-redesign aliases
+(`--color-canvas`, `--text`, `--panel` and so on) were removed in pass two, so
+don't reintroduce them.
 
 ## Theme codes
 

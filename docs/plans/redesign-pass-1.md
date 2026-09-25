@@ -2,8 +2,8 @@
 
 Branch `redesign-pass-1`. Moves the web app onto the Agent Workspace design
 system: a Discord-style rail with per-space sidebars, a Slack-style two-tone
-look, and five presets where every color is a slot you can change. Not deployed
-yet.
+look, and five presets where every color is a slot you can change. Merged in
+PR #91 and deployed on September 25, 2026 as release `main-7837977`.
 
 ## What changed
 
@@ -54,8 +54,8 @@ yet.
 ## Not done, and why
 
 - **Red Hat was unreachable** over Tailscale all night, so everything was built
-  and checked on the Mac instead. CI runs on the self-hosted Red Hat runner, so
-  the PR's checks wait until that host is back.
+  and checked on the Mac instead. CI passed on the Red Hat runner once the host
+  was back.
 - **No presence for people.** The server has no online/away state, so only your
   own avatar shows a dot.
 - **No agent activity in the Messages sidebar.** The Messages overview doesn't
@@ -75,13 +75,10 @@ yet.
 - **On phones the rail and sidebar are two drawers**, as before, rather than one
   combined drawer.
 - **Size budgets were raised** to 560 KiB JS (176 KiB gzipped) and 104 KiB CSS.
-  About 25 KiB of CSS is the legacy stylesheet, which goes away in pass two.
+  Pass two removed the legacy stylesheet and lowered the CSS limit to 100 KiB.
 
 ## Pass two
 
-Home, Project overview, work items (list, board, detail), Project settings
-(team, repositories, GitHub, Codex accounts, sponsored runs) and Create Project
-still use the legacy stylesheet through token aliases.
-They render inside the new shell and follow the theme, but haven't been
-redesigned. Pass two moves them onto `src/ui/`, then deletes `src/styles.css`,
-`src/styles/features.css` and the aliases in `tokens.css`.
+Done: Home, Project overview, work items, Project settings and Create Project
+moved onto `src/ui/`, and the legacy stylesheet and token aliases are gone. See
+`redesign-pass-2.md`.

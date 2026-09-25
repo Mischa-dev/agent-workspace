@@ -292,11 +292,11 @@ describe('Work Items list', () => {
     } as unknown as ReturnType<typeof useCreateWorkItem>)
     renderPage()
 
-    fireEvent.click(screen.getByRole('button', { name: 'New Work Item' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New work item' }))
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'First durable task' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Work Item' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create work item' }))
 
     expect(mutate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -310,10 +310,10 @@ describe('Work Items list', () => {
 
   it('keeps the creation dialog modal to keyboard users and restores focus', async () => {
     renderPage()
-    const trigger = screen.getByRole('button', { name: 'New Work Item' })
+    const trigger = screen.getByRole('button', { name: 'New work item' })
     fireEvent.click(trigger)
 
-    const dialog = screen.getByRole('dialog', { name: 'Capture the work' })
+    const dialog = screen.getByRole('dialog', { name: 'New work item' })
     const title = screen.getByLabelText('Title')
     const close = screen.getByRole('button', { name: 'Close' })
     const cancel = screen.getByRole('button', { name: 'Cancel' })
@@ -457,11 +457,12 @@ describe('Work Item detail', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(screen.getByRole('button', { name: 'Start a run' }))
     fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'channel-a' } })
     fireEvent.change(screen.getByLabelText('Instructions'), {
       target: { value: 'Implement one verified change.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Thread and start' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }))
 
     expect(mutate).toHaveBeenCalledWith(
       expect.objectContaining({

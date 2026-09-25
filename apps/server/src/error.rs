@@ -267,13 +267,13 @@ impl IntoResponse for AppError {
             Self::Conflict(_, _) => (
                 StatusCode::CONFLICT,
                 "conflict",
-                "The request conflicts with current durable state.",
+                "That conflicts with a change made elsewhere. Refresh and try again.",
                 None,
             ),
             Self::VersionConflict { .. } => (
                 StatusCode::CONFLICT,
                 "version_conflict",
-                "The resource changed after it was loaded.",
+                "Someone changed this after you opened it. Refresh and try again.",
                 None,
             ),
             Self::Invalid(_) => (

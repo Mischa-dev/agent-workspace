@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
@@ -10,41 +10,51 @@ import { GitHubIntegrationSettings } from '../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../repositories/RepositorySettings'
 import { TeamSettings } from '../team/TeamSettings'
 import { AppShell } from '../shell/AppShell'
+import { Banner, Button, DetailList, PageHeader, PageTabs, Section, TextField, type IconName } from '../ui'
+import { roleLabel } from './format'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
-import { ProjectContextDrawer } from './ProjectContextDrawer'
+import { ProjectPageError, ProjectPageLoading } from './ProjectPageStates'
 import { useArchiveProject, useProject } from './hooks'
 import { projectLocationHref } from './locations'
-import {
-  ProjectPageError,
-  ProjectPageLoading,
-} from './ProjectOverviewPage'
+import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
+
+type SettingsTab = { id: string; label: string; icon: IconName }
+
+function settingsTabs(project: Project, organizationRole: string | undefined): SettingsTab[] {
+  const manage = project.capabilities.manage
+  const member = project.role !== 'viewer'
+  return [
+    { id: 'general', label: 'General', icon: 'settings' as const },
+    ...(manage && organizationRole ? [{ id: 'members', label: 'Members', icon: 'users' as const }] : []),
+    ...(manage ? [{ id: 'agents', label: 'Agents', icon: 'bot' as const }] : []),
+    ...(member ? [{ id: 'codex', label: 'Codex', icon: 'terminal' as const }] : []),
+    { id: 'repositories', label: 'Repositories', icon: 'repo' as const },
+    ...(manage ? [{ id: 'github', label: 'GitHub', icon: 'pull-request' as const }] : []),
+  ]
+}
 
 export function ProjectSettingsPage() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
+  const [parameters] = useSearchParams()
   const project = useProject(projectId)
   const archive = useArchiveProject()
   const navigate = useNavigate()
   const errorRef = useRef<HTMLDivElement>(null)
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [archiveSubmissionStarted, setArchiveSubmissionStarted] =
-    useState(false)
+  const [archiveSubmissionStarted, setArchiveSubmissionStarted] = useState(false)
   useEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'settings' },
-    project.isSuccess &&
-      !project.data.archivedAt &&
-      project.data.capabilities.navigationWrite,
+    project.isSuccess && !project.data.archivedAt && project.data.capabilities.navigationWrite,
     project.data?.navigation,
   )
-  const organizationRole = session.organizations.find(
-    (organization) => organization.id === project.data?.organizationId,
-  )?.role
+  const organization = session.organizations.find((candidate) => candidate.id === project.data?.organizationId)
 
   if (project.isPending) {
     return (
@@ -61,15 +71,12 @@ export function ProjectSettingsPage() {
     )
   }
   if (project.data.archivedAt && !archiveSubmissionStarted) {
-    return (
-      <Navigate
-        replace
-        to={projectLocationHref(project.data.id, {
-          kind: 'project_overview',
-        })}
-      />
-    )
+    return <Navigate replace to={projectLocationHref(project.data.id, { kind: 'project_overview' })} />
   }
+
+  const tabs = settingsTabs(project.data, organization?.role)
+  const current = tabs.find((tab) => tab.id === parameters.get('tab'))?.id ?? 'general'
+  const settingsHref = `/projects/${encodeURIComponent(project.data.id)}/settings`
 
   const submitArchive = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -77,201 +84,141 @@ export function ProjectSettingsPage() {
     setArchiveSubmissionStarted(true)
     setError(null)
     try {
-      await archive.mutateAsync({
-        projectId: project.data.id,
-        expectedVersion: project.data.version,
-      })
+      await archive.mutateAsync({ projectId: project.data.id, expectedVersion: project.data.version })
       navigate('/home', {
         replace: true,
-        state: { notice: `${project.data.name} was archived. Its history was preserved.` },
+        state: { notice: `${project.data.name} was archived. Everything in it was kept.` },
       })
     } catch (reason) {
       setArchiveSubmissionStarted(false)
       if (isApiError(reason) && reason.code === 'version_conflict') {
-        const details =
-          reason.details && typeof reason.details === 'object'
-            ? (reason.details as Record<string, unknown>)
-            : {}
-        const currentVersion =
-          typeof details.currentVersion === 'number'
-            ? details.currentVersion
-            : null
         await project.refetch()
-        setError(
-          `The Project changed after this page loaded${
-            currentVersion === null
-              ? ''
-              : ` (current version ${currentVersion})`
-          }. Review the refreshed details and try again.`,
-        )
+        setError('Someone changed this Project while you were here. Check the details above and try again.')
       } else {
-        setError(
-          isApiError(reason)
-            ? reason.message
-            : 'The Project could not be archived.',
-        )
+        setError(isApiError(reason) ? reason.message : 'The Project wasn’t archived. Try again.')
       }
     }
   }
 
   return (
-    <AppShell
-      context={<ProjectContextDrawer project={project.data} />}
-      project={project.data}
-      user={session.user}
-    >
-      <div className="page-content narrow-page">
+    <AppShell project={project.data} user={session.user}>
+      <div className="aw-page aw-page--settings">
         <NavigationSyncAlert {...navigationSync} />
-        <header className="page-heading">
-          <div>
-            <span className="section-label">{project.data.key}</span>
-            <h1>Project settings</h1>
-            <p>Manage the durable Project boundary.</p>
-          </div>
-        </header>
-        <section aria-labelledby="project-details-heading" className="page-section">
-          <h2 id="project-details-heading">Details</h2>
-          <dl className="detail-list">
-            <div>
-              <dt>Name</dt>
-              <dd>{project.data.name}</dd>
-            </div>
-            <div>
-              <dt>Key</dt>
-              <dd>{project.data.key}</dd>
-            </div>
-          </dl>
-        </section>
+        <PageHeader icon="settings" title="Project settings">
+          {project.data.name} · {project.data.key}
+        </PageHeader>
+        <PageTabs
+          current={current}
+          label="Settings sections"
+          tabs={tabs.map((tab) => ({
+            ...tab,
+            to: tab.id === 'general' ? settingsHref : `${settingsHref}?tab=${tab.id}`,
+          }))}
+        />
 
-        {project.data.capabilities.manage && organizationRole && (
-          <section aria-labelledby="team-heading" className="page-section">
-            <h2 id="team-heading">Team</h2>
-            <p>
-              Invite human collaborators and manage Project roles without exposing
-              credentials or provider accounts.
-            </p>
-            <TeamSettings
-              organizationRole={organizationRole}
-              projectId={project.data.id}
-            />
-          </section>
-        )}
-
-        {project.data.role === 'viewer' && (
-          <p className="compact-note" role="note">
-            Viewer access is read-only. You can inspect Project and repository
-            details, but account, integration, and team management controls are
-            unavailable.
-          </p>
-        )}
-
-        {project.data.capabilities.manage && (
-          <section aria-labelledby="external-agents-heading" className="page-section">
-            <h2 id="external-agents-heading">External agents</h2>
-            <p>
-              Connect an externally operated teammate with its own Project Actor,
-              least-privilege permissions, and a one-time bearer. Agent Workspace
-              does not host its model, memory, schedules, or autonomy loop.
-            </p>
-            <ExternalAgentSettings projectId={project.data.id} />
-          </section>
-        )}
-
-        {project.data.role !== 'viewer' && (
-          <section
-            aria-labelledby="sponsored-execution-heading"
-            className="page-section"
-          >
-            <h2 id="sponsored-execution-heading">Sponsored Worker requests</h2>
-            <p>
-              Review requests from external teammates before they can use your
-              personal Codex Execution Profile. No run, worktree, or provider
-              session exists until you approve a request here.
-            </p>
-            <SponsoredExecutionSettings projectId={project.data.id} />
-          </section>
-        )}
-
-        {project.data.role !== 'viewer' && (
-          <section aria-labelledby="execution-account-heading" className="page-section">
-            <h2 id="execution-account-heading">Codex account</h2>
-            <p>
-              Connect the personal Execution Profile used for hosted runs. Provider
-              credentials are handled by the isolated Codex profile and are never
-              returned to this page.
-            </p>
-            <ExecutionAccountSettings
-              actorId={session.user.actorId}
-              projectId={project.data.id}
-            />
-          </section>
-        )}
-
-        <section aria-labelledby="repositories-heading" className="page-section">
-          <h2 id="repositories-heading">Repositories</h2>
-          <p>
-            Register trusted code boundaries and prepare their service-owned
-            mirrors before starting hosted runs.
-          </p>
-          <RepositorySettings projectId={project.data.id} />
-        </section>
-
-        {project.data.capabilities.manage && (
-          <section aria-labelledby="github-integration-heading" className="page-section">
-            <h2 id="github-integration-heading">GitHub delivery</h2>
-            <p>
-              View the Project-scoped GitHub App installation, selected
-              repositories, least-privilege permissions, and synchronization
-              health. External App installation remains an operator action.
-            </p>
-            <GitHubIntegrationSettings projectId={project.data.id} />
-          </section>
-        )}
-
-        {project.data.capabilities.archive && !project.data.archivedAt && (
-          <section
-            aria-labelledby="archive-project-heading"
-            className="archive-project"
-          >
-            <h2 id="archive-project-heading">Archive Project</h2>
-            <p>
-              Archive removes this Project from ordinary navigation and rejects
-              new mutations. Conversation and execution history is preserved.
-            </p>
-            {error && (
-              <div
-                className="form-error-summary"
-                ref={errorRef}
-                role="alert"
-                tabIndex={-1}
+        {current === 'general' && (
+          <>
+            <Section id="project-details-heading" title="About this Project">
+              <DetailList
+                items={[
+                  { label: 'Name', value: project.data.name },
+                  { label: 'Key', value: <code className="aw-inline-code">{project.data.key}</code> },
+                  { label: 'Your role', value: roleLabel(project.data.role) },
+                  ...(organization ? [{ label: 'Organization', value: organization.name }] : []),
+                ]}
+              />
+              {project.data.role === 'viewer' && (
+                <Banner role="note" tone="info">
+                  Viewer access is read-only. You can look at the Project and its repositories, but members, agents,
+                  Codex and GitHub are managed by members and admins.
+                </Banner>
+              )}
+            </Section>
+            {project.data.capabilities.archive && !project.data.archivedAt && (
+              <Section
+                description="Archiving takes it out of everyone’s sidebar and stops new messages, work items and runs. Everything already in it is kept and stays readable."
+                id="archive-project-heading"
+                title="Archive this Project"
               >
-                {error}
-              </div>
+                <form className="aw-danger" onSubmit={submitArchive}>
+                  {error && (
+                    <Banner ref={errorRef} tabIndex={-1} tone="danger">
+                      {error}
+                    </Banner>
+                  )}
+                  <TextField
+                    autoComplete="off"
+                    id="archive-confirmation"
+                    label={
+                      <>
+                        Type <strong>{project.data.key}</strong> to confirm
+                      </>
+                    }
+                    mono
+                    onChange={(event) => setConfirmation(event.target.value)}
+                    spellCheck={false}
+                    value={confirmation}
+                  />
+                  <div>
+                    <Button
+                      busy={archive.isPending}
+                      disabled={confirmation !== project.data.key}
+                      icon="archive"
+                      type="submit"
+                      variant="danger"
+                    >
+                      Archive Project
+                    </Button>
+                  </div>
+                </form>
+              </Section>
             )}
-            <form onSubmit={submitArchive}>
-              <div className="field">
-                <label htmlFor="archive-confirmation">
-                  Type <strong>{project.data.key}</strong> to confirm
-                </label>
-                <input
-                  autoComplete="off"
-                  id="archive-confirmation"
-                  onChange={(event) => setConfirmation(event.target.value)}
-                  spellCheck={false}
-                  value={confirmation}
-                />
-              </div>
-              <button
-                className="danger-button"
-                disabled={
-                  archive.isPending || confirmation !== project.data.key
-                }
-                type="submit"
-              >
-                {archive.isPending ? 'Archiving…' : 'Archive Project'}
-              </button>
-            </form>
-          </section>
+          </>
+        )}
+
+        {current === 'members' && organization && (
+          <TeamSettings organizationRole={organization.role} projectId={project.data.id} />
+        )}
+
+        {current === 'agents' && <ExternalAgentSettings projectId={project.data.id} />}
+
+        {current === 'codex' && (
+          <>
+            <Section
+              description="The Codex sign-in used when you start a run. It’s yours alone: nobody else in the Project can use it."
+              id="execution-account-heading"
+              title="Codex account"
+            >
+              <ExecutionAccountSettings actorId={session.user.actorId} projectId={project.data.id} />
+            </Section>
+            <Section
+              description="Agents can ask to run Codex on your account. Nothing runs until you approve it here."
+              id="sponsored-execution-heading"
+              title="Run requests from agents"
+            >
+              <SponsoredExecutionSettings projectId={project.data.id} />
+            </Section>
+          </>
+        )}
+
+        {current === 'repositories' && (
+          <Section
+            description="The code runs can work in. The server keeps its own copy of each repository, so nothing is read from your computer."
+            id="repositories-heading"
+            title="Repositories"
+          >
+            <RepositorySettings projectId={project.data.id} />
+          </Section>
+        )}
+
+        {current === 'github' && (
+          <Section
+            description="Pull requests and checks reach this Project through a GitHub App installation that a host operator sets up."
+            id="github-integration-heading"
+            title="GitHub"
+          >
+            <GitHubIntegrationSettings projectId={project.data.id} />
+          </Section>
         )}
       </div>
     </AppShell>

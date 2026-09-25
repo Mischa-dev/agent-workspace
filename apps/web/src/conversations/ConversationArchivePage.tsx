@@ -4,7 +4,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import {
   ProjectPageError,
   ProjectPageLoading,
-} from '../projects/ProjectOverviewPage'
+} from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { Button, EmptyState, ErrorState, Icon, MessageSkeleton, PageHeader, Section } from '../ui'

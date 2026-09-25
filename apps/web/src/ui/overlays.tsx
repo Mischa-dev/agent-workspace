@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type FormEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
@@ -290,7 +291,9 @@ export function Dialog({
   description,
   footer,
   onClose,
+  onSubmit,
   open,
+  returnFocus,
   title,
   width = 480,
 }: {
@@ -298,18 +301,24 @@ export function Dialog({
   description?: ReactNode
   footer?: ReactNode
   onClose: () => void
+  /** Makes the body and footer one form, so the footer's submit button sends it. */
+  onSubmit?: (event: FormEvent<HTMLFormElement>) => void
   open: boolean
+  /** Where focus goes on close. Defaults to whatever had focus when it opened. */
+  returnFocus?: RefObject<HTMLElement | null>
   title: string
   width?: number
 }) {
   const panel = useRef<HTMLDivElement>(null)
   const restore = useRef<HTMLElement | null>(null)
+  const returnRef = useRef(returnFocus)
   const closeRef = useRef(onClose)
   const titleId = useId()
   const descriptionId = useId()
   useEffect(() => {
     closeRef.current = onClose
-  }, [onClose])
+    returnRef.current = returnFocus
+  }, [onClose, returnFocus])
 
   useEffect(() => {
     if (!open) return undefined
@@ -345,7 +354,7 @@ export function Dialog({
     return () => {
       document.removeEventListener('keydown', onKey)
       if (!rootWasInert) root?.removeAttribute('inert')
-      const target = restore.current
+      const target = returnRef.current?.current ?? restore.current
       window.requestAnimationFrame(() => target?.focus())
     }
   }, [open])
@@ -376,8 +385,17 @@ export function Dialog({
             {description}
           </p>
         ) : null}
-        <div className="aw-dialog__body">{children}</div>
-        {footer ? <footer className="aw-dialog__foot">{footer}</footer> : null}
+        {onSubmit ? (
+          <form className="aw-dialog__form" noValidate onSubmit={onSubmit}>
+            <div className="aw-dialog__body">{children}</div>
+            {footer ? <footer className="aw-dialog__foot">{footer}</footer> : null}
+          </form>
+        ) : (
+          <>
+            <div className="aw-dialog__body">{children}</div>
+            {footer ? <footer className="aw-dialog__foot">{footer}</footer> : null}
+          </>
+        )}
       </div>
     </div>,
     document.body,

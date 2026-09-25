@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { forwardRef, type ReactNode } from 'react'
 
 import { Icon, type IconName } from './icons'
 
@@ -14,28 +14,27 @@ const BANNER_ICONS: Record<BannerTone, IconName> = {
 }
 
 /** A full-width note about the state of the pane, with an optional fix. */
-export function Banner({
-  action,
-  children,
-  className,
-  icon,
-  role,
-  title,
-  tone = 'info',
-}: {
-  action?: ReactNode
-  children?: ReactNode
-  className?: string
-  icon?: IconName
-  /** Overrides the live-region role; danger banners are alerts, the rest are status by default. */
-  role?: 'alert' | 'status'
-  title?: ReactNode
-  tone?: BannerTone
-}) {
+export const Banner = forwardRef<
+  HTMLDivElement,
+  {
+    action?: ReactNode
+    children?: ReactNode
+    className?: string
+    icon?: IconName
+    /** Overrides the live-region role; danger banners are alerts, the rest are status by default. */
+    role?: 'alert' | 'status' | 'note'
+    /** Set to -1 so the banner can take focus, for example an error after a failed submit. */
+    tabIndex?: number
+    title?: ReactNode
+    tone?: BannerTone
+  }
+>(function Banner({ action, children, className, icon, role, tabIndex, title, tone = 'info' }, ref) {
   return (
     <div
       className={['aw-banner', `aw-banner--${tone}`, className].filter(Boolean).join(' ')}
+      ref={ref}
       role={role ?? (tone === 'danger' ? 'alert' : 'status')}
+      tabIndex={tabIndex}
     >
       <Icon className="aw-banner__icon" name={icon ?? BANNER_ICONS[tone]} />
       <p className="aw-banner__text">
@@ -45,7 +44,7 @@ export function Banner({
       {action}
     </div>
   )
-}
+})
 
 export function EmptyState({
   action,

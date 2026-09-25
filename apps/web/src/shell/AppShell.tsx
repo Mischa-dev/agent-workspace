@@ -170,7 +170,7 @@ export function AppShell({
         <DirectSidebar mobileOpen={sidebarOpen} onNavigate={closeDrawers} />
       ) : null}
       <main
-        className={mainClassName ? `aw-main ${mainClassName}` : 'aw-main aw-main--page'}
+        className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
         data-region="content"
         id="main-workspace"
         inert={anyDrawerOpen}
@@ -235,7 +235,7 @@ export function AppShell({
             Live updates are paused for a moment. Anything you send still goes through.
           </Banner>
         )}
-        {mainClassName ? children : <div className="aw-legacy">{children}</div>}
+        {children}
       </main>
       {hasSidebar && context && (
         <div

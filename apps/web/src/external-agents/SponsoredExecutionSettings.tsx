@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { ActorTag, Avatar, Banner, Button, ErrorState, MessageSkeleton, Row, RowList } from '../ui'
 import {
   listSponsoredExecutionRequests,
   respondToSponsoredExecution,
@@ -12,6 +13,11 @@ import {
 type DecisionInput = {
   request: SponsoredExecutionRequest
   decision: 'approve' | 'deny'
+}
+
+function formatWhen(iso: string) {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
 export function SponsoredExecutionSettings({ projectId }: { projectId: string }) {
@@ -27,92 +33,80 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
   }, [error])
   const response = useMutation({
     mutationFn: ({ request, decision }: DecisionInput) =>
-      respondToSponsoredExecution(
-        request.approvalId,
-        request.id,
-        request.version,
-        decision,
-      ),
+      respondToSponsoredExecution(request.approvalId, request.id, request.version, decision),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.sponsoredExecutions(projectId),
-      })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.sponsoredExecutions(projectId) })
     },
     onError: (reason) => {
-      setError(
-        isApiError(reason)
-          ? reason.message
-          : 'The sponsored execution request could not be resolved.',
-      )
+      setError(isApiError(reason) ? reason.message : 'Your answer to that request didn’t go through. Try again.')
     },
   })
 
-  if (requests.isPending) {
-    return <p aria-live="polite">Loading sponsored requests…</p>
-  }
+  if (requests.isPending) return <MessageSkeleton label="Loading run requests" rows={1} />
   if (requests.isError) {
     return (
-      <div className="error-state" role="alert">
-        <p>Sponsored execution requests could not be loaded.</p>
-        <button onClick={() => void requests.refetch()} type="button">
-          Try again
-        </button>
-      </div>
+      <ErrorState action={<Button onClick={() => void requests.refetch()}>Try again</Button>} title="Run requests didn’t load">
+        Check your connection and try again.
+      </ErrorState>
     )
   }
-  const pending = requests.data.requests.filter(
-    (request) => request.status === 'pending',
-  )
+  const pending = requests.data.requests.filter((request) => request.status === 'pending')
   return (
-    <div className="external-agent-settings">
+    <div className="aw-settings-stack">
       {error && (
-        <div
-          className="form-error-summary"
-          ref={errorRef}
-          role="alert"
-          tabIndex={-1}
-        >
+        <Banner ref={errorRef} tabIndex={-1} tone="danger">
           {error}
-        </div>
+        </Banner>
       )}
-      {!pending.length && <p>No external Worker requests need your decision.</p>}
-      <div className="external-agent-list">
-        {pending.map((request) => (
-          <article className="external-agent-row" key={request.id}>
-            <div>
-              <strong>{request.requesterDisplayName}</strong>
-              <span>@{request.requesterHandle}</span>
-              <p>{request.prompt}</p>
-              <small>
-                Human sponsorship required · expires {request.expiresAt}
-              </small>
-            </div>
-            <div className="row-actions">
-              <button
-                className="primary-button"
-                disabled={response.isPending}
-                onClick={() => {
-                  setError(null)
-                  response.mutate({ request, decision: 'approve' })
-                }}
-                type="button"
-              >
-                {response.isPending ? 'Responding…' : 'Approve and queue'}
-              </button>
-              <button
-                disabled={response.isPending}
-                onClick={() => {
-                  setError(null)
-                  response.mutate({ request, decision: 'deny' })
-                }}
-                type="button"
-              >
-                Deny
-              </button>
-            </div>
-          </article>
-        ))}
-      </div>
+      {!pending.length ? (
+        <p className="aw-quiet">No run requests are waiting for you.</p>
+      ) : (
+        <RowList label="Run requests">
+          {pending.map((request) => (
+            <Row
+              actions={
+                <>
+                  <Button
+                    busy={response.isPending && response.variables?.request.id === request.id && response.variables.decision === 'approve'}
+                    disabled={response.isPending}
+                    icon="play"
+                    onClick={() => {
+                      setError(null)
+                      response.mutate({ request, decision: 'approve' })
+                    }}
+                    size="sm"
+                    variant="primary"
+                  >
+                    Approve and queue
+                  </Button>
+                  <Button
+                    disabled={response.isPending}
+                    onClick={() => {
+                      setError(null)
+                      response.mutate({ request, decision: 'deny' })
+                    }}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    Deny
+                  </Button>
+                </>
+              }
+              key={request.id}
+              leading={<Avatar kind="agent" name={request.requesterDisplayName} seed={request.requestingActorId} size={32} />}
+              meta={`@${request.requesterHandle} · asks to run Codex on your account · expires ${formatWhen(request.expiresAt)}`}
+              title={
+                <span className="aw-row__titleline">
+                  {request.requesterDisplayName}
+                  <ActorTag kind="agent" />
+                </span>
+              }
+            >
+              <blockquote className="aw-request__prompt">{request.prompt}</blockquote>
+            </Row>
+          ))}
+        </RowList>
+      )}
     </div>
   )
 }

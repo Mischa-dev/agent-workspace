@@ -107,9 +107,9 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
   return (
     <div className="aw-agents">
       {error && (
-        <div className="aw-agents__error" ref={errorRef} role="alert" tabIndex={-1}>
-          <Banner tone="danger">{error}</Banner>
-        </div>
+        <Banner className="aw-agents__error" ref={errorRef} tabIndex={-1} tone="danger">
+          {error}
+        </Banner>
       )}
       {oneTimeCredential && (
         <OneTimeToken
