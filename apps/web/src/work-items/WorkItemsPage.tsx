@@ -1,30 +1,35 @@
-import {
-  FormEvent,
-  KeyboardEvent as ReactKeyboardEvent,
-  RefObject,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
-import { ProjectContextDrawer } from '../projects/ProjectContextDrawer'
+import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import {
-  useCreateWorkItem,
-  useWorkItemBoard,
-  useWorkItems,
-  useWorkItemWorkflow,
-} from './hooks'
+  Avatar,
+  Banner,
+  Button,
+  Checkbox,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Icon,
+  MessageSkeleton,
+  PageHeader,
+  SegmentedControl,
+  SelectField,
+  TextArea,
+  TextField,
+  actorKind,
+} from '../ui'
+import { useCreateWorkItem, useWorkItemBoard, useWorkItems, useWorkItemWorkflow } from './hooks'
 import { workItemPriorities } from './constants'
+import { workItemHref } from './links'
 import type { WorkItemFilters, WorkItemPriority } from './types'
 import { WorkItemBoard as WorkItemBoardProjection } from './WorkItemBoard'
+import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 
 function filtersFromParameters(parameters: URLSearchParams): WorkItemFilters {
   const priority = parameters.get('priority')
@@ -32,9 +37,7 @@ function filtersFromParameters(parameters: URLSearchParams): WorkItemFilters {
     q: parameters.get('q') || undefined,
     typeId: parameters.get('typeId') || undefined,
     statusId: parameters.get('statusId') || undefined,
-    priority: workItemPriorities.some((item) => item.value === priority)
-      ? (priority as WorkItemPriority)
-      : undefined,
+    priority: workItemPriorities.some((item) => item.value === priority) ? (priority as WorkItemPriority) : undefined,
     archived: parameters.get('archived') === 'true' || undefined,
     cursor: parameters.get('cursor') || undefined,
     limit: 50,
@@ -75,10 +78,7 @@ export function WorkItemsPage() {
   const view = parameters.get('view') === 'board' ? 'board' : 'list'
   const project = useProject(projectId)
   const workflow = useWorkItemWorkflow(projectId)
-  const filters = useMemo(
-    () => filtersFromParameters(parameters),
-    [parameters],
-  )
+  const filters = useMemo(() => filtersFromParameters(parameters), [parameters])
   const list = useWorkItems(projectId, filters)
   const board = useWorkItemBoard(projectId, filters, view === 'board')
   const savedFilters = project.data?.navigation.filters
@@ -90,19 +90,14 @@ export function WorkItemsPage() {
 
   useEffect(() => {
     if (shouldRestore && savedFilters) {
-      setParameters(parametersFromFilters(savedFilters), {
-        replace: true,
-      })
+      setParameters(parametersFromFilters(savedFilters), { replace: true })
     }
   }, [savedFilters, setParameters, shouldRestore])
 
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'work_items' },
-    !shouldRestore &&
-      project.isSuccess &&
-      !project.data.archivedAt &&
-      project.data.capabilities.navigationWrite,
+    !shouldRestore && project.isSuccess && !project.data.archivedAt && project.data.capabilities.navigationWrite,
     project.data?.navigation,
     { ...persistedFilters(filters), view },
   )
@@ -116,140 +111,122 @@ export function WorkItemsPage() {
   }
 
   if (project.isPending) {
-    return <AppShell user={session.user}><WorkItemsLoading /></AppShell>
+    return (
+      <AppShell user={session.user}>
+        <ProjectPageLoading label="Loading work items" />
+      </AppShell>
+    )
   }
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <WorkItemsError onRetry={() => void project.refetch()} />
+        <ProjectPageError onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
 
   const hasFilters = Object.keys(persistedFilters(filters)).length > 0
+  const archived = Boolean(project.data.archivedAt)
+  const newButton = archived ? null : (
+    <Button icon="plus" onClick={() => setCreateOpen(true)} ref={createButtonRef} variant="primary">
+      New work item
+    </Button>
+  )
   return (
-    <AppShell
-      context={<ProjectContextDrawer project={project.data} />}
-      project={project.data}
-      user={session.user}
-    >
-      <div className="page-content work-items-page">
+    <AppShell project={project.data} user={session.user}>
+      <div className="aw-page aw-page--wide">
         <NavigationSyncAlert {...navigationSync} />
-        <header className="page-heading">
-          <div>
-            <span className="section-label">{project.data.key} / PLANNING</span>
-            <h1>Work Items</h1>
-            <p>Durable units of work, ordered newest first.</p>
-          </div>
-          {!project.data.archivedAt && (
-            <button
-              className="primary-button"
-              onClick={() => setCreateOpen(true)}
-              ref={createButtonRef}
-              type="button"
-            >
-              New Work Item
-            </button>
-          )}
-        </header>
+        <PageHeader actions={newButton} icon="work" title="Work items">
+          Everything that needs doing in {project.data.name}, newest first.
+        </PageHeader>
 
-        <section aria-label="Work Item filters" className="work-item-filters">
-          <label className="search-field">
-            <span className="visually-hidden">Search Work Items</span>
-            <input
-              maxLength={120}
-              onChange={(event) => setFilter('q', event.target.value)}
-              placeholder="Search title or key"
-              type="search"
-              value={filters.q ?? ''}
-            />
-          </label>
-          <label>
-            <span className="visually-hidden">Type</span>
-            <select
-              aria-label="Type"
-              onChange={(event) => setFilter('typeId', event.target.value)}
-              value={filters.typeId ?? ''}
-            >
-              <option value="">All types</option>
-              {workflow.data?.types.map((type) => (
-                <option key={type.id} value={type.id}>{type.name}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="visually-hidden">Status</span>
-            <select
-              aria-label="Status"
-              onChange={(event) => setFilter('statusId', event.target.value)}
-              value={filters.statusId ?? ''}
-            >
-              <option value="">All statuses</option>
-              {workflow.data?.statuses.map((status) => (
-                <option key={status.id} value={status.id}>{status.name}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="visually-hidden">Priority</span>
-            <select
-              aria-label="Priority"
-              onChange={(event) => setFilter('priority', event.target.value)}
-              value={filters.priority ?? ''}
-            >
-              <option value="">All priorities</option>
-              {workItemPriorities.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="archive-filter">
-            <input
-              checked={Boolean(filters.archived)}
-              onChange={(event) => setFilter('archived', event.target.checked)}
-              type="checkbox"
-            />
-            Archived
-          </label>
-        </section>
+        <div aria-label="Filter work items" className="aw-worktools" role="search">
+          <TextField
+            aria-label="Search work items"
+            className="aw-worktools__search"
+            maxLength={120}
+            onChange={(event) => setFilter('q', event.target.value)}
+            placeholder="Search by title or key"
+            prefix={<Icon name="search" size={14} />}
+            type="search"
+            value={filters.q ?? ''}
+          />
+          <SelectField aria-label="Type" onChange={(event) => setFilter('typeId', event.target.value)} value={filters.typeId ?? ''}>
+            <option value="">All types</option>
+            {workflow.data?.types.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField aria-label="Status" onChange={(event) => setFilter('statusId', event.target.value)} value={filters.statusId ?? ''}>
+            <option value="">All statuses</option>
+            {workflow.data?.statuses.map((status) => (
+              <option key={status.id} value={status.id}>
+                {status.name}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField aria-label="Priority" onChange={(event) => setFilter('priority', event.target.value)} value={filters.priority ?? ''}>
+            <option value="">All priorities</option>
+            {workItemPriorities.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </SelectField>
+          <Checkbox checked={Boolean(filters.archived)} label="Archived" onChange={(checked) => setFilter('archived', checked)} />
+          <span className="aw-worktools__spacer" />
+          <SegmentedControl
+            label="View"
+            onChange={(next) => setFilter('view', next === 'board' ? 'board' : '')}
+            options={[
+              { value: 'list', label: 'List', icon: 'list' },
+              { value: 'board', label: 'Board', icon: 'board' },
+            ]}
+            value={view}
+          />
+        </div>
 
-        <nav aria-label="Work Item view" className="work-item-view-switcher">
-          <button aria-pressed={view === 'list'} className="text-button" onClick={() => setFilter('view', '')} type="button">List</button>
-          <button aria-pressed={view === 'board'} className="text-button" onClick={() => setFilter('view', 'board')} type="button">Board</button>
-        </nav>
+        {archived && (
+          <Banner className="aw-page__banner" icon="archive">
+            This Project is archived, so its work items can’t change.
+          </Banner>
+        )}
 
-        {view === 'list' && list.isPending ? <WorkItemsLoading compact /> : null}
+        {view === 'list' && list.isPending ? <MessageSkeleton label="Loading work items" rows={3} /> : null}
         {view === 'list' && list.isError ? <WorkItemsError onRetry={() => void list.refetch()} /> : null}
         {view === 'list' && list.isSuccess && list.data.items.length === 0 ? (
-          <div className="empty-state compact-empty-state">
-            <span aria-hidden="true" className="empty-state-mark">◇</span>
-            <h2>{hasFilters ? 'No matching Work Items' : 'No Work Items yet'}</h2>
-            <p>
-              {hasFilters
-                ? 'Adjust the filters to widen this view.'
-                : 'Create the first item to give this Project a durable planning surface.'}
-            </p>
-          </div>
+          <EmptyState action={hasFilters ? null : newButton} icon="work" title={hasFilters ? 'No matching work items' : 'No work items yet'}>
+            {hasFilters
+              ? 'Try a different search, or clear some filters.'
+              : 'Write down what needs doing, then hand it to a person or an agent.'}
+          </EmptyState>
         ) : null}
         {view === 'list' && list.isSuccess && list.data.items.length > 0 ? (
-          <ul aria-label="Work Items" className="work-item-list">
+          <ul aria-label="Work items" className="aw-worklist">
             {list.data.items.map((item) => (
               <li key={item.id}>
-                <Link
-                  to={`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`}
-                >
-                  <span className="work-item-key">{item.key}</span>
-                  <span className="work-item-title">{item.title}</span>
-                  <span className="work-item-type">{item.itemType.name}</span>
-                  <span className="work-item-state" data-category={item.status.semanticCategory}>
-                    {item.status.name}
-                  </span>
-                  <span className="work-item-owner">
-                    {item.assignee?.displayName ?? 'Unassigned'}
-                  </span>
-                  <span className="work-item-priority" data-priority={item.priority}>
-                    {workItemPriorities.find((candidate) => candidate.value === item.priority)?.label}
-                  </span>
+                <Link className="aw-worklist__row" to={workItemHref(projectId, item.id)}>
+                  <PriorityIcon priority={item.priority} />
+                  <span className="aw-worklist__key">{item.key}</span>
+                  <StatusIcon category={item.status.semanticCategory} label={item.status.name} />
+                  <span className="aw-worklist__title">{item.title}</span>
+                  {item.archivedAt ? <span className="aw-worklist__tag">Archived</span> : null}
+                  <span className="aw-worklist__type">{item.itemType.name}</span>
+                  {item.assignee ? (
+                    <Avatar
+                      kind={actorKind(item.assignee.kind)}
+                      label
+                      name={item.assignee.displayName}
+                      seed={item.assignee.actorId}
+                      size={22}
+                    />
+                  ) : (
+                    <span aria-label="Unassigned" className="aw-worklist__nobody" role="img">
+                      <Icon name="unassigned" size={16} />
+                    </span>
+                  )}
                 </Link>
               </li>
             ))}
@@ -257,31 +234,21 @@ export function WorkItemsPage() {
         ) : null}
 
         {view === 'list' && list.isSuccess && (filters.cursor || list.data.nextCursor) ? (
-          <nav aria-label="Work Item pages" className="pagination-actions">
-            <button
-              className="secondary-button"
-              disabled={!filters.cursor}
-              onClick={() => setFilter('cursor', '')}
-              type="button"
-            >
-              Newest
-            </button>
-            <button
-              className="secondary-button"
-              disabled={!list.data.nextCursor}
-              onClick={() => setFilter('cursor', list.data.nextCursor ?? '')}
-              type="button"
-            >
+          <nav aria-label="Work item pages" className="aw-pager">
+            <Button disabled={!filters.cursor} icon="arrow-up" onClick={() => setFilter('cursor', '')} size="sm">
+              Back to newest
+            </Button>
+            <Button disabled={!list.data.nextCursor} iconEnd="arrow-down" onClick={() => setFilter('cursor', list.data.nextCursor ?? '')} size="sm">
               Older
-            </button>
+            </Button>
           </nav>
         ) : null}
-        {view === 'board' && board.isPending ? <WorkItemsLoading compact /> : null}
+        {view === 'board' && board.isPending ? <MessageSkeleton label="Loading the board" rows={3} /> : null}
         {view === 'board' && board.isError ? <WorkItemsError onRetry={() => void board.refetch()} /> : null}
         {view === 'board' && board.isSuccess ? (
           <WorkItemBoardProjection
             columns={board.data.columns}
-            disabled={Boolean(project.data.archivedAt)}
+            disabled={archived}
             projectId={projectId}
             statuses={workflow.data?.statuses ?? []}
           />
@@ -299,7 +266,6 @@ export function WorkItemsPage() {
   )
 }
 
-
 function CreateWorkItemDialog({
   onClose,
   projectId,
@@ -313,49 +279,11 @@ function CreateWorkItemDialog({
 }) {
   const navigate = useNavigate()
   const mutation = useCreateWorkItem()
-  const dialogRef = useRef<HTMLElement>(null)
   const idempotencyKey = useRef(crypto.randomUUID())
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [typeId, setTypeId] = useState(
-    workflow.types.find((item) => item.isDefault)?.id ?? workflow.types[0]?.id ?? '',
-  )
+  const [typeId, setTypeId] = useState(workflow.types.find((item) => item.isDefault)?.id ?? workflow.types[0]?.id ?? '')
   const [priority, setPriority] = useState<WorkItemPriority>('no_priority')
-
-  useEffect(() => {
-    const applicationRoot = document.querySelector<HTMLElement>('#root')
-    const applicationWasInert = applicationRoot?.hasAttribute('inert') ?? false
-    const returnFocus = returnFocusRef.current
-    applicationRoot?.setAttribute('inert', '')
-    return () => {
-      if (!applicationWasInert) applicationRoot?.removeAttribute('inert')
-      window.requestAnimationFrame(() => returnFocus?.focus())
-    }
-  }, [returnFocusRef])
-
-  const handleDialogKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      onClose()
-      return
-    }
-    if (event.key !== 'Tab') return
-    const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      ) ?? [],
-    ).filter((element) => element.tabIndex >= 0)
-    if (!focusable.length) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault()
-      last.focus()
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first.focus()
-    }
-  }
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -372,83 +300,81 @@ function CreateWorkItemDialog({
       {
         onSuccess: (item) => {
           idempotencyKey.current = crypto.randomUUID()
-          navigate(
-            `/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`,
-          )
+          navigate(workItemHref(projectId, item.id))
         },
       },
     )
   }
 
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section
-        aria-labelledby="new-work-item-title"
-        aria-modal="true"
-        className="work-item-dialog"
-        onKeyDown={handleDialogKeyDown}
-        ref={dialogRef}
-        role="dialog"
-      >
-        <header>
-          <div>
-            <span className="section-label">NEW WORK ITEM</span>
-            <h2 id="new-work-item-title">Capture the work</h2>
-          </div>
-          <button aria-label="Close" className="icon-button" onClick={onClose} type="button">×</button>
-        </header>
-        <form onSubmit={submit}>
-          <label className="field">
-            <span>Title</span>
-            <input autoFocus maxLength={240} onChange={(event) => setTitle(event.target.value)} required value={title} />
-          </label>
-          <label className="field">
-            <span>Description</span>
-            <textarea maxLength={100000} onChange={(event) => setDescription(event.target.value)} rows={6} value={description} />
-          </label>
-          <div className="field-grid">
-            <label className="field">
-              <span>Type</span>
-              <select onChange={(event) => setTypeId(event.target.value)} value={typeId}>
-                {workflow.types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
-              </select>
-            </label>
-            <label className="field">
-              <span>Priority</span>
-              <select onChange={(event) => setPriority(event.target.value as WorkItemPriority)} value={priority}>
-                {workItemPriorities.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-              </select>
-            </label>
-          </div>
-          {mutation.isError ? <p className="form-error-summary" role="alert">{mutation.error.message}</p> : null}
-          <div className="form-actions">
-            <button className="secondary-button" onClick={onClose} type="button">Cancel</button>
-            <button className="primary-button" disabled={!title.trim() || mutation.isPending} type="submit">
-              {mutation.isPending ? 'Creating…' : 'Create Work Item'}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>,
-    document.body,
-  )
-}
-
-function WorkItemsLoading({ compact = false }: { compact?: boolean }) {
   return (
-    <div aria-busy="true" className={compact ? 'work-item-list-skeleton' : 'page-content'}>
-      <div aria-label="Loading Work Items" className="page-skeleton">
-        <span /><span /><span />
+    <Dialog
+      footer={
+        <>
+          <Button onClick={onClose} variant="ghost">
+            Cancel
+          </Button>
+          <Button busy={mutation.isPending} disabled={!title.trim()} type="submit" variant="primary">
+            Create work item
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      onSubmit={submit}
+      open
+      returnFocus={returnFocusRef}
+      title="New work item"
+      width={560}
+    >
+      <TextField
+        data-autofocus
+        id="new-work-item-title"
+        label="Title"
+        maxLength={240}
+        onChange={(event) => setTitle(event.target.value)}
+        placeholder="What needs doing?"
+        required
+        value={title}
+      />
+      <TextArea
+        id="new-work-item-description"
+        label="Description"
+        maxLength={100000}
+        onChange={(event) => setDescription(event.target.value)}
+        placeholder="Add the outcome you want, any limits, and useful links."
+        rows={5}
+        value={description}
+      />
+      <div className="aw-form__grid">
+        <SelectField id="new-work-item-type" label="Type" onChange={(event) => setTypeId(event.target.value)} value={typeId}>
+          {workflow.types.map((type) => (
+            <option key={type.id} value={type.id}>
+              {type.name}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          id="new-work-item-priority"
+          label="Priority"
+          onChange={(event) => setPriority(event.target.value as WorkItemPriority)}
+          prefix={<PriorityIcon decorative priority={priority} />}
+          value={priority}
+        >
+          {workItemPriorities.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </SelectField>
       </div>
-    </div>
+      {mutation.isError ? <Banner tone="danger">{mutation.error.message}</Banner> : null}
+    </Dialog>
   )
 }
 
 function WorkItemsError({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="inline-error" role="alert">
-      <p>Work Items could not be loaded.</p>
-      <button onClick={onRetry} type="button">Try again</button>
-    </div>
+    <ErrorState action={<Button onClick={onRetry}>Try again</Button>} title="Work items didn’t load">
+      Check your connection and try again.
+    </ErrorState>
   )
 }

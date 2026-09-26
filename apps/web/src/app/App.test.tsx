@@ -420,7 +420,9 @@ describe('M1 authenticated shell', () => {
       await screen.findByRole('heading', { name: /Welcome back, Next Actor/ }),
     ).toBeVisible()
     expect(
-      await screen.findByRole('link', { name: 'Beta Project' }),
+      await within(await screen.findByRole('navigation', { name: 'Projects' })).findByRole('link', {
+        name: 'Beta Project',
+      }),
     ).toBeVisible()
     expect(
       screen.queryByRole('link', {
@@ -563,7 +565,9 @@ describe('M1 authenticated shell', () => {
 
     fireEvent.click(screen.getByRole('link', { name: 'Home' }))
     fireEvent.click(
-      await screen.findByRole('link', { name: 'Beta Project' }),
+      await within(screen.getByRole('navigation', { name: 'Projects' })).findByRole('link', {
+        name: 'Beta Project',
+      }),
     )
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Beta Project' }),
@@ -880,7 +884,7 @@ describe('M1 authenticated shell', () => {
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(
-      code === 'version_conflict' ? 'current version 2' : message,
+      code === 'version_conflict' ? 'Someone changed this Project' : message,
     )
     await waitFor(() => expect(alert).toHaveFocus())
     expect(window.location.pathname).toBe(
@@ -1129,15 +1133,17 @@ describe('M1 authenticated shell', () => {
     expect(
       screen.queryByRole('button', { name: 'Archive Project' }),
     ).not.toBeInTheDocument()
-    expect(screen.getByText('viewer')).toBeVisible()
+    expect(screen.getByText('Viewer')).toBeVisible()
     expect(screen.getByRole('note')).toHaveTextContent('Viewer access is read-only')
+    const sections = screen.getByRole('navigation', { name: 'Settings sections' })
+    expect(within(sections).queryByRole('link', { name: 'Codex' })).not.toBeInTheDocument()
+    expect(within(sections).queryByRole('link', { name: 'GitHub' })).not.toBeInTheDocument()
+    expect(within(sections).queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
+    fireEvent.click(within(sections).getByRole('link', { name: 'Repositories' }))
+    expect(await screen.findByRole('heading', { name: 'Repositories' })).toBeVisible()
     expect(
       screen.queryByRole('heading', { name: 'Codex account' }),
     ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('heading', { name: 'GitHub delivery' }),
-    ).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Repositories' })).toBeVisible()
   })
 
   it('preserves the hosted Thread timeline, hostile-output escaping, and approval flow', async () => {

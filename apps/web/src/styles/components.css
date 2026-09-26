@@ -571,6 +571,7 @@
 /* Fields */
 .aw-field {
   display: grid;
+  align-content: start;
   gap: 6px;
   min-width: 0;
 }
@@ -633,7 +634,7 @@
   cursor: pointer;
 }
 
-.aw-field__control--select .aw-icon {
+.aw-field__control--select > .aw-icon {
   position: absolute;
   right: var(--space-3);
   pointer-events: none;
@@ -645,9 +646,51 @@
 }
 
 .aw-field__prefix {
-  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-right: 6px;
   font: var(--t-body);
   color: var(--content-fg-muted);
+}
+
+.aw-field__control:has(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.aw-field__control :disabled {
+  cursor: not-allowed;
+  color: var(--content-fg-muted);
+}
+
+/* Compact fields: toolbars, rows and inline forms. */
+.aw-field--inline .aw-field__control,
+.aw-worktools .aw-field__control,
+.aw-inline-add .aw-field__control {
+  min-height: var(--size-control);
+  padding: 0 10px;
+}
+
+.aw-field--inline .aw-field__control input,
+.aw-field--inline .aw-field__control select,
+.aw-worktools .aw-field__control input,
+.aw-worktools .aw-field__control select,
+.aw-inline-add .aw-field__control input,
+.aw-inline-add .aw-field__control select {
+  height: calc(var(--size-control) - 2px);
+  font: var(--t-ui);
+}
+
+.aw-field--inline .aw-field__control--select select,
+.aw-worktools .aw-field__control--select select,
+.aw-inline-add .aw-field__control--select select {
+  padding-right: var(--space-5);
+}
+
+.aw-field--inline .aw-field__control--select > .aw-icon,
+.aw-worktools .aw-field__control--select > .aw-icon,
+.aw-inline-add .aw-field__control--select > .aw-icon {
+  right: 10px;
 }
 
 .aw-field__note {
@@ -1001,4 +1044,151 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+/* Checkbox */
+.aw-check {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.aw-check__input {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.aw-check__box {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1.5px solid var(--control-border);
+  border-radius: var(--radius-xs);
+  background: var(--surface-raised);
+  color: transparent;
+  pointer-events: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.aw-check__input:checked + .aw-check__box {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.aw-check__input:focus-visible + .aw-check__box {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.aw-check__input:disabled {
+  cursor: default;
+}
+
+.aw-check__input:disabled + .aw-check__box {
+  opacity: 0.55;
+}
+
+.aw-check__text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.aw-check__label {
+  font: var(--t-ui);
+  color: var(--content-fg);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.aw-check__input:disabled ~ .aw-check__text .aw-check__label {
+  cursor: default;
+}
+
+.aw-check__desc {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-dialog__form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Small shared bits */
+.aw-quiet {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-textlink {
+  font: var(--t-ui);
+  color: var(--link);
+  text-decoration: none;
+}
+
+.aw-textlink:hover {
+  text-decoration: underline;
+}
+
+.aw-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-meter__bar,
+.aw-progress__bar {
+  appearance: none;
+  width: 120px;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--accent);
+}
+
+.aw-meter__bar::-webkit-progress-bar,
+.aw-progress__bar::-webkit-progress-bar {
+  background: var(--surface-sunken);
+}
+
+.aw-meter__bar::-webkit-progress-value,
+.aw-progress__bar::-webkit-progress-value {
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.aw-meter__bar::-moz-progress-bar,
+.aw-progress__bar::-moz-progress-bar {
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.aw-inline-code {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font: var(--t-code);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--content-fg);
 }

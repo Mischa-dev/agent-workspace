@@ -4,6 +4,7 @@ export { SWATCHES, actorKind, initials, swatchFor, type ActorKind, type Swatch }
 export { Dialog, Menu, Tooltip, type MenuEntry, type Placement } from './overlays'
 export {
   Button,
+  Checkbox,
   IconButton,
   Kbd,
   SegmentedControl,
@@ -13,7 +14,7 @@ export {
   TextField,
   type ButtonVariant,
 } from './controls'
-export { PageHeader, Section } from './page'
+export { DetailList, PageHeader, PageTabs, Row, RowList, Section } from './page'
 export {
   Banner,
   ConversationIntro,

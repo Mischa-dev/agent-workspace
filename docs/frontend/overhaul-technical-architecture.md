@@ -104,8 +104,9 @@ behavior, not by blind wrapper conversion.
   creation dialog.
 - `WorkItemDetailPage`: query boundary, draft/conflict editor, execution actions,
   criteria, links, collaboration, and context.
-- `styles.css`: token/base/primitive/shell ownership versus retained
-  feature-family selectors. Splitting follows these responsibilities only.
+- Styles: split by layer (`tokens.css`, `base.css`, `components.css`) and by
+  surface (`shell.css`, `conversation.css`, `pages.css`, `work.css`). The single
+  legacy `styles.css` was removed in the redesign's second pass.
 
 ## Test pyramid and budgets
 

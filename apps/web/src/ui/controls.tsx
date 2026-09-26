@@ -110,7 +110,7 @@ function FieldNote({ error, hint, id }: { error?: ReactNode; hint?: ReactNode; i
   )
 }
 
-export const TextField = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & FieldProps>(
+export const TextField = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, 'prefix'> & FieldProps>(
   function TextField({ className, error, hint, id: given, label, mono, prefix, ...input }, ref) {
     const generated = useId()
     const id = given ?? generated
@@ -138,7 +138,7 @@ export const TextField = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLIn
   },
 )
 
-export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & FieldProps>(
+export const TextArea = forwardRef<HTMLTextAreaElement, Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'prefix'> & Omit<FieldProps, 'prefix' | 'mono'>>(
   function TextArea({ className, error, hint, id: given, label, ...input }, ref) {
     const generated = useId()
     const id = given ?? generated
@@ -158,8 +158,8 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   },
 )
 
-export const SelectField = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement> & FieldProps>(
-  function SelectField({ children, className, error, hint, id: given, label, ...input }, ref) {
+export const SelectField = forwardRef<HTMLSelectElement, Omit<SelectHTMLAttributes<HTMLSelectElement>, 'prefix'> & Omit<FieldProps, 'mono'>>(
+  function SelectField({ children, className, error, hint, id: given, label, prefix, ...input }, ref) {
     const generated = useId()
     const id = given ?? generated
     return (
@@ -170,6 +170,7 @@ export const SelectField = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HT
           </label>
         ) : null}
         <div className="aw-field__control aw-field__control--select">
+          {prefix ? <span className="aw-field__prefix">{prefix}</span> : null}
           <select aria-describedby={describedBy(id, hint, error)} id={id} ref={ref} {...input}>
             {children}
           </select>
@@ -220,6 +221,52 @@ export function Switch({
       >
         <span className="aw-switch__thumb" />
       </button>
+    </div>
+  )
+}
+
+/** A checkbox with a visible label: a choice that takes effect when the form is saved or the box is ticked. */
+export function Checkbox({
+  checked,
+  description,
+  disabled,
+  id: given,
+  label,
+  onChange,
+}: {
+  checked: boolean
+  description?: ReactNode
+  disabled?: boolean
+  id?: string
+  label: ReactNode
+  onChange: (checked: boolean) => void
+}) {
+  const generated = useId()
+  const id = given ?? generated
+  return (
+    <div className="aw-check">
+      <input
+        aria-describedby={description ? `${id}-d` : undefined}
+        checked={checked}
+        className="aw-check__input"
+        disabled={disabled}
+        id={id}
+        onChange={(event) => onChange(event.target.checked)}
+        type="checkbox"
+      />
+      <span aria-hidden="true" className="aw-check__box">
+        <Icon name="check" size={12} />
+      </span>
+      <span className="aw-check__text">
+        <label className="aw-check__label" htmlFor={id}>
+          {label}
+        </label>
+        {description ? (
+          <span className="aw-check__desc" id={`${id}-d`}>
+            {description}
+          </span>
+        ) : null}
+      </span>
     </div>
   )
 }

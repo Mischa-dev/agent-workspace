@@ -71,17 +71,17 @@ describe('GitHubIntegrationSettings', () => {
     renderSettings()
 
     expect(await screen.findByRole('heading', { name: 'Mischa-dev' })).toBeVisible()
-    expect(screen.getByText('available')).toBeVisible()
+    expect(screen.getByText('Connected')).toBeVisible()
     expect(screen.getByText(/Metadata read · Contents write/)).toBeVisible()
     expect(
       screen.getByText('Mischa-dev/agent-workspace-m0-spike'),
     ).toBeVisible()
     expect(screen.queryByText(/private key|webhook secret|token value/i)).not.toBeInTheDocument()
     expect(
-      await screen.findByLabelText('Move explicitly linked eligible work to Verification when merged'),
+      await screen.findByLabelText('Move linked work items to Verification when the pull request merges'),
     ).toBeChecked()
     expect(
-      screen.getByLabelText('Move explicitly linked work to Review when a pull request opens'),
+      screen.getByLabelText('Move linked work items to Review when a pull request opens'),
     ).not.toBeChecked()
   })
 
@@ -122,7 +122,7 @@ describe('GitHubIntegrationSettings', () => {
 
     renderSettings()
     fireEvent.click(await screen.findByLabelText(
-      'Move explicitly linked work to Review when a pull request opens',
+      'Move linked work items to Review when a pull request opens',
     ))
 
     await waitFor(() => {

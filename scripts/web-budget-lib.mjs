@@ -4,11 +4,12 @@ import { join, relative } from 'node:path'
 
 export const WEB_ASSET_LIMITS = Object.freeze({
   // Raised from 500/160 KiB for the redesign's shell, components and icons (+62 KiB raw, +22 KiB gzip).
+  // Pass two (work items, settings, Home) used most of the rest: about 6 KiB raw and 1.5 KiB gzip remain.
   javascriptRawBytes: 560 * 1024,
   javascriptGzipBytes: 176 * 1024,
-  // Raised from 72 KiB for the design system's five theme presets and components. The legacy
-  // stylesheet (~25 KiB) still serves pages that move to the new design in pass two.
-  cssRawBytes: 104 * 1024,
+  // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
+  // Lowered from 104 KiB once pass two removed the legacy stylesheet.
+  cssRawBytes: 100 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {

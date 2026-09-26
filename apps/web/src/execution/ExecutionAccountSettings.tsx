@@ -1,8 +1,10 @@
-import { FormEvent, useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { humanize } from '../projects/format'
+import { Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, StatusChip, TextField } from '../ui'
 import {
   cancelAccountLogin,
   createPersonalExecutionProfile,
@@ -15,21 +17,14 @@ import {
   type LoginCeremony,
 } from './api'
 
-export function ExecutionAccountSettings({
-  actorId,
-  projectId,
-}: {
-  actorId: string
-  projectId: string
-}) {
+export function ExecutionAccountSettings({ actorId, projectId }: { actorId: string; projectId: string }) {
   const queryClient = useQueryClient()
   const profiles = useQuery({
     queryKey: queryKeys.executionProfiles(projectId),
     queryFn: () => listExecutionProfiles(projectId),
   })
   const createProfile = useMutation({
-    mutationFn: () =>
-      createPersonalExecutionProfile(projectId, crypto.randomUUID()),
+    mutationFn: () => createPersonalExecutionProfile(projectId, crypto.randomUUID()),
     onSuccess: (profile) => {
       queryClient.setQueryData<Awaited<ReturnType<typeof listExecutionProfiles>>>(
         queryKeys.executionProfiles(projectId),
@@ -38,32 +33,40 @@ export function ExecutionAccountSettings({
     },
   })
 
-  if (profiles.isPending) return <p>Loading execution profiles…</p>
-  if (profiles.isError) return <p role="alert">Execution profiles could not be loaded.</p>
+  if (profiles.isPending) return <MessageSkeleton label="Loading your Codex account" rows={1} />
+  if (profiles.isError) {
+    return (
+      <ErrorState action={<Button onClick={() => void profiles.refetch()}>Try again</Button>} title="Your Codex account didn’t load">
+        Check your connection and try again.
+      </ErrorState>
+    )
+  }
   const owned = profiles.data.filter((profile) => profile.owner.id === actorId)
   if (!owned.length) {
     return (
-      <div className="execution-profile-empty-state">
-        <p>
-          Connect an isolated personal profile before starting hosted runs. It
-          is never shared with another Project member.
-        </p>
-        {createProfile.isError && (
-          <p role="alert">Your personal execution profile could not be created.</p>
-        )}
-        <button
-          disabled={createProfile.isPending}
-          onClick={() => createProfile.mutate()}
-          type="button"
+      <div className="aw-card aw-formcard">
+        <EmptyState
+          action={
+            <Button busy={createProfile.isPending} icon="plus" onClick={() => createProfile.mutate()} variant="primary">
+              Create personal profile
+            </Button>
+          }
+          icon="terminal"
+          title="Set up Codex for your runs"
         >
-          {createProfile.isPending ? 'Creating profile…' : 'Create personal profile'}
-        </button>
+          Create a personal Codex profile before starting runs. It’s never shared with another Project member.
+        </EmptyState>
+        {createProfile.isError && (
+          <Banner tone="danger">
+            {isApiError(createProfile.error) ? createProfile.error.message : 'Your Codex profile wasn’t created. Try again.'}
+          </Banner>
+        )}
       </div>
     )
   }
 
   return (
-    <div className="execution-profile-list">
+    <div className="aw-settings-stack">
       {owned.map((profile) => (
         <ExecutionProfileAccount
           key={profile.id}
@@ -75,6 +78,19 @@ export function ExecutionAccountSettings({
       ))}
     </div>
   )
+}
+
+function AccountState({ state }: { state: string | undefined }) {
+  if (!state) return <StatusChip icon="loader" spin>Checking</StatusChip>
+  if (state === 'authenticated') {
+    return (
+      <StatusChip icon="circle-check" tone="success">
+        Signed in
+      </StatusChip>
+    )
+  }
+  if (state === 'unauthenticated') return <StatusChip icon="circle-minus">Signed out</StatusChip>
+  return <StatusChip tone="warning">{humanize(state)}</StatusChip>
 }
 
 function ExecutionProfileAccount({
@@ -93,25 +109,20 @@ function ExecutionProfileAccount({
   const account = useQuery({
     queryKey: accountKey,
     queryFn: () => getAccountStatus(projectId, profileId),
-    refetchInterval: (query) =>
-      query.state.data?.ceremony?.state === 'pending' ? 2_000 : false,
+    refetchInterval: (query) => (query.state.data?.ceremony?.state === 'pending' ? 2_000 : false),
   })
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const update = (value: AccountStatus) => queryClient.setQueryData(accountKey, value)
   const ceremonyUpdate = (ceremony: LoginCeremony) =>
-    queryClient.setQueryData<AccountStatus>(accountKey, (current) =>
-      current ? { ...current, ceremony } : current,
-    )
+    queryClient.setQueryData<AccountStatus>(accountKey, (current) => (current ? { ...current, ceremony } : current))
   const login = useMutation({
-    mutationFn: (kind: 'browser' | 'device-code') =>
-      startAccountLogin(projectId, profileId, kind, crypto.randomUUID()),
+    mutationFn: (kind: 'browser' | 'device-code') => startAccountLogin(projectId, profileId, kind, crypto.randomUUID()),
     onSuccess: ceremonyUpdate,
     onError: (reason) => setError(errorMessage(reason)),
   })
   const apiKeyLogin = useMutation({
-    mutationFn: (value: string) =>
-      loginWithApiKey(projectId, profileId, value, crypto.randomUUID()),
+    mutationFn: (value: string) => loginWithApiKey(projectId, profileId, value, crypto.randomUUID()),
     onSuccess: () => void account.refetch(),
     onError: (reason) => setError(errorMessage(reason)),
   })
@@ -134,80 +145,99 @@ function ExecutionProfileAccount({
   }
   const pending = login.isPending || apiKeyLogin.isPending || cancel.isPending || logout.isPending
   const status = account.data
+  const ceremony = status?.ceremony
 
   return (
-    <article className="execution-profile-card">
-      <header>
-        <div>
-          <h3>{name}</h3>
-          <p>{provider}</p>
-        </div>
-        <span className="status-chip" data-state={status?.accountState ?? 'unknown'}>
-          {(status?.accountState ?? 'checking').replaceAll('_', ' ')}
+    <article aria-labelledby={`profile-${profileId}`} className="aw-card aw-profile">
+      <header className="aw-profile__head">
+        <span className="aw-row__tile">
+          <Icon name="terminal" size={16} />
         </span>
+        <div className="aw-profile__titles">
+          <h3 className="aw-profile__name" id={`profile-${profileId}`}>
+            {name}
+          </h3>
+          <p className="aw-profile__sub">{provider}</p>
+        </div>
+        <AccountState state={status?.accountState} />
       </header>
-      {account.isPending && <p>Checking provider account…</p>}
-      {account.isError && <p role="alert">Provider account status is unavailable.</p>}
-      {error && <p role="alert">{error}</p>}
-      {status?.account && (
-        <p>
-          Signed in with {status.account.accountType}
-          {status.account.email ? ` as ${status.account.email}` : ''}.
-        </p>
-      )}
-      {status?.rateLimits?.primary && (
-        <p>Primary allowance used: {status.rateLimits.primary.usedPercent}%.</p>
-      )}
-      {status?.ceremony?.authUrl && (
-        <p>
-          <a href={status.ceremony.authUrl} rel="noreferrer" target="_blank">
-            Continue secure browser sign-in
-          </a>
-        </p>
-      )}
-      {status?.ceremony?.verificationUrl && (
-        <div className="device-code-instructions">
-          <a href={status.ceremony.verificationUrl} rel="noreferrer" target="_blank">
-            Open device sign-in
-          </a>
-          <p>Enter code <strong>{status.ceremony.userCode}</strong>.</p>
+      {account.isError && <Banner tone="danger">We couldn’t check this account right now.</Banner>}
+      {error && <Banner tone="danger">{error}</Banner>}
+      {(status?.account || status?.rateLimits?.primary) && (
+        <div className="aw-profile__facts">
+          {status?.account && (
+            <p>
+              Signed in with {status.account.accountType}
+              {status.account.email ? ` as ${status.account.email}` : ''}.
+            </p>
+          )}
+          {status?.rateLimits?.primary && (
+            <div className="aw-meter">
+              <span className="aw-meter__label">Usage this period</span>
+              <progress className="aw-meter__bar" max={100} value={status.rateLimits.primary.usedPercent} />
+              <span className="aw-meter__value">{status.rateLimits.primary.usedPercent}%</span>
+            </div>
+          )}
         </div>
       )}
-      {status?.ceremony?.state === 'pending' ? (
-        <button disabled={pending} onClick={() => cancel.mutate()} type="button">
-          Cancel sign-in
-        </button>
-      ) : status?.accountState === 'authenticated' ? (
-        <button className="danger-button" disabled={pending} onClick={() => logout.mutate()} type="button">
-          Sign out provider
-        </button>
-      ) : (
-        <div className="execution-login-options">
-          <button disabled={pending} onClick={() => login.mutate('browser')} type="button">
-            Sign in with browser
-          </button>
-          <button disabled={pending} onClick={() => login.mutate('device-code')} type="button">
-            Use device code
-          </button>
-          <form onSubmit={submitApiKey}>
-            <div className="field">
-              <label htmlFor={`api-key-${profileId}`}>OpenAI API key</label>
-              <input
+      {ceremony?.authUrl && (
+        <a className="aw-btn aw-btn--primary aw-btn--md aw-profile__cta" href={ceremony.authUrl} rel="noreferrer" target="_blank">
+          <span className="aw-btn__label">Continue secure browser sign-in</span>
+          <Icon name="external" />
+        </a>
+      )}
+      {ceremony?.verificationUrl && (
+        <div className="aw-devicecode">
+          <p>
+            Open the sign-in page and enter this code:
+          </p>
+          <code className="aw-devicecode__code">{ceremony.userCode}</code>
+          <a className="aw-btn aw-btn--secondary aw-btn--md" href={ceremony.verificationUrl} rel="noreferrer" target="_blank">
+            <span className="aw-btn__label">Open device sign-in</span>
+            <Icon name="external" />
+          </a>
+        </div>
+      )}
+      <footer className="aw-profile__actions">
+        {ceremony?.state === 'pending' ? (
+          <Button disabled={pending} onClick={() => cancel.mutate()} variant="ghost">
+            Cancel sign-in
+          </Button>
+        ) : status?.accountState === 'authenticated' ? (
+          <Button disabled={pending} icon="log-out" onClick={() => logout.mutate()} variant="ghost">
+            Sign out of Codex
+          </Button>
+        ) : (
+          <>
+            <div className="aw-profile__options">
+              <Button disabled={pending} icon="external" onClick={() => login.mutate('browser')} variant="primary">
+                Sign in with browser
+              </Button>
+              <Button disabled={pending} onClick={() => login.mutate('device-code')}>
+                Use device code
+              </Button>
+            </div>
+            <p className="aw-quiet">Or use an API key. It goes straight to your Codex profile and is never shown again.</p>
+            <form className="aw-inline-form" onSubmit={submitApiKey}>
+              <TextField
                 autoComplete="off"
                 id={`api-key-${profileId}`}
+                label="OpenAI API key"
                 onChange={(event) => setApiKey(event.target.value)}
                 type="password"
                 value={apiKey}
               />
-            </div>
-            <button disabled={pending || !apiKey} type="submit">Use API key</button>
-          </form>
-        </div>
-      )}
+              <Button disabled={pending || !apiKey} icon="key" type="submit">
+                Use API key
+              </Button>
+            </form>
+          </>
+        )}
+      </footer>
     </article>
   )
 }
 
 function errorMessage(reason: unknown) {
-  return isApiError(reason) ? reason.message : 'The provider account operation failed.'
+  return isApiError(reason) ? reason.message : 'That didn’t work. Try again.'
 }

@@ -1,12 +1,24 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
+import { Badge, Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, PageHeader, Row, RowList, Section } from '../ui'
 import { useProjects, useSwitchProject } from './hooks'
-import type { Project } from './types'
 import { ProjectInitials } from './ProjectSwitcher'
+import type { Project } from './types'
+
+function openedLabel(iso: string | null) {
+  if (!iso) return 'Not opened yet'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'Not opened yet'
+  const startOf = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+  const days = Math.round((startOf(new Date()) - startOf(date)) / 86_400_000)
+  if (days === 0) return 'Opened today'
+  if (days === 1) return 'Opened yesterday'
+  return `Opened ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+}
 
 export function HomePage() {
   const session = useAuthenticatedSession()
@@ -22,34 +34,19 @@ export function HomePage() {
     typeof location.state.notice === 'string'
       ? location.state.notice
       : null
-  const activeProjects = (projects.data?.projects ?? []).filter(
-    (project) => !project.archivedAt,
-  )
+  const activeProjects = (projects.data?.projects ?? []).filter((project) => !project.archivedAt)
   const recentProjects = [...activeProjects]
     .sort((left, right) => {
-      const leftTime = left.navigation.lastOpenedAt
-        ? Date.parse(left.navigation.lastOpenedAt)
-        : 0
-      const rightTime = right.navigation.lastOpenedAt
-        ? Date.parse(right.navigation.lastOpenedAt)
-        : 0
+      const leftTime = left.navigation.lastOpenedAt ? Date.parse(left.navigation.lastOpenedAt) : 0
+      const rightTime = right.navigation.lastOpenedAt ? Date.parse(right.navigation.lastOpenedAt) : 0
       return rightTime - leftTime
     })
     .slice(0, 8)
+  const waiting = activeProjects.reduce((total, project) => total + project.attentionCount, 0)
+  const canCreate = session.user.capabilities.createProject
 
-  const openProject = async (
-    project: Project,
-    event: React.MouseEvent<HTMLAnchorElement>,
-  ) => {
-    if (
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return
-    }
+  const openProject = async (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
     setSwitchError(null)
     if (!project.capabilities.navigationWrite) {
@@ -64,102 +61,80 @@ export function HomePage() {
       })
       navigate(result.href)
     } catch (reason) {
-      setSwitchError(
-        isApiError(reason)
-          ? reason.message
-          : 'The Project location could not be restored. Try again.',
-      )
+      setSwitchError(isApiError(reason) ? reason.message : 'We couldn’t open that Project where you left off. Try again.')
     }
   }
 
+  const createLink = canCreate ? (
+    <Link className="aw-btn aw-btn--primary aw-btn--md" to="/projects/new">
+      <Icon name="plus" />
+      <span className="aw-btn__label">Create Project</span>
+    </Link>
+  ) : null
+
   return (
-    <AppShell user={session.user}>
-      <div className="page-content">
-        <header className="page-heading">
-          <div>
-            <span className="section-label">Global Home</span>
-            <h1>Welcome back, {session.user.displayName}</h1>
-            <p>Open a recent Project or start a contained workspace.</p>
-          </div>
-          {session.user.capabilities.createProject && (
-            <Link className="primary-link" to="/projects/new">
-              Create Project
-            </Link>
-          )}
-        </header>
+    <AppShell mainClassName="aw-main--page" user={session.user}>
+      <div className="aw-page aw-page--narrow">
+        <PageHeader actions={createLink} title={`Welcome back, ${session.user.displayName}`}>
+          {projects.isSuccess
+            ? waiting
+              ? `${waiting} ${waiting === 1 ? 'thing needs' : 'things need'} you across your Projects.`
+              : 'You’re all caught up.'
+            : 'Pick up where you left off.'}
+        </PageHeader>
         {notice && (
-          <p className="notice" role="status">
+          <Banner className="aw-page__banner" tone="success">
             {notice}
-          </p>
+          </Banner>
         )}
         {switchError && (
-          <p className="inline-error" role="alert">
+          <Banner className="aw-page__banner" tone="danger">
             {switchError}
-          </p>
+          </Banner>
         )}
-        <section aria-labelledby="recent-projects-heading" className="page-section">
-          <h2 id="recent-projects-heading">Recent Projects</h2>
-          {projects.isPending && <ProjectRowsSkeleton />}
+        <Section id="recent-projects-heading" title="Your Projects">
+          {projects.isPending && <MessageSkeleton label="Loading your Projects" rows={3} />}
           {projects.isError && (
-            <div className="inline-error" role="alert">
-              <p>Projects could not be loaded.</p>
-              <button onClick={() => void projects.refetch()} type="button">
-                Try again
-              </button>
-            </div>
+            <ErrorState action={<Button onClick={() => void projects.refetch()}>Try again</Button>} title="Your Projects didn’t load">
+              Check your connection and try again.
+            </ErrorState>
           )}
-          {!projects.isPending && !projects.isError && !recentProjects.length && (
-            <div className="empty-state compact-empty-state">
-              <h3>Create your first Project</h3>
-              <p>
-                Projects keep conversations, work, repositories, and execution
-                context inside one environment.
-              </p>
-            </div>
+          {projects.isSuccess && !recentProjects.length && (
+            <EmptyState action={createLink} icon="home" title={canCreate ? 'Create your first Project' : 'No Projects yet'}>
+              {canCreate
+                ? 'A Project holds its own channels, work items, repositories and agents.'
+                : 'Ask an owner or admin to invite you to a Project.'}
+            </EmptyState>
           )}
           {recentProjects.length > 0 && (
-            <ul className="project-rows">
+            <RowList label="Your Projects">
               {recentProjects.map((project) => (
-                <li key={project.id}>
-                  <a
-                    href={project.navigation.href}
-                    onClick={(event) => void openProject(project, event)}
-                  >
-                    <ProjectInitials project={project} size={36} />
-                    <span>
-                      <strong>{project.name}</strong>
-                      <small>
-                        {project.navigation.lastOpenedAt
-                          ? `Opened ${new Date(
-                              project.navigation.lastOpenedAt,
-                            ).toLocaleDateString()}`
-                          : 'Not opened yet'}
-                      </small>
-                    </span>
-                    {project.attentionCount > 0 && (
-                      <span>
-                        {project.attentionCount}{' '}
-                        {project.attentionCount === 1 ? 'item' : 'items'} need
-                        attention
+                <Row
+                  actions={
+                    project.attentionCount > 0 ? (
+                      <span className="aw-home__waiting">
+                        <Badge count={project.attentionCount} />
+                        {project.attentionCount === 1 ? 'needs you' : 'need you'}
                       </span>
-                    )}
-                  </a>
-                </li>
+                    ) : (
+                      <Icon className="aw-row__chev" name="chevron-right" />
+                    )
+                  }
+                  className="aw-row--link"
+                  key={project.id}
+                  leading={<ProjectInitials project={project} size={36} />}
+                  meta={`${project.key} · ${openedLabel(project.navigation.lastOpenedAt)}`}
+                  title={
+                    <a className="aw-row__link" href={project.navigation.href} onClick={(event) => void openProject(project, event)}>
+                      {project.name}
+                    </a>
+                  }
+                />
               ))}
-            </ul>
+            </RowList>
           )}
-        </section>
+        </Section>
       </div>
     </AppShell>
-  )
-}
-
-function ProjectRowsSkeleton() {
-  return (
-    <div aria-label="Loading recent Projects" className="project-rows-skeleton">
-      <span />
-      <span />
-      <span />
-    </div>
   )
 }

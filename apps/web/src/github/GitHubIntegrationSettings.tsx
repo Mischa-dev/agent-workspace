@@ -1,15 +1,27 @@
-import { FormEvent, useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { humanize } from '../projects/format'
 import { listRepositories } from '../repositories/api'
 import {
-  getGitHubAutomationSettings,
-  getGitHubStatus,
-  syncGitHubInstallation,
-  updateGitHubAutomationSettings,
-} from './api'
+  Banner,
+  Button,
+  Checkbox,
+  DetailList,
+  ErrorState,
+  Icon,
+  MessageSkeleton,
+  Row,
+  RowList,
+  StatusChip,
+  Switch,
+  TextField,
+} from '../ui'
+import { getGitHubAutomationSettings, getGitHubStatus, syncGitHubInstallation, updateGitHubAutomationSettings } from './api'
+
+type GitHubStatus = Awaited<ReturnType<typeof getGitHubStatus>>
 
 export function GitHubIntegrationSettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
@@ -19,17 +31,29 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
     queryFn: () => getGitHubStatus(projectId),
   })
 
-  if (status.isPending) return <p>Loading GitHub integration…</p>
+  if (status.isPending) return <MessageSkeleton label="Loading GitHub" rows={2} />
   if (status.isError) {
-    return <p role="alert">GitHub integration status could not be loaded.</p>
+    return (
+      <ErrorState action={<Button onClick={() => void status.refetch()}>Try again</Button>} title="GitHub didn’t load">
+        Check your connection and try again.
+      </ErrorState>
+    )
   }
   if (!status.data.configured) {
     return (
-      <div className="integration-empty-state">
-        <span className="status-chip" data-state="unavailable">Not configured</span>
-        <p>
-          A host operator must install the private GitHub App credential files
-          before a Project can connect an installation.
+      <div className="aw-card aw-profile">
+        <header className="aw-profile__head">
+          <span className="aw-row__tile">
+            <Icon name="pull-request" size={16} />
+          </span>
+          <div className="aw-profile__titles">
+            <h3 className="aw-profile__name">GitHub App</h3>
+          </div>
+          <StatusChip icon="circle-minus">Not configured</StatusChip>
+        </header>
+        <p className="aw-quiet">
+          A host operator must install the GitHub App’s private credential files on the server before a Project can connect
+          to GitHub.
         </p>
       </div>
     )
@@ -38,73 +62,84 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
   if (!installation) {
     return <GitHubInstallationSetup onVerified={(current) => queryClient.setQueryData(queryKey, current)} projectId={projectId} />
   }
+  const connected = installation.state === 'available'
 
   return (
-    <div className="github-integration-settings">
-      <header className="integration-status-heading">
-        <div>
-          <h3>{installation.accountLogin}</h3>
-          <p>
-            GitHub App {installation.appId} · installation{' '}
-            {installation.installationId}
-          </p>
-        </div>
-        <span className="status-chip" data-state={installation.state}>
-          {installation.state}
-        </span>
-      </header>
-      <dl className="detail-list">
-        <div>
-          <dt>REST API</dt>
-          <dd>{status.data.apiVersion}</dd>
-        </div>
-        <div>
-          <dt>Repository access</dt>
-          <dd>{installation.repositorySelection}</dd>
-        </div>
-        <div>
-          <dt>Permissions</dt>
-          <dd>
-            Metadata read · Contents write · Pull requests write · Checks read
-            {installation.permissions.actions === 'read' ? ' · Actions read' : ''}
-          </dd>
-        </div>
-        <div>
-          <dt>Last verified</dt>
-          <dd>
-            {installation.lastSuccessAt
-              ? new Date(installation.lastSuccessAt).toLocaleString()
-              : 'Never'}
-          </dd>
-        </div>
-      </dl>
-      {installation.failureCategory && (
-        <p role="alert">
-          GitHub needs attention: {installation.failureCategory.replaceAll('_', ' ')}.
-        </p>
-      )}
-      <h4>Selected repositories</h4>
-      {installation.repositories.length ? (
-        <ul className="linked-record-list">
-          {installation.repositories.map((repository) => (
-            <li key={repository.id}>
-              <div>
-                <strong>{repository.owner}/{repository.name}</strong>
-                <small>
-                  {repository.accessState} · GitHub repository{' '}
-                  {repository.githubRepositoryId}
-                </small>
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>No repositories are selected.</p>
-      )}
-      <p className="compact-note">
-        Credential files, installation tokens, and host paths never appear in
-        this browser projection.
-      </p>
+    <div className="aw-settings-stack">
+      <article aria-labelledby="github-installation-heading" className="aw-card aw-profile">
+        <header className="aw-profile__head">
+          <span className="aw-row__tile">
+            <Icon name="pull-request" size={16} />
+          </span>
+          <div className="aw-profile__titles">
+            <h3 className="aw-profile__name" id="github-installation-heading">
+              {installation.accountLogin}
+            </h3>
+            <p className="aw-profile__sub">
+              GitHub App {installation.appId} · installation {installation.installationId}
+            </p>
+          </div>
+          <StatusChip icon={connected ? 'circle-check' : 'triangle-alert'} tone={connected ? 'success' : 'warning'}>
+            {connected ? 'Connected' : humanize(installation.state)}
+          </StatusChip>
+        </header>
+        {installation.failureCategory && (
+          <Banner tone="warning" title="GitHub needs attention.">
+            {humanize(installation.failureCategory)}. Reverify the installation below, or ask the host operator to check it.
+          </Banner>
+        )}
+        <DetailList
+          items={[
+            { label: 'Repository access', value: humanize(installation.repositorySelection) },
+            {
+              label: 'Permissions',
+              value: `Metadata read · Contents write · Pull requests write · Checks read${
+                installation.permissions.actions === 'read' ? ' · Actions read' : ''
+              }`,
+            },
+            {
+              label: 'Last verified',
+              value: installation.lastSuccessAt ? new Date(installation.lastSuccessAt).toLocaleString() : 'Never',
+            },
+            { label: 'GitHub API', value: <code className="aw-inline-code">{status.data.apiVersion}</code> },
+          ]}
+        />
+      </article>
+
+      <div className="aw-subsection">
+        <h3 className="aw-subsection__title">Repositories it can reach</h3>
+        {installation.repositories.length ? (
+          <RowList label="Repositories GitHub can reach">
+            {installation.repositories.map((repository) => (
+              <Row
+                actions={
+                  repository.accessState === 'selected' ? (
+                    <StatusChip icon="circle-check" tone="success">
+                      Reachable
+                    </StatusChip>
+                  ) : (
+                    <StatusChip icon="triangle-alert" tone="warning">
+                      Missing on GitHub
+                    </StatusChip>
+                  )
+                }
+                key={repository.id}
+                leading={
+                  <span className="aw-row__tile">
+                    <Icon name="repo" size={16} />
+                  </span>
+                }
+                meta={`GitHub repository ${repository.githubRepositoryId}`}
+                title={`${repository.owner}/${repository.name}`}
+              />
+            ))}
+          </RowList>
+        ) : (
+          <p className="aw-quiet">No repositories are selected yet.</p>
+        )}
+        <p className="aw-quiet">Credential files, installation tokens and host paths never reach this page.</p>
+      </div>
+
       <GitHubAutomationSettings projectId={projectId} />
       <GitHubReverify
         installationId={installation.installationId}
@@ -124,61 +159,75 @@ function GitHubAutomationSettings({ projectId }: { projectId: string }) {
     queryFn: () => getGitHubAutomationSettings(projectId),
   })
   const update = useMutation({
-    mutationFn: (next: {
-      pullRequestOpenEnabled: boolean
-      pullRequestMergeEnabled: boolean
-    }) => {
+    mutationFn: (next: { pullRequestOpenEnabled: boolean; pullRequestMergeEnabled: boolean }) => {
       if (!settings.data) throw new Error('GitHub automation settings unavailable')
-      return updateGitHubAutomationSettings(projectId, {
-        expectedVersion: settings.data.version,
-        ...next,
-      })
+      return updateGitHubAutomationSettings(projectId, { expectedVersion: settings.data.version, ...next })
     },
     onSuccess: (current) => queryClient.setQueryData(queryKey, current),
     onError: () => void queryClient.invalidateQueries({ queryKey }),
   })
-  if (settings.isPending) return <p>Loading GitHub automation…</p>
-  if (settings.isError) return <p role="alert">GitHub automation settings could not be loaded.</p>
+  if (settings.isPending) return <MessageSkeleton label="Loading work item automation" rows={1} />
+  if (settings.isError) return <Banner tone="danger">Work item automation didn’t load.</Banner>
   return (
-    <fieldset disabled={update.isPending}>
-      <legend>Work Item automation</legend>
-      <label>
-        <input
+    <div className="aw-subsection">
+      <h3 className="aw-subsection__title">Work item automation</h3>
+      <div className="aw-card aw-switches">
+        <Switch
           checked={settings.data.pullRequestOpenEnabled}
-          onChange={(event) => update.mutate({
-            pullRequestOpenEnabled: event.target.checked,
-            pullRequestMergeEnabled: settings.data.pullRequestMergeEnabled,
-          })}
-          type="checkbox"
+          description="Only work items linked to the pull request move."
+          disabled={update.isPending}
+          label="Move linked work items to Review when a pull request opens"
+          onChange={(checked) =>
+            update.mutate({ pullRequestOpenEnabled: checked, pullRequestMergeEnabled: settings.data.pullRequestMergeEnabled })
+          }
         />
-        Move explicitly linked work to Review when a pull request opens
-      </label>
-      <label>
-        <input
+        <Switch
           checked={settings.data.pullRequestMergeEnabled}
-          onChange={(event) => update.mutate({
-            pullRequestOpenEnabled: settings.data.pullRequestOpenEnabled,
-            pullRequestMergeEnabled: event.target.checked,
-          })}
-          type="checkbox"
+          description="Automation never marks work done, and never reopens work that’s done or canceled."
+          disabled={update.isPending}
+          label="Move linked work items to Verification when the pull request merges"
+          onChange={(checked) =>
+            update.mutate({ pullRequestOpenEnabled: settings.data.pullRequestOpenEnabled, pullRequestMergeEnabled: checked })
+          }
         />
-        Move explicitly linked eligible work to Verification when merged
-      </label>
-      <p className="compact-note">
-        Automation never marks work Done and never reopens Done or Canceled work.
-      </p>
-      {update.isError && <p role="alert">The automation settings changed. Current values were reloaded.</p>}
+      </div>
+      {update.isError && <Banner tone="warning">Someone else changed these settings. The current values are shown.</Banner>}
+    </div>
+  )
+}
+
+function RepositoryChoices({
+  available,
+  disabled,
+  onChange,
+  selected,
+}: {
+  available: { id: string; owner: string; name: string }[]
+  disabled?: boolean
+  onChange: (next: string[]) => void
+  selected: string[]
+}) {
+  if (!available.length) {
+    return <p className="aw-quiet">No trusted repositories are registered yet. Add one on the Repositories tab first.</p>
+  }
+  return (
+    <fieldset className="aw-choices" disabled={disabled}>
+      <legend className="aw-choices__legend">Repositories it may access</legend>
+      {available.map((repository) => (
+        <Checkbox
+          checked={selected.includes(repository.id)}
+          key={repository.id}
+          label={`${repository.owner}/${repository.name}`}
+          onChange={(checked) =>
+            onChange(checked ? [...selected, repository.id] : selected.filter((id) => id !== repository.id))
+          }
+        />
+      ))}
     </fieldset>
   )
 }
 
-function GitHubInstallationSetup({
-  onVerified,
-  projectId,
-}: {
-  onVerified: (status: Awaited<ReturnType<typeof getGitHubStatus>>) => void
-  projectId: string
-}) {
+function GitHubInstallationSetup({ onVerified, projectId }: { onVerified: (status: GitHubStatus) => void; projectId: string }) {
   const repositories = useQuery({
     queryKey: queryKeys.repositories(projectId),
     queryFn: () => listRepositories(projectId),
@@ -187,10 +236,7 @@ function GitHubInstallationSetup({
   const [selected, setSelected] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const verify = useMutation({
-    mutationFn: () => syncGitHubInstallation(projectId, {
-      installationId: Number(installationId),
-      repositoryIds: selected,
-    }),
+    mutationFn: () => syncGitHubInstallation(projectId, { installationId: Number(installationId), repositoryIds: selected }),
     onSuccess: onVerified,
     onError: (reason) => setError(integrationError(reason)),
   })
@@ -199,56 +245,56 @@ function GitHubInstallationSetup({
     setError(null)
     verify.mutate()
   }
-  const available = repositories.data?.repositories.filter(
-    (repository) => repository.enabled && repository.trusted && !repository.archivedAt,
-  ) ?? []
+  const available =
+    repositories.data?.repositories.filter((repository) => repository.enabled && repository.trusted && !repository.archivedAt) ?? []
 
   return (
-    <div className="integration-empty-state">
-      <span className="status-chip" data-state="pending">Host ready</span>
-      <p>
-        GitHub App credentials are available, but this Project has no verified
-        installation yet. Enter the public installation ID and select only the
-        registered repositories it may access.
-      </p>
-      {repositories.isPending && <p>Loading registered repositories…</p>}
-      {repositories.isError && <p role="alert">Registered repositories could not be loaded.</p>}
+    <form aria-labelledby="github-setup-heading" className="aw-card aw-formcard aw-form" onSubmit={submit}>
+      <header className="aw-profile__head">
+        <span className="aw-row__tile">
+          <Icon name="pull-request" size={16} />
+        </span>
+        <div className="aw-profile__titles">
+          <h3 className="aw-profile__name" id="github-setup-heading">
+            Connect a GitHub installation
+          </h3>
+          <p className="aw-profile__sub">
+            The GitHub App is ready on the server. Enter its installation ID and choose which registered repositories it may reach.
+          </p>
+        </div>
+        <StatusChip icon="clock" tone="warning">
+          Ready to connect
+        </StatusChip>
+      </header>
+      {repositories.isPending && <MessageSkeleton label="Loading registered repositories" rows={1} />}
+      {repositories.isError && <Banner tone="danger">Registered repositories didn’t load.</Banner>}
       {repositories.isSuccess && (
-        <form onSubmit={submit}>
-          <div className="field">
-            <label htmlFor="github-installation-id">GitHub installation ID</label>
-            <input
-              id="github-installation-id"
-              inputMode="numeric"
-              onChange={(event) => setInstallationId(event.target.value)}
-              value={installationId}
-            />
+        <>
+          <TextField
+            hint="The number at the end of the installation’s URL on GitHub."
+            id="github-installation-id"
+            inputMode="numeric"
+            label="GitHub installation ID"
+            mono
+            onChange={(event) => setInstallationId(event.target.value)}
+            value={installationId}
+          />
+          <RepositoryChoices available={available} onChange={setSelected} selected={selected} />
+          {error && <Banner tone="danger">{error}</Banner>}
+          <div className="aw-form__actions">
+            <Button
+              busy={verify.isPending}
+              disabled={Number(installationId) <= 0 || selected.length === 0}
+              icon="shield-check"
+              type="submit"
+              variant="primary"
+            >
+              Verify installation
+            </Button>
           </div>
-          <fieldset>
-            <legend>Selected repositories</legend>
-            {available.map((repository) => (
-              <label key={repository.id}>
-                <input
-                  checked={selected.includes(repository.id)}
-                  onChange={(event) => setSelected((current) => event.target.checked
-                    ? [...current, repository.id]
-                    : current.filter((id) => id !== repository.id))}
-                  type="checkbox"
-                />
-                {repository.owner}/{repository.name}
-              </label>
-            ))}
-          </fieldset>
-          {error && <p role="alert">{error}</p>}
-          <button
-            disabled={Number(installationId) <= 0 || selected.length === 0 || verify.isPending}
-            type="submit"
-          >
-            {verify.isPending ? 'Verifying…' : 'Verify installation'}
-          </button>
-        </form>
+        </>
       )}
-    </div>
+    </form>
   )
 }
 
@@ -259,7 +305,7 @@ function GitHubReverify({
   repositoryIds,
 }: {
   installationId: number
-  onVerified: (status: Awaited<ReturnType<typeof getGitHubStatus>>) => void
+  onVerified: (status: GitHubStatus) => void
   projectId: string
   repositoryIds: string[]
 }) {
@@ -274,47 +320,36 @@ function GitHubReverify({
     onSuccess: onVerified,
     onError: (reason) => setError(integrationError(reason)),
   })
-  const available = repositories.data?.repositories.filter(
-    (repository) => repository.enabled && repository.trusted && !repository.archivedAt,
-  ) ?? []
+  const available =
+    repositories.data?.repositories.filter((repository) => repository.enabled && repository.trusted && !repository.archivedAt) ?? []
   return (
-    <div className="repository-actions">
-      <fieldset disabled={repositories.isPending || verify.isPending}>
-        <legend>Repository selection</legend>
-        {repositories.isPending && <p>Loading registered repositories…</p>}
-        {repositories.isError && (
-          <p role="alert">Registered repositories could not be loaded.</p>
+    <div className="aw-subsection">
+      <h3 className="aw-subsection__title">Change repositories</h3>
+      <div className="aw-card aw-formcard aw-form">
+        {repositories.isPending && <MessageSkeleton label="Loading registered repositories" rows={1} />}
+        {repositories.isError && <Banner tone="danger">Registered repositories didn’t load.</Banner>}
+        {repositories.isSuccess && (
+          <RepositoryChoices available={available} disabled={verify.isPending} onChange={setSelected} selected={selected} />
         )}
-        {repositories.isSuccess && available.map((repository) => (
-          <label key={repository.id}>
-            <input
-              checked={selected.includes(repository.id)}
-              onChange={(event) => setSelected((current) => event.target.checked
-                ? [...current, repository.id]
-                : current.filter((id) => id !== repository.id))}
-              type="checkbox"
-            />
-            {repository.owner}/{repository.name}
-          </label>
-        ))}
-      </fieldset>
-      {error && <p role="alert">{error}</p>}
-      <button
-        disabled={selected.length === 0 || repositories.isPending || verify.isPending}
-        onClick={() => {
-          setError(null)
-          verify.mutate()
-        }}
-        type="button"
-      >
-        {verify.isPending ? 'Verifying…' : 'Reverify installation'}
-      </button>
+        {error && <Banner tone="danger">{error}</Banner>}
+        <div className="aw-form__actions">
+          <Button
+            busy={verify.isPending}
+            disabled={selected.length === 0 || repositories.isPending}
+            icon="retry"
+            onClick={() => {
+              setError(null)
+              verify.mutate()
+            }}
+          >
+            Reverify installation
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
 
 function integrationError(reason: unknown) {
-  return isApiError(reason)
-    ? reason.message
-    : 'The GitHub installation could not be verified.'
+  return isApiError(reason) ? reason.message : 'GitHub couldn’t verify the installation. Check the ID and try again.'
 }

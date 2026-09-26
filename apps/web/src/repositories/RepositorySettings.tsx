@@ -1,15 +1,34 @@
-import { FormEvent, useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import {
-  archiveRepository,
-  listRepositories,
-  prepareRepository,
-  registerRepository,
-  type Repository,
-} from './api'
+import { humanize } from '../projects/format'
+import { Banner, Button, Checkbox, ErrorState, Icon, MessageSkeleton, Row, RowList, StatusChip, TextField } from '../ui'
+import { archiveRepository, listRepositories, prepareRepository, registerRepository, type Repository } from './api'
+
+function RepositoryState({ repository }: { repository: Repository }) {
+  if (repository.archivedAt) return <StatusChip icon="archive">Archived</StatusChip>
+  if (repository.preparationState === 'ready') {
+    return (
+      <StatusChip icon="circle-check" tone="success">
+        Ready
+      </StatusChip>
+    )
+  }
+  if (repository.preparationState === 'failed') {
+    return (
+      <StatusChip icon="triangle-alert" tone="danger">
+        Needs attention
+      </StatusChip>
+    )
+  }
+  return (
+    <StatusChip icon="clock" tone="warning">
+      Not set up
+    </StatusChip>
+  )
+}
 
 export function RepositorySettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
@@ -20,9 +39,7 @@ export function RepositorySettings({ projectId }: { projectId: string }) {
   })
   const update = (repository: Repository) => {
     queryClient.setQueryData<Awaited<ReturnType<typeof listRepositories>>>(key, (current) => {
-      const retained = (current?.repositories ?? []).filter(
-        (candidate) => candidate.id !== repository.id,
-      )
+      const retained = (current?.repositories ?? []).filter((candidate) => candidate.id !== repository.id)
       return {
         canManage: current?.canManage ?? repository.capabilities.manage,
         repositories: [...retained, repository].sort((left, right) =>
@@ -32,89 +49,100 @@ export function RepositorySettings({ projectId }: { projectId: string }) {
     })
   }
   const prepare = useMutation({
-    mutationFn: (repositoryId: string) =>
-      prepareRepository(projectId, repositoryId, crypto.randomUUID()),
+    mutationFn: (repositoryId: string) => prepareRepository(projectId, repositoryId, crypto.randomUUID()),
     onSuccess: update,
   })
   const archive = useMutation({
-    mutationFn: (repository: Repository) =>
-      archiveRepository(projectId, repository.id, repository.version, crypto.randomUUID()),
+    mutationFn: (repository: Repository) => archiveRepository(projectId, repository.id, repository.version, crypto.randomUUID()),
     onSuccess: update,
   })
   const [error, setError] = useState<string | null>(null)
 
-  if (repositories.isPending) return <p>Loading repositories…</p>
-  if (repositories.isError) return <p role="alert">Repositories could not be loaded.</p>
+  if (repositories.isPending) return <MessageSkeleton label="Loading repositories" rows={2} />
+  if (repositories.isError) {
+    return (
+      <ErrorState action={<Button onClick={() => void repositories.refetch()}>Try again</Button>} title="Repositories didn’t load">
+        Check your connection and try again.
+      </ErrorState>
+    )
+  }
   const canManage = repositories.data.canManage
 
   return (
-    <div className="repository-settings">
-      {error && <p role="alert">{error}</p>}
+    <div className="aw-settings-stack">
+      {error && <Banner tone="danger">{error}</Banner>}
       {repositories.data.repositories.length ? (
-        <div className="repository-list">
+        <RowList label="Repositories">
           {repositories.data.repositories.map((repository) => (
-            <article className="repository-card" key={repository.id}>
-              <header>
-                <div>
-                  <h3>{repository.owner}/{repository.name}</h3>
-                  <p>Default branch: {repository.defaultBranch}</p>
-                </div>
-                <span className="status-chip" data-state={repository.preparationState}>
-                  {repository.archivedAt ? 'archived' : repository.preparationState}
-                </span>
-              </header>
-              {repository.preparationFailureCategory && (
-                <p>Preparation needs attention: {repository.preparationFailureCategory.replaceAll('_', ' ')}.</p>
-              )}
-              {repository.capabilities.manage && !repository.archivedAt && (
-                <div className="repository-actions">
-                  {repository.preparationState !== 'ready' && (
-                    <button
-                      disabled={prepare.isPending}
-                      onClick={() => {
-                        setError(null)
-                        prepare.mutate(repository.id, {
-                          onError: (reason) => setError(errorMessage(reason)),
-                        })
-                      }}
-                      type="button"
-                    >
-                      {prepare.isPending ? 'Preparing…' : 'Prepare mirror'}
-                    </button>
+            <Row
+              actions={
+                <>
+                  <RepositoryState repository={repository} />
+                  {repository.capabilities.manage && !repository.archivedAt && (
+                    <>
+                      {repository.preparationState !== 'ready' && (
+                        <Button
+                          busy={prepare.isPending && prepare.variables === repository.id}
+                          disabled={prepare.isPending}
+                          icon="retry"
+                          onClick={() => {
+                            setError(null)
+                            prepare.mutate(repository.id, { onError: (reason) => setError(errorMessage(reason)) })
+                          }}
+                          size="sm"
+                        >
+                          Prepare mirror
+                        </Button>
+                      )}
+                      <Button
+                        disabled={archive.isPending}
+                        icon="archive"
+                        onClick={() => {
+                          setError(null)
+                          archive.mutate(repository, { onError: (reason) => setError(errorMessage(reason)) })
+                        }}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Archive repository
+                      </Button>
+                    </>
                   )}
-                  <button
-                    className="danger-button"
-                    disabled={archive.isPending}
-                    onClick={() => {
-                      setError(null)
-                      archive.mutate(repository, {
-                        onError: (reason) => setError(errorMessage(reason)),
-                      })
-                    }}
-                    type="button"
-                  >
-                    Archive repository
-                  </button>
-                </div>
+                </>
+              }
+              heading
+              key={repository.id}
+              leading={
+                <span className="aw-row__tile">
+                  <Icon name="repo" size={16} />
+                </span>
+              }
+              meta={
+                <span className="aw-row__metaline">
+                  <Icon name="branch" size={12} />
+                  {repository.defaultBranch}
+                </span>
+              }
+              title={`${repository.owner}/${repository.name}`}
+            >
+              {repository.preparationFailureCategory && !repository.archivedAt && (
+                <p className="aw-row__note">
+                  Setting up the server’s copy failed: {humanize(repository.preparationFailureCategory).toLocaleLowerCase()}. Prepare the
+                  mirror again, or check the host.
+                </p>
               )}
-            </article>
+            </Row>
           ))}
-        </div>
+        </RowList>
       ) : (
-        <p>No repositories are registered for this Project.</p>
+        <p className="aw-quiet">No repositories yet.{canManage ? ' Register one below to start runs against it.' : ''}</p>
       )}
       {canManage && <RepositoryRegistrationForm onCreated={update} projectId={projectId} />}
     </div>
   )
 }
 
-function RepositoryRegistrationForm({
-  onCreated,
-  projectId,
-}: {
-  onCreated: (repository: Repository) => void
-  projectId: string
-}) {
+function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated: (repository: Repository) => void; projectId: string }) {
   const [githubRepositoryId, setGithubRepositoryId] = useState('')
   const [owner, setOwner] = useState('')
   const [name, setName] = useState('')
@@ -150,38 +178,48 @@ function RepositoryRegistrationForm({
   const valid = Number(githubRepositoryId) > 0 && owner && name && defaultBranch && trusted
 
   return (
-    <form className="repository-registration" onSubmit={submit}>
-      <h3>Register GitHub repository</h3>
-      <div className="field-grid">
-        <div className="field">
-          <label htmlFor="github-repository-id">GitHub repository ID</label>
-          <input id="github-repository-id" inputMode="numeric" onChange={(event) => setGithubRepositoryId(event.target.value)} value={githubRepositoryId} />
-        </div>
-        <div className="field">
-          <label htmlFor="repository-owner">Owner</label>
-          <input id="repository-owner" onChange={(event) => setOwner(event.target.value)} value={owner} />
-        </div>
-        <div className="field">
-          <label htmlFor="repository-name">Repository</label>
-          <input id="repository-name" onChange={(event) => setName(event.target.value)} value={name} />
-        </div>
-        <div className="field">
-          <label htmlFor="repository-default-branch">Default branch</label>
-          <input id="repository-default-branch" onChange={(event) => setDefaultBranch(event.target.value)} value={defaultBranch} />
-        </div>
+    <form aria-labelledby="register-repository-heading" className="aw-card aw-formcard aw-form" onSubmit={submit}>
+      <div>
+        <h3 className="aw-formcard__title" id="register-repository-heading">
+          Register GitHub repository
+        </h3>
+        <p className="aw-formcard__desc">Add a repository from GitHub so runs in this Project can work in it.</p>
       </div>
-      <label className="trust-acknowledgement">
-        <input checked={trusted} onChange={(event) => setTrusted(event.target.checked)} type="checkbox" />
-        I trust this repository. Hosted runs execute its code under the dedicated Agent Workspace service account.
-      </label>
-      {error && <p role="alert">{error}</p>}
-      <button disabled={!valid || registration.isPending} type="submit">
-        {registration.isPending ? 'Registering…' : 'Register repository'}
-      </button>
+      <div className="aw-form__grid">
+        <TextField id="repository-owner" label="Owner" onChange={(event) => setOwner(event.target.value)} placeholder="Mischa-dev" value={owner} />
+        <TextField id="repository-name" label="Repository" onChange={(event) => setName(event.target.value)} placeholder="agent-workspace" value={name} />
+        <TextField
+          hint="The number in the repository’s GitHub API record."
+          id="github-repository-id"
+          inputMode="numeric"
+          label="GitHub repository ID"
+          mono
+          onChange={(event) => setGithubRepositoryId(event.target.value)}
+          value={githubRepositoryId}
+        />
+        <TextField
+          id="repository-default-branch"
+          label="Default branch"
+          mono
+          onChange={(event) => setDefaultBranch(event.target.value)}
+          value={defaultBranch}
+        />
+      </div>
+      <Checkbox
+        checked={trusted}
+        label="I trust this repository. Runs execute its code on the server under the Agent Workspace service account."
+        onChange={setTrusted}
+      />
+      {error && <Banner tone="danger">{error}</Banner>}
+      <div className="aw-form__actions">
+        <Button busy={registration.isPending} disabled={!valid} icon="plus" type="submit" variant="primary">
+          Register repository
+        </Button>
+      </div>
     </form>
   )
 }
 
 function errorMessage(reason: unknown) {
-  return isApiError(reason) ? reason.message : 'The repository operation failed.'
+  return isApiError(reason) ? reason.message : 'That didn’t work. Try again.'
 }

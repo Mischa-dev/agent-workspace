@@ -3899,7 +3899,7 @@ fn work_item_version_conflict_response(item: WorkItemView) -> Result<Response, A
         Json(WorkItemConflictEnvelope {
             error: WorkItemConflictBody {
                 code: "version_conflict",
-                message: "The resource changed after it was loaded.",
+                message: "Someone changed this after you opened it. Refresh and try again.",
                 details: WorkItemConflictDetails {
                     resource: "work_item",
                     current_version: item.version,

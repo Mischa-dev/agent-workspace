@@ -51,21 +51,38 @@ length capped at 760px. At 860px and below the rail, sidebar and details become
 drawers and a top bar opens them. Conversation pages own their scrolling: header
 and composer stay put, the timeline scrolls and stays on the newest message.
 
+Other pages use `.aw-page` (1040px) with a `PageHeader`: `--narrow` (720px) for
+Home, `--form` (640px) for Create Project, `--settings` (880px) and `--wide`
+(1280px) for work items. Project settings are tabs (`PageTabs`, addressed by
+`?tab=`), so each part is one short page. A work item reads like a document: the
+title and description are edited in place, a properties panel sits on the right
+(under the title below 1100px), and a save bar appears at the bottom only when
+there are unsaved edits.
+
 ## Components
 
 In `src/ui/`: `Icon` (Lucide), `Button`, `IconButton` (with tooltip),
-`Tooltip`, `Menu` (portal, arrow keys), `Dialog` (focus trap), `TextField`,
-`TextArea`, `SelectField`, `Switch`, `SegmentedControl`, `Avatar` (round for
-people, square for agents, slate for workers), `AvatarStack`, `ActorTag`,
-`Badge`, `Dots`, `StatusChip`, `Banner`, `EmptyState`, `ErrorState`,
-`ConversationIntro`, `MessageSkeleton`, `PageHeader`, `Section`.
+`Tooltip`, `Menu` (portal, arrow keys), `Dialog` (focus trap; `onSubmit` makes
+it a form), `TextField`, `TextArea`, `SelectField` (all with an optional
+leading `prefix`), `Checkbox`, `Switch` (for settings that apply at once),
+`SegmentedControl`, `Avatar` (round for people, square for agents, slate for
+workers), `AvatarStack`, `ActorTag`, `Badge`, `Dots`, `StatusChip`, `Banner`
+(takes a ref, so an error can take focus), `EmptyState`, `ErrorState`,
+`ConversationIntro`, `MessageSkeleton`, `PageHeader`, `Section`, `PageTabs`,
+`DetailList` (label and value pairs) and `RowList` + `Row` (bordered lists of
+Projects, members, repositories and links; a `.aw-row__link` makes the whole
+row clickable).
 
 Conversation pieces in `src/conversations/`: `ConversationHeader`,
 `ConversationTimeline` + `TimelineEntries` (day dividers, New line, grouping,
 hover actions, message links), `ActivityRow` for worker and system events,
 `ReplyStatusList`, `StructuredComposer` (inline @mentions and # work items),
 `ThreadDialog`. Thread pieces in `src/threads/ThreadPresentation.tsx`:
-`RunCard`, `ApprovalCard`, `RunBadge`, `ThreadDetails`.
+`RunCard`, `ApprovalCard`, `RunBadge`, `ThreadDetails`. Work item marks in
+`src/work-items/WorkItemIcons.tsx`: `StatusIcon` (a circle that fills as work
+moves from backlog to review, checked when done) and `PriorityIcon` (signal
+bars, a red square for urgent). Loading and error states for Project pages are
+`ProjectPageLoading` and `ProjectPageError`.
 
 ## Motion
 
@@ -76,6 +93,7 @@ ring). Every animation has a reduced-motion fallback.
 ## Copy
 
 Plain, specific, sentence case. Name things the way people see them: "Mention
-someone", "Start a thread", "Message #design". Agent states are plain verbs:
+someone", "Start a thread", "Message #design". "Project" is capitalized as the
+product's name for a workspace; "work item", "thread" and "channel" are not. Agent states are plain verbs:
 "Muse is writing a reply…", "Muse passed", "Muse handed this back". Errors say
 what happened and what to do. Never "Actor", "durable" or "AI".

@@ -23,7 +23,7 @@ import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import {
   ProjectPageError,
   ProjectPageLoading,
-} from '../projects/ProjectOverviewPage'
+} from '../projects/ProjectPageStates'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import {

@@ -29,8 +29,9 @@ The first stable decomposition seams are:
 
 ## Migration rule
 
-The retained legacy stylesheet remains a temporary feature-family seam while
-tokens, base, primitives, shell, and new feature rules live in separate files.
-Old selectors may coexist only in that seam. There is no second router,
-alternate application tree, duplicated task model, or competing realtime
-authority.
+Styles live in `src/styles/`, one file per layer or surface: `tokens.css`,
+`base.css` and `components.css`, then `shell.css`, `conversation.css`,
+`pages.css` and `work.css`. The pre-redesign stylesheet is gone; a new rule goes
+in the file that owns its surface, and components come from `src/ui/`. There is
+no second router, alternate application tree, duplicated task model, or
+competing realtime authority.

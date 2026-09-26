@@ -5,13 +5,13 @@ const maxCodexPromptLength = 2_000
 
 export function buildOpenInCodexLink(item: WorkItem, applicationOrigin: string) {
   const repositories = item.linkedRepositories
-  if (item.archivedAt) return { href: null, reason: 'Restore this Work Item before opening it in Codex.' }
-  if (repositories.length === 0) return { href: null, reason: 'Link one trusted repository before opening this Work Item in Codex.' }
+  if (item.archivedAt) return { href: null, reason: 'Restore this work item before opening it in Codex.' }
+  if (repositories.length === 0) return { href: null, reason: 'Link one trusted repository before opening this work item in Codex.' }
   if (repositories.length > 1) return { href: null, reason: 'Keep exactly one linked repository so Codex can select it unambiguously.' }
 
   const repository = repositories[0]
   if (!repository.trusted) return { href: null, reason: 'The linked repository must be trusted before Codex can open it.' }
-  if (repository.archivedAt) return { href: null, reason: 'Restore the linked repository before opening this Work Item in Codex.' }
+  if (repository.archivedAt) return { href: null, reason: 'Restore the linked repository before opening this work item in Codex.' }
   if (!repository.available) return { href: null, reason: 'Prepare and enable the linked repository before opening it in Codex.' }
   if (!canonicalGitHubOrigin.test(repository.cloneUrl)) {
     return { href: null, reason: 'The linked repository does not have a supported canonical Git origin URL.' }

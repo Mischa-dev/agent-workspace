@@ -10,3 +10,7 @@ export const workItemPriorities: Array<{
   { value: 'high', label: 'High' },
   { value: 'urgent', label: 'Urgent' },
 ]
+
+export function priorityLabel(priority: WorkItemPriority) {
+  return workItemPriorities.find((candidate) => candidate.value === priority)?.label ?? 'No priority'
+}
