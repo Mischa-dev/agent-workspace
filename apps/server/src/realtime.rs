@@ -178,24 +178,39 @@ impl OutboxPublisher for RealtimeHub {
         let supported_event_type = matches!(
             envelope.event_type.as_str(),
             "conversation.created"
+                | "conversation.updated"
+                | "conversation.reply_requests.updated"
                 | "conversation.archived"
                 | "conversation.message.created"
                 | "conversation.read_state.updated"
                 | "conversation.agent_run.updated"
                 | "work_item.updated"
+                | "project.membership.updated"
         );
-        let invalid_conversation_scope = if envelope.event_type == "work_item.updated" {
+        let project_scoped_event = matches!(
+            envelope.event_type.as_str(),
+            "work_item.updated" | "project.membership.updated"
+        );
+        let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
         } else {
             envelope.conversation_id.is_none()
                 || payload_conversation_id != envelope.conversation_id
         };
+        let invalid_membership_project_scope = envelope.event_type == "project.membership.updated"
+            && envelope
+                .payload
+                .get("projectId")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                != Some(envelope.project_id);
         if envelope.event_id.is_nil()
             || envelope.event_cursor < 1
             || envelope.version != OUTBOX_SCHEMA_VERSION
             || envelope.project_id.is_nil()
             || envelope.conversation_id.is_some_and(|id| id.is_nil())
             || invalid_conversation_scope
+            || invalid_membership_project_scope
             || envelope
                 .recipient_actor_id
                 .is_some_and(|actor_id| actor_id.is_nil())
@@ -847,6 +862,46 @@ mod tests {
     }
 
     #[test]
+    fn conversation_updates_and_reply_requests_reach_subscribers() {
+        let hub = RealtimeHub::new(2);
+        let mut receiver = hub.subscribe();
+        let conversation_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        for (event_cursor, event_type, payload) in [
+            (
+                41,
+                "conversation.updated",
+                serde_json::json!({ "conversationId": conversation_id, "version": 2 }),
+            ),
+            (
+                42,
+                "conversation.reply_requests.updated",
+                serde_json::json!({ "conversationId": conversation_id }),
+            ),
+        ] {
+            let envelope = OutboxEnvelope {
+                event_id: Uuid::now_v7(),
+                event_cursor,
+                version: OUTBOX_SCHEMA_VERSION,
+                project_id,
+                conversation_id: Some(conversation_id),
+                recipient_actor_id: None,
+                event_type: event_type.to_owned(),
+                occurred_at: "2026-09-26T15:00:00Z".to_owned(),
+                payload,
+            };
+            OutboxPublisher::publish(&hub, &envelope).expect("publish conversation update");
+            let delivery = receiver.try_recv().expect("conversation update delivery");
+            assert_eq!(delivery.conversation_id(), Some(conversation_id));
+            let wire: serde_json::Value =
+                serde_json::from_str(&delivery.to_wire_json().expect("bounded wire JSON"))
+                    .expect("decode wire JSON");
+            assert_eq!(wire["type"], event_type);
+            assert_eq!(wire["conversationId"], conversation_id.to_string());
+        }
+    }
+
+    #[test]
     fn durable_publication_without_a_connected_browser_is_successful() {
         let hub = RealtimeHub::new(1);
         let conversation_id = Uuid::now_v7();
@@ -901,6 +956,54 @@ mod tests {
         .expect("decode Work Item wire JSON");
         assert!(wire["conversationId"].is_null());
         assert_eq!(wire["payload"]["workItemId"], work_item_id.to_string());
+    }
+
+    #[test]
+    fn membership_update_is_project_scoped_and_cannot_cross_projects() {
+        let hub = RealtimeHub::new(2);
+        let mut receiver = hub.subscribe();
+        let project_id = Uuid::now_v7();
+        let actor_id = Uuid::now_v7();
+        let envelope = OutboxEnvelope {
+            event_id: Uuid::now_v7(),
+            event_cursor: 3,
+            version: OUTBOX_SCHEMA_VERSION,
+            project_id,
+            conversation_id: None,
+            recipient_actor_id: None,
+            event_type: "project.membership.updated".to_owned(),
+            occurred_at: "2026-09-26T15:00:00Z".to_owned(),
+            payload: serde_json::json!({
+                "projectId": project_id,
+                "actorId": actor_id,
+                "version": 2,
+            }),
+        };
+        OutboxPublisher::publish(&hub, &envelope).expect("publish membership update");
+        let delivery = receiver.try_recv().expect("membership update delivery");
+        assert_eq!(delivery.conversation_id(), None);
+        let wire: serde_json::Value =
+            serde_json::from_str(&delivery.to_wire_json().expect("bounded wire JSON"))
+                .expect("decode wire JSON");
+        assert_eq!(wire["type"], "project.membership.updated");
+        assert_eq!(wire["payload"]["projectId"], project_id.to_string());
+
+        let other_project = OutboxEnvelope {
+            project_id: Uuid::now_v7(),
+            ..envelope.clone()
+        };
+        assert_eq!(
+            OutboxPublisher::publish(&hub, &other_project),
+            Err(RealtimePublishError::InvalidMetadata)
+        );
+        let conversation_scoped = OutboxEnvelope {
+            conversation_id: Some(Uuid::now_v7()),
+            ..envelope
+        };
+        assert_eq!(
+            OutboxPublisher::publish(&hub, &conversation_scoped),
+            Err(RealtimePublishError::InvalidMetadata)
+        );
     }
 
     #[test]

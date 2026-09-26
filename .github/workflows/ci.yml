@@ -29,6 +29,7 @@ jobs:
       - run: cargo fmt --check
       - run: ./tools/verify-self-hosted-guide.sh
       - run: python3 tools/hermes-connector/verify-fixtures.py
+      - run: python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace
       - run: cargo install cargo-deny --version 0.20.2 --locked
