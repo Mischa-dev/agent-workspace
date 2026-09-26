@@ -166,13 +166,14 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert!(!safe_list.contains(&token));
 
     let supervisors = SupervisorRegistry::new(&config).expect("M6 supervisor registry");
-    let application = router(AppState {
+    let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         rate_limits: RateLimiters::default(),
         realtime: RealtimeHub::new(16),
         supervisors,
-    });
+    };
+    let application = router(state.clone());
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -186,10 +187,48 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
 
     let unauthorized = mcp_request(&application, None, None, &initialize).await;
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-    assert!(
+    assert_eq!(
         unauthorized
             .headers()
-            .contains_key(header::WWW_AUTHENTICATE)
+            .get(header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok()),
+        Some(
+            "Bearer resource_metadata=\"http://127.0.0.1:3100/.well-known/oauth-protected-resource/api/v1/mcp\""
+        )
+    );
+
+    let mut public_config = (*state.config).clone();
+    public_config.public_origin = Some("https://workspace.example.test".to_owned());
+    let public_application = router(AppState {
+        config: Arc::new(public_config),
+        ..state.clone()
+    });
+    let public_unauthorized = mcp_request(&public_application, None, None, &initialize).await;
+    assert_eq!(public_unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        public_unauthorized
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok()),
+        Some(
+            "Bearer resource_metadata=\"https://workspace.example.test/.well-known/oauth-protected-resource/api/v1/mcp\""
+        )
+    );
+    let public_metadata = json_response(
+        public_application
+            .oneshot(
+                Request::builder()
+                    .uri("/.well-known/oauth-protected-resource/api/v1/mcp")
+                    .body(Body::empty())
+                    .expect("public metadata request"),
+            )
+            .await
+            .expect("public metadata response"),
+    )
+    .await;
+    assert_eq!(
+        public_metadata["resource"],
+        "https://workspace.example.test/api/v1/mcp"
     );
 
     let initialized = mcp_request(&application, Some(&token), None, &initialize).await;

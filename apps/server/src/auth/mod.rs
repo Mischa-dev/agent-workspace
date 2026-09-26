@@ -624,7 +624,7 @@ fn hash_secret(value: &str) -> [u8; 32] {
     Sha256::digest(value.as_bytes()).into()
 }
 
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers.get_all(COOKIE).iter().find_map(|header| {
         header.to_str().ok().and_then(|cookies| {
             cookies.split(';').find_map(|cookie| {
@@ -643,7 +643,7 @@ fn session_cookie_name(config: &AppConfig) -> &'static str {
     }
 }
 
-fn csrf_cookie_name(config: &AppConfig) -> &'static str {
+pub(crate) fn csrf_cookie_name(config: &AppConfig) -> &'static str {
     if config.environment == Environment::Development {
         CSRF_COOKIE_DEV
     } else {
