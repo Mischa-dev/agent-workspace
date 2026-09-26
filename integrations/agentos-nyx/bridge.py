@@ -61,6 +61,14 @@ def controller(command):
     return envelope["result"]
 
 
+def source_revision():
+    plan = controller({"operation": "plan"})
+    revision = plan.get("source_revision")
+    if not isinstance(revision, str) or not revision:
+        raise RuntimeError("AgentOS plan omitted its source revision")
+    return revision
+
+
 class Workspace:
     """A minimal MCP client over curl.
 
@@ -237,13 +245,12 @@ def process(workspace, config, receipt_path, receipt):
     save(receipt_path, receipt)
     last_renew = time.monotonic()
     if "submission" not in receipt:
-        plan = controller({"operation": "plan"})
         receipt["submission"] = {
             "operation": "task-submit",
             "idempotency_key": f"workspace-{request_id}-{generation}",
             "submission": {
                 "agent": config["agentos_id"],
-                "source_revision": plan["source_revision"],
+                "source_revision": source_revision(),
                 "prompt": prompt_for(claim, config["slug"].capitalize()),
             },
         }
@@ -314,9 +321,11 @@ def main():
         workspace = Workspace(config)
         workspace.connect()
         inbox = workspace.inbox()
-        print(f"{args.agent}: connected; {len(inbox)} open request(s)")
         if args.check:
+            source_revision()
+            print(f"{args.agent}: connected; {len(inbox)} open request(s); AgentOS controller reachable")
             return
+        print(f"{args.agent}: connected; {len(inbox)} open request(s)")
         # Finish anything this agent already started before taking new work.
         open_ids = {item["requestId"] for item in inbox}
         for path in sorted(receipts.glob("*.json")):

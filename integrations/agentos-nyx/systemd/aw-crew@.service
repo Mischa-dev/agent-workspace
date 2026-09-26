@@ -9,7 +9,8 @@ ExecStart=/run/current-system/sw/bin/python3 %h/.local/share/agent-workspace-aw-
 WorkingDirectory=%h
 UMask=0077
 NoNewPrivileges=true
-PrivateTmp=true
+# PrivateTmp in a user unit maps the root controller's peer UID to 65534.
+# AgentOS must see UID 0 to verify its controller before sending a request.
 MemoryMax=256M
 CPUQuota=50%
 TimeoutStartSec=65min
