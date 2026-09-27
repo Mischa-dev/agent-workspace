@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_csrf},
+    auth::{AuthenticatedActor, cookie_value, csrf_cookie_name, require_csrf},
     error::{ApiJson, AppError},
 };
 
@@ -46,7 +46,7 @@ pub fn router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(MAX_OAUTH_BODY_BYTES))
 }
 
-fn public_origin(state: &AppState) -> String {
+pub(super) fn public_origin(state: &AppState) -> String {
     state
         .config
         .public_origin
@@ -302,7 +302,7 @@ async fn authorize(
             "no active Project membership is available",
         ));
     }
-    let csrf = csrf_cookie(&headers)
+    let csrf = csrf_cookie(&state.config, &headers)
         .ok_or_else(|| OAuthError::access_denied("the browser session is missing CSRF state"))?;
     let scope = scopes.join(" ");
     let agents = agent_choices(&state, principal.actor_id).await?;
@@ -1241,13 +1241,8 @@ fn parse_client_id(value: &str) -> Result<Uuid, OAuthError> {
         .map_err(|_| OAuthError::invalid_client("unknown public client"))
 }
 
-fn csrf_cookie(headers: &HeaderMap) -> Option<String> {
-    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
-    cookie.split(';').find_map(|pair| {
-        let (name, value) = pair.trim().split_once('=')?;
-        matches!(name, "agent_workspace_csrf" | "__Host-agent_workspace_csrf")
-            .then(|| value.to_owned())
-    })
+fn csrf_cookie(config: &crate::config::AppConfig, headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, csrf_cookie_name(config))
 }
 
 fn hidden_authorize_fields(request: &AuthorizeRequest, scope: &str, csrf: &str) -> String {
@@ -1407,7 +1402,38 @@ impl IntoResponse for OAuthError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+
+    #[test]
+    fn production_consent_uses_secure_csrf_cookie_when_both_names_are_present() {
+        let config = crate::config::AppConfig::from_values(&BTreeMap::from([
+            (
+                "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+                "postgres://example.invalid/database".to_owned(),
+            ),
+            ("AGENT_WORKSPACE_ENV".to_owned(), "production".to_owned()),
+            (
+                "AGENT_WORKSPACE_ALLOWED_ORIGINS".to_owned(),
+                "https://workspace.example.com".to_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_SERVER_ADDR".to_owned(),
+                "0.0.0.0:3100".to_owned(),
+            ),
+        ]))
+        .expect("production config");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static(
+                "agent_workspace_csrf=stale; __Host-agent_workspace_csrf=current",
+            ),
+        );
+
+        assert_eq!(csrf_cookie(&config, &headers).as_deref(), Some("current"));
+    }
 
     fn authorize_query(resources: &[&str]) -> String {
         let mut serializer = url::form_urlencoded::Serializer::new(String::new());

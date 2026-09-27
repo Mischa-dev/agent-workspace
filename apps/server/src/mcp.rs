@@ -930,8 +930,8 @@ async fn authenticate_mcp(
 fn unauthorized_response(state: &AppState) -> Response {
     let mut response = StatusCode::UNAUTHORIZED.into_response();
     let challenge = format!(
-        "Bearer resource_metadata=\"http://{}/.well-known/oauth-protected-resource/api/v1/mcp\"",
-        state.config.server_addr
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/api/v1/mcp\"",
+        oauth::public_origin(state)
     );
     if let Ok(value) = HeaderValue::from_str(&challenge) {
         response.headers_mut().insert(WWW_AUTHENTICATE, value);
