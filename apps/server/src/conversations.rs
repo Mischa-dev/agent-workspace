@@ -2016,7 +2016,7 @@ async fn search_mentionable_actors(
         WHERE membership.project_id = $1
           AND membership.enabled
           AND actor.status = 'active'
-          AND actor.kind IN ('human', 'execution_worker')
+          AND actor.kind IN ('human', 'external_agent', 'execution_worker')
           AND (
               $2 = ''
               OR strpos(lower(membership.display_name), $2) > 0
