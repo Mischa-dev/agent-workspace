@@ -1787,6 +1787,48 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .as_str()
         .expect("account fixture operation");
     let second = Uuid::now_v7();
+    let other_org = Uuid::now_v7();
+    let other_project = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations(id,name,slug) VALUES ($1,'Other organization',$2)")
+        .bind(other_org)
+        .bind(format!("other-{}", other_org.simple()))
+        .execute(&pool)
+        .await
+        .expect("other organization");
+    sqlx::query("INSERT INTO organization_memberships(organization_id,actor_id,role) VALUES ($1,$2,'owner')").bind(other_org).bind(seed.human_actor_id).execute(&pool).await.expect("other owner");
+    sqlx::query("INSERT INTO projects(id,organization_id,project_key,name) VALUES ($1,$2,'OTHER','Other project')").bind(other_project).bind(other_org).execute(&pool).await.expect("other project");
+    sqlx::query("INSERT INTO project_memberships(id,project_id,actor_id,role,display_name,handle) SELECT $1,$2,actor_id,role,display_name,handle FROM project_memberships WHERE project_id=$3 AND actor_id=$4").bind(Uuid::now_v7()).bind(other_project).bind(seed.project_id).bind(seed.human_actor_id).execute(&pool).await.expect("other project owner");
+    let cross_org = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            &format!("/api/v1/projects/{other_project}/members"),
+            &cookie,
+            &csrf,
+            json!({"actorId":actor,"role":"member"}),
+        ))
+        .await
+        .expect("cross organization request");
+    assert_eq!(
+        cross_org.status(),
+        StatusCode::NOT_FOUND,
+        "a project owner cannot import another organization's agent"
+    );
+    assert!(
+        !sqlx::query_scalar::<_, bool>("SELECT agent_connection_can_access($1,$2)")
+            .bind(
+                created["connection"]["id"]
+                    .as_str()
+                    .expect("connection")
+                    .parse::<Uuid>()
+                    .expect("connection UUID")
+            )
+            .bind(other_project)
+            .fetch_one(&pool)
+            .await
+            .expect("cross organization authorization")
+    );
+
     sqlx::query("INSERT INTO projects(id,organization_id,project_key,name) VALUES ($1,$2,'SECOND','Second project')").bind(second).bind(seed.organization_id).execute(&pool).await.expect("account fixture operation");
     sqlx::query("INSERT INTO project_memberships(id,project_id,actor_id,role,display_name,handle) SELECT $1,$2,actor_id,role,display_name,handle FROM project_memberships WHERE project_id=$3 AND actor_id=$4")
         .bind(Uuid::now_v7()).bind(second).bind(seed.project_id).bind(seed.human_actor_id).execute(&pool).await.expect("account fixture operation");
