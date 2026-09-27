@@ -318,6 +318,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
+    boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/token", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/revoke", OAuthProtocol),
     boundary_route!("mcp", Protocol, "/api/v1/mcp", McpProtocol),

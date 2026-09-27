@@ -170,7 +170,7 @@ async fn hosted_client_can_sign_in_as_an_agent() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/oauth/authorize")
+                .uri("/connect/confirm")
                 .header(header::COOKIE, &cookie)
                 .header(header::ORIGIN, "http://127.0.0.1:3100")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")

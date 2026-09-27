@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/oauth/register", post(register_client))
         .route("/oauth/authorize", get(authorize).post(consent))
+        .route("/connect/confirm", post(consent))
         .route("/oauth/token", post(token))
         .route("/oauth/revoke", post(revoke))
         .layer(DefaultBodyLimit::max(MAX_OAUTH_BODY_BYTES))
@@ -342,7 +343,7 @@ async fn authorize(
         format!("<fieldset><legend>Choose one Project</legend>{choices}</fieldset>")
     };
     let html = format!(
-        "<!doctype html><html><head><meta charset=utf-8><title>Authorize</title></head><body><main><h1>Authorize {}</h1><p>This client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {} unless you connect it as one of your agents.</p><form method=post action=/oauth/authorize>{}{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
+        "<!doctype html><html><head><meta charset=utf-8><title>Authorize</title></head><body><main><h1>Authorize {}</h1><p>This client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {} unless you connect it as one of your agents.</p><form method=post action=/connect/confirm>{}{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
         escape_html(&client.client_name),
         escape_html(&scope),
         escape_html(&principal.display_name),
