@@ -1724,9 +1724,10 @@ mod tests {
             "avoid noisy status-only updates",
             "expectedVersion",
             "Link pull requests explicitly",
-            "Permissions are Project-scoped",
+            "Human grants are Project-scoped",
         ] {
             assert!(first.contains(required), "missing {required}");
         }
+        assert!(SERVER_INSTRUCTIONS.contains("each call checks current membership"));
     }
 }
