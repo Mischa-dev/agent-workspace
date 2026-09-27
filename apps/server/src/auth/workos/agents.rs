@@ -730,7 +730,7 @@ mod tests {
             &header,
             value,
             &EncodingKey::from_rsa_pem(include_bytes!(
-                "../../../tests/fixtures/workos-agent/test-only-private.pem"
+                "../../../tests/fixtures/workos-agent/test-only-rsa.txt"
             ))
             .expect("WorkOS agent test operation"),
         )
