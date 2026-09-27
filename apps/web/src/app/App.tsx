@@ -18,6 +18,7 @@ import { ThemeProvider } from '../theme/ThemeProvider'
 import { Button, EmptyState, MessageSkeleton } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
+const AccountSettingsPage = lazy(() => import('../auth/AccountSettingsPage').then((module) => ({ default: module.AccountSettingsPage })))
 const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
 const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
 const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
@@ -73,6 +74,7 @@ export function App() {
                 path="/join"
               />
               <Route element={<SessionBoundary />}>
+                <Route path="/settings/account" element={<AuthenticatedRouteBoundary><AccountSettingsPage /></AuthenticatedRouteBoundary>} />
                 <Route element={<Navigate replace to="/home" />} path="/" />
                 <Route
                   element={

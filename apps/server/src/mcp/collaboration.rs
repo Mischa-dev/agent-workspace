@@ -661,15 +661,15 @@ pub(super) async fn begin_authorized_read<'a>(
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
         JOIN actors actor ON actor.id = credential.actor_id
-        JOIN projects project ON project.id = credential.project_id
+        JOIN projects project ON project.id = $2
         JOIN project_memberships membership
-          ON membership.project_id = credential.project_id
+          ON membership.project_id = $2
          AND membership.actor_id = credential.actor_id
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = credential.actor_id
         WHERE credential.id = $1
-          AND credential.project_id = $2
+          AND agent_connection_can_access(connection.id, $2)
           AND credential.actor_id = $3
           AND credential.external_agent_connection_id = $4
           AND credential.status = 'active' AND credential.revoked_at IS NULL
@@ -952,6 +952,8 @@ async fn poll(
                    expires_at::text AS expires_at
             FROM external_agent_events
             WHERE connection_id = $1 AND sequence > $2 AND expires_at > now()
+              AND agent_connection_can_access(connection_id, project_id)
+              AND external_event_visible_to(connection_id, resource_kind, resource_id)
             ORDER BY sequence
             LIMIT $3
             "#,
@@ -1019,7 +1021,7 @@ async fn revalidate_connection(
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = connection.actor_id
         WHERE credential.id = $1
-          AND credential.project_id = $2
+          AND agent_connection_can_access(connection.id, $2)
           AND credential.actor_id = $3
           AND credential.external_agent_connection_id = $4
           AND credential.status = 'active'

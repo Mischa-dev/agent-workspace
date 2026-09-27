@@ -17,7 +17,14 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/projects/{project_id}/members", get(list_members))
+        .route(
+            "/api/v1/projects/{project_id}/members",
+            get(list_members).post(add_existing_member),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/member-candidates",
+            get(member_candidates),
+        )
         .route(
             "/api/v1/projects/{project_id}/members/{actor_id}",
             axum::routing::patch(update_member),
@@ -40,6 +47,7 @@ struct MemberRow {
     organization_id: Uuid,
     actor_id: Uuid,
     organization_role: String,
+    actor_kind: String,
     role: String,
     display_name: String,
     handle: String,
@@ -75,6 +83,7 @@ struct MemberView {
     id: Uuid,
     project_id: Uuid,
     actor_id: Uuid,
+    actor_kind: String,
     role: String,
     display_name: String,
     handle: String,
@@ -221,7 +230,7 @@ async fn update_member(
         WHERE project_id = $1 AND actor_id = $2 AND version = $6
         RETURNING id, project_id,
           (SELECT organization_id FROM projects WHERE id = $1) AS organization_id,
-          actor_id,
+          actor_id, (SELECT kind FROM actors WHERE id = $2) AS actor_kind,
           (SELECT role FROM organization_memberships
             WHERE organization_id = (SELECT organization_id FROM projects WHERE id = $1)
               AND actor_id = $2) AS organization_role,
@@ -261,14 +270,6 @@ async fn update_member(
         current_version: target.version,
     })?;
 
-    sync_organization_role(
-        &mut transaction,
-        target.organization_id,
-        actor_id,
-        &target.organization_role,
-        next_role,
-    )
-    .await?;
     if target.enabled && !next_enabled {
         revoke_project_credentials(&mut transaction, project_id, actor_id).await?;
     }
@@ -355,6 +356,9 @@ fn authorize_target(
     target: &MemberRow,
     next_role: &str,
 ) -> Result<(), AppError> {
+    if target.actor_kind == "external_agent" && !matches!(next_role, "member" | "viewer") {
+        return Err(AppError::Forbidden);
+    }
     match access.organization_role.as_str() {
         "owner" => Ok(()),
         "admin"
@@ -378,6 +382,7 @@ fn member_view(row: MemberRow, principal: &AuthenticatedActor, access: &AccessRo
         id: row.id,
         project_id: row.project_id,
         actor_id: row.actor_id,
+        actor_kind: row.actor_kind,
         role: row.role,
         display_name: row.display_name,
         handle: row.handle,
@@ -471,7 +476,7 @@ async fn load_member_for_update(
     actor_id: Uuid,
 ) -> Result<Option<MemberRow>, AppError> {
     Ok(sqlx::query_as::<_, MemberRow>(&format!(
-        "{} FOR UPDATE OF membership, actor, user_account, organization_membership",
+        "{} FOR UPDATE OF membership, actor, organization_membership",
         member_query_sql()
     ))
     .bind(project_id)
@@ -484,7 +489,7 @@ fn member_list_sql() -> &'static str {
     concat!(
         "SELECT * FROM (",
         // The reusable projection is bounded to human Users and safe metadata.
-        "SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, ",
+        "SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, actor.kind AS actor_kind, ",
         "organization_membership.role AS organization_role, membership.role, membership.display_name, ",
         "membership.handle, membership.enabled, membership.version, membership.invited_by_actor_id, ",
         "inviter.display_name AS invited_by_display_name, membership.accepted_invitation_id, ",
@@ -495,8 +500,8 @@ fn member_list_sql() -> &'static str {
         "WHEN EXISTS (SELECT 1 FROM execution_profiles profile WHERE profile.project_id = membership.project_id AND profile.owner_actor_id = membership.actor_id) THEN 'disabled' ",
         "ELSE 'not_configured' END AS profile_readiness ",
         "FROM project_memberships membership JOIN projects project ON project.id = membership.project_id ",
-        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' ",
-        "JOIN users user_account ON user_account.actor_id = actor.id ",
+        "JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent') ",
+        "LEFT JOIN users user_account ON user_account.actor_id = actor.id ",
         "JOIN organization_memberships organization_membership ON organization_membership.organization_id = project.organization_id AND organization_membership.actor_id = actor.id ",
         "LEFT JOIN project_memberships inviter ON inviter.project_id = membership.project_id AND inviter.actor_id = membership.invited_by_actor_id ",
         "WHERE membership.project_id = $1",
@@ -506,7 +511,7 @@ fn member_list_sql() -> &'static str {
 
 fn member_query_sql() -> &'static str {
     r#"
-    SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id,
+    SELECT membership.id, membership.project_id, project.organization_id, membership.actor_id, actor.kind AS actor_kind,
            organization_membership.role AS organization_role, membership.role,
            membership.display_name, membership.handle, membership.enabled, membership.version,
            membership.invited_by_actor_id, inviter.display_name AS invited_by_display_name,
@@ -529,8 +534,8 @@ fn member_query_sql() -> &'static str {
            END AS profile_readiness
     FROM project_memberships membership
     JOIN projects project ON project.id = membership.project_id
-    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human'
-    JOIN users user_account ON user_account.actor_id = actor.id
+    JOIN actors actor ON actor.id = membership.actor_id AND actor.kind IN ('human', 'external_agent')
+    LEFT JOIN users user_account ON user_account.actor_id = actor.id
     JOIN organization_memberships organization_membership
       ON organization_membership.organization_id = project.organization_id
      AND organization_membership.actor_id = actor.id
@@ -566,31 +571,6 @@ async fn lock_and_require_other_owners(
             "project_membership",
             "the last enabled owner cannot be changed",
         ));
-    }
-    Ok(())
-}
-
-async fn sync_organization_role(
-    transaction: &mut Transaction<'_, Postgres>,
-    organization_id: Uuid,
-    actor_id: Uuid,
-    current_organization_role: &str,
-    project_role: &str,
-) -> Result<(), AppError> {
-    let next = match project_role {
-        "admin" => "admin",
-        "member" | "viewer" => "member",
-        _ => return Ok(()),
-    };
-    if current_organization_role != next {
-        sqlx::query(
-            "UPDATE organization_memberships SET role = $3, version = version + 1, updated_at = now() WHERE organization_id = $1 AND actor_id = $2",
-        )
-        .bind(organization_id)
-        .bind(actor_id)
-        .bind(next)
-        .execute(&mut **transaction)
-        .await?;
     }
     Ok(())
 }
@@ -725,4 +705,111 @@ mod tests {
             .is_err()
         );
     }
+}
+
+#[derive(Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct MemberCandidate {
+    actor_id: Uuid,
+    actor_kind: String,
+    display_name: String,
+    handle: String,
+}
+
+async fn member_candidates(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+) -> Result<Json<Vec<MemberCandidate>>, AppError> {
+    let access = load_access(&state, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_access(&principal, &access, project_id, Action::MembershipManage)?;
+    Ok(Json(sqlx::query_as::<_, MemberCandidate>(r#"
+        SELECT profile.actor_id, actor.kind AS actor_kind, profile.display_name, profile.handle
+        FROM projects project
+        JOIN organization_actor_profiles profile ON profile.organization_id = project.organization_id
+        JOIN actors actor ON actor.id = profile.actor_id AND actor.status = 'active'
+        JOIN organization_memberships om ON om.organization_id = profile.organization_id
+          AND om.actor_id = profile.actor_id AND om.enabled
+        LEFT JOIN users u ON u.actor_id = actor.id
+        WHERE project.id = $1 AND actor.kind IN ('human', 'external_agent')
+          AND (actor.kind = 'external_agent' OR u.status = 'active')
+          AND NOT EXISTS (SELECT 1 FROM project_memberships pm WHERE pm.project_id = $1 AND pm.actor_id = actor.id)
+        ORDER BY profile.display_name, actor.id LIMIT 200
+    "#).bind(project_id).fetch_all(&state.pool).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AddExistingMemberRequest {
+    actor_id: Uuid,
+    role: String,
+}
+
+async fn add_existing_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<AddExistingMemberRequest>,
+) -> Result<Json<MemberView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    if !matches!(request.role.as_str(), "member" | "viewer") {
+        return Err(AppError::Validation("membership role"));
+    }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("m7-membership:{project_id}"))
+        .execute(&mut *tx)
+        .await?;
+    let access = load_access_for_update(&mut tx, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_access(&principal, &access, project_id, Action::MembershipManage)?;
+    if access.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+    let candidate = sqlx::query_as::<_, (Uuid, String, String)>(r#"
+        SELECT p.organization_id, profile.display_name, profile.handle
+        FROM projects p
+        JOIN organization_actor_profiles profile ON profile.organization_id = p.organization_id AND profile.actor_id = $2
+        JOIN organization_memberships om ON om.organization_id = p.organization_id AND om.actor_id = $2 AND om.enabled
+        JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent')
+        WHERE p.id = $1 AND (a.kind = 'external_agent' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active'))
+        FOR SHARE OF om, a
+    "#).bind(project_id).bind(request.actor_id).fetch_optional(&mut *tx).await?
+        .ok_or(AppError::NotFound("workspace member"))?;
+    let inserted = sqlx::query(r#"
+        INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, invited_by_actor_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (project_id, actor_id) DO NOTHING
+    "#).bind(Uuid::now_v7()).bind(project_id).bind(request.actor_id).bind(&request.role)
+        .bind(candidate.1).bind(candidate.2).bind(principal.actor_id).execute(&mut *tx).await?;
+    let row = load_member_for_update(&mut tx, project_id, request.actor_id)
+        .await?
+        .ok_or(AppError::NotFound("member"))?;
+    if !row.enabled || row.role != request.role {
+        return Err(AppError::Conflict(
+            "membership",
+            "member already exists; use its current version to change access",
+        ));
+    }
+    if inserted.rows_affected() > 0 {
+        sqlx::query(r#"INSERT INTO audit_events (id,actor_id,project_id,session_id,authentication_class,action,target_kind,target_id,outcome)
+            VALUES ($1,$2,$3,$4,'browser_session','project_membership.added','actor',$5,'succeeded')"#)
+            .bind(Uuid::now_v7()).bind(principal.actor_id).bind(project_id).bind(principal.session_id)
+            .bind(request.actor_id).execute(&mut *tx).await?;
+        enqueue_typed(
+            &mut tx,
+            project_id,
+            OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
+                project_id,
+                actor_id: request.actor_id,
+                version: row.version,
+            }),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Json(member_view(row, &principal, &access)))
 }

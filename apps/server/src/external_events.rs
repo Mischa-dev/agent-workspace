@@ -104,13 +104,13 @@ pub async fn enqueue_external_work_item_event(
         SELECT connection.id
         FROM work_items item
         JOIN external_agent_connections connection
-          ON connection.project_id = item.project_id
+          ON agent_connection_can_access(connection.id, item.project_id)
          AND connection.actor_id = COALESCE($3, item.assignee_actor_id)
          AND connection.status = 'active'
         JOIN actors actor ON actor.id = connection.actor_id
          AND actor.kind = 'external_agent' AND actor.status = 'active'
         JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
+          ON membership.project_id = $1
          AND membership.actor_id = connection.actor_id
          AND membership.enabled
         WHERE item.project_id = $1 AND item.id = $2
@@ -209,13 +209,13 @@ async fn external_approval_recipients(
         JOIN projects project ON project.id = conversation.project_id
          AND project.archived_at IS NULL
         JOIN external_agent_connections connection
-          ON connection.project_id = conversation.project_id
+          ON agent_connection_can_access(connection.id, conversation.project_id)
           AND connection.status = 'active'
          AND connection.actor_id <> approval.requesting_actor_id
         JOIN actors actor ON actor.id = connection.actor_id
          AND actor.kind = 'external_agent' AND actor.status = 'active'
         JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
+          ON membership.project_id = conversation.project_id
          AND membership.actor_id = connection.actor_id
          AND membership.enabled
          AND membership.role IN ('owner', 'admin', 'member')

@@ -21,6 +21,16 @@ use rmcp::{
     },
 };
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+struct Scoped<T> {
+    /// Optional target project. Agents may select only projects they belong to.
+    #[serde(rename = "projectId")]
+    #[allow(dead_code)]
+    project_id: Option<String>,
+    #[serde(flatten)]
+    args: T,
+}
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use subtle::ConstantTimeEq;
@@ -51,7 +61,7 @@ const MAX_TOKEN_BYTES: usize = 128;
 const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
 const LAST_USED_THROTTLE_MINUTES: i32 = 5;
 #[cfg(test)]
-const SERVER_INSTRUCTIONS: &str = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run. To answer people, call inbox_list, claim a request with reply_claim (it returns the conversation context), then reply_send, reply_pass, or reply_release.";
+const SERVER_INSTRUCTIONS: &str = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Human grants are Project-scoped. Agent accounts can use projects_list and an optional projectId to act in projects they have joined. Resource IDs resolve their own project; each call checks current membership. Connecting or calling tools never creates an Agent Workspace Thread or hosted run. To answer people, call inbox_list, claim a request with reply_claim (it returns the conversation context), then reply_send, reply_pass, or reply_release.";
 
 #[derive(Clone, Debug)]
 pub struct McpPrincipal {
@@ -138,6 +148,47 @@ struct ProjectProjectionRow {
 #[tool_router]
 impl McpServer {
     #[tool(
+        description = "List projects available to this account. Use projectId on calls to choose a project.",
+        annotations(read_only_hint = true)
+    )]
+    async fn projects_list(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<Vec<ProjectProjection>> {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return Json(vec![]);
+        };
+        if !principal.can_read() {
+            return Json(vec![]);
+        }
+        let rows = sqlx::query_as::<_, ProjectProjectionRow>(r#"
+            SELECT p.id, p.organization_id, p.project_key, p.name, p.version, pm.role
+            FROM projects p JOIN project_memberships pm ON pm.project_id = p.id AND pm.actor_id = $1 AND pm.enabled
+            WHERE p.archived_at IS NULL AND (p.id = $2 OR agent_connection_can_access($3, p.id))
+            ORDER BY p.name, p.id LIMIT 200
+        "#).bind(principal.actor_id).bind(principal.project_id).bind(principal.external_agent_connection_id)
+            .fetch_all(&self.state.pool).await;
+        Json(
+            rows.unwrap_or_default()
+                .into_iter()
+                .map(|row| ProjectProjection {
+                    id: row.id.to_string(),
+                    organization_id: row.organization_id.to_string(),
+                    key: row.project_key,
+                    name: row.name,
+                    version: row.version,
+                    role: row.role,
+                    canonical_url: format!(
+                        "{}/projects/{}",
+                        oauth::public_origin(&self.state),
+                        row.id
+                    ),
+                })
+                .collect(),
+        )
+    }
+
+    #[tool(
         description = "List reply requests waiting for you: DMs and group messages people want you to answer",
         annotations(
             title = "Check inbox",
@@ -149,7 +200,9 @@ impl McpServer {
     )]
     async fn inbox_list(
         &self,
-        Parameters(arguments): Parameters<replies::InboxListArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::InboxListArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<replies::ReplyToolResult<replies::InboxProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -170,7 +223,9 @@ impl McpServer {
     )]
     async fn reply_claim(
         &self,
-        Parameters(arguments): Parameters<replies::ReplyClaimArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyClaimArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<replies::ReplyToolResult<replies::ClaimProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -191,7 +246,9 @@ impl McpServer {
     )]
     async fn reply_send(
         &self,
-        Parameters(arguments): Parameters<replies::ReplySendArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplySendArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -212,7 +269,9 @@ impl McpServer {
     )]
     async fn reply_pass(
         &self,
-        Parameters(arguments): Parameters<replies::ReplyPassArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyPassArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -233,7 +292,9 @@ impl McpServer {
     )]
     async fn reply_release(
         &self,
-        Parameters(arguments): Parameters<replies::ReplyReleaseArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyReleaseArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -254,7 +315,9 @@ impl McpServer {
     )]
     async fn approval_get(
         &self,
-        Parameters(arguments): Parameters<approvals::ApprovalGetArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<approvals::ApprovalGetArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<approvals::ApprovalToolResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -275,7 +338,9 @@ impl McpServer {
     )]
     async fn approval_respond(
         &self,
-        Parameters(arguments): Parameters<approvals::ApprovalRespondArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<approvals::ApprovalRespondArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<approvals::ApprovalToolResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -348,7 +413,9 @@ impl McpServer {
     )]
     async fn conversation_timeline_get(
         &self,
-        Parameters(arguments): Parameters<collaboration::ConversationTimelineArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<collaboration::ConversationTimelineArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<collaboration::CollaborationReadResult<collaboration::ConversationTimelineProjection>>
     {
@@ -370,7 +437,9 @@ impl McpServer {
     )]
     async fn mentionable_actor_search(
         &self,
-        Parameters(arguments): Parameters<collaboration::MentionableActorSearchArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<collaboration::MentionableActorSearchArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<collaboration::CollaborationReadResult<collaboration::MentionableActorProjection>>
     {
@@ -392,7 +461,9 @@ impl McpServer {
     )]
     async fn conversation_message_send(
         &self,
-        Parameters(arguments): Parameters<collaboration::ConversationMessageSendArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<collaboration::ConversationMessageSendArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<collaboration::ConversationMessageSendResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -413,7 +484,9 @@ impl McpServer {
     )]
     async fn external_event_poll(
         &self,
-        Parameters(arguments): Parameters<collaboration::ExternalEventPollArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<collaboration::ExternalEventPollArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<collaboration::ExternalEventPollResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -535,7 +608,9 @@ impl McpServer {
     )]
     async fn project_instructions_get(
         &self,
-        Parameters(_arguments): Parameters<reads::ProjectInstructionsArguments>,
+        Parameters(Scoped {
+            args: _arguments, ..
+        }): Parameters<Scoped<reads::ProjectInstructionsArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<reads::ReadResult<reads::ProjectInstructionsProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -558,7 +633,9 @@ impl McpServer {
     )]
     async fn work_item_get(
         &self,
-        Parameters(arguments): Parameters<reads::WorkItemGetArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<reads::WorkItemGetArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<reads::ReadResult<reads::WorkItemProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -581,7 +658,9 @@ impl McpServer {
     )]
     async fn work_item_create(
         &self,
-        Parameters(arguments): Parameters<writes::CreateWorkItemArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::CreateWorkItemArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -604,7 +683,9 @@ impl McpServer {
     )]
     async fn work_item_search(
         &self,
-        Parameters(arguments): Parameters<reads::WorkItemSearchArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<reads::WorkItemSearchArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<reads::ReadResult<reads::WorkItemSearchProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -627,7 +708,9 @@ impl McpServer {
     )]
     async fn work_item_context_get(
         &self,
-        Parameters(arguments): Parameters<reads::WorkItemGetArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<reads::WorkItemGetArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<reads::ReadResult<reads::WorkItemContextProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -650,7 +733,9 @@ impl McpServer {
     )]
     async fn repository_get(
         &self,
-        Parameters(arguments): Parameters<reads::RepositoryGetArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<reads::RepositoryGetArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<reads::ReadResult<reads::RepositoryProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -673,7 +758,9 @@ impl McpServer {
     )]
     async fn pull_request_get(
         &self,
-        Parameters(arguments): Parameters<reads::PullRequestGetArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<reads::PullRequestGetArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<reads::ReadResult<reads::PullRequestProjection>> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -696,7 +783,9 @@ impl McpServer {
     )]
     async fn work_item_set_status(
         &self,
-        Parameters(arguments): Parameters<writes::SetStatusArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::SetStatusArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -719,7 +808,9 @@ impl McpServer {
     )]
     async fn work_item_post_update(
         &self,
-        Parameters(arguments): Parameters<writes::PostUpdateArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::PostUpdateArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -742,7 +833,9 @@ impl McpServer {
     )]
     async fn work_item_update(
         &self,
-        Parameters(arguments): Parameters<writes::UpdateWorkItemArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::UpdateWorkItemArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -765,7 +858,9 @@ impl McpServer {
     )]
     async fn work_item_create_subtask(
         &self,
-        Parameters(arguments): Parameters<writes::CreateSubtaskArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::CreateSubtaskArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -788,7 +883,9 @@ impl McpServer {
     )]
     async fn work_item_link_pull_request(
         &self,
-        Parameters(arguments): Parameters<writes::LinkPullRequestArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::LinkPullRequestArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -811,7 +908,9 @@ impl McpServer {
     )]
     async fn work_item_mark_blocked(
         &self,
-        Parameters(arguments): Parameters<writes::MarkBlockedArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::MarkBlockedArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -834,7 +933,9 @@ impl McpServer {
     )]
     async fn work_item_mark_ready_for_review(
         &self,
-        Parameters(arguments): Parameters<writes::MarkReadyForReviewArguments>,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<writes::MarkReadyForReviewArguments>>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<writes::WriteResult> {
         let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
@@ -849,7 +950,7 @@ impl McpServer {
 #[tool_handler(
     name = "agent-workspace",
     version = "0.6.0",
-    instructions = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Permissions are Project-scoped and never authorize cross-Project discovery. Connecting or calling tools never creates an Agent Workspace Thread or hosted run. To answer people, call inbox_list, claim a request with reply_claim (it returns the conversation context), then reply_send, reply_pass, or reply_release."
+    instructions = "Identify the Project and Work Item by immutable ID or canonical Agent Workspace URL before acting. Read current state before writes; avoid noisy status-only updates. Every non-commutative write requires the current expectedVersion and a stable clientRequestId. On conflict, refetch and retry only when the result says retry is safe. Link pull requests explicitly to the intended Work Item. Human grants are Project-scoped. Agent accounts can use projects_list and an optional projectId to act in projects they have joined. Resource IDs resolve their own project; each call checks current membership. Connecting or calling tools never creates an Agent Workspace Thread or hosted run. To answer people, call inbox_list, claim a request with reply_claim (it returns the conversation context), then reply_send, reply_pass, or reply_release."
 )]
 impl ServerHandler for McpServer {}
 
@@ -912,9 +1013,26 @@ async fn authenticate_mcp(
         return error.into_response();
     }
     match resolve_bearer_principal(&state, request.headers()).await {
-        Ok(Some(principal)) => {
+        Ok(Some(mut principal)) => {
             if let Err(error) = state.rate_limits.check_mcp_request(principal.credential_id) {
                 return error.into_response();
+            }
+            if request.method() == http::Method::POST {
+                let (parts, body) = request.into_parts();
+                let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY_BYTES).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+                };
+                if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    && body.get("method").and_then(serde_json::Value::as_str) == Some("tools/call")
+                {
+                    match scoped_project(&state, &principal, &body["params"]["arguments"]).await {
+                        Ok(Some(project_id)) => principal.project_id = project_id,
+                        Ok(None) => {}
+                        Err(error) => return error.into_response(),
+                    }
+                }
+                request = Request::from_parts(parts, Body::from(bytes));
             }
             request.extensions_mut().insert(principal);
             next.run(request).await
@@ -1490,6 +1608,77 @@ async fn insert_credential_audit(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+async fn scoped_project(
+    state: &AppState,
+    principal: &McpPrincipal,
+    args: &serde_json::Value,
+) -> Result<Option<Uuid>, AppError> {
+    let mut target = args
+        .get("projectId")
+        .and_then(|v| v.as_str())
+        .map(str::parse::<Uuid>)
+        .transpose()
+        .map_err(|_| AppError::Validation("projectId"))?;
+    if target.is_none() {
+        for (key, query) in [
+            (
+                "requestId",
+                "SELECT project_id FROM reply_requests WHERE id = $1",
+            ),
+            (
+                "conversationId",
+                "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+            ),
+            (
+                "threadId",
+                "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+            ),
+            (
+                "workItemId",
+                "SELECT project_id FROM work_items WHERE id = $1",
+            ),
+            (
+                "parentWorkItemId",
+                "SELECT project_id FROM work_items WHERE id = $1",
+            ),
+            (
+                "repositoryId",
+                "SELECT project_id FROM repositories WHERE id = $1",
+            ),
+            (
+                "identifier",
+                "SELECT project_id FROM work_items WHERE id = $1",
+            ),
+        ] {
+            if let Some(id) = args
+                .get(key)
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse::<Uuid>().ok())
+            {
+                let mut lookup = sqlx::query_scalar::<_, Uuid>(query).bind(id);
+                if query.contains("$2") {
+                    lookup = lookup.bind(principal.actor_id);
+                }
+                target = lookup.fetch_optional(&state.pool).await?;
+                break;
+            }
+        }
+    }
+    if let Some(target) = target
+        && target != principal.project_id
+    {
+        let allowed = sqlx::query_scalar::<_, bool>("SELECT agent_connection_can_access($1, $2)")
+            .bind(principal.external_agent_connection_id)
+            .bind(target)
+            .fetch_one(&state.pool)
+            .await?;
+        if principal.actor_kind != ActorKind::ExternalAgent || !allowed {
+            return Err(AppError::Forbidden);
+        }
+    }
+    Ok(target)
 }
 
 #[cfg(test)]

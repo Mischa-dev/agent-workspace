@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { Banner, Button, TextField } from '../ui'
+import { startWorkOs, workOsStatus } from './workos'
 import { AuthLayout } from './AuthLayout'
 import { installAuthenticatedSession, isAuthenticatedSession, login, useSession } from './session'
 
@@ -22,6 +23,7 @@ function safeReturnTo(search: string) {
 }
 
 export function SignInPage() {
+  const workos = useQuery({ queryKey: ['workos-status'], queryFn: workOsStatus })
   const session = useSession()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -42,6 +44,13 @@ export function SignInPage() {
   useEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
+
+  const workOsSignIn = async (signup = false) => {
+    setSubmitting(true)
+    setError(null)
+    try { await startWorkOs(signup ? { username: loginName.trim() } : {}) }
+    catch { setError('Could not open secure sign-in. Try again.'); setSubmitting(false) }
+  }
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -72,13 +81,15 @@ export function SignInPage() {
     <AuthLayout
       footer={
         <>
-          New host? Create the first account on the server with <code>bootstrap-admin</code>. There’s no sign-up page.
+          Existing account? You can link WorkOS from Account settings after signing in.
         </>
       }
       intro="Welcome back. Your conversations and agents are waiting."
       title="Sign in"
       titleId="sign-in-heading"
     >
+      {new URLSearchParams(location.search).has('workosError') && <Banner tone="danger">WorkOS sign-in could not be completed. If you have an existing account, sign in below and link it in Account settings.</Banner>}
+      {workos.data?.enabled && <Button busy={submitting} onClick={() => void workOsSignIn()} variant="primary">Continue with WorkOS</Button>}
       {error && (
         <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
           <Banner tone="danger">{error}</Banner>
@@ -117,6 +128,7 @@ export function SignInPage() {
         >
           {submitting ? 'Signing in…' : 'Sign in'}
         </Button>
+        {workos.data?.signupEnabled && <Button disabled={submitting || loginName.trim().length < 3} onClick={() => void workOsSignIn(true)}>Create account with this username</Button>}
       </form>
     </AuthLayout>
   )

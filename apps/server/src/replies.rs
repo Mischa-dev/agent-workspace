@@ -190,7 +190,7 @@ async fn wake(
         r#"
         SELECT id, webhook_url IS NOT NULL
         FROM external_agent_connections
-        WHERE project_id = $1 AND actor_id = $2 AND status = 'active'
+        WHERE agent_connection_can_access(id, $1) AND actor_id = $2 AND status = 'active'
         "#,
     )
     .bind(project_id)
@@ -325,7 +325,7 @@ pub(crate) async fn timeline_requests(
                (
                    SELECT max(connection.last_used_at)::text
                    FROM external_agent_connections connection
-                   WHERE connection.project_id = request.project_id
+                   WHERE agent_connection_can_access(connection.id, request.project_id)
                      AND connection.actor_id = request.agent_actor_id
                ) AS agent_last_seen_at
         FROM reply_requests request
@@ -575,7 +575,7 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
                delivery.attempts, request.agent_actor_id,
-               request.status = 'pending' AS request_pending,
+               (request.status = 'pending' AND agent_connection_can_access(connection.id, request.project_id) AND conversation_visible_to(request.conversation_id, request.agent_actor_id)) AS request_pending,
                connection.webhook_url, connection.webhook_secret
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id

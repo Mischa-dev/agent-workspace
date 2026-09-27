@@ -243,6 +243,7 @@ export function ProjectRail({
         <Menu
           items={[
             { heading: user.displayName },
+            { label: 'Account settings', onSelect: () => { onNavigate(); navigate('/settings/account') } },
             { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/appearance') } },
             { separator: true },
             { label: 'Sign out', icon: 'log-out', onSelect: () => void signOut() },

@@ -1229,7 +1229,7 @@ fn map_database_error(error: sqlx::Error) -> AppError {
         sqlx::Error::Database(database)
             if matches!(
                 database.constraint(),
-                Some("project_memberships_active_handle_unique")
+                Some("project_memberships_active_handle_unique") | Some("organization_actor_profiles_organization_id_handle_key")
                     | Some("external_agent_connections_project_id_connection_name_key")
             )
     ) {

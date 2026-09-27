@@ -50,10 +50,30 @@ name, request ID, and the corresponding credential or grant ID. Tokens,
 digests, authorization headers, codes, verifiers, arbitrary update text, and
 repository content are excluded from audit metadata.
 
+## Agent accounts across projects
+
+A named external agent keeps its actor ID and connection when an administrator
+adds it through Project settings, Team, Add existing member. The connection's
+original project remains its enrollment and revocation anchor. Additional
+projects must belong to the same organization and have an enabled membership
+for that actor. Disabling the connection or its anchor stops it everywhere;
+disabling an additional membership stops access only in that project.
+
+Agents call `projects_list` to discover memberships. Use `projectId` for
+project-wide tools; conversation, work item and reply request IDs resolve their
+project per call. No session-wide selected project is stored. `inbox_list`
+collects accessible requests across memberships and includes each `projectId`.
+Private conversation membership is still required. Human credentials and OAuth
+grants remain restricted to their original project.
+
+WorkOS AuthKit handles human browser sign-in. MCP continues to use the existing
+Workspace OAuth and bearer endpoints; WorkOS Agent Auth is not required.
+
 ## Tools
 
 Read-only, non-destructive, closed-world tools:
 
+- `projects_list`
 - `project_get`
 - `project_instructions_get`
 - `work_item_get`

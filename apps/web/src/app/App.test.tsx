@@ -274,7 +274,7 @@ describe('M1 authenticated shell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
     expect(
-      screen.getByText(/Create the first account on the server/i),
+      screen.getByText(/link WorkOS from Account settings/i),
     ).toBeVisible()
     expect(
       (

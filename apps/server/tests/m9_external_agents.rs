@@ -1737,3 +1737,330 @@ async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
         .await
         .expect("connect schema-scoped M9 pool")
 }
+
+#[tokio::test]
+async fn existing_agent_joins_another_project_without_another_identity_or_token() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("member_accounts_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create isolated M9 schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run M9 migrations");
+
+    let temporary = tempfile::tempdir().expect("temporary M9 root");
+    let config = test_config(&database_url, temporary.path());
+    let seed = dev_seed(&pool, &config).await.expect("seed M9 fixture");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: LOGIN.to_owned(),
+            display_name: "M9 Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap M9 owner");
+    let application = test_app(pool.clone(), config);
+    let cookie = login(&application).await;
+    let csrf = csrf_from_cookie(&cookie);
+    let base = format!("/api/v1/projects/{}/external-agents", seed.project_id);
+
+    let created = application.clone().oneshot(write_request("POST", &base, &cookie, &csrf,
+        json!({"connectionName":"Shared agent","displayName":"Shared agent","handle":"shared_agent","role":"member","scopes":["read","write","events"]}))).await.expect("account fixture operation");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    let actor = created["connection"]["actorId"]
+        .as_str()
+        .expect("account fixture operation");
+    let token = created["oneTimeCredential"]["token"]
+        .as_str()
+        .expect("account fixture operation");
+    let second = Uuid::now_v7();
+    sqlx::query("INSERT INTO projects(id,organization_id,project_key,name) VALUES ($1,$2,'SECOND','Second project')").bind(second).bind(seed.organization_id).execute(&pool).await.expect("account fixture operation");
+    sqlx::query("INSERT INTO project_memberships(id,project_id,actor_id,role,display_name,handle) SELECT $1,$2,actor_id,role,display_name,handle FROM project_memberships WHERE project_id=$3 AND actor_id=$4")
+        .bind(Uuid::now_v7()).bind(second).bind(seed.project_id).bind(seed.human_actor_id).execute(&pool).await.expect("account fixture operation");
+    let session = initialize_mcp(&application, token).await;
+    let denied = mcp_request(&application,token,Some(&session),json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"conversation_list","arguments":{"projectId":second}}})).await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let candidates = response_json(
+        application
+            .clone()
+            .oneshot(read_request(
+                &format!("/api/v1/projects/{second}/member-candidates"),
+                &cookie,
+            ))
+            .await
+            .expect("account fixture operation"),
+    )
+    .await;
+    assert!(
+        candidates
+            .as_array()
+            .expect("account fixture operation")
+            .iter()
+            .any(|v| v["actorId"] == actor)
+    );
+    let add = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            &format!("/api/v1/projects/{second}/members"),
+            &cookie,
+            &csrf,
+            json!({"actorId":actor,"role":"member"}),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(add.status(), StatusCode::OK);
+    let added = response_json(add).await;
+    assert_eq!(added["actorKind"], "external_agent");
+    assert_eq!(added["handle"], "shared_agent");
+    let allowed = call_mcp_tool(
+        &application,
+        token,
+        &session,
+        "conversation_list",
+        json!({"projectId":second}),
+    )
+    .await;
+    assert_eq!(allowed["outcome"], "found");
+    let channel = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "POST",
+            &format!("/api/v1/projects/{second}/channels"),
+            &cookie,
+            &csrf,
+            "second-channel",
+            json!({"name":"shared"}),
+        ))
+        .await
+        .expect("create channel");
+    assert_eq!(channel.status(), StatusCode::CREATED);
+    let channel = response_json(channel).await;
+    let conversation = channel["conversation"]["id"].as_str().expect("channel ID");
+    let sent = call_mcp_tool(&application,token,&session,"conversation_message_send",json!({"conversationId":conversation,"content":{"version":1,"nodes":[{"type":"text","text":"Same agent in a second project"}]},"clientRequestId":"second-project-message"})).await;
+    assert_eq!(sent["outcome"], "applied", "{sent}");
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT author_actor_id FROM messages WHERE conversation_id=$1"
+        )
+        .bind(conversation.parse::<Uuid>().expect("conversation UUID"))
+        .fetch_one(&pool)
+        .await
+        .expect("authorship"),
+        actor.parse::<Uuid>().expect("actor UUID")
+    );
+    // One MCP session can alternate projects without leaking a selected project.
+    let home = call_mcp_tool(
+        &application,
+        token,
+        &session,
+        "conversation_list",
+        json!({"projectId":seed.project_id}),
+    )
+    .await;
+    assert_eq!(home["outcome"], "found");
+    let elevated = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "PATCH",
+            &format!("/api/v1/projects/{second}/members/{actor}"),
+            &cookie,
+            &csrf,
+            "no-agent-admin",
+            json!({"expectedVersion":1,"role":"admin"}),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(elevated.status(), StatusCode::FORBIDDEN);
+    let removed = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "PATCH",
+            &format!("/api/v1/projects/{second}/members/{actor}"),
+            &cookie,
+            &csrf,
+            "remove-agent",
+            json!({"expectedVersion":1,"enabled":false}),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(removed.status(), StatusCode::OK);
+    let denied = mcp_request(&application,token,Some(&session),json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"conversation_list","arguments":{"projectId":second}}})).await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let home = call_mcp_tool(
+        &application,
+        token,
+        &session,
+        "conversation_list",
+        json!({"projectId":seed.project_id}),
+    )
+    .await;
+    assert_eq!(home["outcome"], "found");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM actors WHERE kind='external_agent'")
+            .fetch_one(&pool)
+            .await
+            .expect("account fixture operation"),
+        1
+    );
+    terminate_mcp(&application, token, &session).await;
+    drop(application);
+    pool.close().await;
+    administrative_pool
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("account fixture operation");
+}
+
+#[tokio::test]
+async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() {
+    let Some((database_url, administrative_pool)) = integration_pool().await else {
+        return;
+    };
+    let schema = format!("workos_browser_{}", Uuid::now_v7().simple());
+    administrative_pool
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create isolated M9 schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("run M9 migrations");
+
+    let temporary = tempfile::tempdir().expect("temporary M9 root");
+    let mut config = test_config(&database_url, temporary.path());
+    let seed = dev_seed(&pool, &config).await.expect("seed M9 fixture");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: LOGIN.to_owned(),
+            display_name: "M9 Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap M9 owner");
+    config.workos = Some(agent_workspace_server::config::WorkOsConfig {
+        client_id: "client_test".into(),
+        api_key: agent_workspace_server::config::SecretString::new("sk_test"),
+        allow_signup: false,
+    });
+    let application = test_app(pool.clone(), config);
+    let cookie = login(&application).await;
+    let csrf = csrf_from_cookie(&cookie);
+
+    let no_csrf = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            "/api/v1/auth/workos/start",
+            &cookie,
+            "wrong",
+            json!({"link":true}),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(no_csrf.status(), StatusCode::FORBIDDEN);
+    let started = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            "/api/v1/auth/workos/start",
+            &cookie,
+            &csrf,
+            json!({"link":true}),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(started.status(), StatusCode::OK);
+    let login_cookie = started
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("account fixture operation")
+        .to_str()
+        .expect("account fixture operation")
+        .to_owned();
+    assert!(login_cookie.contains("HttpOnly") && login_cookie.contains("SameSite=Lax"));
+    let started = response_json(started).await;
+    let url = url::Url::parse(started["url"].as_str().expect("account fixture operation"))
+        .expect("account fixture operation");
+    assert_eq!(url.host_str(), Some("api.workos.com"));
+    let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(query["code_challenge_method"], "S256");
+    assert!(!query.contains_key("client_secret"));
+    let callback = format!(
+        "/auth/workos/callback?code=test-code&state={}",
+        query["state"]
+    );
+    let wrong_browser = application
+        .clone()
+        .oneshot(read_request(&callback, &cookie))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(wrong_browser.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        wrong_browser.headers()[header::LOCATION],
+        "/sign-in?workosError=1"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM workos_login_attempts WHERE link_session_id IS NOT NULL"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("account fixture operation"),
+        1,
+        "another browser must not consume this login"
+    );
+    sqlx::query("UPDATE workos_login_attempts SET expires_at=now()-interval '1 second'")
+        .execute(&pool)
+        .await
+        .expect("account fixture operation");
+    let expired = application
+        .clone()
+        .oneshot(read_request(
+            &callback,
+            login_cookie
+                .split(';')
+                .next()
+                .expect("account fixture operation"),
+        ))
+        .await
+        .expect("account fixture operation");
+    assert_eq!(expired.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        expired.headers()[header::LOCATION],
+        "/sign-in?workosError=1"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workos_identities")
+            .fetch_one(&pool)
+            .await
+            .expect("account fixture operation"),
+        0
+    );
+    drop(application);
+    pool.close().await;
+    administrative_pool
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("account fixture operation");
+}
