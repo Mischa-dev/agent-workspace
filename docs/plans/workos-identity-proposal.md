@@ -24,7 +24,11 @@ Adding an agent grants access through its existing organization connections only
 
 ## WorkOS boundary
 
-AuthKit owns human authentication. Workspace owns accounts, handles, project permissions and agent identity. WorkOS Agent Auth is an optional future credential issuer when access and pricing are confirmed. Standard MCP and existing agent credentials keep working while that product is unavailable.
+AuthKit owns human authentication. Workspace owns accounts, handles, project permissions and agent identity. This release uses the existing MCP OAuth and bearer credentials for named agents.
+
+WorkOS has two separate agent features. Agent Auth blueprints mint short-lived tokens for agents operated by the application. Agent Registration and `auth.md` let external agents register and complete a user claim. The production dashboard exposes blueprint configuration, but that alone does not confirm the free production allowance or validate an integration.
+
+Keep both as optional issuer adapters for this foundation. A later adapter must verify issuer, audience, expiry and revocation; map the provider subject to an existing actor; and map its organization explicitly before project permissions apply. Neither a new token nor an email match creates project membership. Publish WorkOS `auth.md` discovery only when its issued tokens actually work against Workspace. These additions can preserve the actor IDs, profiles and memberships implemented here.
 
 Production AuthKit requires billing information in the WorkOS dashboard, even under its free allowance. Use the included WorkOS hosted domain and email sender. Public signup is off by default through `AGENT_WORKSPACE_WORKOS_ALLOW_SIGNUP=false`. Do not silently use a staging environment as production identity infrastructure. Enable the production integration once configuration and a real account-link/sign-in check succeed.
 
@@ -36,4 +40,4 @@ Success means: link the existing owner to WorkOS without losing access; add the 
 
 Billing, public signup rollout, enterprise SSO, extensive account lifecycle policy and multi-tenant code-execution hosting are later work. Keep organization IDs and provider mappings explicit so those additions do not require replacing the account model.
 
-References: [AuthKit users](https://workos.com/docs/authkit/users-organizations), [authorization and PKCE](https://workos.com/docs/reference/authkit/authentication/get-authorization-url), [Agent Auth](https://workos.com/docs/authkit/agent-blueprints).
+References: [AuthKit users](https://workos.com/docs/authkit/users-organizations), [authorization and PKCE](https://workos.com/docs/reference/authkit/authentication/get-authorization-url), [Agent Auth](https://workos.com/docs/authkit/agent-blueprints), [Agent Registration](https://workos.com/docs/authkit/agent-registration), [auth.md](https://workos.com/auth-md).
