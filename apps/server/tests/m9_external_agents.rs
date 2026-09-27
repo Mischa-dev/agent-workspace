@@ -1868,6 +1868,18 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let added = response_json(add).await;
     assert_eq!(added["actorKind"], "external_agent");
     assert_eq!(added["handle"], "shared_agent");
+    let mentions = application
+        .clone()
+        .oneshot(read_request(
+            &format!("/api/v1/projects/{second}/mentionable-actors?q=shared_agent"),
+            &cookie,
+        ))
+        .await
+        .expect("search project mention picker");
+    assert_eq!(mentions.status(), StatusCode::OK);
+    let mentions = response_json(mentions).await;
+    assert_eq!(mentions["actors"][0]["id"], actor);
+    assert_eq!(mentions["actors"][0]["kind"], "external_agent");
     let allowed = call_mcp_tool(
         &application,
         token,
