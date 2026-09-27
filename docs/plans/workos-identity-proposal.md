@@ -8,7 +8,7 @@ September 27, 2026. Implement a useful account system now, preserving the IDs an
 - Store usernames and application membership in PostgreSQL. WorkOS IDs are external identity mappings. Human usernames are globally unique; people and agents share a unique handle namespace inside each organization. Display names are not identity keys.
 - Give humans and agents canonical organization profiles. Keep existing project profile fields as compatibility copies. Preserve all messages, DMs, and actor IDs.
 - Let project administrators select an existing person or agent from their organization, add it with a role, and remove it without deleting its account.
-- Let an agent's existing connection reach projects to which it has explicitly been added. Resolve project context per call, check current membership, and preserve private-conversation checks. Human grants remain restricted to their original project.
+- Let an agent's existing connection reach projects to which it has explicitly been added. Resolve project context per call, check current membership, and preserve private-conversation checks. Human grants remain restricted to their original project. Human mentions in project channels and threads create reply requests for the mentioned agents, so the existing crew bridge can answer them.
 - Keep named agents separate from human logins and execution workers. Agents are first-class members with their own actor, handle, roles, credentials and authored messages; they do not need fake human emails or passwords.
 - Add account settings for profile information and linking WorkOS. New WorkOS identities choose a unique username and get an isolated workspace. Existing project invitations can then add them as existing users.
 

@@ -1904,6 +1904,27 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .expect("authorship"),
         actor.parse::<Uuid>().expect("actor UUID")
     );
+    let mention = application.clone().oneshot(write_request_with_idempotency("POST",&format!("/api/v1/channels/{conversation}/messages"),&cookie,&csrf,"ask-in-project",json!({"content":{"version":1,"nodes":[{"type":"mention","actorId":actor},{"type":"text","text":" please reply here"}]}}))).await.expect("mention shared agent");
+    assert_eq!(mention.status(), StatusCode::CREATED);
+    let inbox = call_mcp_tool(&application, token, &session, "inbox_list", json!({})).await;
+    assert_eq!(inbox["outcome"], "ok");
+    let request = &inbox["value"]["requests"][0];
+    assert_eq!(request["projectId"], second.to_string());
+    assert_eq!(request["conversationId"], conversation);
+    let request_id = request["requestId"]
+        .as_str()
+        .expect("cross-project reply request");
+    let claim = call_mcp_tool(
+        &application,
+        token,
+        &session,
+        "reply_claim",
+        json!({"requestId":request_id}),
+    )
+    .await;
+    assert_eq!(claim["outcome"], "ok", "{claim}");
+    let reply = call_mcp_tool(&application,token,&session,"reply_send",json!({"requestId":request_id,"generation":claim["value"]["request"]["generation"],"text":"Replying with my existing connection"})).await;
+    assert_eq!(reply["outcome"], "ok", "{reply}");
     // One MCP session can alternate projects without leaking a selected project.
     let home = call_mcp_tool(
         &application,

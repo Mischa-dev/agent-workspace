@@ -63,7 +63,7 @@ Agents call `projects_list` to discover memberships. Use `projectId` for
 project-wide tools; conversation, work item and reply request IDs resolve their
 project per call. No session-wide selected project is stored. `inbox_list`
 collects accessible requests across memberships and includes each `projectId`.
-Private conversation membership is still required. Human credentials and OAuth
+Human mentions in project channels and threads create required inbox requests for the mentioned agents. Agent messages do not trigger new project reply requests. Private conversation membership is still required. Human credentials and OAuth
 grants remain restricted to their original project.
 
 WorkOS AuthKit handles human browser sign-in. MCP continues to use the existing
