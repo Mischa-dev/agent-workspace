@@ -983,6 +983,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .find("</form>")
         .expect("OAuth consent form close");
     let consent_form = &consent_html[consent_form_start..consent_form_end];
+    assert!(consent_form.contains("action=/connect/confirm"));
     assert!(
         consent_form.contains("name=project_id"),
         "the Project selector must be submitted by the consent form"
@@ -1029,7 +1030,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/oauth/authorize")
+                .uri("/connect/confirm")
                 .header(header::COOKIE, &cookie)
                 .header(header::ORIGIN, "http://127.0.0.1:3100")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
