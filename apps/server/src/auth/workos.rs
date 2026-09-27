@@ -1,5 +1,7 @@
 //! WorkOS owns authentication; local actors and memberships remain authoritative.
 //! Provider credentials never leave this module or enter persisted application data.
+pub mod agents;
+
 use super::{
     AuthenticatedActor, SessionIdentity, append_cookie, cookie_value,
     establish_session_in_transaction, hash_secret, load_authenticated_actor, normalize_login_name,
@@ -28,6 +30,7 @@ use zeroize::Zeroizing;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(agents::router())
         .route("/api/v1/auth/workos", get(status))
         .route("/api/v1/auth/workos/start", post(start))
         .route("/auth/workos/callback", get(callback))
@@ -42,6 +45,7 @@ pub fn router() -> Router<AppState> {
 struct WorkOsStatus {
     enabled: bool,
     signup_enabled: bool,
+    google_enabled: bool,
     linked: bool,
     email: Option<String>,
 }
@@ -63,6 +67,11 @@ async fn status(
     };
     Ok(Json(WorkOsStatus {
         enabled: state.config.workos.is_some(),
+        google_enabled: state
+            .config
+            .workos
+            .as_ref()
+            .is_some_and(|c| c.google_enabled),
         signup_enabled: state.config.workos.as_ref().is_some_and(|c| c.allow_signup),
         linked: email.is_some(),
         email,
@@ -72,6 +81,7 @@ async fn status(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StartRequest {
+    provider: Option<String>,
     link: Option<bool>,
     username: Option<String>,
 }
@@ -145,6 +155,11 @@ async fn start(
     if username.is_some() && (!config.allow_signup || link_session_id.is_some()) {
         return Err(AppError::Forbidden);
     }
+    let provider = match request.provider.as_deref() {
+        None | Some("authkit") => "authkit",
+        Some("GoogleOAuth") if config.google_enabled => "GoogleOAuth",
+        _ => return Err(AppError::Validation("sign-in provider")),
+    };
     let nonce = random_token();
     let browser = random_token();
     let pkce = Zeroizing::new(verifier(config, &nonce)?);
@@ -152,7 +167,7 @@ async fn start(
         .map_err(|_| AppError::Internal("WorkOS URL"))?;
     url.query_pairs_mut().extend_pairs([
         ("client_id", config.client_id.as_str()),
-        ("provider", "authkit"),
+        ("provider", provider),
         ("response_type", "code"),
         (
             "redirect_uri",
@@ -599,6 +614,9 @@ mod tests {
             client_id: "client_test".into(),
             api_key: SecretString::new("sk_test"),
             allow_signup: true,
+            authkit_domain: None,
+            google_enabled: false,
+            agent_registration_enabled: false,
         };
         let provider = ProviderUser {
             id: "user_test_one".into(),

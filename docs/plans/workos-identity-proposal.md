@@ -24,11 +24,17 @@ Adding an agent grants access through its existing organization connections only
 
 ## WorkOS boundary
 
-AuthKit owns human authentication. Workspace owns accounts, handles, project permissions and agent identity. This release uses the existing MCP OAuth and bearer credentials for named agents.
+AuthKit owns human authentication. Workspace owns accounts, handles, project permissions and agent identity. Named agents can use WorkOS access tokens, existing MCP OAuth, or their bootstrap bearer credential. All three resolve to the same local account.
 
 WorkOS has two separate agent features. Agent Auth blueprints mint short-lived tokens for agents operated by the application. Agent Registration and `auth.md` let external agents register and complete a user claim. The production dashboard exposes blueprint configuration, but that alone does not confirm the free production allowance or validate an integration.
 
-Keep both as optional issuer adapters for this foundation. A later adapter must verify issuer, audience, expiry and revocation; map the provider subject to an existing actor; and map its organization explicitly before project permissions apply. Neither a new token nor an email match creates project membership. Publish WorkOS `auth.md` discovery only when its issued tokens actually work against Workspace. These additions can preserve the actor IDs, profiles and memberships implemented here.
+Implement both issuer adapters. Verify the WorkOS signature, issuer, audience, expiry, agent claims and live revocation before resolving a local grant. Store WorkOS organization mappings and blueprint/registration bindings in PostgreSQL, referencing the existing agent connection and revocable credential. Intersect token permissions with the connection scopes. A token never creates project membership or borrows human authorship.
+
+Agents settings enables an autonomous blueprint for an existing named agent. The runtime exchanges its bootstrap credential at `/api/v1/agents/token` for a five-minute access token and rotating refresh token. Sessions last at most 24 hours. Revoking the binding, disabling the connection, removing membership, or rotating the backing credential stops access. Reconnect the binding after credential rotation. Provider access and refresh tokens stay in the agent runtime, never application records.
+
+External agents discover `/auth.md`, follow the WorkOS `service_auth` claim, and give the administrator their registration ID. Only the human who claimed that registration can attach it to a named Workspace agent. Unverified registrations have no access. Organization mappings are explicit and unique; no email or name auto-linking.
+
+Enable Google OAuth in the production WorkOS environment with the application’s Google Cloud client, using only basic identity scopes. Add Google sign-in and Google account-link buttons while preserving the explicit account-link flow.
 
 Production AuthKit requires billing information in the WorkOS dashboard, even under its free allowance. Use the included WorkOS hosted domain and email sender. Public signup is off by default through `AGENT_WORKSPACE_WORKOS_ALLOW_SIGNUP=false`. Do not silently use a staging environment as production identity infrastructure. Enable the production integration once configuration and a real account-link/sign-in check succeed.
 

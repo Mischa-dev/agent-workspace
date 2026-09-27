@@ -45,10 +45,10 @@ export function SignInPage() {
     if (error) errorRef.current?.focus()
   }, [error])
 
-  const workOsSignIn = async (signup = false) => {
+  const workOsSignIn = async (signup = false, provider?: 'GoogleOAuth') => {
     setSubmitting(true)
     setError(null)
-    try { await startWorkOs(signup ? { username: loginName.trim() } : {}) }
+    try { await startWorkOs(signup ? { username: loginName.trim(), provider } : { provider }) }
     catch { setError('Could not open secure sign-in. Try again.'); setSubmitting(false) }
   }
 
@@ -89,6 +89,7 @@ export function SignInPage() {
       titleId="sign-in-heading"
     >
       {new URLSearchParams(location.search).has('workosError') && <Banner tone="danger">WorkOS sign-in could not be completed. If you have an existing account, sign in below and link it in Account settings.</Banner>}
+      {workos.data?.googleEnabled && <Button busy={submitting} onClick={() => void workOsSignIn(false, 'GoogleOAuth')} variant="primary">Continue with Google</Button>}
       {workos.data?.enabled && <Button busy={submitting} onClick={() => void workOsSignIn()} variant="primary">Continue with WorkOS</Button>}
       {error && (
         <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
