@@ -7,7 +7,9 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // Account settings and the shared member picker bring the measured bundle to
   // 571,778 raw bytes and 180,817 gzip bytes. Keep the raw ceiling and allow
   // 2 KiB more gzip for these added routes and controls.
-  javascriptRawBytes: 560 * 1024,
+  // Google and WorkOS agent controls measure 574,498 raw / 181,586 gzip bytes.
+  // Allow 2 KiB raw for these controls; retain the compressed transfer limit.
+  javascriptRawBytes: 562 * 1024,
   javascriptGzipBytes: 178 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
