@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { WorkOsAgentSettings } from './WorkOsAgentSettings'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import {
@@ -327,6 +328,7 @@ function AgentCard({
             scopes={connection.scopes}
           />
           <WebhookField connection={connection} disabled={disabled} />
+          <WorkOsAgentSettings connection={connection} />
         </div>
       ) : null}
       {connection.status !== 'removed' && (

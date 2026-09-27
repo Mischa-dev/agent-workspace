@@ -67,9 +67,16 @@ async fn protected_resource_metadata(
     State(state): State<AppState>,
 ) -> Json<ProtectedResourceMetadata> {
     let origin = public_origin(&state);
+    let mut authorization_servers = vec![origin.clone()];
+    if let Some(config) = &state.config.workos
+        && config.agent_registration_enabled
+        && let Some(domain) = &config.authkit_domain
+    {
+        authorization_servers.push(domain.clone());
+    }
     Json(ProtectedResourceMetadata {
         resource: format!("{origin}{MCP_PATH}"),
-        authorization_servers: vec![origin],
+        authorization_servers,
         scopes_supported: vec!["read", "write"],
         bearer_methods_supported: vec!["header"],
     })

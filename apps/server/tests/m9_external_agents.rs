@@ -2037,6 +2037,9 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
         client_id: "client_test".into(),
         api_key: agent_workspace_server::config::SecretString::new("sk_test"),
         allow_signup: false,
+        authkit_domain: None,
+        google_enabled: true,
+        agent_registration_enabled: false,
     });
     let application = test_app(pool.clone(), config);
     let cookie = login(&application).await;
@@ -2049,7 +2052,7 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
             "/api/v1/auth/workos/start",
             &cookie,
             "wrong",
-            json!({"link":true}),
+            json!({"link":true,"provider":"GoogleOAuth"}),
         ))
         .await
         .expect("account fixture operation");
@@ -2061,7 +2064,7 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
             "/api/v1/auth/workos/start",
             &cookie,
             &csrf,
-            json!({"link":true}),
+            json!({"link":true,"provider":"GoogleOAuth"}),
         ))
         .await
         .expect("account fixture operation");
@@ -2080,6 +2083,7 @@ async fn workos_link_start_requires_csrf_and_callback_is_bound_to_the_browser() 
     assert_eq!(url.host_str(), Some("api.workos.com"));
     let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(query["code_challenge_method"], "S256");
+    assert_eq!(query["provider"], "GoogleOAuth");
     assert!(!query.contains_key("client_secret"));
     let callback = format!(
         "/auth/workos/callback?code=test-code&state={}",

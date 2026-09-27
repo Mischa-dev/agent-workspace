@@ -57,7 +57,7 @@ pub const MCP_PATH: &str = "/api/v1/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_PREFIX_LENGTH: usize = 16;
-const MAX_TOKEN_BYTES: usize = 128;
+const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
 const LAST_USED_THROTTLE_MINUTES: i32 = 5;
 #[cfg(test)]
@@ -1057,13 +1057,19 @@ fn unauthorized_response(state: &AppState) -> Response {
     response
 }
 
-async fn resolve_bearer_principal(
+pub(crate) async fn resolve_bearer_principal(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<McpPrincipal>, AppError> {
     let Some(token) = exact_bearer_token(headers) else {
         return Ok(None);
     };
+    if token.starts_with("eyJ") {
+        return crate::auth::workos::agents::resolve_token(state, token).await;
+    }
+    if token.len() > 128 {
+        return Ok(None);
+    }
     if token.starts_with("aw_oauth_") {
         return oauth::resolve_access_token(state, token).await;
     }
@@ -1168,7 +1174,7 @@ async fn resolve_bearer_principal(
     }))
 }
 
-fn exact_bearer_token(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn exact_bearer_token(headers: &HeaderMap) -> Option<&str> {
     if headers
         .get_all(axum::http::header::AUTHORIZATION)
         .iter()
@@ -1184,6 +1190,7 @@ fn exact_bearer_token(headers: &HeaderMap) -> Option<&str> {
     let token = value.strip_prefix("Bearer ")?;
     if token.is_empty()
         || token.len() > MAX_TOKEN_BYTES
+        || (!token.starts_with("eyJ") && token.len() > 128)
         || token.bytes().any(|byte| byte.is_ascii_whitespace())
     {
         return None;

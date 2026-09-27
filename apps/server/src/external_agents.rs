@@ -1267,6 +1267,29 @@ impl From<ConnectionRow> for ConnectionView {
     }
 }
 
+/// WorkOS identity attachment grants access as this named agent, so use the
+/// same management policy and transaction locks as credential rotation.
+pub(crate) async fn authorize_identity_binding(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    connection_id: Uuid,
+) -> Result<Uuid, AppError> {
+    lock_project(transaction, project_id).await?;
+    let access = load_access_tx(transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_management(principal, &access, project_id)?;
+    if access.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+    let connection = load_connection_tx(transaction, project_id, connection_id).await?;
+    if connection.status != "active" {
+        return Err(AppError::Forbidden);
+    }
+    Ok(access.organization_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CreateConnectionRequest, generate_token, validate_create};

@@ -19,7 +19,7 @@ export function AccountSettingsPage() {
     onError: (reason) => setError(isApiError(reason) ? reason.message : 'Could not save your profile.'),
   })
   const link = useMutation({
-    mutationFn: () => startWorkOs({ link: true }),
+    mutationFn: (provider?: 'GoogleOAuth') => startWorkOs({ link: true, provider }),
     onError: () => setError('Could not open secure sign-in. Try again.'),
   })
   const submit = (event: FormEvent) => { event.preventDefault(); save.mutate() }
@@ -39,9 +39,10 @@ export function AccountSettingsPage() {
         <Section title="Sign-in" description="Link WorkOS to keep your existing projects, conversations, and username.">
           {status.isPending && <p>Loading sign-in settings…</p>}
           {status.isError && <Banner tone="danger">Could not load sign-in settings.</Banner>}
+          {status.data?.googleEnabled && !status.data.linked && <Button busy={link.isPending} onClick={() => link.mutate('GoogleOAuth')} variant="primary">Link Google account</Button>}
           {status.data?.enabled && (status.data.linked
             ? <p>WorkOS connected as {status.data.email}.</p>
-            : <Button busy={link.isPending} onClick={() => link.mutate()} variant="primary">Link WorkOS account</Button>)}
+            : <Button busy={link.isPending} onClick={() => link.mutate(undefined)} variant="primary">Link WorkOS account</Button>)}
           {status.data && !status.data.enabled && <p>WorkOS sign-in has not been configured on this host.</p>}
         </Section>
       </div>

@@ -106,6 +106,9 @@ pub struct WorkOsConfig {
     pub client_id: String,
     pub api_key: SecretString,
     pub allow_signup: bool,
+    pub authkit_domain: Option<String>,
+    pub google_enabled: bool,
+    pub agent_registration_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -586,7 +589,40 @@ fn workos_config(
         Some("true") => true,
         _ => return Err(error()),
     };
+    let authkit_domain = values
+        .get("AGENT_WORKSPACE_WORKOS_AUTHKIT_DOMAIN")
+        .map(|value| {
+            let url = url::Url::parse(value).map_err(|_| error())?;
+            if url.scheme() != "https"
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.port().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || url.path() != "/"
+            {
+                return Err(error());
+            }
+            Ok(url.as_str().trim_end_matches('/').to_owned())
+        })
+        .transpose()?;
+    let flag = |key: &str| -> Result<bool, ConfigError> {
+        match values.get(key).map(String::as_str) {
+            None | Some("false") => Ok(false),
+            Some("true") => Ok(true),
+            _ => Err(error()),
+        }
+    };
+    let google_enabled = flag("AGENT_WORKSPACE_WORKOS_GOOGLE_ENABLED")?;
+    let agent_registration_enabled = flag("AGENT_WORKSPACE_WORKOS_AGENT_REGISTRATION_ENABLED")?;
+    if agent_registration_enabled && authkit_domain.is_none() {
+        return Err(error());
+    }
     Ok(Some(WorkOsConfig {
+        authkit_domain,
+        google_enabled,
+        agent_registration_enabled,
         client_id,
         api_key: SecretString::new(key.trim()),
         allow_signup,
