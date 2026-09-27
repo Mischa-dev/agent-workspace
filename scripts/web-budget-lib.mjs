@@ -4,9 +4,11 @@ import { join, relative } from 'node:path'
 
 export const WEB_ASSET_LIMITS = Object.freeze({
   // Raised from 500/160 KiB for the redesign's shell, components and icons (+62 KiB raw, +22 KiB gzip).
-  // Pass two (work items, settings, Home) used most of the rest: about 6 KiB raw and 1.5 KiB gzip remain.
+  // Account settings and the shared member picker bring the measured bundle to
+  // 571,778 raw bytes and 180,817 gzip bytes. Keep the raw ceiling and allow
+  // 2 KiB more gzip for these added routes and controls.
   javascriptRawBytes: 560 * 1024,
-  javascriptGzipBytes: 176 * 1024,
+  javascriptGzipBytes: 178 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
   cssRawBytes: 100 * 1024,
