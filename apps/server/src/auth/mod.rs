@@ -1,4 +1,5 @@
 pub mod password;
+pub mod workos;
 
 use std::future::Future;
 
@@ -38,6 +39,7 @@ const MAX_COOKIE_VALUE_BYTES: usize = 256;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(workos::router())
         .route("/api/v1/auth/session", get(read_session))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/logout", post(logout))
@@ -381,6 +383,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         .await?;
         transaction.commit().await?;
         state.realtime.revoke_session(principal.session_id);
+        workos::revoke_provider_session(&state, principal.session_id).await;
     }
 
     let mut response_headers = HeaderMap::new();
@@ -494,6 +497,9 @@ pub async fn load_authenticated_actor(
     let Some(row) = row else {
         return Ok(None);
     };
+    if !workos::session_valid(state, row.session_id).await? {
+        return Ok(None);
+    }
     sqlx::query(
         r#"
         UPDATE sessions

@@ -58,6 +58,24 @@ macro_rules! boundary_route {
 }
 
 pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
+    boundary_route!(
+        "auth/workos",
+        Post,
+        "/api/v1/auth/workos/start",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "auth/workos",
+        Patch,
+        "/api/v1/account/profile",
+        SessionAuthentication
+    ),
+    policy_route!(
+        "memberships",
+        Post,
+        "/api/v1/projects/{project_id}/members",
+        MembershipManage
+    ),
     boundary_route!("auth", Post, "/api/v1/auth/login", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/logout", SessionAuthentication),
     policy_route!("api", Post, "/api/v1/threads/{id}/agent-runs", WorkerInvoke),
@@ -448,6 +466,7 @@ mod tests {
         ("account", include_str!("account.rs")),
         ("api", include_str!("api.rs")),
         ("auth", include_str!("auth/mod.rs")),
+        ("auth/workos", include_str!("auth/workos.rs")),
         ("conversations", include_str!("conversations.rs")),
         ("direct", include_str!("direct.rs")),
         ("replies", include_str!("replies.rs")),

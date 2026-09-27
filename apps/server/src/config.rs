@@ -97,7 +97,15 @@ pub struct AppConfig {
     pub codex_shutdown_timeout: Duration,
     pub demo_executor: bool,
     pub github: Option<GitHubConfig>,
+    pub workos: Option<WorkOsConfig>,
     pub log_filter: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkOsConfig {
+    pub client_id: String,
+    pub api_key: SecretString,
+    pub allow_signup: bool,
 }
 
 #[derive(Clone)]
@@ -250,6 +258,7 @@ impl AppConfig {
             });
         }
 
+        let workos = workos_config(values, &data_root, &web_root)?;
         Ok(Self {
             environment,
             server_addr,
@@ -272,6 +281,7 @@ impl AppConfig {
             codex_shutdown_timeout,
             demo_executor,
             github,
+            workos,
             log_filter,
         })
     }
@@ -542,6 +552,45 @@ pub enum ConfigError {
     Missing(String),
     #[error("invalid configuration for {key}: {reason}")]
     Invalid { key: String, reason: String },
+}
+
+fn workos_config(
+    values: &BTreeMap<String, String>,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<WorkOsConfig>, ConfigError> {
+    let client_id = values.get("AGENT_WORKSPACE_WORKOS_CLIENT_ID");
+    let key_path = values.get("AGENT_WORKSPACE_WORKOS_API_KEY_PATH");
+    if client_id.is_none() && key_path.is_none() {
+        return Ok(None);
+    }
+    let error = || ConfigError::Invalid {
+        key: "AGENT_WORKSPACE_WORKOS_CLIENT_ID".into(),
+        reason: "set a client ID and protected API key file together".into(),
+    };
+    let client_id = client_id
+        .filter(|id| id.starts_with("client_") && id.len() < 100)
+        .ok_or_else(error)?
+        .clone();
+    let path = PathBuf::from(key_path.ok_or_else(error)?);
+    validate_secret_file("WORKOS_API_KEY_PATH", &path, data_root, web_root, 4096)?;
+    let key = std::fs::read_to_string(path).map_err(|_| error())?;
+    if !key.trim().starts_with("sk_") {
+        return Err(error());
+    }
+    let allow_signup = match values
+        .get("AGENT_WORKSPACE_WORKOS_ALLOW_SIGNUP")
+        .map(String::as_str)
+    {
+        None | Some("false") => false,
+        Some("true") => true,
+        _ => return Err(error()),
+    };
+    Ok(Some(WorkOsConfig {
+        client_id,
+        api_key: SecretString::new(key.trim()),
+        allow_signup,
+    }))
 }
 
 #[cfg(test)]

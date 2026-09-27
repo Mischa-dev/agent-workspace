@@ -65,6 +65,15 @@ pub(crate) async fn ask_for_replies(
     transaction: &mut Transaction<'_, Postgres>,
     message: NewMessage<'_>,
 ) -> Result<(), AppError> {
+    if matches!(message.conversation_kind, "channel" | "thread") {
+        // Project discussions ask only agents explicitly mentioned by a human.
+        // DMs and groups retain their existing delivery and turn rules below.
+        return if message.author_kind == "human" && !message.mentioned_actor_ids.is_empty() {
+            ask(transaction, &message, true).await
+        } else {
+            Ok(())
+        };
+    }
     if !matches!(message.conversation_kind, "dm" | "group") {
         return Ok(());
     }
@@ -104,8 +113,13 @@ async fn ask(
     message: &NewMessage<'_>,
     required: bool,
 ) -> Result<(), AppError> {
-    let agents = sqlx::query_scalar::<_, Uuid>(
-        r#"
+    let agents = if matches!(message.conversation_kind, "channel" | "thread") {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT membership.actor_id FROM project_memberships membership JOIN actors actor ON actor.id=membership.actor_id WHERE membership.project_id=$1 AND membership.enabled AND actor.kind='external_agent' AND actor.status='active' AND actor.id=ANY($2) AND conversation_visible_to($3,actor.id) ORDER BY actor.id"
+        ).bind(message.project_id).bind(message.mentioned_actor_ids).bind(message.conversation_id).fetch_all(&mut **transaction).await?
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
         SELECT member.actor_id
         FROM conversation_members member
         JOIN actors actor ON actor.id = member.actor_id
@@ -119,11 +133,12 @@ async fn ask(
           AND membership.enabled
         ORDER BY member.actor_id
         "#,
-    )
-    .bind(message.conversation_id)
-    .bind(message.author_actor_id)
-    .fetch_all(&mut **transaction)
-    .await?;
+        )
+        .bind(message.conversation_id)
+        .bind(message.author_actor_id)
+        .fetch_all(&mut **transaction)
+        .await?
+    };
     if agents.is_empty() {
         return Ok(());
     }
@@ -190,7 +205,7 @@ async fn wake(
         r#"
         SELECT id, webhook_url IS NOT NULL
         FROM external_agent_connections
-        WHERE project_id = $1 AND actor_id = $2 AND status = 'active'
+        WHERE agent_connection_can_access(id, $1) AND actor_id = $2 AND status = 'active'
         "#,
     )
     .bind(project_id)
@@ -325,7 +340,7 @@ pub(crate) async fn timeline_requests(
                (
                    SELECT max(connection.last_used_at)::text
                    FROM external_agent_connections connection
-                   WHERE connection.project_id = request.project_id
+                   WHERE agent_connection_can_access(connection.id, request.project_id)
                      AND connection.actor_id = request.agent_actor_id
                ) AS agent_last_seen_at
         FROM reply_requests request
@@ -575,7 +590,7 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
                delivery.attempts, request.agent_actor_id,
-               request.status = 'pending' AS request_pending,
+               (request.status = 'pending' AND agent_connection_can_access(connection.id, request.project_id) AND conversation_visible_to(request.conversation_id, request.agent_actor_id)) AS request_pending,
                connection.webhook_url, connection.webhook_secret
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id

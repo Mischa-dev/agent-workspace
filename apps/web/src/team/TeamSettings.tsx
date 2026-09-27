@@ -20,6 +20,8 @@ import {
 } from '../ui'
 import {
   issueInvitation,
+  listMemberCandidates,
+  addExistingMember,
   listInvitations,
   listMembers,
   replaceInvitation,
@@ -136,6 +138,7 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
           {error}
         </Banner>
       )}
+      <ExistingMemberForm projectId={projectId} onAdded={refresh} />
       <Section description="Anyone with the link can join as the role you pick, until it expires or is used." title="Invite people">
         {oneShot && <OneShotInvitation invitation={oneShot} onDismiss={() => setOneShot(null)} />}
         <InviteForm
@@ -300,7 +303,7 @@ function MemberRow({
             value={member.role}
           >
             {member.role === 'owner' && <option value="owner">Owner</option>}
-            <option value="admin">Admin</option>
+            {member.actorKind !== 'external_agent' && <option value="admin">Admin</option>}
             <option value="member">Member</option>
             <option value="viewer">Viewer</option>
           </SelectField>
@@ -330,8 +333,32 @@ function MemberRow({
       }
       className={member.enabled ? undefined : 'is-disabled'}
       leading={<Avatar name={member.displayName} seed={member.actorId} size={32} />}
-      meta={`@${member.handle} · ${member.enabled ? codexReadiness(member.executionProfileReadiness) : 'Disabled'}`}
+      meta={`@${member.handle} · ${member.enabled ? (member.actorKind === 'external_agent' ? 'Agent' : codexReadiness(member.executionProfileReadiness)) : 'Disabled'}`}
       title={member.displayName}
     />
   )
+}
+
+function ExistingMemberForm({ projectId, onAdded }: { projectId: string; onAdded: () => Promise<void> }) {
+  const candidates = useQuery({ queryKey: ['member-candidates', projectId], queryFn: () => listMemberCandidates(projectId) })
+  const [actorId, setActorId] = useState('')
+  const [role, setRole] = useState<'member' | 'viewer'>('member')
+  const mutation = useMutation({
+    mutationFn: () => addExistingMember(projectId, actorId, role),
+    onSuccess: async () => { setActorId(''); await onAdded(); await candidates.refetch() },
+  })
+  return <Section title="Add a workspace member" description="Add an existing person or agent. Agents keep their identity, connection and conversations.">
+    <form className="aw-form-stack" onSubmit={(event) => { event.preventDefault(); if (actorId) mutation.mutate() }}>
+      {candidates.isError && <Banner tone="danger">Members could not be loaded. <Button onClick={() => void candidates.refetch()}>Retry</Button></Banner>}
+      {mutation.isError && <Banner tone="danger">{isApiError(mutation.error) ? mutation.error.message : 'Could not add this member.'}</Banner>}
+      <SelectField id="existing-member" label="Person or agent" value={actorId} onChange={(event) => setActorId(event.target.value)} disabled={candidates.isPending || mutation.isPending}>
+        <option value="">Choose a member</option>
+        {(candidates.data ?? []).map((member) => <option key={member.actorId} value={member.actorId}>{member.displayName} (@{member.handle}) · {member.actorKind === 'external_agent' ? 'Agent' : 'Person'}</option>)}
+      </SelectField>
+      <SelectField id="existing-member-role" label="Project role" value={role} onChange={(event) => setRole(event.target.value as 'member' | 'viewer')}>
+        <option value="member">Member</option><option value="viewer">Viewer</option>
+      </SelectField>
+      <Button type="submit" disabled={!actorId || mutation.isPending} busy={mutation.isPending}>Add member</Button>
+    </form>
+  </Section>
 }

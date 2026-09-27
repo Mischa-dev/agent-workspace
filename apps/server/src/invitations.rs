@@ -966,7 +966,8 @@ fn map_join_database_error(error: sqlx::Error) -> AppError {
     };
     match constraint {
         Some("users_login_name_unique") => AppError::Conflict("user", "login name already exists"),
-        Some("project_memberships_active_handle_unique") => {
+        Some("project_memberships_active_handle_unique")
+        | Some("organization_actor_profiles_organization_id_handle_key") => {
             AppError::Conflict("project_membership", "handle already exists")
         }
         _ => AppError::Database(error),

@@ -280,7 +280,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .and_then(Value::as_array)
             .map(Vec::len),
         // 23 original tools plus the five reply-request tools.
-        Some(28)
+        Some(29)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),

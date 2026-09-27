@@ -112,7 +112,7 @@ pub fn router(state: AppState) -> Router {
                 tracing::info_span!(
                     "http.request",
                     method = %request.method(),
-                    uri = %request.uri(),
+                    path = %request.uri().path(),
                     request_id = request_id,
                 )
             }),

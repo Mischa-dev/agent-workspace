@@ -6,6 +6,7 @@ export type Member = {
   id: string
   projectId: string
   actorId: string
+  actorKind?: string
   role: TeamRole
   displayName: string
   handle: string
@@ -93,4 +94,12 @@ export function replaceInvitation(
     `/api/v1/project-invitations/${invitationId}/replace`,
     { method: 'POST', json: { expectedVersion, expiresInHours } },
   )
+}
+
+export type MemberCandidate = { actorId: string; actorKind: string; displayName: string; handle: string }
+export function listMemberCandidates(projectId: string) {
+  return requestJson<MemberCandidate[]>(`/api/v1/projects/${projectId}/member-candidates`)
+}
+export function addExistingMember(projectId: string, actorId: string, role: 'member' | 'viewer') {
+  return requestJson<Member>(`/api/v1/projects/${projectId}/members`, { method: 'POST', json: { actorId, role } })
 }

@@ -1335,12 +1335,14 @@ async fn lock_message_conversation(
         Some(
             sqlx::query_scalar::<_, Uuid>(
                 r#"
-                SELECT credential.project_id
-                FROM mcp_client_credentials credential
+                SELECT target.project_id
+                FROM conversations target, mcp_client_credentials credential
                 JOIN external_agent_connections connection
                   ON connection.id = credential.external_agent_connection_id
                 JOIN actors actor ON actor.id = credential.actor_id
-                WHERE credential.id = $1
+                WHERE target.id = $4 AND conversation_visible_to(target.id, $3)
+                  AND agent_connection_can_access(connection.id, target.project_id)
+                  AND credential.id = $1
                   AND connection.id = $2
                   AND credential.actor_id = $3
                   AND actor.kind = 'external_agent'
@@ -1359,6 +1361,7 @@ async fn lock_message_conversation(
             .bind(proof.credential_id)
             .bind(proof.connection_id)
             .bind(actor.actor_id)
+            .bind(conversation_id)
             .fetch_optional(&mut **transaction)
             .await?
             .ok_or(AppError::NotFound("conversation"))?,
@@ -1461,9 +1464,9 @@ async fn enqueue_external_message_events(
         FROM external_agent_connections connection
         JOIN actors actor ON actor.id = connection.actor_id
         JOIN project_memberships membership
-          ON membership.project_id = connection.project_id
+          ON membership.project_id = $1
          AND membership.actor_id = connection.actor_id
-        WHERE connection.project_id = $1
+        WHERE agent_connection_can_access(connection.id, $1)
           AND connection.actor_id = ANY($2)
           AND connection.actor_id <> $3
           AND connection.status = 'active'
