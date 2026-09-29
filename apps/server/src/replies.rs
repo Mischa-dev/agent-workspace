@@ -53,6 +53,11 @@ pub fn router() -> Router<AppState> {
 pub(crate) struct NewMessage<'a> {
     pub project_id: Uuid,
     pub conversation_id: Uuid,
+    /// Where the member list lives: the conversation itself, or the DM or
+    /// group a thread belongs to.
+    pub members_conversation_id: Uuid,
+    /// The kind whose rules apply. A thread under a DM or group follows the
+    /// DM or group rules.
     pub conversation_kind: &'a str,
     pub message_id: Uuid,
     pub author_actor_id: Uuid,
@@ -134,7 +139,7 @@ async fn ask(
         ORDER BY member.actor_id
         "#,
         )
-        .bind(message.conversation_id)
+        .bind(message.members_conversation_id)
         .bind(message.author_actor_id)
         .fetch_all(&mut **transaction)
         .await?
@@ -409,7 +414,7 @@ async fn continue_conversation(
         false,
     )
     .await?;
-    if conversation.kind != "group" {
+    if conversation.effective_kind() != "group" {
         return Err(AppError::Conflict("conversation", "only groups have turns"));
     }
     sqlx::query("UPDATE conversations SET agent_turns_remaining = $2 WHERE id = $1")
@@ -439,6 +444,7 @@ async fn continue_conversation(
             &NewMessage {
                 project_id: conversation.project_id,
                 conversation_id,
+                members_conversation_id: conversation.membership_conversation_id(),
                 conversation_kind: "group",
                 message_id,
                 author_actor_id,

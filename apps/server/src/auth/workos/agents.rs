@@ -293,6 +293,8 @@ async fn grant(
                     .filter(|scope| granted.contains(&format!("workspace:{scope}").as_str()))
                     .collect(),
                 authentication_class: "workos_agent",
+                account_wide: false,
+                project_explicit: false,
             }
         })
         .filter(|principal| principal.can_read()))

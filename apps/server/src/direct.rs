@@ -233,6 +233,9 @@ async fn direct_overview(
                     name: row.name,
                     archived_at: None,
                     version: row.version,
+                    thread_status: None,
+                    thread_outcome: None,
+                    parent_kind: None,
                 },
                 members: serde_json::from_value(row.members)
                     .map_err(|_| AppError::Internal("direct conversation members"))?,
@@ -289,50 +292,14 @@ async fn open_dm(
     let mut transaction = state.pool.begin().await?;
     let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
     require(&principal, &space, Action::ChannelCreate)?;
-    lock_people(&mut transaction, space.project_id, &[request.actor_id]).await?;
-
-    // One DM per pair: the sorted pair is unique within the space, so a
-    // second request (or a race) finds the existing conversation.
-    let (first, second) = if principal.actor_id < request.actor_id {
-        (principal.actor_id, request.actor_id)
-    } else {
-        (request.actor_id, principal.actor_id)
-    };
-    let dm_key = format!("{first}:{second}");
-    let inserted = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO conversations (id, project_id, kind, name, visibility, dm_key)
-        VALUES ($1, $2, 'dm', $3, 'members', $4)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-        "#,
+    let (conversation_id, created) = open_dm_in(
+        &mut transaction,
+        space.project_id,
+        principal.actor_id,
+        request.actor_id,
     )
-    .bind(Uuid::now_v7())
-    .bind(space.project_id)
-    .bind(DM_NAME)
-    .bind(&dm_key)
-    .fetch_optional(&mut *transaction)
     .await?;
-    let created = inserted.is_some();
-    let conversation_id = match inserted {
-        Some(id) => id,
-        None => sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM conversations WHERE project_id = $1 AND kind = 'dm' AND dm_key = $2",
-        )
-        .bind(space.project_id)
-        .bind(&dm_key)
-        .fetch_one(&mut *transaction)
-        .await?,
-    };
     if created {
-        insert_members(
-            &mut transaction,
-            space.project_id,
-            conversation_id,
-            principal.actor_id,
-            &[principal.actor_id, request.actor_id],
-        )
-        .await?;
         announce_created(
             &mut transaction,
             &headers,
@@ -405,31 +372,12 @@ async fn create_group(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let people = lock_people(&mut transaction, space.project_id, &others).await?;
-    let name = match name {
-        Some(name) => name,
-        None => default_group_name(&people),
-    };
-    let conversation_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO conversations (id, project_id, kind, name, visibility)
-        VALUES ($1, $2, 'group', $3, 'members')
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(space.project_id)
-    .bind(&name)
-    .execute(&mut *transaction)
-    .await?;
-    let mut members = others.clone();
-    members.push(principal.actor_id);
-    insert_members(
+    let conversation_id = create_group_in(
         &mut transaction,
         space.project_id,
-        conversation_id,
         principal.actor_id,
-        &members,
+        &others,
+        name,
     )
     .await?;
     announce_created(
@@ -526,6 +474,151 @@ async fn remove_member(
     .await?;
     transaction.commit().await?;
     Ok(Json(response))
+}
+
+/// Find or create the DM between two members of a direct space. Returns the
+/// conversation and whether it was just created. The other person must be a
+/// member of the space; `lock_people` checks that.
+pub(crate) async fn open_dm_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+    other_actor_id: Uuid,
+) -> Result<(Uuid, bool), AppError> {
+    if other_actor_id == actor_id {
+        return Err(AppError::Validation("DM recipient"));
+    }
+    lock_people(transaction, project_id, &[other_actor_id]).await?;
+    // One DM per pair: the sorted pair is unique within the space, so a
+    // second request (or a race) finds the existing conversation.
+    let (first, second) = if actor_id < other_actor_id {
+        (actor_id, other_actor_id)
+    } else {
+        (other_actor_id, actor_id)
+    };
+    let dm_key = format!("{first}:{second}");
+    let inserted = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, name, visibility, dm_key)
+        VALUES ($1, $2, 'dm', $3, 'members', $4)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(project_id)
+    .bind(DM_NAME)
+    .bind(&dm_key)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let created = inserted.is_some();
+    let conversation_id = match inserted {
+        Some(id) => id,
+        None => sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM conversations WHERE project_id = $1 AND kind = 'dm' AND dm_key = $2",
+        )
+        .bind(project_id)
+        .bind(&dm_key)
+        .fetch_one(&mut **transaction)
+        .await?,
+    };
+    if created {
+        insert_members(
+            transaction,
+            project_id,
+            conversation_id,
+            actor_id,
+            &[actor_id, other_actor_id],
+        )
+        .await?;
+    }
+    Ok((conversation_id, created))
+}
+
+/// Create a group with the caller and the given members of a direct space.
+pub(crate) async fn create_group_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+    others: &[Uuid],
+    name: Option<String>,
+) -> Result<Uuid, AppError> {
+    if others.is_empty() || others.len() >= MAX_GROUP_MEMBERS || others.contains(&actor_id) {
+        return Err(AppError::Validation("group members"));
+    }
+    let people = lock_people(transaction, project_id, others).await?;
+    let name = match name {
+        Some(name) => name,
+        None => default_group_name(&people),
+    };
+    let conversation_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, name, visibility)
+        VALUES ($1, $2, 'group', $3, 'members')
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(project_id)
+    .bind(&name)
+    .execute(&mut **transaction)
+    .await?;
+    let mut members = others.to_vec();
+    members.push(actor_id);
+    insert_members(transaction, project_id, conversation_id, actor_id, &members).await?;
+    Ok(conversation_id)
+}
+
+/// The direct space a person or agent can start DMs and groups in, with
+/// their role there. People get their space created on first use.
+pub(crate) async fn space_for_actor(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    agent_connection_id: Option<Uuid>,
+) -> Result<(Uuid, MembershipRole), AppError> {
+    if let Some(connection_id) = agent_connection_id {
+        let (project_id, role) = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT project.id, membership.role
+            FROM projects project
+            JOIN project_memberships membership
+              ON membership.project_id = project.id
+             AND membership.actor_id = $1
+             AND membership.enabled
+            WHERE project.kind = 'direct' AND project.archived_at IS NULL
+              AND agent_connection_can_access($2, project.id)
+            ORDER BY project.created_at, project.id
+            LIMIT 1
+            "#,
+        )
+        .bind(actor_id)
+        .bind(connection_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("direct messages"))?;
+        return Ok((project_id, parse_role(&role)?));
+    }
+    let (login_name, display_name) = sqlx::query_as::<_, (String, String)>(
+        "SELECT login_name, display_name FROM users WHERE actor_id = $1 AND status = 'active'",
+    )
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("user"))?;
+    let space = ensure_direct_space(
+        transaction,
+        &Person {
+            actor_id,
+            actor_kind: "human",
+            login_name: &login_name,
+            display_name: &display_name,
+        },
+    )
+    .await?;
+    if !space.enabled {
+        return Err(AppError::NotFound("direct messages"));
+    }
+    Ok((space.project_id, space.role))
 }
 
 /// The fields of a signed-in person the direct space needs.
@@ -898,6 +991,9 @@ async fn conversation_response(
             name,
             archived_at: None,
             version,
+            thread_status: None,
+            thread_outcome: None,
+            parent_kind: None,
         },
         read_state: ReadStateView {
             highest_seen_sequence: seen,

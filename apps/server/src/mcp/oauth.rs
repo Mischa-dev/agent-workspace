@@ -2,7 +2,7 @@ use axum::{
     Form, Json, Router,
     extract::{DefaultBodyLimit, RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/oauth/register", post(register_client))
         .route("/oauth/authorize", get(authorize).post(consent))
+        .route("/oauth/consent.css", get(consent_stylesheet))
         .route("/connect/confirm", post(consent))
         .route("/oauth/token", post(token))
         .route("/oauth/revoke", post(revoke))
@@ -285,13 +286,6 @@ struct ClientRow {
     redirect_uris: Vec<String>,
 }
 
-#[derive(FromRow)]
-struct ProjectChoice {
-    id: Uuid,
-    name: String,
-    project_key: String,
-}
-
 async fn authorize(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -304,61 +298,71 @@ async fn authorize(
         .check_oauth_ceremony(&request.client_id)
         .map_err(OAuthError::from)?;
     let (client, scopes) = validate_authorize_request(&state, &request).await?;
-    let projects = project_choices(&state, principal.actor_id).await?;
-    if projects.is_empty() {
-        return Err(OAuthError::access_denied(
-            "no active Project membership is available",
-        ));
-    }
     let csrf = csrf_cookie(&state.config, &headers)
         .ok_or_else(|| OAuthError::access_denied("the browser session is missing CSRF state"))?;
     let scope = scopes.join(" ");
     let agents = agent_choices(&state, principal.actor_id).await?;
-    let project_controls = if !agents.is_empty() {
-        let agent_options = agents
+    let client_name = escape_html(&client.client_name);
+    let person = escape_html(&principal.display_name);
+    let wants_write = scopes.iter().any(|scope| scope == "write");
+    let agent_section = if agents.is_empty() {
+        "<input type=hidden name=connect_as value=self>".to_owned()
+    } else {
+        let options = agents
             .iter()
             .map(|agent| {
                 format!(
-                    "<label><input required type=radio name=connect_as value=\"agent:{}\"> {} (agent) in {}</label><br>",
+                    "<label class=choice><input type=radio name=connect_as value=\"agent:{}\"><span><strong>{}</strong><small>The app signs in as this agent and uses the agent's own permissions.</small></span></label>",
                     agent.connection_id,
                     escape_html(&agent.display_name),
-                    escape_html(&agent.project_name)
                 )
             })
             .collect::<String>();
-        let self_options = projects
-            .iter()
-            .map(|project| {
-                format!(
-                    "<label><input required type=radio name=connect_as value=\"self:{}\"> You ({}) in {}</label><br>",
-                    project.id,
-                    escape_html(&principal.display_name),
-                    escape_html(&project.name)
-                )
-            })
-            .collect::<String>();
-        format!("<fieldset><legend>Connect as</legend>{agent_options}{self_options}</fieldset>")
-    } else if projects.len() == 1 {
         format!(
-            "<input type=hidden name=project_id value=\"{}\"><p><strong>Project:</strong> {} ({})</p>",
-            projects[0].id,
-            escape_html(&projects[0].name),
-            escape_html(&projects[0].project_key)
+            "<details><summary>Connect as one of your agents instead</summary><div class=choices><label class=choice><input type=radio name=connect_as value=self checked><span><strong>You ({person})</strong><small>The usual choice for Claude Code, Codex and ChatGPT.</small></span></label>{options}</div></details>"
         )
-    } else {
-        let choices = projects.iter().map(|project| format!("<label><input required type=radio name=project_id value=\"{}\"> {} ({})</label><br>", project.id, escape_html(&project.name), escape_html(&project.project_key))).collect::<String>();
-        format!("<fieldset><legend>Choose one Project</legend>{choices}</fieldset>")
     };
+    // The site-wide `no-referrer` policy makes browsers send `Origin: null` on
+    // form posts, which the consent endpoint's origin check rejects. The
+    // consent page alone uses `same-origin`, so the post carries its origin.
     let html = format!(
-        "<!doctype html><html><head><meta charset=utf-8><title>Authorize</title></head><body><main><h1>Authorize {}</h1><p>This client requests <strong>{}</strong> access through Agent Workspace MCP. Calls are attributed to {} unless you connect it as one of your agents.</p><form method=post action=/connect/confirm>{}{}<button name=decision value=approve type=submit>Authorize</button><button name=decision value=deny type=submit>Cancel</button></form></main></body></html>",
-        escape_html(&client.client_name),
-        escape_html(&scope),
-        escape_html(&principal.display_name),
-        project_controls,
-        hidden_authorize_fields(&request, &scope, &csrf),
+        r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><meta name=referrer content=same-origin><title>Connect {client_name}</title><link rel=stylesheet href=/oauth/consent.css></head><body><main class=card><p class=brand>Agent Workspace</p><h1>Connect {client_name}</h1><p class=lede>{client_name} will act as you, {person}, everywhere your account can reach: your messages, projects, tasks and pages. It sees exactly what you see, nothing more.</p><form method=post action=/connect/confirm><fieldset><legend>Access</legend><div class=choices><label class=choice><input type=radio name=access value=full{full_checked}><span><strong>Full access</strong><small>Read, and make changes as you: send messages, update tasks, edit pages.</small></span></label><label class=choice><input type=radio name=access value=read{read_checked}><span><strong>Read only</strong><small>Look at everything you can see, but change nothing.</small></span></label></div></fieldset><label class=check><input type=checkbox name=show_via value=on checked><span>Label what it writes “via {client_name}”</span></label><input type=hidden name=via_choice value=1>{agent_section}{hidden}<div class=actions><button class=primary name=decision value=approve type=submit>Connect</button><button name=decision value=deny type=submit>Cancel</button></div><p class=note>Requested: {scope}. You can change the label or revoke access any time in Account settings, under Connected apps.</p></form></main></body></html>"#,
+        full_checked = if wants_write { " checked" } else { "" },
+        read_checked = if wants_write { "" } else { " checked" },
+        scope = escape_html(&scope),
+        hidden = hidden_authorize_fields(&request, &scope, &csrf),
     );
     Ok(Html(html))
 }
+
+/// Styles for the consent page. The site's content security policy allows
+/// only same-origin stylesheets, so they're served here rather than inline.
+async fn consent_stylesheet() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        CONSENT_CSS,
+    )
+        .into_response()
+}
+
+const CONSENT_CSS: &str = r#":root{color-scheme:light dark;--bg:#f6f5f2;--card:#fff;--text:#1d1c1a;--muted:#6b6862;--line:#e3e0d9;--accent:#3b5bdb;--accent-text:#fff;--choice:#faf9f7}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1f1e1c;--text:#ecebe7;--muted:#a19d95;--line:#34322e;--accent:#7c95f5;--accent-text:#10131f;--choice:#262522}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.card{width:100%;max-width:520px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
+.brand{margin:0 0 8px;color:var(--muted);font-size:13px;font-weight:600;letter-spacing:.02em}
+h1{margin:0 0 8px;font-size:22px;line-height:1.25}.lede{margin:0 0 20px;color:var(--muted)}
+fieldset{border:0;margin:0 0 16px;padding:0}legend{font-weight:600;margin-bottom:8px}
+.choices{display:grid;gap:8px}.choice{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--choice);cursor:pointer}
+.choice:has(input:checked){border-color:var(--accent)}.choice input{margin-top:4px}.choice span{display:grid;gap:2px}.choice small{color:var(--muted);font-size:13px}
+.check{display:flex;gap:10px;align-items:center;margin:4px 0 16px}
+details{margin:0 0 16px}summary{cursor:pointer;color:var(--accent);margin-bottom:8px}
+.actions{display:flex;gap:8px;margin-top:8px}button{font:inherit;padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:transparent;color:var(--text);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-text);font-weight:600}
+.note{margin:16px 0 0;color:var(--muted);font-size:13px}
+"#;
 
 #[derive(Deserialize)]
 struct ConsentRequest {
@@ -370,9 +374,14 @@ struct ConsentRequest {
     code_challenge: String,
     code_challenge_method: String,
     resource: Option<String>,
+    /// Older forms named one Project; it now connects the whole account.
     project_id: Option<String>,
-    /// "self:<project id>" or "agent:<connection id>".
+    /// "self" or "agent:<connection id>". Older forms sent "self:<project>".
     connect_as: Option<String>,
+    /// "full" or "read". Older forms used the requested scope instead.
+    access: Option<String>,
+    show_via: Option<String>,
+    via_choice: Option<String>,
     csrf_token: String,
     decision: String,
 }
@@ -402,7 +411,7 @@ async fn consent(
         code_challenge_method: form.code_challenge_method,
         resource: form.resource,
     };
-    let (client, scopes) = validate_authorize_request(&state, &request).await?;
+    let (client, requested_scopes) = validate_authorize_request(&state, &request).await?;
     if form.decision != "approve" {
         return redirect_authorization_error(
             &request.redirect_uri,
@@ -410,12 +419,19 @@ async fn consent(
             "access_denied",
         );
     }
+    let scopes = match form.access.as_deref() {
+        Some("full") => vec!["read".to_owned(), "write".to_owned()],
+        Some("read") => vec!["read".to_owned()],
+        Some(_) => return Err(OAuthError::access_denied("choose full or read-only access")),
+        None => requested_scopes,
+    };
+    let show_via = form.via_choice.is_none() || form.show_via.as_deref() == Some("on");
     let selection = form
         .connect_as
         .as_deref()
         .map(str::to_owned)
-        .or_else(|| form.project_id.as_deref().map(|id| format!("self:{id}")))
-        .ok_or_else(|| OAuthError::access_denied("choose who to connect as"))?;
+        .or_else(|| form.project_id.as_ref().map(|_| "self".to_owned()))
+        .unwrap_or_else(|| "self".to_owned());
     let (project_id, actor_id, connection_id) = if let Some(connection) =
         selection.strip_prefix("agent:")
     {
@@ -426,45 +442,25 @@ async fn consent(
             .await?
             .ok_or_else(|| OAuthError::access_denied("that agent is not available"))?;
         (project_id, agent_actor_id, Some(connection_id))
+    } else if selection == "self" || selection.starts_with("self:") {
+        // The app acts as this person across their whole account. The grant is
+        // anchored to their Messages space, which every person belongs to;
+        // each call is checked against their current memberships.
+        let mut transaction = state.pool.begin().await.map_err(AppError::from)?;
+        let (home, _) =
+            crate::direct::space_for_actor(&mut transaction, principal.actor_id, None).await?;
+        transaction.commit().await.map_err(AppError::from)?;
+        (home, principal.actor_id, None)
     } else {
-        let project_id = selection
-            .strip_prefix("self:")
-            .and_then(|id| id.parse::<Uuid>().ok())
-            .ok_or_else(|| OAuthError::access_denied("invalid Project selection"))?;
-        (project_id, principal.actor_id, None)
+        return Err(OAuthError::access_denied("choose who to connect as"));
     };
-    let membership = connection_id.is_some()
-        || sqlx::query_scalar::<_, bool>(
-            r#"SELECT EXISTS(
-            SELECT 1 FROM projects p
-            JOIN project_memberships pm ON pm.project_id = p.id
-            JOIN organization_memberships om
-              ON om.organization_id = p.organization_id
-             AND om.actor_id = pm.actor_id
-             AND om.enabled
-            JOIN actors a ON a.id = pm.actor_id
-            JOIN users u ON u.actor_id = pm.actor_id AND u.status = 'active'
-            WHERE p.id = $1 AND pm.actor_id = $2 AND p.archived_at IS NULL
-              AND pm.enabled AND a.kind = 'human' AND a.status = 'active'
-        )"#,
-        )
-        .bind(project_id)
-        .bind(principal.actor_id)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(AppError::from)?;
-    if !membership {
-        return Err(OAuthError::access_denied(
-            "the selected Project is not available",
-        ));
-    }
 
     let (code, prefix, digest) = generate_secret("aw_code_");
     sqlx::query(
         r#"INSERT INTO mcp_oauth_authorization_codes (
             id, client_id, project_id, actor_id, redirect_uri, scopes,
-            code_prefix, code_digest, code_challenge, external_agent_connection_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
+            code_prefix, code_digest, code_challenge, external_agent_connection_id, show_via
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
     )
     .bind(Uuid::now_v7())
     .bind(client.id)
@@ -476,6 +472,7 @@ async fn consent(
     .bind(digest.to_vec())
     .bind(&request.code_challenge)
     .bind(connection_id)
+    .bind(show_via)
     .execute(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -583,6 +580,7 @@ struct CodeRow {
     scopes: Vec<String>,
     code_digest: Vec<u8>,
     code_challenge: String,
+    show_via: bool,
 }
 
 async fn exchange_code(
@@ -609,7 +607,8 @@ async fn exchange_code(
         r#"
         SELECT code.id, code.client_id, code.project_id, code.actor_id,
                code.external_agent_connection_id,
-               code.redirect_uri, code.scopes, code.code_digest, code.code_challenge
+               code.redirect_uri, code.scopes, code.code_digest, code.code_challenge,
+               code.show_via
         FROM mcp_oauth_authorization_codes code
         JOIN mcp_oauth_clients client ON client.id = code.client_id
         JOIN projects project ON project.id = code.project_id
@@ -669,8 +668,8 @@ async fn exchange_code(
     sqlx::query(
         r#"INSERT INTO mcp_oauth_grants (
             id, client_id, project_id, actor_id, scopes,
-            external_agent_connection_id, backing_credential_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7)"#,
+            external_agent_connection_id, backing_credential_id, show_via, account_wide
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
     )
     .bind(grant_id)
     .bind(client_id)
@@ -679,6 +678,10 @@ async fn exchange_code(
     .bind(&row.scopes)
     .bind(row.external_agent_connection_id)
     .bind(backing_credential_id)
+    .bind(row.show_via)
+    // People connect apps for their whole account; agents keep their
+    // connection's own reach.
+    .bind(row.external_agent_connection_id.is_none())
     .execute(&mut *transaction)
     .await
     .map_err(AppError::from)?;
@@ -912,6 +915,7 @@ struct AccessRow {
     external_agent_connection_id: Option<Uuid>,
     backing_credential_id: Option<Uuid>,
     connection_scopes: Option<Vec<String>>,
+    account_wide: bool,
 }
 
 pub async fn resolve_access_token(
@@ -926,7 +930,7 @@ pub async fn resolve_access_token(
         SELECT access.id AS token_id, grant_row.id AS grant_id, grant_row.actor_id,
                grant_row.project_id, client.client_name, grant_row.scopes, access.token_digest,
                grant_row.external_agent_connection_id, grant_row.backing_credential_id,
-               connection.scopes AS connection_scopes
+               connection.scopes AS connection_scopes, grant_row.account_wide
         FROM mcp_oauth_access_tokens access
         JOIN mcp_oauth_grants grant_row ON grant_row.id = access.grant_id
         JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
@@ -987,6 +991,8 @@ pub async fn resolve_access_token(
             client_name: row.client_name,
             scopes,
             authentication_class: "mcp_oauth",
+            account_wide: false,
+            project_explicit: false,
         }));
     }
     Ok(Some(McpPrincipal {
@@ -1000,6 +1006,8 @@ pub async fn resolve_access_token(
         client_name: row.client_name,
         scopes: row.scopes,
         authentication_class: "mcp_oauth",
+        account_wide: row.account_wide,
+        project_explicit: false,
     }))
 }
 
@@ -1007,15 +1015,13 @@ pub async fn resolve_access_token(
 struct AgentChoice {
     connection_id: Uuid,
     display_name: String,
-    project_name: String,
 }
 
 /// Active agent connections in Projects this person can manage agents in.
 async fn agent_choices(state: &AppState, actor_id: Uuid) -> Result<Vec<AgentChoice>, OAuthError> {
     sqlx::query_as::<_, AgentChoice>(
         r#"
-        SELECT connection.id AS connection_id, agent_membership.display_name,
-               project.name AS project_name
+        SELECT connection.id AS connection_id, agent_membership.display_name
         FROM external_agent_connections connection
         JOIN projects project ON project.id = connection.project_id
         JOIN project_memberships agent_membership
@@ -1071,33 +1077,6 @@ async fn managed_agent(
     .bind(connection_id)
     .bind(manager_actor_id)
     .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::from)
-    .map_err(Into::into)
-}
-
-async fn project_choices(
-    state: &AppState,
-    actor_id: Uuid,
-) -> Result<Vec<ProjectChoice>, OAuthError> {
-    sqlx::query_as::<_, ProjectChoice>(
-        r#"
-        SELECT project.id, project.name, project.project_key
-        FROM projects project
-        JOIN project_memberships membership ON membership.project_id = project.id
-        JOIN users user_account
-          ON user_account.actor_id = membership.actor_id
-         AND user_account.status = 'active'
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = membership.actor_id
-         AND organization_membership.enabled
-        WHERE membership.actor_id = $1 AND membership.enabled AND project.archived_at IS NULL
-        ORDER BY project.name, project.id LIMIT 100
-    "#,
-    )
-    .bind(actor_id)
-    .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)
     .map_err(Into::into)
@@ -1169,13 +1148,11 @@ fn is_loopback_redirect(url: &Url) -> bool {
         && url.port().is_some()
 }
 
-/// Send the browser back to the client. A plain redirect after the consent
-/// form can be blocked by the `form-action 'self'` policy for non-loopback
-/// clients, so those get a tiny continue page instead.
+/// Send the browser back to the client with a tiny page that forwards
+/// itself. A plain redirect after the consent form is blocked by the site's
+/// `form-action 'self'` policy, because Chrome applies it to the redirect's
+/// target, including loopback clients such as Codex and Claude Code.
 fn redirect_to_client(redirect: &Url) -> Response {
-    if is_loopback_redirect(redirect) {
-        return Redirect::to(redirect.as_str()).into_response();
-    }
     let target = escape_html(redirect.as_str());
     Html(format!(
         "<!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=\"0; url={target}\"><title>Returning</title></head><body><main><p>Returning to the app… <a href=\"{target}\">Continue</a></p></main></body></html>"

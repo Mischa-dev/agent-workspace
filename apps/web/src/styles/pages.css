@@ -1566,3 +1566,76 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Pages: what's true for a project now */
+.aw-doc {
+  max-width: var(--size-measure);
+  padding: var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--content-fg);
+  font: var(--t-body);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aw-page-editor {
+  display: grid;
+  gap: var(--space-3);
+  max-width: var(--size-measure);
+}
+
+.aw-page-editor textarea {
+  font: var(--t-code);
+}
+
+.aw-row__text {
+  margin: var(--space-1) 0 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  white-space: pre-wrap;
+}
+
+/* Connected apps: copyable setup lines */
+.aw-connect {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-copyline {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-copyline__label {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-copyline__value {
+  overflow-x: auto;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font: var(--t-code);
+  white-space: pre;
+}
+
+.aw-connect__note {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+@media (max-width: 640px) {
+  .aw-copyline {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .aw-copyline__label {
+    grid-column: 1 / -1;
+  }
+}

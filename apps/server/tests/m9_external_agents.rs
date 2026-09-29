@@ -190,12 +190,10 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .as_array()
         .expect("MCP tools")
         .iter()
-        .find(|tool| tool["name"] == "conversation_message_send")
-        .expect("conversation_message_send tool");
-    assert_eq!(
-        message_tool["inputSchema"]["properties"]["content"]["$ref"],
-        "#/$defs/MessageContent"
-    );
+        .find(|tool| tool["name"] == "message_send")
+        .expect("message_send tool");
+    assert!(message_tool["inputSchema"]["properties"]["text"].is_object());
+    assert!(message_tool["inputSchema"]["properties"]["content"].is_object());
     assert_eq!(
         message_tool["inputSchema"]["$defs"]["MessageContent"]["type"],
         "object"
@@ -212,7 +210,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         json!({"projectId":seed.project_id.to_string(),"limit":1}),
     )
     .await;
-    assert_eq!(conversations["outcome"], "found");
+    assert_eq!(conversations["outcome"], "ok");
     assert_eq!(
         conversations["value"]["conversations"]
             .as_array()
@@ -224,13 +222,13 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "mentionable_actor_search",
+        "people_search",
         json!({"query":"Hermes","limit":10}),
     )
     .await;
-    assert_eq!(mentionable["outcome"], "found");
+    assert_eq!(mentionable["outcome"], "ok");
     assert_eq!(
-        mentionable["value"]["actors"][0]["id"],
+        mentionable["value"]["people"][0]["id"],
         actor_id.to_string()
     );
 
@@ -238,7 +236,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "conversation_message_send",
+        "message_send",
         json!({
             "conversationId":seed.thread_id.to_string(),
             "clientRequestId":"m9-external-message-1",
@@ -249,25 +247,25 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(sent["outcome"], "applied");
-    assert_eq!(sent["idempotentReplay"], false);
-    assert_eq!(
-        sent["result"]["message"]["author"]["id"],
-        actor_id.to_string()
-    );
-    assert_eq!(
-        sent["result"]["message"]["author"]["kind"],
-        "external_agent"
-    );
-    let external_message_id = sent["result"]["message"]["id"]
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    assert_eq!(sent["value"]["idempotentReplay"], false);
+    let external_message_id = sent["value"]["messageId"]
         .as_str()
         .expect("external Message id")
         .to_owned();
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>("SELECT author_actor_id FROM messages WHERE id = $1")
+            .bind(external_message_id.parse::<Uuid>().expect("message UUID"))
+            .fetch_one(&pool)
+            .await
+            .expect("external message author"),
+        actor_id
+    );
     let replayed_message = call_mcp_tool(
         &application,
         &first_token,
         &session_id,
-        "conversation_message_send",
+        "message_send",
         json!({
             "conversationId":seed.thread_id.to_string(),
             "clientRequestId":"m9-external-message-1",
@@ -278,17 +276,14 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         }),
     )
     .await;
-    assert_eq!(replayed_message["outcome"], "applied");
-    assert_eq!(replayed_message["idempotentReplay"], true);
-    assert_eq!(
-        replayed_message["result"]["message"]["id"],
-        external_message_id
-    );
+    assert_eq!(replayed_message["outcome"], "ok");
+    assert_eq!(replayed_message["value"]["idempotentReplay"], true);
+    assert_eq!(replayed_message["value"]["messageId"], external_message_id);
     let conflicting_message = call_mcp_tool(
         &application,
         &first_token,
         &session_id,
-        "conversation_message_send",
+        "message_send",
         json!({
             "conversationId":seed.thread_id.to_string(),
             "clientRequestId":"m9-external-message-1",
@@ -302,13 +297,13 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "conversation_timeline_get",
+        "conversation_read",
         json!({"conversationId":seed.thread_id.to_string(),"limit":10}),
     )
     .await;
-    assert_eq!(timeline["outcome"], "found");
+    assert_eq!(timeline["outcome"], "ok");
     assert_eq!(
-        timeline["value"]["entries"][0]["message"]["id"],
+        timeline["value"]["messages"][0]["messageId"],
         external_message_id
     );
     let browser_timeline = application
@@ -389,7 +384,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "work_item_create",
+        "task_create",
         json!({
             "title":"External teammate fixture",
             "description":"Created through the canonical M9 MCP command.",
@@ -409,7 +404,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "work_item_create",
+        "task_create",
         json!({
             "title":"External teammate fixture",
             "description":"A different description must not replay.",
@@ -425,7 +420,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "work_item_create_subtask",
+        "task_create",
         json!({
             "parentWorkItemId":external_work_item_id.to_string(),
             "title":"Idempotency subtask fixture",
@@ -439,7 +434,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "work_item_create_subtask",
+        "task_create",
         json!({
             "parentWorkItemId":external_work_item_id.to_string(),
             "title":"Idempotency subtask fixture",
@@ -454,7 +449,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "work_item_update",
+        "task_update",
         json!({
             "workItemId":external_work_item_id.to_string(),
             "expectedVersion":1,
@@ -469,13 +464,13 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "work_item_get",
-        json!({"identifier":external_work_item_id.to_string()}),
+        "task_open",
+        json!({"taskId":external_work_item_id.to_string()}),
     )
     .await;
-    assert_eq!(read_work_item["outcome"], "found");
+    assert_eq!(read_work_item["outcome"], "ok");
     assert_eq!(
-        read_work_item["value"]["assignee"]["actorId"],
+        read_work_item["value"]["task"]["assignee"]["actorId"],
         actor_id.to_string()
     );
 
@@ -1071,7 +1066,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "external_execution_request_create",
+        "run_request",
         json!({
             "conversationId":seed.thread_id.to_string(),
             "repositoryId":seed.repository_id.to_string(),
@@ -1888,7 +1883,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         json!({"projectId":second}),
     )
     .await;
-    assert_eq!(allowed["outcome"], "found");
+    assert_eq!(allowed["outcome"], "ok");
     let channel = application
         .clone()
         .oneshot(write_request_with_idempotency(
@@ -1904,8 +1899,8 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     assert_eq!(channel.status(), StatusCode::CREATED);
     let channel = response_json(channel).await;
     let conversation = channel["conversation"]["id"].as_str().expect("channel ID");
-    let sent = call_mcp_tool(&application,token,&session,"conversation_message_send",json!({"conversationId":conversation,"content":{"version":1,"nodes":[{"type":"text","text":"Same agent in a second project"}]},"clientRequestId":"second-project-message"})).await;
-    assert_eq!(sent["outcome"], "applied", "{sent}");
+    let sent = call_mcp_tool(&application,token,&session,"message_send",json!({"conversationId":conversation,"content":{"version":1,"nodes":[{"type":"text","text":"Same agent in a second project"}]},"clientRequestId":"second-project-message"})).await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
     assert_eq!(
         sqlx::query_scalar::<_, Uuid>(
             "SELECT author_actor_id FROM messages WHERE conversation_id=$1"
@@ -1946,7 +1941,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         json!({"projectId":seed.project_id}),
     )
     .await;
-    assert_eq!(home["outcome"], "found");
+    assert_eq!(home["outcome"], "ok");
     let elevated = application
         .clone()
         .oneshot(write_request_with_idempotency(
@@ -1983,7 +1978,7 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         json!({"projectId":seed.project_id}),
     )
     .await;
-    assert_eq!(home["outcome"], "found");
+    assert_eq!(home["outcome"], "ok");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM actors WHERE kind='external_agent'")
             .fetch_one(&pool)

@@ -22,7 +22,10 @@ import {
 import { ConversationHeader } from './ConversationHeader'
 import type { ComposerSubmission } from './composerModel'
 import { useConversationTimeline, useProjectConversationSidebar } from './hooks'
+import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
 import { StructuredComposer } from './StructuredComposer'
+import { ThreadBoard, ThreadStatusChip } from './threadBoard'
+import { useThreads } from './threadModel'
 import { ThreadDialog } from './ThreadDialog'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from './Timeline'
 import type { ConversationTimelineEntry, SidebarThread } from './types'
@@ -41,8 +44,16 @@ const THREAD_STATE: Record<SidebarThread['attention'], string> = {
 export function ChannelPage() {
   const session = useAuthenticatedSession()
   const { projectId = '', channelId = '' } = useParams()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const includeArchived = searchParams.get('includeArchived') === 'true'
+  const boardOpen = searchParams.get('threads') === 'all'
+  const setBoardOpen = (open: boolean) => {
+    const next = new URLSearchParams(searchParams)
+    if (open) next.set('threads', 'all')
+    else next.delete('threads')
+    setSearchParams(next, { replace: true })
+  }
+  const threadStatuses = useThreads(channelId)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const project = useProject(projectId)
@@ -83,6 +94,11 @@ export function ChannelPage() {
     }
     return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
   }, [channelId, olderState, page?.entries, validBoundary])
+
+  const statusByThread = useMemo(
+    () => new Map((threadStatuses.data ?? []).map((thread) => [thread.id, thread])),
+    [threadStatuses.data],
+  )
 
   const linkedThreadsByMessage = useMemo(() => {
     const linked = new Map<string, SidebarThread[]>()
@@ -196,6 +212,16 @@ export function ChannelPage() {
 
   return (
     <AppShell
+      context={
+        boardOpen ? (
+          <ThreadBoard
+            conversationId={channelId}
+            onClose={() => setBoardOpen(false)}
+            onOpen={(thread) => navigate(threadRoute(thread.id))}
+          />
+        ) : undefined
+      }
+      contextKey={boardOpen ? 'threads' : undefined}
       mainClassName="aw-main--conversation"
       project={project.data}
       selectedChannelId={validBoundary ? channelId : undefined}
@@ -204,7 +230,16 @@ export function ChannelPage() {
       <NavigationSyncAlert {...navigationSync} />
       <ConversationHeader
         actions={
-          canPost ? <IconButton icon="messages" label="Start a thread" onClick={() => setThreadDialog({ origin: null })} side="bottom" /> : null
+          <>
+            <IconButton
+              icon="list"
+              label={boardOpen ? 'Hide threads' : 'Threads'}
+              onClick={() => setBoardOpen(!boardOpen)}
+              pressed={boardOpen}
+              side="bottom"
+            />
+            {canPost ? <IconButton icon="messages" label="Start a thread" onClick={() => setThreadDialog({ origin: null })} side="bottom" /> : null}
+          </>
         }
         icon="hash"
         menu={[
@@ -220,6 +255,7 @@ export function ChannelPage() {
         ]}
         title={name}
       />
+      {validBoundary ? <PinnedBar canEdit={canPost} conversationId={channelId} projectId={projectId} /> : null}
       {archived ? (
         <Banner className="aw-conv__banner" icon="archive" title="This channel is archived." tone="offline">
           You can read it, but no one can post.
@@ -264,7 +300,11 @@ export function ChannelPage() {
               <Link className="aw-threadlink" key={thread.id} to={threadRoute(thread.id)}>
                 <Icon name="messages" size={14} />
                 <span className="aw-threadlink__name">{thread.name}</span>
+                {statusByThread.get(thread.id) ? <ThreadStatusChip status={statusByThread.get(thread.id)?.status ?? 'Open'} /> : null}
                 {THREAD_STATE[thread.attention] ? <span className="aw-threadlink__state">{THREAD_STATE[thread.attention]}</span> : null}
+                {statusByThread.get(thread.id)?.outcome ? (
+                  <span className="aw-threadlink__state">{statusByThread.get(thread.id)?.outcome}</span>
+                ) : null}
                 <Icon className="aw-threadlink__chev" name="chevron-right" size={14} />
                 <span className="visually-hidden">, open thread</span>
               </Link>
@@ -272,21 +312,30 @@ export function ChannelPage() {
           }}
           renderToolbar={(entry) => {
             if (!entry.message) return null
-            const threads = linkedThreadsByMessage.get(entry.message.id) ?? []
+            const message = entry.message
+            const threads = linkedThreadsByMessage.get(message.id) ?? []
+            const memory = canPost ? <MessageMemoryActions conversationId={channelId} message={message} projectId={projectId} /> : null
             if (threads.length) {
-              return <IconButton icon="messages" label="Open thread" onClick={() => navigate(threadRoute(threads[0].id))} size="sm" />
+              return (
+                <>
+                  <IconButton icon="messages" label="Open thread" onClick={() => navigate(threadRoute(threads[0].id))} size="sm" />
+                  {memory}
+                </>
+              )
             }
             if (!canPost) return null
-            const message = entry.message
             return (
-              <IconButton
-                icon="messages"
-                label="Start a thread"
-                onClick={() =>
-                  setThreadDialog({ origin: { messageId: message.id, text: message.plainText, author: message.author.displayName } })
-                }
-                size="sm"
-              />
+              <>
+                <IconButton
+                  icon="messages"
+                  label="Start a thread"
+                  onClick={() =>
+                    setThreadDialog({ origin: { messageId: message.id, text: message.plainText, author: message.author.displayName } })
+                  }
+                  size="sm"
+                />
+                {memory}
+              </>
             )
           }}
           viewerId={session.user.actorId}

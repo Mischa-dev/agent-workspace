@@ -1,0 +1,668 @@
+//! Orientation tools: `briefing` answers "what needs me?", `projects_list`
+//! shows where the caller can work, and `project_open` gets them oriented in
+//! one project.
+//!
+//! The briefing pushes pointers, not whole conversations: each item is one
+//! line the caller can open. What must not be missed (direct asks, mentions)
+//! comes first.
+
+use rmcp::schemars;
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use uuid::Uuid;
+
+use super::{
+    McpPrincipal,
+    common::{
+        ToolResult, accessible_project_ids, parse_id, project_role, public_url, truncate_text,
+    },
+    replies::{InboxItem, InboxListArguments, ReplyToolResult, inbox_list},
+    talk::{ConversationSummary, ListFilter, list_rows, summary},
+};
+use crate::{AppState, error::AppError, memory, policy::ActorKind};
+
+const GUIDE_CHARACTERS: usize = 20_000;
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct BriefingArguments {
+    // Read by the MCP middleware, which scopes the call to this project.
+    #[allow(dead_code)]
+    /// Only this project. Leave it out for everything.
+    pub project_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Briefing {
+    pub you: You,
+    /// Agents only: messages people asked you to answer. Claim one with
+    /// reply_claim.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reply_requests: Vec<InboxItem>,
+    /// Messages that @mention you and that you haven't read.
+    pub mentions: Vec<Mention>,
+    /// Conversations with messages you haven't read, most recent first.
+    pub unread: Vec<ConversationSummary>,
+    /// Open tasks assigned to you, most recently changed first.
+    pub tasks: Vec<TaskLine>,
+    /// Tasks you've claimed and are working on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<TaskLine>,
+    /// Threads whose status or outcome changed in the last week.
+    pub thread_updates: Vec<ThreadUpdate>,
+    pub next_steps: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct You {
+    pub actor_id: String,
+    pub name: String,
+    pub handle: String,
+    /// person or agent
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected_through: Option<String>,
+    /// full or read
+    pub access: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Mention {
+    pub conversation_id: String,
+    pub conversation: String,
+    pub project: String,
+    pub sequence: i64,
+    pub message_id: String,
+    pub author: String,
+    pub text: String,
+    pub sent_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TaskLine {
+    pub id: String,
+    pub key: String,
+    pub title: String,
+    pub status: String,
+    pub priority: String,
+    pub project: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ThreadUpdate {
+    pub thread_id: String,
+    pub name: String,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub under: String,
+    pub changed_by: Option<String>,
+    pub changed_at: String,
+}
+
+const NEXT_STEPS: &str = "Open anything here with conversation_open or task_open. Answer reply requests with reply_claim then reply_send. When a discussion settles, set the thread's status and outcome with thread_update or record a decision with decision_record, so nobody has to reread it. Claim a task with task_claim before working on it.";
+
+pub(super) async fn briefing(
+    state: &AppState,
+    principal: &McpPrincipal,
+    _arguments: BriefingArguments,
+) -> ToolResult<Briefing> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    let result = async {
+        let projects = if principal.project_explicit {
+            vec![principal.project_id]
+        } else {
+            accessible_project_ids(state, principal).await?
+        };
+        let (name, handle) = sqlx::query_as::<_, (String, String)>(
+            "SELECT display_name, handle FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(principal.project_id)
+        .bind(principal.actor_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or_else(|| (principal.client_name.clone(), String::new()));
+        let reply_requests = if principal.actor_kind == ActorKind::ExternalAgent {
+            match inbox_list(state, principal, InboxListArguments { limit: Some(20) }).await {
+                ReplyToolResult::Ok { value } => value.requests,
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let mentions = sqlx::query_as::<_, Mention>(
+            r#"
+            SELECT conversation.id::text AS conversation_id,
+                   CASE WHEN conversation.kind = 'dm' THEN 'DM' ELSE conversation.name END
+                       AS conversation,
+                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END
+                       AS project,
+                   entry.sequence, message.id::text AS message_id,
+                   COALESCE(author.display_name, 'Someone') AS author,
+                   left(message.plain_text, 280) AS text,
+                   message.created_at::text AS sent_at
+            FROM message_mentions mention
+            JOIN messages message ON message.id = mention.message_id
+            JOIN conversations conversation ON conversation.id = message.conversation_id
+            JOIN projects project ON project.id = conversation.project_id
+            JOIN conversation_entries entry ON entry.message_id = message.id
+            LEFT JOIN conversation_read_states read_state
+              ON read_state.conversation_id = conversation.id AND read_state.actor_id = $1
+            LEFT JOIN project_memberships author
+              ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
+            WHERE mention.actor_id = $1
+              AND message.project_id = ANY($2)
+              AND message.author_actor_id <> $1
+              AND message.created_at > now() - interval '30 days'
+              AND entry.sequence > COALESCE(read_state.highest_seen_sequence, 0)
+              AND conversation.archived_at IS NULL
+              AND conversation_visible_to(conversation.id, $1)
+            ORDER BY message.created_at DESC
+            LIMIT 20
+            "#,
+        )
+        .bind(principal.actor_id)
+        .bind(&projects)
+        .fetch_all(&state.pool)
+        .await?;
+        let unread = list_rows(
+            state,
+            principal.actor_id,
+            &projects,
+            ListFilter {
+                kinds: None,
+                with_person: None,
+                unread_only: true,
+                status: None,
+                query: String::new(),
+                only_id: None,
+            },
+            0,
+            15,
+        )
+        .await?
+        .into_iter()
+        .map(|row| summary(state, principal.actor_id, row))
+        .collect();
+        let tasks = task_lines(state, &projects, principal.actor_id, TaskFilter::Assigned).await?;
+        let claims = task_lines(state, &projects, principal.actor_id, TaskFilter::Claimed).await?;
+        let thread_updates = sqlx::query_as::<_, ThreadUpdate>(
+            r#"
+            SELECT thread.id::text AS thread_id, thread.name, thread.thread_status AS status,
+                   thread.thread_outcome AS outcome,
+                   CASE WHEN parent.kind = 'dm' THEN 'a DM' ELSE parent.name END AS under,
+                   changer.display_name AS changed_by,
+                   thread.thread_status_changed_at::text AS changed_at
+            FROM conversations thread
+            JOIN conversations parent ON parent.id = thread.parent_channel_id
+            LEFT JOIN project_memberships changer
+              ON changer.project_id = thread.project_id
+             AND changer.actor_id = thread.thread_status_changed_by_actor_id
+            WHERE thread.kind = 'thread'
+              AND thread.project_id = ANY($2)
+              AND thread.thread_status_changed_at > now() - interval '7 days'
+              AND thread.thread_status_changed_by_actor_id IS DISTINCT FROM $1
+              AND thread.archived_at IS NULL
+              AND conversation_visible_to(thread.id, $1)
+            ORDER BY thread.thread_status_changed_at DESC
+            LIMIT 10
+            "#,
+        )
+        .bind(principal.actor_id)
+        .bind(&projects)
+        .fetch_all(&state.pool)
+        .await?;
+        Ok::<_, AppError>(ToolResult::ok(Briefing {
+            you: You {
+                actor_id: principal.actor_id.to_string(),
+                name,
+                handle,
+                kind: if principal.actor_kind == ActorKind::ExternalAgent {
+                    "agent".to_owned()
+                } else {
+                    "person".to_owned()
+                },
+                connected_through: principal
+                    .via_grant_id()
+                    .map(|_| principal.client_name.clone()),
+                access: if principal.can_write() {
+                    "full".to_owned()
+                } else {
+                    "read".to_owned()
+                },
+            },
+            reply_requests,
+            mentions,
+            unread,
+            tasks,
+            claims,
+            thread_updates,
+            next_steps: NEXT_STEPS,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "briefing"))
+}
+
+pub(super) enum TaskFilter {
+    Assigned,
+    Claimed,
+}
+
+pub(super) async fn task_lines(
+    state: &AppState,
+    projects: &[Uuid],
+    actor_id: Uuid,
+    filter: TaskFilter,
+) -> Result<Vec<TaskLine>, AppError> {
+    let condition = match filter {
+        TaskFilter::Assigned => {
+            "item.assignee_actor_id = $2 AND status.semantic_category NOT IN ('completed', 'canceled')"
+        }
+        TaskFilter::Claimed => "claim.actor_id = $2",
+    };
+    Ok(sqlx::query_as::<_, TaskLine>(&format!(
+        r#"
+        SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
+               item.title, status.name AS status, item.priority, project.name AS project,
+               item.updated_at::text AS updated_at, claimer.display_name AS claimed_by
+        FROM work_items item
+        JOIN projects project ON project.id = item.project_id
+        JOIN work_item_statuses status
+          ON status.project_id = item.project_id AND status.id = item.status_id
+        LEFT JOIN work_item_claims claim
+          ON claim.work_item_id = item.id AND claim.expires_at > now()
+        LEFT JOIN project_memberships claimer
+          ON claimer.project_id = item.project_id AND claimer.actor_id = claim.actor_id
+        WHERE item.project_id = ANY($1) AND item.archived_at IS NULL AND {condition}
+        ORDER BY item.updated_at DESC
+        LIMIT 20
+        "#
+    ))
+    .bind(projects)
+    .bind(actor_id)
+    .fetch_all(&state.pool)
+    .await?)
+}
+
+// ---------------------------------------------------------------------------
+// projects_list
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProjectLine {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    pub role: String,
+    /// True for the Messages space that holds DMs and groups.
+    pub messages_space: bool,
+    pub open_tasks: i64,
+    pub unread_conversations: i64,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProjectsValue {
+    pub projects: Vec<ProjectLine>,
+}
+
+pub(super) async fn projects_list(
+    state: &AppState,
+    principal: &McpPrincipal,
+) -> ToolResult<ProjectsValue> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    let result = async {
+        let projects = accessible_project_ids(state, principal).await?;
+        let mut rows = sqlx::query_as::<_, ProjectLine>(
+            r#"
+            SELECT project.id::text AS id, project.project_key AS key,
+                   CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS name,
+                   membership.role, project.kind = 'direct' AS messages_space,
+                   (SELECT count(*) FROM work_items item
+                    JOIN work_item_statuses status
+                      ON status.project_id = item.project_id AND status.id = item.status_id
+                    WHERE item.project_id = project.id AND item.archived_at IS NULL
+                      AND status.semantic_category NOT IN ('completed', 'canceled')) AS open_tasks,
+                   (SELECT count(*) FROM conversations conversation
+                    LEFT JOIN conversation_read_states read_state
+                      ON read_state.conversation_id = conversation.id AND read_state.actor_id = $1
+                    WHERE conversation.project_id = project.id AND conversation.archived_at IS NULL
+                      AND conversation.next_entry_sequence - 1
+                          > COALESCE(read_state.highest_seen_sequence, 0)
+                      AND conversation_visible_to(conversation.id, $1)) AS unread_conversations,
+                   '' AS url
+            FROM projects project
+            JOIN project_memberships membership
+              ON membership.project_id = project.id AND membership.actor_id = $1
+            WHERE project.id = ANY($2)
+            ORDER BY (project.kind = 'direct'), project.name, project.id
+            "#,
+        )
+        .bind(principal.actor_id)
+        .bind(&projects)
+        .fetch_all(&state.pool)
+        .await?;
+        for row in &mut rows {
+            row.url = if row.messages_space {
+                public_url(state, "/messages")
+            } else {
+                public_url(state, &format!("/projects/{}", row.id))
+            };
+        }
+        Ok::<_, AppError>(ToolResult::ok(ProjectsValue { projects: rows }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "projects_list"))
+}
+
+// ---------------------------------------------------------------------------
+// project_open
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ProjectOpenArguments {
+    /// The project's ID or link. projects_list shows them.
+    pub project_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProjectOverview {
+    pub project: ProjectHeader,
+    /// The project's guide page: how this project works. Read it first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide: Option<GuidePage>,
+    /// Other pages, titles only. Read one with page_get.
+    pub pages: Vec<PageLine>,
+    /// Recent decisions that still hold.
+    pub decisions: Vec<DecisionLine>,
+    pub tasks: TaskOverview,
+    /// Threads still being worked out, across the project's channels.
+    pub open_threads: Vec<ConversationSummary>,
+    pub channels: Vec<ConversationSummary>,
+    pub repositories: Vec<RepositoryLine>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProjectHeader {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+    pub role: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GuidePage {
+    pub page_id: String,
+    pub title: String,
+    pub body: String,
+    pub truncated: bool,
+    pub version: i64,
+    pub updated_at: String,
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PageLine {
+    pub id: String,
+    pub title: String,
+    pub updated_at: String,
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DecisionLine {
+    pub id: String,
+    pub title: String,
+    pub decided_by: String,
+    pub decided_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TaskOverview {
+    /// Counts by status.
+    pub by_status: Vec<StatusCount>,
+    /// The first open tasks in board order: what's next.
+    pub next: Vec<TaskLine>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<TaskLine>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub claimed: Vec<TaskLine>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StatusCount {
+    pub status: String,
+    pub category: String,
+    pub count: i64,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RepositoryLine {
+    pub id: String,
+    pub name: String,
+    pub default_branch: String,
+}
+
+pub(super) async fn project_open(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ProjectOpenArguments,
+) -> ToolResult<ProjectOverview> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    let Some(project_id) = parse_id(&arguments.project_id) else {
+        return ToolResult::invalid("projectId", "Pass a project ID or link.");
+    };
+    if project_id != principal.project_id {
+        return ToolResult::not_found("That project");
+    }
+    let result = async {
+        let Some(role) = project_role(state, principal, project_id).await? else {
+            return Ok(ToolResult::not_found("That project"));
+        };
+        let (key, name, kind) = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT project_key, name, kind FROM projects WHERE id = $1",
+        )
+        .bind(project_id)
+        .fetch_one(&state.pool)
+        .await?;
+        let guide = memory::guide_page(&state.pool, project_id)
+            .await?
+            .map(|page| {
+                let (body, truncated) = truncate_text(&page.body, GUIDE_CHARACTERS);
+                GuidePage {
+                    page_id: page.id.to_string(),
+                    title: page.title,
+                    body,
+                    truncated,
+                    version: page.version,
+                    updated_at: page.updated_at,
+                    stale: page.stale,
+                }
+            });
+        let pages = memory::list_pages(&state.pool, project_id, false)
+            .await?
+            .into_iter()
+            .filter(|page| !page.is_guide)
+            .take(50)
+            .map(|page| PageLine {
+                id: page.id.to_string(),
+                title: page.title,
+                updated_at: page.updated_at,
+                stale: page.stale,
+            })
+            .collect();
+        let decisions = memory::list_decisions(&state.pool, project_id, principal.actor_id, false, 15)
+            .await?
+            .into_iter()
+            .map(|decision| DecisionLine {
+                id: decision.id.to_string(),
+                title: decision.title,
+                decided_by: decision.decided_by,
+                decided_at: decision.created_at,
+            })
+            .collect();
+        let by_status = sqlx::query_as::<_, StatusCount>(
+            r#"
+            SELECT status.name AS status, status.semantic_category AS category, count(item.id) AS count
+            FROM work_item_statuses status
+            LEFT JOIN work_items item
+              ON item.project_id = status.project_id AND item.status_id = status.id
+             AND item.archived_at IS NULL
+            WHERE status.project_id = $1 AND status.enabled
+            GROUP BY status.id, status.name, status.semantic_category, status.position
+            ORDER BY status.position
+            "#,
+        )
+        .bind(project_id)
+        .fetch_all(&state.pool)
+        .await?;
+        let next = project_tasks(state, project_id, ProjectTaskFilter::Next).await?;
+        let blocked = project_tasks(state, project_id, ProjectTaskFilter::Blocked).await?;
+        let claimed = project_tasks(state, project_id, ProjectTaskFilter::Claimed).await?;
+        let conversations = list_rows(
+            state,
+            principal.actor_id,
+            &[project_id],
+            ListFilter {
+                kinds: Some(vec!["channel".to_owned(), "thread".to_owned()]),
+                with_person: None,
+                unread_only: false,
+                status: None,
+                query: String::new(),
+                only_id: None,
+            },
+            0,
+            200,
+        )
+        .await?;
+        let (mut channels, mut open_threads) = (Vec::new(), Vec::new());
+        for row in conversations {
+            let item = summary(state, principal.actor_id, row);
+            if item.kind == "channel" {
+                channels.push(item);
+            } else if item.status.as_deref().is_some_and(|status| {
+                !matches!(
+                    status.to_ascii_lowercase().as_str(),
+                    "done" | "dropped" | "decided"
+                )
+            }) && open_threads.len() < 15
+            {
+                open_threads.push(item);
+            }
+        }
+        let repositories = sqlx::query_as::<_, RepositoryLine>(
+            r#"
+            SELECT id::text AS id, owner || '/' || name AS name, default_branch
+            FROM repositories
+            WHERE project_id = $1 AND archived_at IS NULL
+            ORDER BY owner, name
+            LIMIT 20
+            "#,
+        )
+        .bind(project_id)
+        .fetch_all(&state.pool)
+        .await?;
+        Ok::<_, AppError>(ToolResult::ok(ProjectOverview {
+            project: ProjectHeader {
+                id: project_id.to_string(),
+                key,
+                name: if kind == "direct" {
+                    "Messages".to_owned()
+                } else {
+                    name
+                },
+                role,
+                url: public_url(
+                    state,
+                    &if kind == "direct" {
+                        "/messages".to_owned()
+                    } else {
+                        format!("/projects/{project_id}")
+                    },
+                ),
+            },
+            guide,
+            pages,
+            decisions,
+            tasks: TaskOverview {
+                by_status,
+                next,
+                blocked,
+                claimed,
+            },
+            open_threads,
+            channels,
+            repositories,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "project_open"))
+}
+
+enum ProjectTaskFilter {
+    Next,
+    Blocked,
+    Claimed,
+}
+
+async fn project_tasks(
+    state: &AppState,
+    project_id: Uuid,
+    filter: ProjectTaskFilter,
+) -> Result<Vec<TaskLine>, AppError> {
+    let (condition, limit) = match filter {
+        ProjectTaskFilter::Next => (
+            "status.semantic_category IN ('unstarted', 'started', 'review', 'verification') AND item.blocked_reason IS NULL",
+            10,
+        ),
+        ProjectTaskFilter::Blocked => ("item.blocked_reason IS NOT NULL", 10),
+        ProjectTaskFilter::Claimed => ("claim.actor_id IS NOT NULL", 10),
+    };
+    Ok(sqlx::query_as::<_, TaskLine>(&format!(
+        r#"
+        SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
+               item.title, status.name AS status, item.priority, project.name AS project,
+               item.updated_at::text AS updated_at, claimer.display_name AS claimed_by
+        FROM work_items item
+        JOIN projects project ON project.id = item.project_id
+        JOIN work_item_statuses status
+          ON status.project_id = item.project_id AND status.id = item.status_id
+        LEFT JOIN work_item_claims claim
+          ON claim.work_item_id = item.id AND claim.expires_at > now()
+        LEFT JOIN project_memberships claimer
+          ON claimer.project_id = item.project_id AND claimer.actor_id = claim.actor_id
+        WHERE item.project_id = $1 AND item.archived_at IS NULL
+          AND status.semantic_category NOT IN ('completed', 'canceled')
+          AND {condition}
+        ORDER BY status.position, item.board_rank, item.id
+        LIMIT {limit}
+        "#
+    ))
+    .bind(project_id)
+    .fetch_all(&state.pool)
+    .await?)
+}

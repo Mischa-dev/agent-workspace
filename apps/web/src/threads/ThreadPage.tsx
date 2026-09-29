@@ -33,6 +33,7 @@ import {
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { ConversationHeader } from '../conversations/ConversationHeader'
+import { ThreadStatusButton } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import {
@@ -947,13 +948,24 @@ export function ThreadPage() {
       <ConversationHeader
         actions={
           verifiedTimeline ? (
-            <IconButton
-              icon="panel-right"
-              label={detailsOpen ? 'Hide details' : 'Show details'}
-              onClick={() => setDetailsOpen(!detailsOpen)}
-              pressed={detailsOpen}
-              side="bottom"
-            />
+            <>
+              <ThreadStatusButton
+                onSaved={() => void thread.timeline.refetch()}
+                thread={{
+                  id: threadId,
+                  name: threadName,
+                  status: verifiedTimeline.conversation.threadStatus ?? 'Open',
+                  outcome: verifiedTimeline.conversation.threadOutcome,
+                }}
+              />
+              <IconButton
+                icon="panel-right"
+                label={detailsOpen ? 'Hide details' : 'Show details'}
+                onClick={() => setDetailsOpen(!detailsOpen)}
+                pressed={detailsOpen}
+                side="bottom"
+              />
+            </>
           ) : null
         }
         icon="messages"

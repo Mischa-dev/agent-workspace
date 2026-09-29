@@ -5,6 +5,7 @@ pub mod api;
 pub mod auth;
 pub mod bootstrap;
 pub mod config;
+pub mod connected_apps;
 pub mod conversations;
 pub mod direct;
 pub mod domain;
@@ -20,6 +21,7 @@ pub mod idempotency;
 pub mod invitations;
 pub mod mcp;
 pub mod memberships;
+pub mod memory;
 pub mod message_content;
 pub mod migration_preflight;
 pub mod outbox;
@@ -35,6 +37,7 @@ pub mod replies;
 pub mod repositories;
 pub mod retention;
 pub mod scheduler;
+pub mod search;
 pub mod seed;
 pub mod storage_admission;
 pub mod telemetry;
@@ -90,6 +93,9 @@ pub fn router(state: AppState) -> Router {
         .merge(invitations::router())
         .merge(memberships::router())
         .merge(work_items::router())
+        .merge(memory::router())
+        .merge(search::router())
+        .merge(connected_apps::router())
         .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
         .route("/api/v1", any(api_not_found))

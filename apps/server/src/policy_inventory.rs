@@ -182,6 +182,45 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages",
         MessageSend
     ),
+    policy_route!(
+        "conversations",
+        Post,
+        "/api/v1/conversations/{id}/threads",
+        ThreadCreate
+    ),
+    policy_route!("conversations", Patch, "/api/v1/threads/{id}", ThreadCreate),
+    policy_route!("memory", Post, "/api/v1/projects/{id}/pages", WorkItemEdit),
+    policy_route!("memory", Patch, "/api/v1/pages/{id}", WorkItemEdit),
+    policy_route!(
+        "memory",
+        Post,
+        "/api/v1/projects/{id}/decisions",
+        MessageSend
+    ),
+    policy_route!(
+        "memory",
+        Post,
+        "/api/v1/conversations/{id}/pins",
+        MessageSend
+    ),
+    policy_route!(
+        "memory",
+        Delete,
+        "/api/v1/conversations/{id}/pins/{kind}/{target_id}",
+        MessageSend
+    ),
+    boundary_route!(
+        "connected_apps",
+        Patch,
+        "/api/v1/account/connected-apps/{id}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "connected_apps",
+        Post,
+        "/api/v1/account/connected-apps/{id}/revoke",
+        SessionAuthentication
+    ),
     policy_route!("direct", Post, "/api/v1/direct/dms", ChannelCreate),
     policy_route!("direct", Post, "/api/v1/direct/groups", ChannelCreate),
     policy_route!(
@@ -479,6 +518,8 @@ mod tests {
         ("work_items", include_str!("work_items.rs")),
         ("execution", include_str!("execution.rs")),
         ("external_agents", include_str!("external_agents.rs")),
+        ("memory", include_str!("memory.rs")),
+        ("connected_apps", include_str!("connected_apps.rs")),
     ];
 
     #[test]

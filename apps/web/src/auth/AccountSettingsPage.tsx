@@ -4,6 +4,7 @@ import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { AppShell } from '../shell/AppShell'
 import { Banner, Button, PageHeader, Section, TextField } from '../ui'
+import { ConnectedAppsSection } from './ConnectedApps'
 import { useAuthenticatedSession } from './session'
 import { startWorkOs, workOsStatus } from './workos'
 
@@ -45,6 +46,7 @@ export function AccountSettingsPage() {
             : <Button busy={link.isPending} onClick={() => link.mutate(undefined)} variant="primary">Link WorkOS account</Button>)}
           {status.data && !status.data.enabled && <p>WorkOS sign-in has not been configured on this host.</p>}
         </Section>
+        <ConnectedAppsSection />
       </div>
     </AppShell>
   )

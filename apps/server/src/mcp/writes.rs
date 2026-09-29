@@ -32,6 +32,7 @@ const MAX_BLOCKED_REASON_CHARACTERS: usize = 2_000;
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetStatusArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub status: String,
@@ -41,7 +42,10 @@ pub struct SetStatusArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PostUpdateArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
+    /// The comment or update, in plain text.
+    #[serde(rename = "text", alias = "update")]
     pub update: String,
     pub client_request_id: String,
 }
@@ -49,6 +53,7 @@ pub struct PostUpdateArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateWorkItemArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub title: Option<String>,
@@ -62,6 +67,7 @@ pub struct UpdateWorkItemArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSubtaskArguments {
+    #[serde(rename = "parentId", alias = "parentWorkItemId")]
     pub parent_work_item_id: String,
     pub title: String,
     pub description: Option<String>,
@@ -81,6 +87,7 @@ pub struct CreateWorkItemArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkPullRequestArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub pull_request_id: String,
@@ -90,6 +97,7 @@ pub struct LinkPullRequestArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkBlockedArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub reason: String,
@@ -99,6 +107,7 @@ pub struct MarkBlockedArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkReadyForReviewArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub client_request_id: String,
@@ -962,6 +971,9 @@ async fn authorize_write(
             retry_category: "request_write_scope".to_owned(),
         }));
     }
+    // Rows written below (activity, comments) record the app a person is
+    // acting through.
+    super::common::mark_via(transaction, principal).await?;
     let membership = lock_membership(transaction, principal.actor_id, principal.project_id).await?;
     let Some(membership) = membership else {
         return Ok(Some(not_found()));
