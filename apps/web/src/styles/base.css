@@ -131,6 +131,15 @@ samp {
   }
 }
 
+/* iOS zooms the page into any field smaller than 16px when it gains focus. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

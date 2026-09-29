@@ -76,11 +76,17 @@ export function ProjectRail({
   currentProjectId,
   mobileOpen,
   onNavigate,
+  onSpaceSelected = onNavigate,
   user,
 }: {
   currentProjectId: string | null
   mobileOpen: boolean
   onNavigate: () => void
+  /**
+   * Called instead of onNavigate when a Project or Messages is chosen. On phones
+   * the drawer stays open so its sidebar can show that space's channels.
+   */
+  onSpaceSelected?: () => void
   user: SessionUser
 }) {
   const projectsQuery = useProjects()
@@ -130,7 +136,7 @@ export function ProjectRail({
     setStatus(null)
     if (!project.capabilities.navigationWrite) {
       setSwitcherOpen(false)
-      onNavigate()
+      onSpaceSelected()
       navigate(projectHref(project))
       return
     }
@@ -141,7 +147,7 @@ export function ProjectRail({
         navigation: project.navigation,
       })
       setSwitcherOpen(false)
-      onNavigate()
+      onSpaceSelected()
       navigate(result.href)
     } catch (reason) {
       setStatus(isApiError(reason) ? reason.message : 'Couldn’t switch Projects. Try again.')
@@ -185,7 +191,7 @@ export function ProjectRail({
           badge={unreadConversations}
           icon="message"
           label="Messages"
-          onClick={onNavigate}
+          onClick={onSpaceSelected}
           to="/messages"
         />
         <span className="aw-rail__divider" role="separator" />

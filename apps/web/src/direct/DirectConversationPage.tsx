@@ -266,6 +266,11 @@ export function DirectConversationPage() {
       contextKey={openThreadId ?? (boardOpen ? 'threads' : membersOpen ? 'members' : undefined)}
       direct
       mainClassName="aw-main--conversation"
+      onContextDismiss={() => {
+        if (openThreadId) openThread(null)
+        setBoardOpen(false)
+        setMembersOpen(false)
+      }}
       user={session.user}
     >
       {header}

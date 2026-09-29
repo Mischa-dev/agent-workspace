@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { SessionUser } from '../auth/session'
 import { DirectSidebar } from '../direct/DirectSidebar'
 import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
+import { syncThemeColor } from '../theme/themeColor'
 import { Banner, Icon } from '../ui'
+import { MenuButton } from './MenuButton'
+import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useMobileNavigation } from './mobileNavigation'
 import { ProjectRail } from './ProjectRail'
 import { ProjectSidebar } from './ProjectSidebar'
+import { useKeyboardViewport } from './useKeyboardViewport'
+import { useSwipe } from './useSwipe'
 
 const drawerFocusableSelector = [
   'a[href]',
@@ -27,7 +32,8 @@ function setInert(element: HTMLElement | null, inert: boolean) {
 
 /**
  * The app frame: the rail of spaces, the space's sidebar, the conversation or page,
- * and an optional details panel. On narrow screens each side column becomes a drawer.
+ * and an optional details panel. On narrow screens the rail and sidebar become one
+ * navigation drawer, and the details panel becomes a drawer on the right.
  */
 export function AppShell({
   children,
@@ -35,6 +41,7 @@ export function AppShell({
   contextKey,
   direct = false,
   mainClassName,
+  onContextDismiss,
   project = null,
   selectedChannelId,
   thread = null,
@@ -51,23 +58,31 @@ export function AppShell({
   /** Show the Messages sidebar (DMs and groups) instead of a Project's. */
   direct?: boolean
   mainClassName?: string
+  /**
+   * Called when the person closes the details drawer on a narrow screen, so the
+   * page can forget the panel and its own toggle opens it again in one tap.
+   */
+  onContextDismiss?: () => void
   project?: Project | null
   selectedChannelId?: string
   thread?: { id: string; name: string } | null
   user: SessionUser
 }) {
-  const [railOpen, setRailOpen] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+  useKeyboardViewport()
+  const navigation = useMobileNavigation()
+  const navOpen = navigation.open
+  const setNavOpen = navigation.setOpen
   const [contextOpenState, setContextOpen] = useState(false)
   // A panel closed from inside (a thread's close button) closes its drawer too.
   const contextOpen = contextOpenState && Boolean(context)
   const shellRef = useRef<HTMLDivElement>(null)
-  const railButtonRef = useRef<HTMLButtonElement>(null)
-  const sidebarButtonRef = useRef<HTMLButtonElement>(null)
-  const contextButtonRef = useRef<HTMLButtonElement>(null)
+  const navTriggerRef = useRef<HTMLElement | null>(null)
   const contextCloseButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const anyDrawerOpen = railOpen || sidebarOpen || contextOpen
+  const contextTriggerRef = useRef<HTMLElement | null>(null)
+  const anyDrawerOpen = navOpen || contextOpen
+  // Conversations bring their own header, which carries the menu button on phones.
+  const conversationLayout = mainClassName === 'aw-main--conversation'
 
   // When the page asks to show something new in the panel (a thread), open
   // the drawer on narrow screens. Adjusting state while rendering, not in an
@@ -75,44 +90,77 @@ export function AppShell({
   const [shownContextKey, setShownContextKey] = useState<string | undefined>(undefined)
   if (contextKey !== shownContextKey) {
     setShownContextKey(contextKey)
-    if (contextKey && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 860px)').matches) {
-      setRailOpen(false)
-      setSidebarOpen(false)
+    if (contextKey && isMobileWidth()) {
+      if (navOpen) setNavOpen(false)
       setContextOpen(true)
     }
   }
   const realtime = useOptionalRealtime()
   const hasSidebar = Boolean(project) || direct
 
-  const closeDrawers = () => {
-    setRailOpen(false)
-    setSidebarOpen(false)
+  const closeDrawers = useCallback(() => {
+    setNavOpen(false)
     setContextOpen(false)
-  }
+  }, [setNavOpen])
 
-  const returnFocus = useCallback(
-    () => (railOpen ? railButtonRef.current : sidebarOpen ? sidebarButtonRef.current : contextButtonRef.current),
-    [railOpen, sidebarOpen],
+  const dismiss = useCallback(() => {
+    const trigger = navOpen ? navTriggerRef.current : contextTriggerRef.current
+    if (contextOpen) onContextDismiss?.()
+    closeDrawers()
+    window.requestAnimationFrame(() => trigger?.focus())
+  }, [closeDrawers, contextOpen, navOpen, onContextDismiss])
+
+  const openNavigation = useCallback(
+    (trigger: HTMLElement | null) => {
+      navTriggerRef.current = trigger
+      setContextOpen(false)
+      setNavOpen(true)
+    },
+    [setNavOpen],
   )
+
+  const shellHeader = useMemo(() => ({ openNavigation, navigationOpen: navOpen }), [navOpen, openNavigation])
+
+  // The details panel's trigger lives in the page header; remember what had
+  // focus when it opened (before focus moves into the drawer, below) so
+  // closing the drawer can return there.
+  useEffect(() => {
+    if (contextOpen) contextTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }, [contextOpen])
+
+  // Widening past the phone layout shows everything in place, so drop the drawers.
+  useEffect(() => {
+    if (!anyDrawerOpen || typeof window.matchMedia !== 'function') return undefined
+    const query = window.matchMedia(MOBILE_QUERY)
+    const onChange = () => {
+      if (!query.matches) closeDrawers()
+    }
+    query.addEventListener?.('change', onChange)
+    return () => query.removeEventListener?.('change', onChange)
+  }, [anyDrawerOpen, closeDrawers])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.chrome = conversationLayout ? 'conversation' : 'page'
+    syncThemeColor()
+  }, [conversationLayout])
 
   useEffect(() => {
     if (!anyDrawerOpen) return
-    const activeDrawer = shellRef.current?.querySelector<HTMLElement>(
-      railOpen ? '#project-rail' : sidebarOpen ? '#project-sidebar' : '#context-region',
+    const drawers = Array.from(
+      shellRef.current?.querySelectorAll<HTMLElement>(navOpen ? '#project-rail, #project-sidebar' : '#context-region') ?? [],
     )
 
     const handleDrawerKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        const trigger = returnFocus()
-        closeDrawers()
-        window.requestAnimationFrame(() => trigger?.focus())
+        dismiss()
         return
       }
 
       if (event.key !== 'Tab') return
-      const drawerControls = Array.from(activeDrawer?.querySelectorAll<HTMLElement>(drawerFocusableSelector) ?? []).filter(
-        (element) => element.tabIndex >= 0 && !element.closest('[inert], [aria-hidden="true"]'),
-      )
+      const drawerControls = drawers
+        .flatMap((drawer) => Array.from(drawer.querySelectorAll<HTMLElement>(drawerFocusableSelector)))
+        .filter((element) => element.tabIndex >= 0 && !element.closest('[inert], [aria-hidden="true"]'))
       const focusable = closeButtonRef.current ? [...drawerControls, closeButtonRef.current] : drawerControls
       if (!focusable.length) return
 
@@ -130,7 +178,7 @@ export function AppShell({
     }
     document.addEventListener('keydown', handleDrawerKeyDown)
     return () => document.removeEventListener('keydown', handleDrawerKeyDown)
-  }, [anyDrawerOpen, contextOpen, railOpen, returnFocus, sidebarOpen])
+  }, [anyDrawerOpen, dismiss, navOpen])
 
   useEffect(() => {
     const rail = shellRef.current?.querySelector<HTMLElement>('#project-rail') ?? null
@@ -138,8 +186,8 @@ export function AppShell({
     const contextRegion = shellRef.current?.querySelector<HTMLElement>('#context-region') ?? null
     const contextDrawer = contextRegion?.querySelector<HTMLElement>('.context-drawer') ?? null
 
-    setInert(rail, anyDrawerOpen && !railOpen)
-    setInert(sidebar, anyDrawerOpen && !sidebarOpen)
+    setInert(rail, anyDrawerOpen && !navOpen)
+    setInert(sidebar, anyDrawerOpen && !navOpen)
     setInert(contextRegion, anyDrawerOpen && !contextOpen)
     setInert(contextDrawer, anyDrawerOpen && !contextOpen)
 
@@ -149,15 +197,18 @@ export function AppShell({
       setInert(contextRegion, false)
       setInert(contextDrawer, false)
     }
-  }, [anyDrawerOpen, contextOpen, railOpen, sidebarOpen])
+  }, [anyDrawerOpen, contextOpen, navOpen])
 
   useEffect(() => {
-    if (!railOpen && !sidebarOpen && !contextOpen) return
+    if (!navOpen && !contextOpen) return
     const focusTimer = window.setTimeout(() => {
-      if (railOpen) {
-        document.querySelector<HTMLElement>('#project-rail a, #project-rail button')?.focus()
-      } else if (sidebarOpen) {
-        document.querySelector<HTMLElement>('#project-sidebar a, #project-sidebar button')?.focus()
+      if (navOpen) {
+        // Start where you are: the current channel or conversation, else the first destination.
+        const target =
+          document.querySelector<HTMLElement>('#project-sidebar [aria-current="page"]') ??
+          document.querySelector<HTMLElement>('#project-sidebar a') ??
+          document.querySelector<HTMLElement>('#project-rail a, #project-rail button')
+        target?.focus()
       } else if (contextOpen) {
         const contextRegion = document.querySelector<HTMLElement>('#context-region')
         const focusTarget = contextCloseButtonRef.current ?? contextRegion
@@ -165,141 +216,102 @@ export function AppShell({
       }
     }, 50)
     return () => window.clearTimeout(focusTimer)
-  }, [contextOpen, railOpen, sidebarOpen])
+  }, [contextOpen, navOpen])
+
+  useSwipe(shellRef, {
+    onSwipeLeft: () => {
+      if (navOpen) dismiss()
+    },
+    onSwipeRight: (target) => {
+      if (contextOpen) dismiss()
+      else if (!navOpen && isMobileWidth() && target.closest('#main-workspace')) openNavigation(null)
+    },
+  })
 
   return (
-    <div
-      className="aw-shell"
-      data-drawer={railOpen ? 'rail' : sidebarOpen ? 'sidebar' : contextOpen ? 'context' : undefined}
-      data-has-context={Boolean(hasSidebar && context)}
-      data-has-sidebar={hasSidebar}
-      ref={shellRef}
-    >
-      <a className="aw-skip-link" href="#main-workspace" inert={anyDrawerOpen}>
-        Skip to main workspace
-      </a>
-      <ProjectRail currentProjectId={project?.id ?? null} mobileOpen={railOpen} onNavigate={closeDrawers} user={user} />
-      {project ? (
-        <ProjectSidebar
-          mobileOpen={sidebarOpen}
-          onNavigate={closeDrawers}
-          project={project}
-          selectedChannelId={selectedChannelId}
-          thread={thread}
-        />
-      ) : direct ? (
-        <DirectSidebar mobileOpen={sidebarOpen} onNavigate={closeDrawers} />
-      ) : null}
-      <main
-        className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
-        data-region="content"
-        id="main-workspace"
-        inert={anyDrawerOpen}
-        tabIndex={-1}
+    <ShellHeaderContext.Provider value={shellHeader}>
+      <div
+        className="aw-shell"
+        data-drawer={navOpen ? 'nav' : contextOpen ? 'context' : undefined}
+        data-has-context={Boolean(hasSidebar && context)}
+        data-has-sidebar={hasSidebar}
+        ref={shellRef}
       >
-        <div className="aw-mobilebar">
-          <button
-            aria-controls="project-rail"
-            aria-expanded={railOpen}
-            className="aw-mobilebar__button"
-            onClick={() => {
-              setSidebarOpen(false)
-              setContextOpen(false)
-              setRailOpen((open) => !open)
-            }}
-            ref={railButtonRef}
-            type="button"
-          >
-            <Icon name="menu" size={20} />
-            <span className="visually-hidden">Projects</span>
-          </button>
-          {hasSidebar && (
-            <button
-              aria-controls="project-sidebar"
-              aria-expanded={sidebarOpen}
-              className="aw-mobilebar__button"
-              onClick={() => {
-                setRailOpen(false)
-                setContextOpen(false)
-                setSidebarOpen((open) => !open)
-              }}
-              ref={sidebarButtonRef}
-              type="button"
-            >
-              <span aria-hidden="true" className="aw-mobilebar__space">
-                {project ? project.name : 'Messages'}
-                <Icon name="chevron-down" size={14} />
-              </span>
-              <span className="visually-hidden">{project ? `${project.key} menu` : 'Messages menu'}</span>
-            </button>
-          )}
-          {hasSidebar && context && (
-            <button
-              aria-controls="context-region"
-              aria-expanded={contextOpen}
-              className="aw-mobilebar__button aw-mobilebar__details"
-              onClick={() => {
-                setRailOpen(false)
-                setSidebarOpen(false)
-                setContextOpen((open) => !open)
-              }}
-              ref={contextButtonRef}
-              type="button"
-            >
-              <Icon name="panel-right" size={18} />
-              Details
-            </button>
-          )}
-        </div>
-        {realtime?.connection === 'retrying' && (
-          <Banner className="aw-shell__banner" title="Reconnecting." tone="offline">
-            Live updates are paused for a moment. Anything you send still goes through.
-          </Banner>
-        )}
-        {children}
-      </main>
-      {hasSidebar && context && (
-        <div
-          aria-label={contextOpen ? 'Details' : undefined}
-          aria-modal={contextOpen || undefined}
-          className="aw-panel"
-          data-mobile-open={contextOpen}
+        <a className="aw-skip-link" href="#main-workspace" inert={anyDrawerOpen}>
+          Skip to main workspace
+        </a>
+        <ProjectRail
+          currentProjectId={project?.id ?? null}
+          mobileOpen={navOpen}
+          onNavigate={closeDrawers}
+          onSpaceSelected={navigation.keepOpenOnNextNavigation}
+          user={user}
+        />
+        {project ? (
+          <ProjectSidebar
+            mobileOpen={navOpen}
+            onNavigate={closeDrawers}
+            project={project}
+            selectedChannelId={selectedChannelId}
+            thread={thread}
+          />
+        ) : direct ? (
+          <DirectSidebar mobileOpen={navOpen} onNavigate={closeDrawers} />
+        ) : null}
+        <main
+          className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
           data-region="content"
-          id="context-region"
-          role={contextOpen ? 'dialog' : undefined}
+          id="main-workspace"
+          inert={anyDrawerOpen}
           tabIndex={-1}
         >
-          {contextOpen && (
-            <button
-              aria-label="Close Details"
-              autoFocus
-              className="aw-iconbtn aw-panel__close"
-              onClick={() => {
-                setContextOpen(false)
-                window.requestAnimationFrame(() => contextButtonRef.current?.focus())
-              }}
-              ref={contextCloseButtonRef}
-              type="button"
-            >
-              <Icon name="x" size={18} />
-            </button>
+          {conversationLayout ? null : (
+            <div className="aw-mobilebar">
+              <MenuButton label={project ? project.name : direct ? 'Messages' : 'Agent Workspace'} />
+            </div>
           )}
-          {context}
-        </div>
-      )}
-      {anyDrawerOpen && (
-        <button
-          aria-label={contextOpen ? 'Dismiss Details' : 'Close navigation'}
-          className="aw-drawer-backdrop"
-          onClick={() => {
-            const trigger = returnFocus()
-            closeDrawers()
-            window.requestAnimationFrame(() => trigger?.focus())
-          }}
-          ref={closeButtonRef}
-          type="button"
-        />
-      )}
-    </div>
+          {realtime?.connection === 'retrying' && (
+            <Banner className="aw-shell__banner" title="Reconnecting." tone="offline">
+              Live updates are paused for a moment. Anything you send still goes through.
+            </Banner>
+          )}
+          {children}
+        </main>
+        {hasSidebar && context && (
+          <div
+            aria-label={contextOpen ? 'Details' : undefined}
+            aria-modal={contextOpen || undefined}
+            className="aw-panel"
+            data-mobile-open={contextOpen}
+            data-region="content"
+            id="context-region"
+            role={contextOpen ? 'dialog' : undefined}
+            tabIndex={-1}
+          >
+            {contextOpen && (
+              <button
+                aria-label="Close Details"
+                className="aw-iconbtn aw-panel__close"
+                onClick={dismiss}
+                ref={contextCloseButtonRef}
+                type="button"
+              >
+                <Icon name="x" size={18} />
+              </button>
+            )}
+            {context}
+          </div>
+        )}
+        {anyDrawerOpen && (
+          <button
+            aria-label={contextOpen ? 'Dismiss Details' : 'Close navigation'}
+            className="aw-drawer-backdrop"
+            onClick={dismiss}
+            ref={closeButtonRef}
+            type="button"
+          />
+        )}
+      </div>
+    </ShellHeaderContext.Provider>
   )
 }
