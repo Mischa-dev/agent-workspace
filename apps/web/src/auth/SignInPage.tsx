@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -34,12 +34,15 @@ export function SignInPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const returnTo = safeReturnTo(location.search)
+  const goBack = useCallback(() => {
+    // An app's connect screen is served by the server, not this app.
+    if (returnTo.startsWith('/oauth/')) window.location.replace(returnTo)
+    else navigate(returnTo, { replace: true })
+  }, [navigate, returnTo])
 
   useEffect(() => {
-    if (isAuthenticatedSession(session.data)) {
-      navigate(returnTo, { replace: true })
-    }
-  }, [navigate, returnTo, session.data])
+    if (isAuthenticatedSession(session.data)) goBack()
+  }, [goBack, session.data])
 
   useEffect(() => {
     if (error) errorRef.current?.focus()
@@ -64,7 +67,7 @@ export function SignInPage() {
       }
       installAuthenticatedSession(queryClient, nextSession)
       setPassword('')
-      navigate(returnTo, { replace: true })
+      goBack()
     } catch (reason) {
       setPassword('')
       if (isApiError(reason) && reason.code === 'rate_limited') {

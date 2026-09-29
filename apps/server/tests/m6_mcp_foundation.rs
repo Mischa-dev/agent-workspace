@@ -945,6 +945,34 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .unwrap_or_else(|| panic!("OAuth client ID: {registration}"))
         .to_owned();
     assert!(registration.get("client_secret").is_none());
+    // Claude Code registers as "Claude Code (<server nickname>)". Clean the
+    // name rather than refusing the connection.
+    let claude_code = json_response(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "client_name":"Claude Code (agent-workspace)",
+                            "redirect_uris":["http://localhost:45679/callback"],
+                            "token_endpoint_auth_method":"none",
+                            "grant_types":["authorization_code","refresh_token"],
+                            "response_types":["code"],
+                            "scope":"read write"
+                        }))
+                        .expect("registration JSON"),
+                    ))
+                    .expect("registration request"),
+            )
+            .await
+            .expect("registration response"),
+    )
+    .await;
+    assert_eq!(claude_code["client_name"], "Claude Code", "{claude_code}");
 
     let cookie = login(&application).await;
     let csrf = csrf_from_cookie(&cookie);
@@ -966,11 +994,49 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         // rejecting conflicting resource targets.
         .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp")
         .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp");
+    // Signed out: go sign in, then come back to this screen.
+    let authorize_path =
+        authorize_url.path().to_owned() + "?" + authorize_url.query().expect("query");
+    let signed_out = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_path)
+                .body(Body::empty())
+                .expect("authorize request"),
+        )
+        .await
+        .expect("authorize response");
+    assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
+    let sign_in = url::Url::parse("http://127.0.0.1:3100")
+        .and_then(|base| {
+            base.join(
+                signed_out.headers()[header::LOCATION]
+                    .to_str()
+                    .expect("location"),
+            )
+        })
+        .expect("sign-in URL");
+    assert_eq!(sign_in.path(), "/sign-in");
+    assert_eq!(
+        sign_in
+            .query_pairs()
+            .find(|(key, _)| key == "returnTo")
+            .map(|(_, value)| value.into_owned()),
+        Some(authorize_path.clone())
+    );
+    assert!(
+        signed_out.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("cookie")
+            .contains("sign_in_return=")
+    );
+
     let consent_page = application
         .clone()
         .oneshot(
             Request::builder()
-                .uri(authorize_url.path().to_owned() + "?" + authorize_url.query().expect("query"))
+                .uri(&authorize_path)
                 .header(header::COOKIE, &cookie)
                 .body(Body::empty())
                 .expect("authorize request"),

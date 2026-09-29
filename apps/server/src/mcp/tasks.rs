@@ -935,8 +935,11 @@ pub(super) async fn task_claim(
         }
         let mut transaction = state.pool.begin().await?;
         mark_via(&mut transaction, principal).await?;
+        // Claimers take turns on the task row. With a shared lock here, two
+        // agents claiming at once deadlocked: the winner's activity write
+        // waited on the loser's lock while the loser waited on the claim.
         let archived = sqlx::query_scalar::<_, bool>(
-            "SELECT archived_at IS NOT NULL FROM work_items WHERE id = $1 FOR SHARE",
+            "SELECT archived_at IS NOT NULL FROM work_items WHERE id = $1 FOR NO KEY UPDATE",
         )
         .bind(task_id)
         .fetch_one(&mut *transaction)
@@ -944,8 +947,8 @@ pub(super) async fn task_claim(
         if archived {
             return Ok(ToolResult::conflict("That task is archived."));
         }
-        // The primary key makes this race-safe: of two agents claiming at
-        // once, one inserts and the other finds a live claim it doesn't own.
+        // The second claimer runs after the first commits and finds a live
+        // claim it doesn't own, so the update below changes nothing.
         let claimed = sqlx::query_as::<_, (Uuid, bool)>(
             r#"
             INSERT INTO work_item_claims (work_item_id, project_id, actor_id, note, expires_at)

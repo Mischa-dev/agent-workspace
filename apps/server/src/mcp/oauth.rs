@@ -16,7 +16,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, cookie_value, csrf_cookie_name, require_csrf},
+    auth::{
+        AuthenticatedActor, cookie_value, csrf_cookie_name, require_csrf, sign_in_return,
+        sign_in_return_cookie,
+    },
     error::{ApiJson, AppError},
 };
 
@@ -137,12 +140,13 @@ struct RegistrationResponse {
 
 async fn register_client(
     State(state): State<AppState>,
-    ApiJson(request): ApiJson<RegistrationRequest>,
+    ApiJson(mut request): ApiJson<RegistrationRequest>,
 ) -> Result<(StatusCode, Json<RegistrationResponse>), OAuthError> {
     state
         .rate_limits
         .check_oauth_ceremony(&request.client_name)
         .map_err(OAuthError::from)?;
+    request.client_name = clean_client_name(&request.client_name);
     validate_client_name(&request.client_name)?;
     if request.redirect_uris.is_empty() || request.redirect_uris.len() > 8 {
         return Err(OAuthError::invalid_client_metadata(
@@ -288,16 +292,25 @@ struct ClientRow {
 
 async fn authorize(
     State(state): State<AppState>,
-    principal: AuthenticatedActor,
+    principal: Result<AuthenticatedActor, AppError>,
     headers: HeaderMap,
     RawQuery(raw_query): RawQuery,
-) -> Result<Html<String>, OAuthError> {
+) -> Result<Response, OAuthError> {
+    let back = format!(
+        "/oauth/authorize?{}",
+        raw_query.as_deref().unwrap_or_default()
+    );
     let request = parse_authorize_query(raw_query)?;
     state
         .rate_limits
         .check_oauth_ceremony(&request.client_id)
         .map_err(OAuthError::from)?;
     let (client, scopes) = validate_authorize_request(&state, &request).await?;
+    let principal = match principal {
+        Ok(principal) => principal,
+        Err(AppError::AuthenticationRequired) => return sign_in_first(&state, &back),
+        Err(error) => return Err(error.into()),
+    };
     let csrf = csrf_cookie(&state.config, &headers)
         .ok_or_else(|| OAuthError::access_denied("the browser session is missing CSRF state"))?;
     let scope = scopes.join(" ");
@@ -332,7 +345,37 @@ async fn authorize(
         scope = escape_html(&scope),
         hidden = hidden_authorize_fields(&request, &scope, &csrf),
     );
-    Ok(Html(html))
+    let mut response = Html(html).into_response();
+    if sign_in_return(&state.config, &headers).is_some() {
+        let forget = sign_in_return_cookie(&state.config, None);
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&forget).map_err(|_| AppError::Internal("sign-in return"))?,
+        );
+    }
+    Ok(response)
+}
+
+/// Someone signed out opened the connect screen: send them to sign in, and
+/// remember the screen so every kind of sign-in brings them back to it.
+fn sign_in_first(state: &AppState, back: &str) -> Result<Response, OAuthError> {
+    let location = format!(
+        "/sign-in?returnTo={}",
+        url::form_urlencoded::byte_serialize(back.as_bytes()).collect::<String>()
+    );
+    let remember = sign_in_return_cookie(&state.config, Some(back));
+    let header_value = |value: &str| {
+        HeaderValue::from_str(value).map_err(|_| AppError::Internal("sign-in return"))
+    };
+    Ok((
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, header_value(&location)?),
+            (header::SET_COOKIE, header_value(&remember)?),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+    )
+        .into_response())
 }
 
 /// Styles for the consent page. The site's content security policy allows
@@ -1102,6 +1145,43 @@ fn parse_scopes(scope: Option<&str>) -> Result<Vec<String>, OAuthError> {
     Ok(values)
 }
 
+/// Apps name themselves freely: Claude Code registers as
+/// "Claude Code (<server nickname>)". Keep the app's own name in the plain
+/// characters the consent page and "via" labels allow, rather than refusing
+/// the connection over punctuation.
+fn clean_client_name(raw: &str) -> String {
+    let raw = raw.trim();
+    let base = raw
+        .strip_suffix(')')
+        .and_then(|rest| rest.rfind(" (").map(|index| &rest[..index]))
+        .filter(|base| !base.trim().is_empty())
+        .unwrap_or(raw);
+    let plain: String = base
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let mut name = plain
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_start_matches(|character: char| !character.is_ascii_alphanumeric())
+        .chars()
+        .take(MAX_CLIENT_NAME)
+        .collect::<String>();
+    name.truncate(name.trim_end().len());
+    if name.is_empty() {
+        "Connected app".to_owned()
+    } else {
+        name
+    }
+}
+
 fn validate_client_name(name: &str) -> Result<(), OAuthError> {
     if name.is_empty()
         || name.chars().count() > MAX_CLIENT_NAME
@@ -1493,6 +1573,24 @@ mod tests {
         assert!(parse_scopes(Some("write")).is_err());
         assert!(parse_scopes(Some("read admin")).is_err());
         assert!(secret_lookup("aw_oauth_aaaaaaaéaaaa", "aw_oauth_").is_err());
+    }
+
+    #[test]
+    fn client_names_are_cleaned_instead_of_refused() {
+        for (raw, clean) in [
+            ("Claude Code (agent-workspace)", "Claude Code"),
+            ("Codex", "Codex"),
+            ("ChatGPT", "ChatGPT"),
+            ("  Cursor: Agent!  ", "Cursor Agent"),
+            ("(agent-workspace)", "agent-workspace"),
+            ("✨ 日本語 ✨", "Connected app"),
+            ("", "Connected app"),
+        ] {
+            let cleaned = clean_client_name(raw);
+            assert_eq!(cleaned, clean, "{raw}");
+            assert!(validate_client_name(&cleaned).is_ok(), "{raw}");
+        }
+        assert!(validate_client_name(&clean_client_name(&"a ".repeat(200))).is_ok());
     }
 
     #[test]
