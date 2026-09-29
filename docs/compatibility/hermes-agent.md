@@ -63,25 +63,21 @@ mcp_servers:
         - approval_get
         - approval_respond
         - conversation_list
-        - conversation_message_send
-        - conversation_timeline_get
+        - conversation_read
         - external_event_poll
-        - external_execution_request_create
-        - mentionable_actor_search
-        - project_get
-        - project_instructions_get
+        - message_send
+        - people_search
+        - project_open
         - pull_request_get
         - repository_get
-        - work_item_context_get
-        - work_item_create
-        - work_item_create_subtask
-        - work_item_get
-        - work_item_mark_blocked
-        - work_item_mark_ready_for_review
-        - work_item_post_update
-        - work_item_search
-        - work_item_set_status
-        - work_item_update
+        - run_request
+        - task_comment
+        - task_create
+        - task_list
+        - task_mark_blocked
+        - task_mark_ready_for_review
+        - task_open
+        - task_update
       resources: false
       prompts: false
     sampling:
@@ -93,7 +89,7 @@ mcp_servers:
 Hermes registers these as `mcp__agent_workspace__<tool>`. The allowlist is
 also committed as `tools/hermes-connector/fixtures/tool-allowlist.txt` and CI
 checks every entry against the Rust MCP implementation. The server advertises
-`work_item_link_pull_request` to first-party human clients, but it is omitted
+`task_link_pull_request` to first-party human clients, but it is omitted
 from this external profile because M9 does not delegate GitHub publication or
 integration management.
 

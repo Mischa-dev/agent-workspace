@@ -17,7 +17,7 @@ type ConnectedApp = {
   lastUsedAt: string | null
 }
 
-type ConnectedAppsResponse = { mcpUrl: string; apps: ConnectedApp[] }
+type ConnectedAppsResponse = { mcpUrl: string; guideUrl: string; apps: ConnectedApp[] }
 
 const key = ['connected-apps'] as const
 
@@ -64,6 +64,7 @@ export function ConnectedAppsSection() {
     onError,
   })
   const mcpUrl = apps.data?.mcpUrl ?? `${window.location.origin}/api/v1/mcp`
+  const guideUrl = apps.data?.guideUrl ?? `${window.location.origin}/connect.md`
   return (
     <>
       <Section
@@ -118,8 +119,13 @@ export function ConnectedAppsSection() {
         title="Connect an app"
       >
         <div className="aw-connect">
+          <CopyLine label="Setup guide for a bot" value={guideUrl} />
+          <p className="aw-connect__note">
+            Send this link to Codex, Claude, Muse, Hermes or any other agent. It explains how to connect, whether it works for
+            you or has its own agent account.
+          </p>
           <CopyLine label="MCP address" value={mcpUrl} />
-          <CopyLine label="Claude Code" value={`claude mcp add --transport http agent-workspace ${mcpUrl}`} />
+          <CopyLine label="Claude Code" value={`claude mcp add --scope user --transport http agent-workspace ${mcpUrl}`} />
           <CopyLine label="Codex config.toml" value={`[mcp_servers.agent_workspace]\nurl = "${mcpUrl}"`} />
           <CopyLine label="Then in Codex" value="codex mcp login agent_workspace" />
           <p className="aw-connect__note">

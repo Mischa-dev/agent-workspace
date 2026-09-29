@@ -1,11 +1,13 @@
 //! Connected apps: the MCP clients (Claude Code, Codex, ChatGPT, ...) a
 //! person has connected to their account. People can see what's connected,
-//! turn the "via <app>" label on or off, and revoke access.
+//! turn the "via <app>" label on or off, and revoke access. `/connect.md` is
+//! the setup guide a person sends to an agent or app so it can connect itself.
 
 use axum::{
     Json, Router,
     extract::State,
-    http::HeaderMap,
+    http::{HeaderMap, header},
+    response::IntoResponse,
     routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,26 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/account/connected-apps", get(list))
         .route("/api/v1/account/connected-apps/{id}", patch(update))
         .route("/api/v1/account/connected-apps/{id}/revoke", post(revoke))
+        .route("/connect.md", get(setup_guide))
+}
+
+fn public_origin(state: &AppState) -> String {
+    state
+        .config
+        .public_origin
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", state.config.server_addr))
+}
+
+/// Plain-text setup instructions written for the agent or app itself.
+async fn setup_guide(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        include_str!("connect.md").replace("{origin}", &public_origin(&state)),
+    )
 }
 
 #[derive(Debug, FromRow, Serialize)]
@@ -46,6 +68,8 @@ struct ConnectedApp {
 struct ConnectedAppsResponse {
     /// The address to give an MCP client.
     mcp_url: String,
+    /// Setup instructions to send to an agent or app.
+    guide_url: String,
     apps: Vec<ConnectedApp>,
 }
 
@@ -89,13 +113,10 @@ async fn list(
     .bind(principal.actor_id)
     .fetch_all(&state.pool)
     .await?;
-    let origin = state
-        .config
-        .public_origin
-        .clone()
-        .unwrap_or_else(|| format!("http://{}", state.config.server_addr));
+    let origin = public_origin(&state);
     Ok(Json(ConnectedAppsResponse {
         mcp_url: format!("{origin}{MCP_PATH}"),
+        guide_url: format!("{origin}/connect.md"),
         apps,
     }))
 }

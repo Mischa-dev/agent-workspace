@@ -939,6 +939,28 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(metadata["resource"], "http://127.0.0.1:3100/api/v1/mcp");
     assert_eq!(metadata["scopes_supported"], json!(["read", "write"]));
+    // The setup guide people send to agents names this server's address.
+    let guide = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/connect.md")
+                .body(Body::empty())
+                .expect("guide request"),
+        )
+        .await
+        .expect("guide response");
+    assert_eq!(guide.status(), StatusCode::OK);
+    let guide = String::from_utf8(
+        to_bytes(guide.into_body(), 100_000)
+            .await
+            .expect("guide body")
+            .to_vec(),
+    )
+    .expect("guide UTF-8");
+    assert!(guide.contains("url = \"http://127.0.0.1:3100/api/v1/mcp\""));
+    assert!(guide.contains("${AGENT_WORKSPACE_MCP_TOKEN}"));
+    assert!(!guide.contains("{origin}"));
 
     let redirect_uri = "http://127.0.0.1:45678/callback";
     let registration = json_response(
