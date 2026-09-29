@@ -300,6 +300,31 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         project_tool.pointer("/annotations/openWorldHint"),
         Some(&json!(false))
     );
+    // Clients on MCP 2026-07-28 (Claude Code) reject lists without cache hints.
+    let prompts = protocol_json(
+        mcp_request(
+            &application,
+            Some(&token),
+            Some(&session_id),
+            &json!({"jsonrpc":"2.0","id":3,"method":"prompts/list","params":{}}),
+        )
+        .await,
+    )
+    .await;
+    for list in [&tools, &prompts] {
+        assert!(
+            list.pointer("/result/ttlMs").is_some_and(Value::is_u64),
+            "{list}"
+        );
+        assert_eq!(list.pointer("/result/cacheScope"), Some(&json!("public")));
+    }
+    assert_eq!(
+        prompts
+            .pointer("/result/prompts")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2)
+    );
 
     let project = protocol_json(
         mcp_request(
