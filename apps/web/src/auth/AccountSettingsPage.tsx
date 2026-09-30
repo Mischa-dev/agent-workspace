@@ -40,7 +40,7 @@ export function AccountSettingsPage() {
         <Section title="Sign-in" description="Link WorkOS to keep your existing projects, conversations, and username.">
           {status.isPending && <p>Loading sign-in settings…</p>}
           {status.isError && <Banner tone="danger">Could not load sign-in settings.</Banner>}
-          {status.data?.googleEnabled && !status.data.linked && <Button busy={link.isPending} onClick={() => link.mutate('GoogleOAuth')} variant="primary">Link Google account</Button>}
+          {status.data?.googleEnabled &&<Button busy={link.isPending} onClick={() => link.mutate('GoogleOAuth')} variant="primary">Link Google account</Button>}
           {status.data?.enabled && (status.data.linked
             ? <p>WorkOS connected as {status.data.email}.</p>
             : <Button busy={link.isPending} onClick={() => link.mutate(undefined)} variant="primary">Link WorkOS account</Button>)}

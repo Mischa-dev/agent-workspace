@@ -26,6 +26,10 @@ const MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 600;
 const GLOBAL_MCP_AUTH_ATTEMPTS_PER_WINDOW: u32 = 900;
 const OAUTH_CEREMONIES_PER_WINDOW: u32 = 30;
 const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
+// WorkOS sign-in starts have their own budget so they can neither starve nor
+// be starved by password logins and MCP OAuth ceremonies.
+const WORKOS_STARTS_PER_WINDOW: u32 = 20;
+const GLOBAL_WORKOS_STARTS_PER_WINDOW: u32 = 600;
 const WEBHOOK_ATTEMPTS_PER_WINDOW: u32 = 300;
 const MAX_LOGIN_KEYS: usize = 4_096;
 const MAX_INVITATION_KEYS: usize = 4_096;
@@ -46,6 +50,8 @@ pub struct RateLimiters {
     global_mcp_auth_attempts: FixedWindowLimiter<()>,
     oauth_ceremonies: FixedWindowLimiter<[u8; 32]>,
     global_oauth_ceremonies: FixedWindowLimiter<()>,
+    workos_starts: FixedWindowLimiter<[u8; 32]>,
+    global_workos_starts: FixedWindowLimiter<()>,
     webhook_attempts: FixedWindowLimiter<()>,
     password_kdfs: Arc<Semaphore>,
 }
@@ -114,6 +120,21 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)
     }
 
+    /// `None` means the caller has no distinguishing key; it is bounded by the
+    /// global ceiling only, so one caller cannot exhaust a shared bucket.
+    pub fn check_workos_start(&self, untrusted_key: Option<&str>) -> Result<(), AppError> {
+        self.global_workos_starts
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let Some(untrusted_key) = untrusted_key else {
+            return Ok(());
+        };
+        let key: [u8; 32] = Sha256::digest(untrusted_key.as_bytes()).into();
+        self.workos_starts
+            .check(key)
+            .map_err(AppError::rate_limited)
+    }
+
     pub fn check_webhook_attempt(&self) -> Result<(), AppError> {
         self.webhook_attempts
             .check(())
@@ -169,6 +190,16 @@ impl Default for RateLimiters {
             ),
             global_oauth_ceremonies: FixedWindowLimiter::new(
                 GLOBAL_OAUTH_CEREMONIES_PER_WINDOW,
+                WINDOW,
+                1,
+            ),
+            workos_starts: FixedWindowLimiter::new(
+                WORKOS_STARTS_PER_WINDOW,
+                WINDOW,
+                MAX_LOGIN_KEYS,
+            ),
+            global_workos_starts: FixedWindowLimiter::new(
+                GLOBAL_WORKOS_STARTS_PER_WINDOW,
                 WINDOW,
                 1,
             ),

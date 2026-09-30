@@ -395,17 +395,21 @@ fn parse_membership_role(role: &str) -> Option<MembershipRole> {
     }
 }
 
-async fn resolve_work_item_id(
-    pool: &sqlx::PgPool,
-    project_id: Uuid,
-    identifier: &str,
-) -> Option<Uuid> {
+pub(super) enum WorkItemReference {
+    /// A UUID, given directly or as the last segment of a canonical URL.
+    Id(Uuid),
+    /// A project-key reference such as `AW-12`, resolved against a project.
+    Key,
+}
+
+/// Classifies a task identifier; `None` means it can never match.
+pub(super) fn parse_work_item_reference(identifier: &str) -> Option<WorkItemReference> {
     if identifier.is_empty() || identifier.len() > 2048 || identifier.chars().any(char::is_control)
     {
         return None;
     }
     if let Ok(id) = identifier.parse::<Uuid>() {
-        return Some(id);
+        return Some(WorkItemReference::Id(id));
     }
     if identifier.starts_with('/')
         || identifier.starts_with("http://")
@@ -415,7 +419,20 @@ async fn resolve_work_item_id(
             .trim_end_matches('/')
             .rsplit('/')
             .next()
-            .and_then(|segment| segment.parse::<Uuid>().ok());
+            .and_then(|segment| segment.parse::<Uuid>().ok())
+            .map(WorkItemReference::Id);
+    }
+    Some(WorkItemReference::Key)
+}
+
+async fn resolve_work_item_id(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    identifier: &str,
+) -> Option<Uuid> {
+    match parse_work_item_reference(identifier)? {
+        WorkItemReference::Id(id) => return Some(id),
+        WorkItemReference::Key => {}
     }
     sqlx::query_scalar::<_, Uuid>(
         r#"

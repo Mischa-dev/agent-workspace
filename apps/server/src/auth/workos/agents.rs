@@ -290,7 +290,12 @@ async fn grant(
                 scopes: row
                     .scopes
                     .into_iter()
-                    .filter(|scope| granted.contains(&format!("workspace:{scope}").as_str()))
+                    .filter(|scope| {
+                        // The token audience is this server, so the bare local
+                        // scope names are accepted alongside `workspace:*`.
+                        granted.contains(&format!("workspace:{scope}").as_str())
+                            || granted.contains(&scope.as_str())
+                    })
                     .collect(),
                 authentication_class: "workos_agent",
                 account_wide: false,
@@ -336,9 +341,11 @@ async fn list(
     let bindings = sqlx::query_as::<_, BindingView>("SELECT id,kind,subject_id,revoked_at::text FROM workos_agent_bindings WHERE connection_id=$1 ORDER BY created_at")
         .bind(connection).fetch_all(&mut *tx).await?;
     tx.commit().await?;
-    Ok(Json(
-        json!({"enabled":state.config.workos.as_ref().is_some_and(|c| c.authkit_domain.is_some()), "bindings":bindings}),
-    ))
+    Ok(Json(json!({
+        "enabled": state.config.workos.as_ref().is_some_and(|c| c.authkit_domain.is_some()),
+        "registrationEnabled": state.config.workos.as_ref().is_some_and(|c| c.authkit_domain.is_some() && c.agent_registration_enabled),
+        "bindings": bindings,
+    })))
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
