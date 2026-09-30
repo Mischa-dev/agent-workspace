@@ -492,10 +492,10 @@ async fn load_context(
          AND connection.scopes = credential.scopes
         JOIN actors actor ON actor.id = credential.actor_id
          AND actor.kind = 'external_agent' AND actor.status = 'active'
-        JOIN projects project ON project.id = credential.project_id
+        JOIN projects project ON project.id = $5
          AND project.archived_at IS NULL
         JOIN project_memberships membership
-          ON membership.project_id = credential.project_id
+          ON membership.project_id = project.id
          AND membership.actor_id = credential.actor_id
          AND membership.enabled
         JOIN organization_memberships organization_membership
@@ -515,11 +515,13 @@ async fn load_context(
          )
         JOIN agent_runs run ON run.id = approval.agent_run_id
         JOIN conversations conversation ON conversation.id = run.conversation_id
-         AND conversation.project_id = credential.project_id
+         AND conversation.project_id = project.id
         WHERE credential.id = $1
           AND connection.id = $2
           AND credential.actor_id = $3
-          AND credential.project_id = $5
+          -- The credential stays anchored to its home project; the approval
+          -- may be in any project this connection can act in.
+          AND agent_connection_can_access(connection.id, project.id)
           AND credential.status = 'active'
           AND credential.revoked_at IS NULL
           AND credential.expires_at > now()

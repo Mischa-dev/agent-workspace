@@ -103,6 +103,11 @@ async fn list(
                OR (grant_row.external_agent_connection_id IS NOT NULL
                    AND EXISTS (
                        SELECT 1 FROM project_memberships manager
+                       JOIN projects project ON project.id = manager.project_id
+                       JOIN organization_memberships organization_membership
+                         ON organization_membership.organization_id = project.organization_id
+                        AND organization_membership.actor_id = manager.actor_id
+                        AND organization_membership.enabled
                        WHERE manager.project_id = connection.project_id
                          AND manager.actor_id = $1 AND manager.enabled
                          AND manager.role IN ('owner', 'admin'))))
@@ -138,6 +143,11 @@ async fn owned_grant(
               AND (grant_row.actor_id = $2
                    OR EXISTS (
                        SELECT 1 FROM project_memberships manager
+                       JOIN projects project ON project.id = manager.project_id
+                       JOIN organization_memberships organization_membership
+                         ON organization_membership.organization_id = project.organization_id
+                        AND organization_membership.actor_id = manager.actor_id
+                        AND organization_membership.enabled
                        WHERE manager.project_id = connection.project_id
                          AND manager.actor_id = $2 AND manager.enabled
                          AND manager.role IN ('owner', 'admin')))

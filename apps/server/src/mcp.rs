@@ -1081,7 +1081,10 @@ async fn authenticate_mcp(
                 if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes)
                     && body.get("method").and_then(serde_json::Value::as_str) == Some("tools/call")
                 {
-                    match scoped_project(&state, &principal, &body["params"]["arguments"]).await {
+                    let tool = body["params"]["name"].as_str().unwrap_or_default();
+                    match scoped_project(&state, &principal, tool, &body["params"]["arguments"])
+                        .await
+                    {
                         Ok(Some(project_id)) => {
                             principal.project_id = project_id;
                             principal.project_explicit = true;
@@ -1680,14 +1683,15 @@ async fn insert_credential_audit(
 async fn scoped_project(
     state: &AppState,
     principal: &McpPrincipal,
+    tool: &str,
     args: &serde_json::Value,
 ) -> Result<Option<Uuid>, AppError> {
+    // Tools accept an ID or a link to it; read them the same way here.
     let mut target = args
         .get("projectId")
         .and_then(|v| v.as_str())
-        .map(str::parse::<Uuid>)
-        .transpose()
-        .map_err(|_| AppError::Validation("projectId"))?;
+        .map(|value| common::parse_id(value).ok_or(AppError::Validation("projectId")))
+        .transpose()?;
     if target.is_none() {
         for (key, query) in [
             (
@@ -1715,8 +1719,8 @@ async fn scoped_project(
                 "SELECT project_id FROM repositories WHERE id = $1",
             ),
             (
-                "identifier",
-                "SELECT project_id FROM work_items WHERE id = $1",
+                "approvalId",
+                "SELECT conversation.project_id FROM agent_approvals approval JOIN agent_runs run ON run.id = approval.agent_run_id JOIN conversations conversation ON conversation.id = run.conversation_id WHERE approval.id = $1",
             ),
             ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
             (
@@ -1743,7 +1747,7 @@ async fn scoped_project(
             if let Some(id) = args
                 .get(key)
                 .and_then(|v| v.as_str())
-                .and_then(|v| v.parse::<Uuid>().ok())
+                .and_then(common::parse_id)
             {
                 let mut lookup = sqlx::query_scalar::<_, Uuid>(query).bind(id);
                 if query.contains("$2") {
@@ -1754,8 +1758,16 @@ async fn scoped_project(
             }
         }
     }
+    if target.is_none()
+        && let Some(identifier) = args.get("identifier").and_then(|v| v.as_str())
+    {
+        target = identifier_project(state, principal, tool, identifier).await?;
+    }
+    // An account-wide grant's own project is only where it was anchored; the
+    // person may since have left it, so it's checked like any other.
     if let Some(target) = target
-        && target != principal.project_id
+        && (target != principal.project_id
+            || (principal.actor_kind == ActorKind::Human && principal.account_wide))
     {
         // People connected for their whole account reach every Project they
         // belong to; agents reach the Projects their connection allows.
@@ -1777,6 +1789,72 @@ async fn scoped_project(
         }
     }
     Ok(target)
+}
+
+/// Resolves the project an `identifier` argument names, by the tool that reads
+/// it. Non-UUID references only match the home project or projects the caller
+/// can access, preferring the home project.
+async fn identifier_project(
+    state: &AppState,
+    principal: &McpPrincipal,
+    tool: &str,
+    identifier: &str,
+) -> Result<Option<Uuid>, AppError> {
+    match tool {
+        "pull_request_get" if identifier.is_empty() || identifier.len() > 2048 => Ok(None),
+        "pull_request_get" => {
+            if let Ok(id) = identifier.parse::<Uuid>() {
+                return Ok(sqlx::query_scalar::<_, Uuid>(
+                    "SELECT project_id FROM github_pull_requests WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await?);
+            }
+            Ok(sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT project_id FROM github_pull_requests
+                WHERE html_url = $1
+                  AND (project_id = $2 OR actor_can_access_project($3, $4, project_id))
+                ORDER BY project_id = $2 DESC, project_id
+                LIMIT 1
+                "#,
+            )
+            .bind(identifier)
+            .bind(principal.project_id)
+            .bind(principal.actor_id)
+            .bind(principal.external_agent_connection_id)
+            .fetch_optional(&state.pool)
+            .await?)
+        }
+        // Task tools accept `identifier` as an alias for `taskId`.
+        _ => match reads::parse_work_item_reference(identifier) {
+            Some(reads::WorkItemReference::Id(id)) => Ok(sqlx::query_scalar::<_, Uuid>(
+                "SELECT project_id FROM work_items WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?),
+            Some(reads::WorkItemReference::Key) => Ok(sqlx::query_scalar::<_, Uuid>(
+                r#"
+                    SELECT project.id
+                    FROM work_items item
+                    JOIN projects project ON project.id = item.project_id
+                    WHERE upper(project.project_key || '-' || item.number::text) = upper($1)
+                      AND (project.id = $2 OR actor_can_access_project($3, $4, project.id))
+                    ORDER BY project.id = $2 DESC, project.id
+                    LIMIT 1
+                    "#,
+            )
+            .bind(identifier)
+            .bind(principal.project_id)
+            .bind(principal.actor_id)
+            .bind(principal.external_agent_connection_id)
+            .fetch_optional(&state.pool)
+            .await?),
+            None => Ok(None),
+        },
+    }
 }
 
 #[cfg(test)]

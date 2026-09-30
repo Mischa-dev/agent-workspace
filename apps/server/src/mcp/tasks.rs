@@ -148,17 +148,26 @@ pub(super) async fn task_list(
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let query = arguments.query.clone().unwrap_or_default();
+        // Board positions count every task in a column, so they're numbered
+        // before the filters and the page apply.
         let mut tasks = sqlx::query_as::<_, TaskSummary>(&format!(
             r#"
+            WITH numbered AS (
+                SELECT item.id,
+                       row_number() OVER (PARTITION BY item.project_id, item.status_id
+                                          ORDER BY item.board_rank, item.id) AS board_position
+                FROM work_items item
+                WHERE item.project_id = ANY($1) AND item.archived_at IS NULL
+            )
             SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
                    item.title, status.name AS status, status.semantic_category AS status_group,
                    item.priority, assignee.display_name AS assignee,
-                   row_number() OVER (PARTITION BY item.project_id, item.status_id
-                                      ORDER BY item.board_rank, item.id) AS board_position,
+                   numbered.board_position,
                    item.blocked_reason IS NOT NULL AS blocked,
                    claimer.display_name AS claimed_by, project.name AS project,
                    item.version, item.updated_at::text AS updated_at, item.project_id
-            FROM work_items item
+            FROM numbered
+            JOIN work_items item ON item.id = numbered.id
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
@@ -168,24 +177,7 @@ pub(super) async fn task_list(
               ON claim.work_item_id = item.id AND claim.expires_at > now()
             LEFT JOIN project_memberships claimer
               ON claimer.project_id = item.project_id AND claimer.actor_id = claim.actor_id
-            WHERE item.project_id = ANY($1) AND item.archived_at IS NULL
-            ORDER BY {order}
-            "#
-        ))
-        .bind(&projects)
-        .fetch_all(&state.pool)
-        .await?;
-        // Board positions count every task in a column, so filters apply after
-        // they're numbered.
-        let filtered_ids = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            SELECT item.id
-            FROM work_items item
-            JOIN projects project ON project.id = item.project_id
-            JOIN work_item_statuses status
-              ON status.project_id = item.project_id AND status.id = item.status_id
-            WHERE item.project_id = ANY($1) AND item.archived_at IS NULL
-              AND ($2 OR status.semantic_category NOT IN ('completed', 'canceled'))
+            WHERE ($2 OR status.semantic_category NOT IN ('completed', 'canceled'))
               AND ($3::text IS NULL OR lower(status.name) = lower($3)
                    OR status.semantic_category = lower($3))
               AND ($4 = 'any' OR ($4 = 'none' AND item.assignee_actor_id IS NULL)
@@ -194,8 +186,10 @@ pub(super) async fn task_list(
                    OR item.title ILIKE '%' || $6 || '%'
                    OR upper(project.project_key || '-' || item.number::text) = upper($6))
               AND ($7::uuid IS NULL OR item.parent_work_item_id = $7)
-            "#,
-        )
+            ORDER BY {order}
+            LIMIT $8 OFFSET $9
+            "#
+        ))
         .bind(&projects)
         .bind(arguments.include_done.unwrap_or(false))
         .bind(status)
@@ -203,21 +197,15 @@ pub(super) async fn task_list(
         .bind(assignee_id)
         .bind(query.trim())
         .bind(parent_id)
+        .bind(limit + 1)
+        .bind(offset)
         .fetch_all(&state.pool)
-        .await?
-        .into_iter()
-        .map(|id| id.to_string())
-        .collect::<std::collections::HashSet<_>>();
-        tasks.retain(|task| filtered_ids.contains(&task.id));
-        let total = i64::try_from(tasks.len()).unwrap_or(i64::MAX);
-        let page = tasks
-            .into_iter()
-            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
-            .take(usize::try_from(limit).unwrap_or(200))
-            .collect::<Vec<_>>();
+        .await?;
+        let has_more = i64::try_from(tasks.len()).unwrap_or(i64::MAX) > limit;
+        tasks.truncate(usize::try_from(limit).unwrap_or(200));
         Ok::<_, AppError>(ToolResult::ok(TaskListValue {
-            tasks: page,
-            next_cursor: (offset + limit < total).then(|| (offset + limit).to_string()),
+            tasks,
+            next_cursor: has_more.then(|| (offset + limit).to_string()),
         }))
     }
     .await;
@@ -396,12 +384,14 @@ pub(super) async fn task_open(
             ) linked
             JOIN conversations conversation ON conversation.id = linked.id
             WHERE conversation.archived_at IS NULL
+              AND conversation.project_id = $3
               AND conversation_visible_to(conversation.id, $2)
             ORDER BY conversation.created_at
             "#,
         )
         .bind(task_id)
         .bind(principal.actor_id)
+        .bind(project_id)
         .fetch_all(&state.pool)
         .await?;
         let links = sqlx::query_as::<_, LinkedItem>(
@@ -414,12 +404,15 @@ pub(super) async fn task_open(
             FROM work_item_links link
             LEFT JOIN project_pages page
               ON link.target_kind = 'page' AND page.id = link.target_id AND page.archived_at IS NULL
+             AND page.project_id = link.project_id
             LEFT JOIN project_decisions decision
               ON link.target_kind = 'decision' AND decision.id = link.target_id
+             AND decision.project_id = link.project_id
              AND (decision.source_conversation_id IS NULL
                   OR conversation_visible_to(decision.source_conversation_id, $2))
             LEFT JOIN messages message
               ON link.target_kind = 'message' AND message.id = link.target_id
+             AND message.project_id = link.project_id
              AND conversation_visible_to(message.conversation_id, $2)
             LEFT JOIN project_memberships author
               ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
@@ -626,41 +619,33 @@ pub(super) async fn task_update(
         )
         .await;
     };
-    let mut expected_version = arguments.expected_version;
-    if changes_fields {
-        let result = writes::update_work_item(
+    if !changes_fields {
+        return writes::set_status(
             state,
             principal,
-            writes::UpdateWorkItemArguments {
-                work_item_id: arguments.task_id.clone(),
-                expected_version,
-                title: arguments.title,
-                description: arguments.description,
-                priority: arguments.priority,
-                assignee_actor_id,
-                clear_assignee: arguments.clear_assignee,
-                client_request_id: client_request_id.clone(),
+            writes::SetStatusArguments {
+                work_item_id: arguments.task_id,
+                expected_version: arguments.expected_version,
+                status,
+                client_request_id,
             },
         )
         .await;
-        match &result {
-            WriteResult::Applied { version, .. } => expected_version = *version,
-            _ => return result,
-        }
     }
-    writes::set_status(
+    writes::update_work_item_and_status(
         state,
         principal,
-        writes::SetStatusArguments {
+        writes::UpdateWorkItemArguments {
             work_item_id: arguments.task_id,
-            expected_version,
-            status,
-            client_request_id: if changes_fields {
-                format!("{client_request_id}.status")
-            } else {
-                client_request_id
-            },
+            expected_version: arguments.expected_version,
+            title: arguments.title,
+            description: arguments.description,
+            priority: arguments.priority,
+            assignee_actor_id,
+            clear_assignee: arguments.clear_assignee,
+            client_request_id,
         },
+        status,
     )
     .await
 }
@@ -1115,23 +1100,32 @@ pub(super) async fn task_link(
         if !can_write_in(state, principal, project_id, Action::WorkItemEdit).await? {
             return Ok(ToolResult::denied("You can't change tasks in that project."));
         }
+        // Every target must be in the task's own project, so a link can't show
+        // another project's conversation, page, or decision to the people who
+        // can read this task.
         let visible = match *kind {
             "conversation" => sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2))",
+                r#"SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 AND project_id = $3
+                   AND conversation_visible_to(id, $2) AND actor_can_access_project($2, $4, $3))"#,
             ),
             "message" => sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2))",
+                r#"SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND project_id = $3
+                   AND conversation_visible_to(conversation_id, $2) AND actor_can_access_project($2, $4, $3))"#,
             ),
             "page" => sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM project_pages WHERE id = $1 AND archived_at IS NULL AND actor_can_access_project($2, NULL, project_id))",
+                r#"SELECT EXISTS (SELECT 1 FROM project_pages WHERE id = $1 AND project_id = $3
+                   AND archived_at IS NULL AND actor_can_access_project($2, $4, $3))"#,
             ),
             _ => sqlx::query_scalar::<_, bool>(
-                r#"SELECT EXISTS (SELECT 1 FROM project_decisions WHERE id = $1
-                   AND (source_conversation_id IS NULL OR conversation_visible_to(source_conversation_id, $2)))"#,
+                r#"SELECT EXISTS (SELECT 1 FROM project_decisions WHERE id = $1 AND project_id = $3
+                   AND (source_conversation_id IS NULL OR conversation_visible_to(source_conversation_id, $2))
+                   AND actor_can_access_project($2, $4, $3))"#,
             ),
         }
         .bind(target_id)
         .bind(principal.actor_id)
+        .bind(project_id)
+        .bind(principal.external_agent_connection_id)
         .fetch_one(&state.pool)
         .await?;
         if !visible {

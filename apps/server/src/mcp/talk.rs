@@ -719,7 +719,7 @@ async fn readable_conversation(
     Ok(Ok(row))
 }
 
-fn retype<T>(result: ToolResult<()>) -> ToolResult<T> {
+fn retype<T, U>(result: ToolResult<U>) -> ToolResult<T> {
     match result {
         ToolResult::Ok { .. } => ToolResult::unavailable(),
         ToolResult::NotFound { message } => ToolResult::NotFound { message },
@@ -1151,6 +1151,9 @@ pub(super) async fn mark_read(
     principal: &McpPrincipal,
     arguments: MarkReadArguments,
 ) -> ToolResult<ReadMark> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
     let result = async {
         let conversation =
             match readable_conversation(state, principal, &arguments.conversation_id).await? {
@@ -1291,6 +1294,13 @@ pub(super) async fn conversation_start(
     if arguments.people.is_empty() || arguments.people.len() > 19 {
         return ToolResult::invalid("people", "Name between 1 and 19 people.");
     }
+    if arguments
+        .text
+        .as_deref()
+        .is_some_and(|text| text.trim().chars().count() > MAX_TEXT_CHARACTERS)
+    {
+        return ToolResult::invalid("text", "Send between 1 and 20,000 characters.");
+    }
     let name = match arguments
         .name
         .as_deref()
@@ -1401,7 +1411,7 @@ pub(super) async fn conversation_start(
                 let content = content_from_text(state, space_id, text).await?;
                 match send(state, principal, conversation_id, content, None).await {
                     ToolResult::Ok { value } => Some(value),
-                    _ => None,
+                    failed => return Ok(retype(failed)),
                 }
             }
             None => None,
@@ -1579,7 +1589,14 @@ pub(super) async fn thread_start(
                     .await?
                 {
                     transaction.commit().await?;
-                    let message = post_optional(state, principal, id, arguments.text.as_deref()).await?;
+                    let message = post_optional(
+                        state,
+                        principal,
+                        id,
+                        arguments.text.as_deref(),
+                        Some(origin_id),
+                    )
+                    .await?;
                     return Ok(ToolResult::ok(ThreadValue {
                         url: public_url(state, &thread_path(&parent, id)),
                         id: id.to_string(),
@@ -1662,7 +1679,14 @@ pub(super) async fn thread_start(
         )
         .await?;
         transaction.commit().await?;
-        let message = post_optional(state, principal, thread_id, arguments.text.as_deref()).await?;
+        let message = post_optional(
+            state,
+            principal,
+            thread_id,
+            arguments.text.as_deref(),
+            origin_id,
+        )
+        .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
             url: public_url(state, &thread_path(&parent, thread_id)),
             id: thread_id.to_string(),
@@ -1683,13 +1707,21 @@ async fn post_optional(
     principal: &McpPrincipal,
     conversation_id: Uuid,
     text: Option<&str>,
+    origin_id: Option<Uuid>,
 ) -> Result<Option<SentMessage>, AppError> {
     let Some(text) = text.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
     };
+    // A thread started from a message is found again on retry, so its opening
+    // message gets a key from that message and the text: retrying replays it
+    // instead of posting it twice.
+    let key = origin_id.map(|origin_id| {
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+        format!("thread-start.{origin_id}.{}", hex::encode(&digest[..16]))
+    });
     let content = content_from_text(state, principal.project_id, text).await?;
     Ok(
-        match send(state, principal, conversation_id, content, None).await {
+        match send(state, principal, conversation_id, content, key).await {
             ToolResult::Ok { value } => Some(value),
             _ => None,
         },

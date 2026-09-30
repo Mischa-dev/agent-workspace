@@ -260,6 +260,59 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         .expect("admin promotion response");
     assert_eq!(admin_promotion.status(), StatusCode::FORBIDDEN);
 
+    // Promoting a human to Project admin makes them an Organization admin so
+    // they can actually manage members; demoting them reverses it.
+    let organization_role = |actor_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
+            )
+            .bind(seed.organization_id)
+            .bind(actor_id)
+            .fetch_one(&pool)
+            .await
+            .expect("organization role")
+        }
+    };
+    let promoted = application
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("{members_uri}/{viewer_actor_id}"),
+            &write_headers(&owner_cookie, &owner_csrf, "owner-promotes-viewer"),
+            json!({"expectedVersion":1,"role":"admin"}),
+        ))
+        .await
+        .expect("owner promotion response");
+    assert_eq!(promoted.status(), StatusCode::OK);
+    assert_eq!(organization_role(viewer_actor_id).await, "admin");
+    let (promoted_cookie, _) = login(&application, "m7-viewer").await;
+    let candidates = application
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/api/v1/projects/{}/member-candidates", seed.project_id),
+            &[("cookie", promoted_cookie.as_str())],
+            Value::Null,
+        ))
+        .await
+        .expect("promoted admin manages members");
+    assert_eq!(candidates.status(), StatusCode::OK);
+    let demoted = application
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("{members_uri}/{viewer_actor_id}"),
+            &write_headers(&owner_cookie, &owner_csrf, "owner-demotes-admin"),
+            json!({"expectedVersion":2,"role":"viewer"}),
+        ))
+        .await
+        .expect("owner demotion response");
+    assert_eq!(demoted.status(), StatusCode::OK);
+    assert_eq!(organization_role(viewer_actor_id).await, "member");
+    assert_eq!(organization_role(seed.human_actor_id).await, "owner");
+
     // An Organization owner who is only a Project admin still cannot remove
     // that Project's sole enabled owner. Both owner sets are locked.
     sqlx::query(

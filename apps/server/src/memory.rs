@@ -418,7 +418,7 @@ pub async fn create_page(
     let note = normalize_note(input.note.as_deref())?;
     let is_guide = input.is_guide.unwrap_or(false);
     if is_guide {
-        clear_guide(transaction, project_id, None).await?;
+        clear_guide(transaction, writer, project_id, None).await?;
     }
     let page_id = Uuid::now_v7();
     sqlx::query(
@@ -504,7 +504,7 @@ pub async fn update_page(
         return Ok(project_id);
     }
     if new_guide && !is_guide {
-        clear_guide(transaction, project_id, Some(page_id)).await?;
+        clear_guide(transaction, writer, project_id, Some(page_id)).await?;
     }
     if new_archived != archived {
         note.get_or_insert_with(|| if new_archived { "Archived" } else { "Restored" }.to_owned());
@@ -542,21 +542,40 @@ pub async fn update_page(
     Ok(project_id)
 }
 
+/// Stop the current guide being the guide. That is a change to the page, so
+/// it gets a new version like any other.
 async fn clear_guide(
     transaction: &mut Transaction<'_, Postgres>,
+    writer: Writer,
     project_id: Uuid,
     except: Option<Uuid>,
 ) -> Result<(), AppError> {
-    sqlx::query(
+    let demoted = sqlx::query_as::<_, (Uuid, i64, String, String)>(
         r#"
-        UPDATE project_pages SET is_guide = false
+        UPDATE project_pages
+        SET is_guide = false, version = version + 1,
+            updated_by_actor_id = $3, updated_at = now()
         WHERE project_id = $1 AND is_guide AND ($2::uuid IS NULL OR id <> $2)
+        RETURNING id, version, title, body
         "#,
     )
     .bind(project_id)
     .bind(except)
-    .execute(&mut **transaction)
+    .bind(writer.actor_id)
+    .fetch_all(&mut **transaction)
     .await?;
+    for (page_id, version, title, body) in demoted {
+        insert_revision(
+            transaction,
+            writer,
+            page_id,
+            version,
+            &title,
+            &body,
+            Some("No longer the guide"),
+        )
+        .await?;
+    }
     Ok(())
 }
 

@@ -270,6 +270,9 @@ async fn update_member(
         current_version: target.version,
     })?;
 
+    if target.actor_kind == "human" {
+        sync_organization_role(&mut transaction, target.organization_id, actor_id).await?;
+    }
     if target.enabled && !next_enabled {
         revoke_project_credentials(&mut transaction, project_id, actor_id).await?;
     }
@@ -572,6 +575,41 @@ async fn lock_and_require_other_owners(
             "the last enabled owner cannot be changed",
         ));
     }
+    Ok(())
+}
+
+/// Keeps a human's Organization role in step with their Project roles: managing
+/// members requires an Organization admin, so a Project owner or admin anywhere
+/// in the Organization is one, and someone who is neither anywhere is not.
+/// Owners are never changed here.
+async fn sync_organization_role(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        WITH next AS (
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM project_memberships membership
+                JOIN projects project ON project.id = membership.project_id
+                WHERE project.organization_id = $1 AND project.archived_at IS NULL
+                  AND membership.actor_id = $2 AND membership.enabled
+                  AND membership.role IN ('owner', 'admin')
+            ) THEN 'admin' ELSE 'member' END AS role
+        )
+        UPDATE organization_memberships
+        SET role = next.role, version = version + 1, updated_at = now()
+        FROM next
+        WHERE organization_id = $1 AND actor_id = $2
+          AND organization_memberships.role IN ('admin', 'member')
+          AND organization_memberships.role <> next.role
+        "#,
+    )
+    .bind(organization_id)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

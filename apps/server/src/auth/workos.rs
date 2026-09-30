@@ -130,6 +130,19 @@ fn verifier(config: &WorkOsConfig, state: &str) -> Result<String, AppError> {
     mac.update(state.as_bytes());
     Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
+/// Rate-limit key for a sign-in ceremony: the linking session when there is
+/// one, otherwise the client address Cloudflare reports. Callers with neither
+/// are bounded by the limiter's global ceiling only.
+fn workos_start_key(headers: &HeaderMap, link_session_id: Option<Uuid>) -> Option<String> {
+    if let Some(session_id) = link_session_id {
+        return Some(format!("session:{session_id}"));
+    }
+    headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 64)
+        .map(|address| format!("address:{address}"))
+}
 async fn start(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -137,7 +150,6 @@ async fn start(
 ) -> Result<Response, AppError> {
     let config = config(&state)?;
     require_allowed_origin(&state.config, &headers)?;
-    state.rate_limits.check_login("workos-start")?;
     let link_session_id = if request.link == Some(true) {
         let principal = load_authenticated_actor(&state, &headers)
             .await?
@@ -147,6 +159,9 @@ async fn start(
     } else {
         None
     };
+    state
+        .rate_limits
+        .check_workos_start(workos_start_key(&headers, link_session_id).as_deref())?;
     let username = request
         .username
         .as_deref()
@@ -515,8 +530,43 @@ pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<
     if !needs_check {
         return Ok(true);
     }
+    // Claim this interval's check so concurrent requests on the same session
+    // make one provider call; the others keep the session until it resolves.
+    let claimed = sqlx::query("UPDATE sessions SET workos_checked_at=now() WHERE id=$1 AND (workos_checked_at IS NULL OR workos_checked_at<now()-interval '5 minutes')")
+        .bind(session_id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected()
+        == 1;
+    if !claimed {
+        return Ok(true);
+    }
+    let valid = match provider_session_active(config, &subject, &sid).await {
+        Ok(valid) => valid,
+        Err(error) => {
+            // Release the claim so the next request checks again.
+            sqlx::query("UPDATE sessions SET workos_checked_at=NULL WHERE id=$1")
+                .bind(session_id)
+                .execute(&state.pool)
+                .await?;
+            return Err(error);
+        }
+    };
+    if !valid {
+        sqlx::query("UPDATE sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1")
+            .bind(session_id)
+            .execute(&state.pool)
+            .await?;
+        state.realtime.revoke_session(session_id);
+    }
+    Ok(valid)
+}
+async fn provider_session_active(
+    config: &WorkOsConfig,
+    subject: &str,
+    sid: &str,
+) -> Result<bool, AppError> {
     let mut after = None;
-    let mut valid = false;
     for _ in 0..10 {
         let mut request = client()?
             .get(format!(
@@ -542,27 +592,14 @@ pub(super) async fn session_valid(state: &AppState, session_id: Uuid) -> Result<
             rows.iter()
                 .any(|r| r["id"] == sid && r["status"] == "active")
         }) {
-            valid = true;
-            break;
+            return Ok(true);
         }
         after = value["list_metadata"]["after"].as_str().map(str::to_owned);
         if after.is_none() {
             break;
         }
     }
-    if valid {
-        sqlx::query("UPDATE sessions SET workos_checked_at=now() WHERE id=$1")
-            .bind(session_id)
-            .execute(&state.pool)
-            .await?;
-    } else {
-        sqlx::query("UPDATE sessions SET revoked_at=COALESCE(revoked_at,now()) WHERE id=$1")
-            .bind(session_id)
-            .execute(&state.pool)
-            .await?;
-        state.realtime.revoke_session(session_id);
-    }
-    Ok(valid)
+    Ok(false)
 }
 pub(super) async fn revoke_provider_session(state: &AppState, session_id: Uuid) {
     let Some(config) = &state.config.workos else {
@@ -577,13 +614,24 @@ pub(super) async fn revoke_provider_session(state: &AppState, session_id: Uuid) 
     else {
         return;
     };
-    if let Ok(client) = client() {
-        let _ = client
-            .post("https://api.workos.com/user_management/sessions/revoke")
-            .bearer_auth(config.api_key.expose())
-            .json(&serde_json::json!({"session_id":sid}))
-            .send()
-            .await;
+    let Ok(client) = client() else {
+        tracing::warn!("WorkOS session revoke skipped: identity client unavailable");
+        return;
+    };
+    // Log only the outcome; never the session reference, key, or response body.
+    match client
+        .post("https://api.workos.com/user_management/sessions/revoke")
+        .bearer_auth(config.api_key.expose())
+        .json(&serde_json::json!({"session_id":sid}))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => tracing::warn!(
+            status = response.status().as_u16(),
+            "WorkOS session revoke was rejected"
+        ),
+        Err(_) => tracing::warn!("WorkOS session revoke failed to reach the identity service"),
     }
 }
 

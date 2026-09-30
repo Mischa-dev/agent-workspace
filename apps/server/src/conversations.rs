@@ -2387,6 +2387,20 @@ async fn search_mentionable_actors(
           AND membership.enabled
           AND actor.status = 'active'
           AND actor.kind IN ('human', 'external_agent', 'execution_worker')
+          -- Only offer agents that could answer: viewers cannot send, and a
+          -- read-only connection cannot claim a reply.
+          AND (
+              actor.kind <> 'external_agent'
+              OR (
+                  membership.role <> 'viewer'
+                  AND EXISTS (
+                      SELECT 1 FROM external_agent_connections connection
+                      WHERE connection.actor_id = actor.id
+                        AND 'write' = ANY(connection.scopes)
+                        AND agent_connection_can_access(connection.id, membership.project_id)
+                  )
+              )
+          )
           AND (
               $2 = ''
               OR strpos(lower(membership.display_name), $2) > 0

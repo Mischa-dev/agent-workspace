@@ -13,7 +13,7 @@ export function WorkOsAgentSettings({ connection }: { connection: ExternalAgentC
   const [registrationId, setRegistrationId] = useState('')
   const [error, setError] = useState<string | null>(null)
   const queryKey = ['workos-agent', connection.id]
-  const bindings = useQuery({ queryKey, queryFn: () => requestJson<{ enabled: boolean; bindings: Binding[] }>(path) })
+  const bindings = useQuery({ queryKey, queryFn: () => requestJson<{ enabled: boolean; registrationEnabled: boolean; bindings: Binding[] }>(path) })
   const update = useMutation({
     mutationFn: (input: { registrationId?: string; revoke?: string }) => input.revoke
       ? requestJson(`${path}/${encodeURIComponent(input.revoke)}`, { method: 'DELETE' })
@@ -36,8 +36,10 @@ export function WorkOsAgentSettings({ connection }: { connection: ExternalAgentC
       </div>)}
       <Button busy={update.isPending} onClick={() => update.mutate({})}>{active.some((b) => b.kind === 'blueprint') ? 'Reconnect after token rotation' : 'Enable WorkOS agent tokens'}</Button>
       <p>Your agent exchanges its current connection token for a five-minute WorkOS token. After rotating the connection token, reconnect here. Disabling the agent stops both credential types.</p>
-      <TextField id={`workos-registration-${connection.id}`} label="Claimed WorkOS registration ID" placeholder="agent_reg_…" value={registrationId} maxLength={100} onChange={(event) => setRegistrationId(event.target.value)} hint="For an external agent following auth.md. Link your WorkOS account and claim the registration first." />
-      <Button busy={update.isPending} disabled={!registrationId.startsWith('agent_reg_')} onClick={() => update.mutate({ registrationId })}>Attach claimed agent</Button>
+      {bindings.data.registrationEnabled && <>
+        <TextField id={`workos-registration-${connection.id}`} label="Claimed WorkOS registration ID" placeholder="agent_reg_…" value={registrationId} maxLength={100} onChange={(event) => setRegistrationId(event.target.value)} hint="For an external agent following auth.md. Link your WorkOS account and claim the registration first." />
+        <Button busy={update.isPending} disabled={!registrationId.startsWith('agent_reg_')} onClick={() => update.mutate({ registrationId })}>Attach claimed agent</Button>
+      </>}
     </section>
   )
 }
