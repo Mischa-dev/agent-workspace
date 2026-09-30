@@ -1828,16 +1828,15 @@ async fn identifier_project(
             .await?)
         }
         // Task tools accept `identifier` as an alias for `taskId`.
-        _ => {
-            match reads::parse_work_item_reference(identifier) {
-                Some(reads::WorkItemReference::Id(id)) => Ok(sqlx::query_scalar::<_, Uuid>(
-                    "SELECT project_id FROM work_items WHERE id = $1",
-                )
-                .bind(id)
-                .fetch_optional(&state.pool)
-                .await?),
-                Some(reads::WorkItemReference::Key) => Ok(sqlx::query_scalar::<_, Uuid>(
-                    r#"
+        _ => match reads::parse_work_item_reference(identifier) {
+            Some(reads::WorkItemReference::Id(id)) => Ok(sqlx::query_scalar::<_, Uuid>(
+                "SELECT project_id FROM work_items WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?),
+            Some(reads::WorkItemReference::Key) => Ok(sqlx::query_scalar::<_, Uuid>(
+                r#"
                     SELECT project.id
                     FROM work_items item
                     JOIN projects project ON project.id = item.project_id
@@ -1846,16 +1845,15 @@ async fn identifier_project(
                     ORDER BY project.id = $2 DESC, project.id
                     LIMIT 1
                     "#,
-                )
-                .bind(identifier)
-                .bind(principal.project_id)
-                .bind(principal.actor_id)
-                .bind(principal.external_agent_connection_id)
-                .fetch_optional(&state.pool)
-                .await?),
-                None => Ok(None),
-            }
-        }
+            )
+            .bind(identifier)
+            .bind(principal.project_id)
+            .bind(principal.actor_id)
+            .bind(principal.external_agent_connection_id)
+            .fetch_optional(&state.pool)
+            .await?),
+            None => Ok(None),
+        },
     }
 }
 
