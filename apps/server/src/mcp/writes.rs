@@ -32,6 +32,7 @@ const MAX_BLOCKED_REASON_CHARACTERS: usize = 2_000;
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetStatusArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub status: String,
@@ -41,7 +42,10 @@ pub struct SetStatusArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PostUpdateArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
+    /// The comment or update, in plain text.
+    #[serde(rename = "text", alias = "update")]
     pub update: String,
     pub client_request_id: String,
 }
@@ -49,6 +53,7 @@ pub struct PostUpdateArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateWorkItemArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub title: Option<String>,
@@ -62,6 +67,7 @@ pub struct UpdateWorkItemArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSubtaskArguments {
+    #[serde(rename = "parentId", alias = "parentWorkItemId")]
     pub parent_work_item_id: String,
     pub title: String,
     pub description: Option<String>,
@@ -81,6 +87,7 @@ pub struct CreateWorkItemArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkPullRequestArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub pull_request_id: String,
@@ -90,6 +97,7 @@ pub struct LinkPullRequestArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkBlockedArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub reason: String,
@@ -99,6 +107,7 @@ pub struct MarkBlockedArguments {
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MarkReadyForReviewArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     pub expected_version: i64,
     pub client_request_id: String,
@@ -396,7 +405,21 @@ pub async fn update_work_item(
     principal: &McpPrincipal,
     arguments: UpdateWorkItemArguments,
 ) -> WriteResult {
-    match update_work_item_inner(state, principal, arguments).await {
+    match update_work_item_inner(state, principal, arguments, None).await {
+        Ok(result) => result,
+        Err(error) => command_error("work_item_update", error),
+    }
+}
+
+/// Changes fields and the status together in one transaction, so a rejected
+/// status leaves the fields untouched too.
+pub async fn update_work_item_and_status(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: UpdateWorkItemArguments,
+    status: String,
+) -> WriteResult {
+    match update_work_item_inner(state, principal, arguments, Some(status)).await {
         Ok(result) => result,
         Err(error) => command_error("work_item_update", error),
     }
@@ -406,6 +429,7 @@ async fn update_work_item_inner(
     state: &AppState,
     principal: &McpPrincipal,
     mut arguments: UpdateWorkItemArguments,
+    status: Option<String>,
 ) -> Result<WriteResult, AppError> {
     let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
         return Ok(WriteResult::invalid("workItemId"));
@@ -419,6 +443,12 @@ async fn update_work_item_inner(
         || arguments.clear_assignee == Some(true) && arguments.assignee_actor_id.is_some()
     {
         return Ok(WriteResult::invalid("update"));
+    }
+    if status
+        .as_deref()
+        .is_some_and(|status| status.is_empty() || status.len() > 80)
+    {
+        return Ok(WriteResult::invalid("status"));
     }
     arguments.title = match arguments
         .title
@@ -461,8 +491,16 @@ async fn update_work_item_inner(
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
     }
-    let scope = resource_bound_scope("mcp_work_items", work_item_id, "update")?;
-    let request_hash = RequestHash::for_value(&arguments)?;
+    let (scope, request_hash) = match &status {
+        None => (
+            resource_bound_scope("mcp_work_items", work_item_id, "update")?,
+            RequestHash::for_value(&arguments)?,
+        ),
+        Some(status) => (
+            resource_bound_scope("mcp_work_items", work_item_id, "update_with_status")?,
+            RequestHash::for_value(&(&arguments, status))?,
+        ),
+    };
     let reservation = match reserve(
         &mut transaction,
         principal.actor_id,
@@ -483,6 +521,15 @@ async fn update_work_item_inner(
     } else {
         assignee_actor_id.map(Some)
     };
+    let status_id = match &status {
+        Some(status) => {
+            match resolve_status(&mut transaction, principal.project_id, status).await? {
+                Some(status_id) => Some(status_id),
+                None => return Ok(WriteResult::invalid("status")),
+            }
+        }
+        None => None,
+    };
     let outcome = update_work_item_by_id(
         &mut transaction,
         &mcp_actor(principal, arguments.client_request_id.clone()),
@@ -492,7 +539,7 @@ async fn update_work_item_inner(
             title: arguments.title.as_deref(),
             description: arguments.description.as_deref(),
             type_id: None,
-            status_id: None,
+            status_id,
             priority: arguments.priority.as_deref(),
             assignee_actor_id: assignee_update,
             summary: "Work Item updated through MCP",
@@ -962,6 +1009,9 @@ async fn authorize_write(
             retry_category: "request_write_scope".to_owned(),
         }));
     }
+    // Rows written below (activity, comments) record the app a person is
+    // acting through.
+    super::common::mark_via(transaction, principal).await?;
     let membership = lock_membership(transaction, principal.actor_id, principal.project_id).await?;
     let Some(membership) = membership else {
         return Ok(Some(not_found()));

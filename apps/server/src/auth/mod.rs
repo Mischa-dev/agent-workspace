@@ -657,6 +657,44 @@ pub(crate) fn csrf_cookie_name(config: &AppConfig) -> &'static str {
     }
 }
 
+fn sign_in_return_cookie_name(config: &AppConfig) -> &'static str {
+    if config.environment == Environment::Development {
+        "aw_sign_in_return"
+    } else {
+        "__Host-aw_sign_in_return"
+    }
+}
+
+/// Remember an app's connect screen while someone signs in. Google and WorkOS
+/// sign-in finish on the server and can't carry the web app's `returnTo`, so
+/// the screen rides along in a short-lived cookie. `None` forgets it.
+pub(crate) fn sign_in_return_cookie(config: &AppConfig, path: Option<&str>) -> String {
+    let name = sign_in_return_cookie_name(config);
+    let (value, max_age) = path.map_or((String::new(), 0), |path| {
+        (URL_SAFE_NO_PAD.encode(path), 900)
+    });
+    let secure = if config.environment == Environment::Development {
+        ""
+    } else {
+        "; Secure"
+    };
+    format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")
+}
+
+/// The connect screen someone left to sign in, if any. Only connect screens
+/// qualify, so the cookie can't send anyone anywhere else.
+pub(crate) fn sign_in_return(config: &AppConfig, headers: &HeaderMap) -> Option<String> {
+    let value = cookie_value(headers, sign_in_return_cookie_name(config))?;
+    let path = String::from_utf8(URL_SAFE_NO_PAD.decode(value).ok()?).ok()?;
+    is_sign_in_return(&path).then_some(path)
+}
+
+fn is_sign_in_return(path: &str) -> bool {
+    path.len() <= 8192
+        && path.starts_with("/oauth/authorize?")
+        && path.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
 fn session_cookie(config: &AppConfig, value: &str, expire: bool) -> String {
     cookie(
         session_cookie_name(config),
@@ -719,6 +757,35 @@ mod tests {
             "postgres://example.invalid/database".to_owned(),
         )]))
         .expect("development config")
+    }
+
+    #[test]
+    fn sign_in_return_only_leads_back_to_connect_screens() {
+        let config = config();
+        let remembered = |path: &str| {
+            let cookie = super::sign_in_return_cookie(&config, Some(path));
+            let pair = cookie.split(';').next().expect("cookie pair").to_owned();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::COOKIE,
+                HeaderValue::from_str(&pair).expect("cookie header"),
+            );
+            super::sign_in_return(&config, &headers)
+        };
+        assert_eq!(
+            remembered("/oauth/authorize?client_id=a&state=b").as_deref(),
+            Some("/oauth/authorize?client_id=a&state=b")
+        );
+        for elsewhere in [
+            "https://evil.example/oauth/authorize?x",
+            "//evil.example/oauth/authorize?x",
+            "/settings/account",
+            "/oauth/authorize?x y",
+            "/oauth/authorize?x\r\nSet-Cookie: a=b",
+        ] {
+            assert_eq!(remembered(elsewhere), None, "{elsewhere}");
+        }
+        assert!(super::sign_in_return_cookie(&config, None).contains("Max-Age=0"));
     }
 
     #[test]

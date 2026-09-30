@@ -34,6 +34,10 @@ const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => (
 const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
 const AppearancePage = lazy(() => import('../theme/AppearancePage').then((module) => ({ default: module.AppearancePage })))
 const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
+const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
+const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
+const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
+const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
 
 function createQueryClient() {
   return new QueryClient({
@@ -179,6 +183,38 @@ export function App() {
                     </AuthenticatedRouteBoundary>
                   }
                   path="/projects/:projectId/threads/:threadId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <PagesPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/pages"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <PageDetailPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/pages/:pageId"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <DecisionsPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/projects/:projectId/decisions"
+                />
+                <Route
+                  element={
+                    <AuthenticatedRouteBoundary>
+                      <SearchPage />
+                    </AuthenticatedRouteBoundary>
+                  }
+                  path="/search"
                 />
                 <Route element={<NotFoundPage />} path="*" />
               </Route>

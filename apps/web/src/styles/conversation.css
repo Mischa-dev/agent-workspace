@@ -1057,3 +1057,176 @@ h2.aw-card__title {
 .aw-sync-alert .aw-banner {
   outline: none;
 }
+
+/* Connected-app label on messages written through an app, such as Claude Code */
+.aw-msg__via {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+/* Thread status: a chip that opens the status dialog */
+.aw-threadstatus {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.aw-threadstatus:focus-visible {
+  border-radius: var(--radius-full);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+/* A conversation's thread board */
+.aw-board__list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-board__item {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--content-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-board__item:hover {
+  border-color: var(--content-border);
+  background: var(--content-hover);
+}
+
+.aw-board__item:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.aw-board__top,
+.aw-board__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-board__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--t-ui-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-board__meta,
+.aw-board__outcome {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+/* A DM or group thread, open beside the conversation */
+.aw-threadpanel {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100%;
+  padding-bottom: 0;
+}
+
+.aw-threadpanel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-threadpanel__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-threadpanel__outcome {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--content-fg);
+  font: var(--t-small);
+}
+
+.aw-threadpanel__messages {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Pinned pages, decisions and messages at the top of a conversation */
+.aw-pins {
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-pins__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  cursor: pointer;
+}
+
+.aw-pins__toggle:hover {
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+.aw-pins__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-pins__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.aw-pins__title {
+  font: var(--t-ui-strong);
+  color: var(--link);
+}
+
+.aw-pins__text {
+  grid-column: 1;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.aw-pins__item .aw-iconbtn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}

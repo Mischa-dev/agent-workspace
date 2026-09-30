@@ -155,6 +155,7 @@ export function MessageRow({
           <div className="aw-msg__meta">
             <span className="aw-msg__author">{message.author.displayName}</span>
             <ActorTag kind={kind} />
+            {message.via ? <span className="aw-msg__via">via {message.via}</span> : null}
             <time className="aw-msg__time" dateTime={entry.createdAt} title={formatFullDate(entry.createdAt)}>
               {formatTime(entry.createdAt)}
             </time>
@@ -283,6 +284,7 @@ export function TimelineEntries({
         previous?.message &&
         dividers.length === 0 &&
         previous.message.author.id === entry.message.author.id &&
+        previous.message.via === entry.message.via &&
         Date.parse(entry.createdAt) - Date.parse(previous.createdAt) < GROUP_WINDOW_MS,
     )
     previous = entry

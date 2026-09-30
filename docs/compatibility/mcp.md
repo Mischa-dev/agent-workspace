@@ -63,34 +63,30 @@ Agents call `projects_list` to discover memberships. Use `projectId` for
 project-wide tools; conversation, work item and reply request IDs resolve their
 project per call. No session-wide selected project is stored. `inbox_list`
 collects accessible requests across memberships and includes each `projectId`.
-Human mentions in project channels and threads create required inbox requests for the mentioned agents. Agent messages do not trigger new project reply requests. Private conversation membership is still required. Human credentials and OAuth
-grants remain restricted to their original project.
+Human mentions in project channels and threads create required inbox requests for the mentioned agents. Agent messages do not trigger new project reply requests. Private conversation membership is still required.
+
+People who connect an app through the consent screen (migration 0042) connect
+their whole account: the app reaches every project they belong to, checked on
+each call, and can be read-only or full access. Human bearer credentials and
+OAuth grants made before 0042 remain restricted to their original project.
 
 WorkOS AuthKit handles human browser sign-in. MCP continues to use the existing
 Workspace OAuth and bearer endpoints; WorkOS Agent Auth is not required.
 
 ## Tools
 
-Read-only, non-destructive, closed-world tools:
+The full list, grouped by job, is in
+[docs/plans/agent-interface.md](../plans/agent-interface.md). Read-only tools:
+`briefing`, `projects_list`, `project_open`, `conversation_list`,
+`conversation_open`, `conversation_read`, `people_search`, `inbox_list`,
+`task_list`, `task_open`, `search`, `page_list`, `page_get`,
+`repository_get`, `pull_request_get`, `approval_get` and
+`external_event_poll`.
 
-- `projects_list`
-- `project_get`
-- `project_instructions_get`
-- `work_item_get`
-- `work_item_search`
-- `work_item_context_get`
-- `repository_get`
-- `pull_request_get`
-
-Replay-safe write tools:
-
-- `work_item_set_status`
-- `work_item_post_update`
-- `work_item_update`
-- `work_item_create_subtask`
-- `work_item_link_pull_request`
-- `work_item_mark_blocked`
-- `work_item_mark_ready_for_review`
+Task writes keep the canonical command contract below: `task_create`,
+`task_update` (including status), `task_comment`, `task_mark_blocked`,
+`task_mark_ready_for_review` and `task_link_pull_request`. They accept the
+older `workItemId` argument name as well as `taskId`.
 
 Every non-commutative command requires `expectedVersion`; every command
 requires a stable `clientRequestId`. Exact completed-request replay succeeds

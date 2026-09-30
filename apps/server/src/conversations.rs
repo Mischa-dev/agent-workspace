@@ -68,6 +68,11 @@ pub fn router() -> Router<AppState> {
             post(send_direct_message),
         )
         .route("/api/v1/channels/{id}/threads", post(create_thread))
+        .route(
+            "/api/v1/conversations/{id}/threads",
+            get(list_threads).post(create_thread),
+        )
+        .route("/api/v1/threads/{id}", axum::routing::patch(patch_thread))
         .route("/api/v1/channels/{id}/archive", post(archive_channel))
         .route("/api/v1/threads/{id}/archive", post(archive_thread))
         .route(
@@ -91,19 +96,41 @@ struct ProjectAccessRow {
 
 #[derive(Clone, Debug, FromRow)]
 pub(crate) struct ConversationAccessRow {
-    id: Uuid,
+    pub(crate) id: Uuid,
     pub(crate) project_id: Uuid,
     pub(crate) kind: String,
-    parent_channel_id: Option<Uuid>,
+    pub(crate) parent_channel_id: Option<Uuid>,
     origin_message_id: Option<Uuid>,
-    name: String,
-    version: i64,
+    pub(crate) name: String,
+    pub(crate) version: i64,
     archived_at: Option<String>,
     project_archived: bool,
     parent_archived: bool,
-    next_entry_sequence: i64,
+    pub(crate) parent_kind: Option<String>,
+    pub(crate) thread_status: String,
+    pub(crate) thread_outcome: Option<String>,
+    pub(crate) next_entry_sequence: i64,
     membership_role: String,
     membership_enabled: bool,
+}
+
+impl ConversationAccessRow {
+    /// The kind whose reply rules and members apply: a thread under a DM or
+    /// group behaves like its parent.
+    pub(crate) fn effective_kind(&self) -> &str {
+        match (self.kind.as_str(), self.parent_kind.as_deref()) {
+            ("thread", Some(parent @ ("dm" | "group"))) => parent,
+            (kind, _) => kind,
+        }
+    }
+
+    /// The conversation whose member list controls who can see this one.
+    pub(crate) fn membership_conversation_id(&self) -> Uuid {
+        match (self.kind.as_str(), self.parent_kind.as_deref()) {
+            ("thread", Some("dm" | "group")) => self.parent_channel_id.unwrap_or(self.id),
+            _ => self.id,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -173,10 +200,19 @@ pub struct ConversationView {
     pub name: String,
     pub archived_at: Option<String>,
     pub version: i64,
+    /// Threads only: where the thread stands, such as Open or Decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_outcome: Option<String>,
+    /// Threads only: the kind of conversation the thread lives under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_kind: Option<String>,
 }
 
 impl From<&ConversationAccessRow> for ConversationView {
     fn from(row: &ConversationAccessRow) -> Self {
+        let is_thread = row.kind == "thread";
         Self {
             id: row.id,
             project_id: row.project_id,
@@ -186,6 +222,17 @@ impl From<&ConversationAccessRow> for ConversationView {
             name: row.name.clone(),
             archived_at: row.archived_at.clone(),
             version: row.version,
+            thread_status: is_thread.then(|| row.thread_status.clone()),
+            thread_outcome: if is_thread {
+                row.thread_outcome.clone()
+            } else {
+                None
+            },
+            parent_kind: if is_thread {
+                row.parent_kind.clone()
+            } else {
+                None
+            },
         }
     }
 }
@@ -210,6 +257,10 @@ pub struct MessageView {
     pub mentioned_actors: Vec<ActorView>,
     pub referenced_work_items: Vec<ConversationWorkItemReferenceView>,
     pub created_at: String,
+    /// The connected app a person sent this through, when that app's
+    /// "show via" setting is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -420,6 +471,7 @@ struct TimelineEntryRow {
     plain_text: Option<String>,
     mentioned_actors: serde_json::Value,
     referenced_work_items: serde_json::Value,
+    via: Option<String>,
     agent_run_event_id: Option<Uuid>,
     agent_run_id: Option<Uuid>,
     event_kind: Option<String>,
@@ -436,6 +488,7 @@ struct MessageResultRow {
     author_kind: String,
     author_name: String,
     author_handle: String,
+    via: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -633,6 +686,9 @@ async fn list_channels(
                     name: row.name,
                     archived_at: row.archived_at,
                     version: row.version,
+                    thread_status: None,
+                    thread_outcome: None,
+                    parent_kind: None,
                 },
                 highest_sequence,
                 unread: highest_sequence > read_state.highest_seen_sequence,
@@ -752,6 +808,9 @@ async fn create_channel(
             name: command.name,
             archived_at: None,
             version: 1,
+            thread_status: None,
+            thread_outcome: None,
+            parent_kind: None,
         },
         read_state: ReadStateView {
             highest_seen_sequence: 0,
@@ -788,7 +847,9 @@ async fn create_thread(
         false,
     )
     .await?;
-    require_conversation_kind(&channel, "channel")?;
+    if !matches!(channel.kind.as_str(), "channel" | "dm" | "group") {
+        return Err(AppError::NotFound("conversation"));
+    }
     require_active_conversation(&channel)?;
     let reservation = match idempotency::reserve(
         &mut transaction,
@@ -889,6 +950,9 @@ async fn create_thread(
             name: command.name,
             archived_at: None,
             version: 1,
+            thread_status: Some("Open".to_owned()),
+            thread_outcome: None,
+            parent_kind: Some(channel.kind.clone()),
         },
         read_state: ReadStateView {
             highest_seen_sequence: 0,
@@ -898,6 +962,290 @@ async fn create_thread(
     finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
     transaction.commit().await?;
     created_conversation_response(StatusCode::CREATED, &body)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadListQuery {
+    status: Option<String>,
+    include_archived: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadListResponse {
+    conversation_id: Uuid,
+    threads: Vec<ThreadSummaryView>,
+}
+
+/// A thread as it appears on a conversation's thread board.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadSummaryView {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) outcome: Option<String>,
+    pub(crate) origin_message_id: Option<Uuid>,
+    pub(crate) message_count: i64,
+    pub(crate) unread: bool,
+    pub(crate) archived: bool,
+    pub(crate) last_activity_at: String,
+    pub(crate) status_changed_at: Option<String>,
+}
+
+/// The threads under a channel, DM, or group, newest activity first.
+async fn list_threads(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<ThreadListQuery>,
+) -> Result<Json<ThreadListResponse>, AppError> {
+    let conversation = authorized_conversation(
+        &state,
+        &principal,
+        conversation_id,
+        Action::ProjectView,
+        false,
+    )
+    .await?;
+    if !matches!(conversation.kind.as_str(), "channel" | "dm" | "group") {
+        return Err(AppError::NotFound("conversation"));
+    }
+    let status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let threads = thread_summaries(
+        &state.pool,
+        conversation.id,
+        principal.actor_id,
+        status,
+        query.include_archived.unwrap_or(false),
+        200,
+    )
+    .await?;
+    Ok(Json(ThreadListResponse {
+        conversation_id: conversation.id,
+        threads,
+    }))
+}
+
+pub(crate) async fn thread_summaries(
+    pool: &sqlx::PgPool,
+    parent_id: Uuid,
+    viewer_actor_id: Uuid,
+    status: Option<&str>,
+    include_archived: bool,
+    limit: i64,
+) -> Result<Vec<ThreadSummaryView>, AppError> {
+    Ok(sqlx::query_as::<_, ThreadSummaryView>(
+        r#"
+        SELECT thread.id, thread.name, thread.thread_status AS status,
+               thread.thread_outcome AS outcome, thread.origin_message_id,
+               thread.next_entry_sequence - 1 AS message_count,
+               thread.next_entry_sequence - 1 > COALESCE(read_state.highest_seen_sequence, 0)
+                   AS unread,
+               thread.archived_at IS NOT NULL AS archived,
+               COALESCE(last_entry.created_at, thread.created_at)::text AS last_activity_at,
+               thread.thread_status_changed_at::text AS status_changed_at
+        FROM conversations thread
+        LEFT JOIN conversation_read_states read_state
+          ON read_state.conversation_id = thread.id AND read_state.actor_id = $2
+        LEFT JOIN LATERAL (
+            SELECT entry.created_at FROM conversation_entries entry
+            WHERE entry.conversation_id = thread.id
+            ORDER BY entry.sequence DESC LIMIT 1
+        ) last_entry ON true
+        WHERE thread.parent_channel_id = $1
+          AND thread.kind = 'thread'
+          AND conversation_visible_to(thread.id, $2)
+          AND ($3::text IS NULL OR lower(thread.thread_status) = lower($3))
+          AND ($4 OR thread.archived_at IS NULL)
+        ORDER BY COALESCE(last_entry.created_at, thread.created_at) DESC, thread.id
+        LIMIT $5
+        "#,
+    )
+    .bind(parent_id)
+    .bind(viewer_actor_id)
+    .bind(status)
+    .bind(include_archived)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ThreadPatch {
+    pub(crate) name: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) outcome: Option<String>,
+    #[serde(default)]
+    pub(crate) clear_outcome: bool,
+}
+
+pub(crate) const THREAD_STATUS_SUGGESTIONS: [&str; 6] = [
+    "Open",
+    "In progress",
+    "Decided",
+    "Done",
+    "Dropped",
+    "Blocked",
+];
+const MAX_THREAD_STATUS_CHARACTERS: usize = 40;
+const MAX_THREAD_OUTCOME_CHARACTERS: usize = 1000;
+
+/// Normalize a thread status: suggestions keep their spelling, and any short
+/// custom status is allowed.
+pub(crate) fn normalize_thread_status(value: &str) -> Result<String, AppError> {
+    let status = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if status.is_empty()
+        || status.chars().count() > MAX_THREAD_STATUS_CHARACTERS
+        || status.chars().any(char::is_control)
+    {
+        return Err(AppError::Validation("thread status"));
+    }
+    Ok(THREAD_STATUS_SUGGESTIONS
+        .iter()
+        .find(|suggestion| suggestion.eq_ignore_ascii_case(&status))
+        .map_or(status, |suggestion| (*suggestion).to_owned()))
+}
+
+fn normalize_thread_outcome(value: &str) -> Result<Option<String>, AppError> {
+    let outcome = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if outcome.chars().count() > MAX_THREAD_OUTCOME_CHARACTERS {
+        return Err(AppError::Validation("thread outcome"));
+    }
+    Ok((!outcome.is_empty()).then_some(outcome))
+}
+
+/// Rename a thread or change its status or outcome. Shared by the browser API
+/// and MCP. Returns the updated thread.
+pub(crate) async fn update_thread(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    thread_id: Uuid,
+    patch: &ThreadPatch,
+) -> Result<ConversationView, AppError> {
+    if patch.name.is_none()
+        && patch.status.is_none()
+        && patch.outcome.is_none()
+        && !patch.clear_outcome
+    {
+        return Err(AppError::Validation("thread change"));
+    }
+    let name = patch
+        .name
+        .as_deref()
+        .map(normalize_conversation_name)
+        .transpose()?;
+    let status = patch
+        .status
+        .as_deref()
+        .map(normalize_thread_status)
+        .transpose()?;
+    let outcome = match (&patch.outcome, patch.clear_outcome) {
+        (Some(_), true) => return Err(AppError::Validation("thread outcome")),
+        (Some(value), false) => Some(normalize_thread_outcome(value)?),
+        (None, true) => Some(None),
+        (None, false) => None,
+    };
+    let thread = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
+        thread_id,
+        Action::ThreadCreate,
+        false,
+    )
+    .await?;
+    require_conversation_kind(&thread, "thread")?;
+    let status_changed = status
+        .as_ref()
+        .is_some_and(|status| *status != thread.thread_status)
+        || outcome
+            .as_ref()
+            .is_some_and(|outcome| *outcome != thread.thread_outcome);
+    let updated = sqlx::query(
+        r#"
+        UPDATE conversations
+        SET name = COALESCE($2, name),
+            thread_status = COALESCE($3, thread_status),
+            thread_outcome = CASE WHEN $4 THEN $5 ELSE thread_outcome END,
+            thread_status_changed_at = CASE WHEN $6 THEN now() ELSE thread_status_changed_at END,
+            thread_status_changed_by_actor_id =
+                CASE WHEN $6 THEN $7 ELSE thread_status_changed_by_actor_id END,
+            version = version + 1,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(thread.id)
+    .bind(&name)
+    .bind(&status)
+    .bind(outcome.is_some())
+    .bind(outcome.clone().flatten())
+    .bind(status_changed)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await;
+    map_conversation_insert(updated)?;
+    let version = thread.version + 1;
+    enqueue_event(
+        transaction,
+        thread.project_id,
+        OutboxEventPayload::ConversationUpdated(crate::outbox::ConversationUpdatedPayload {
+            conversation_id: thread.id,
+            version,
+        }),
+    )
+    .await?;
+    let mut view = ConversationView::from(&thread);
+    view.version = version;
+    if let Some(name) = name {
+        view.name = name;
+    }
+    if let Some(status) = status {
+        view.thread_status = Some(status);
+    }
+    if let Some(outcome) = outcome {
+        view.thread_outcome = outcome;
+    }
+    Ok(view)
+}
+
+async fn patch_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(thread_id): ApiPath<Uuid>,
+    ApiJson(patch): ApiJson<ThreadPatch>,
+) -> Result<Json<ConversationView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let view = update_thread(
+        &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        thread_id,
+        &patch,
+    )
+    .await?;
+    insert_audit_event(
+        &mut transaction,
+        &headers,
+        &principal,
+        view.project_id,
+        "conversation.thread_updated",
+        thread_id,
+        serde_json::json!({ "status": view.thread_status, "name": view.name }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(view))
 }
 
 async fn send_channel_message(
@@ -953,6 +1301,7 @@ async fn send_direct_message(
             actor_id: principal.actor_id,
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
+            via_grant_id: None,
         },
         conversation_id,
         None,
@@ -980,6 +1329,7 @@ async fn send_message(
             actor_id: principal.actor_id,
             actor_kind: principal.actor_kind.clone(),
             mcp_credential: None,
+            via_grant_id: None,
         },
         conversation_id,
         Some(expected_kind),
@@ -996,6 +1346,8 @@ pub(crate) struct MessageCommandActor {
     pub(crate) actor_id: Uuid,
     pub(crate) actor_kind: String,
     pub(crate) mcp_credential: Option<MessageMcpCredential>,
+    /// The connected app a person is sending through, if any.
+    pub(crate) via_grant_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1123,9 +1475,9 @@ pub(crate) async fn append_message_command(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
-            content_version, content, plain_text
+            content_version, content, plain_text, via_oauth_grant_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
         "#,
     )
     .bind(message_id)
@@ -1134,6 +1486,7 @@ pub(crate) async fn append_message_command(
     .bind(actor.actor_id)
     .bind(&content_json)
     .bind(&plain_text)
+    .bind(actor.via_grant_id)
     .execute(&mut *transaction)
     .await?;
     for actor_id in &mentioned_actor_ids {
@@ -1201,13 +1554,17 @@ pub(crate) async fn append_message_command(
             entry.created_at::text AS entry_created_at,
             actor.kind AS author_kind,
             membership.display_name AS author_name,
-            membership.handle AS author_handle
+            membership.handle AS author_handle,
+            via_client.client_name AS via
         FROM messages message
         JOIN conversation_entries entry ON entry.message_id = message.id
         JOIN actors actor ON actor.id = message.author_actor_id
         JOIN project_memberships membership
           ON membership.project_id = message.project_id
          AND membership.actor_id = message.author_actor_id
+        LEFT JOIN mcp_oauth_grants via_grant
+          ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
+        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         WHERE message.id = $1
         "#,
     )
@@ -1247,6 +1604,7 @@ pub(crate) async fn append_message_command(
         mentioned_actors,
         referenced_work_items,
         created_at: result.message_created_at,
+        via: result.via,
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -1284,7 +1642,8 @@ pub(crate) async fn append_message_command(
         replies::NewMessage {
             project_id: conversation.project_id,
             conversation_id: conversation.id,
-            conversation_kind: &conversation.kind,
+            members_conversation_id: conversation.membership_conversation_id(),
+            conversation_kind: conversation.effective_kind(),
             message_id,
             author_actor_id: actor.actor_id,
             author_kind: &actor.actor_kind,
@@ -1377,6 +1736,9 @@ async fn lock_message_conversation(
                conversation.archived_at::text AS archived_at,
                project.archived_at IS NOT NULL AS project_archived,
                COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
+               parent.kind AS parent_kind,
+               conversation.thread_status,
+               conversation.thread_outcome,
                conversation.next_entry_sequence,
                membership.role AS membership_role,
                membership.enabled AS membership_enabled
@@ -1556,6 +1918,7 @@ async fn conversation_timeline(
             message.plain_text,
             COALESCE(mentions.actors, '[]'::jsonb) AS mentioned_actors,
             COALESCE(work_item_references.items, '[]'::jsonb) AS referenced_work_items,
+            via_client.client_name AS via,
             event.id AS agent_run_event_id,
             event.agent_run_id,
             event.kind AS event_kind,
@@ -1608,6 +1971,9 @@ async fn conversation_timeline(
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
         ) work_item_references ON true
+        LEFT JOIN mcp_oauth_grants via_grant
+          ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
+        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id
         WHERE entry.conversation_id = $1
           AND entry.sequence < $3
@@ -1673,7 +2039,7 @@ async fn conversation_timeline(
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
     let (reply_requests, agent_turns_remaining) =
-        if matches!(conversation.kind.as_str(), "dm" | "group") {
+        if matches!(conversation.effective_kind(), "dm" | "group") {
             let (requests, remaining) =
                 replies::timeline_requests(&state.pool, conversation.id).await?;
             (requests, Some(remaining))
@@ -1919,6 +2285,9 @@ async fn archive_conversation(
             archived_at::text AS archived_at,
             false AS project_archived,
             false AS parent_archived,
+            $4::text AS parent_kind,
+            thread_status,
+            thread_outcome,
             next_entry_sequence,
             $3::text AS membership_role,
             true AS membership_enabled
@@ -1927,6 +2296,7 @@ async fn archive_conversation(
     .bind(conversation.id)
     .bind(principal.actor_id)
     .bind(&conversation.membership_role)
+    .bind(&conversation.parent_kind)
     .fetch_one(&mut *transaction)
     .await?;
     enqueue_event(
@@ -2444,7 +2814,7 @@ async fn authorized_conversation(
     Ok(row)
 }
 
-async fn fetch_conversation_access(
+pub(crate) async fn fetch_conversation_access(
     pool: &sqlx::PgPool,
     actor_id: Uuid,
     conversation_id: Uuid,
@@ -2462,6 +2832,9 @@ async fn fetch_conversation_access(
             conversation.archived_at::text AS archived_at,
             project.archived_at IS NOT NULL AS project_archived,
             COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
+            parent.kind AS parent_kind,
+            conversation.thread_status,
+            conversation.thread_outcome,
             conversation.next_entry_sequence,
             membership.role AS membership_role,
             membership.enabled AS membership_enabled
@@ -2492,6 +2865,27 @@ pub(crate) async fn lock_conversation_access(
     action: Action,
     include_archived: bool,
 ) -> Result<ConversationAccessRow, AppError> {
+    lock_conversation_for(
+        transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        conversation_id,
+        action,
+        include_archived,
+    )
+    .await
+}
+
+/// Lock a conversation for a person or agent, whether they came through a
+/// browser session or MCP. Visibility goes through `conversation_visible_to`.
+pub(crate) async fn lock_conversation_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    conversation_id: Uuid,
+    action: Action,
+    include_archived: bool,
+) -> Result<ConversationAccessRow, AppError> {
     let row = sqlx::query_as::<_, ConversationAccessRow>(
         r#"
         SELECT
@@ -2505,6 +2899,9 @@ pub(crate) async fn lock_conversation_access(
             conversation.archived_at::text AS archived_at,
             project.archived_at IS NOT NULL AS project_archived,
             COALESCE(parent.archived_at IS NOT NULL, false) AS parent_archived,
+            parent.kind AS parent_kind,
+            conversation.thread_status,
+            conversation.thread_outcome,
             conversation.next_entry_sequence,
             membership.role AS membership_role,
             membership.enabled AS membership_enabled
@@ -2525,17 +2922,17 @@ pub(crate) async fn lock_conversation_access(
         "#,
     )
     .bind(conversation_id)
-    .bind(principal.actor_id)
+    .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    authorize_conversation_row(principal, &row, action, include_archived)?;
+    authorize_conversation_row_for(actor_id, actor_kind, &row, action, include_archived)?;
     if let Some(parent_channel_id) = row.parent_channel_id {
         let parent_active = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT archived_at IS NULL
             FROM conversations
-            WHERE id = $1 AND project_id = $2 AND kind = 'channel'
+            WHERE id = $1 AND project_id = $2 AND kind IN ('channel', 'dm', 'group')
             FOR SHARE
             "#,
         )
@@ -2557,6 +2954,22 @@ fn authorize_conversation_row(
     action: Action,
     include_archived: bool,
 ) -> Result<(), AppError> {
+    authorize_conversation_row_for(
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        row,
+        action,
+        include_archived,
+    )
+}
+
+pub(crate) fn authorize_conversation_row_for(
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    row: &ConversationAccessRow,
+    action: Action,
+    include_archived: bool,
+) -> Result<(), AppError> {
     if row.project_archived
         || (!include_archived
             && (row.archived_at.is_some() || (row.kind == "thread" && row.parent_archived)))
@@ -2568,17 +2981,28 @@ fn authorize_conversation_row(
     } else {
         ProjectScope::project(row.project_id)
     };
-    require_policy(
-        principal,
-        &row.membership_role,
-        row.membership_enabled,
-        row.project_id,
-        action,
-        scope,
-    )
+    let subject = Subject::new(
+        actor_id,
+        actor_kind,
+        true,
+        Some(Membership::project(
+            row.project_id,
+            parse_membership_role(&row.membership_role)?,
+            row.membership_enabled,
+        )),
+        None,
+    );
+    if matches!(
+        authorize(&subject, action, Resource::Project(scope)),
+        Decision::Allow
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("conversation"))
+    }
 }
 
-fn require_active_conversation(row: &ConversationAccessRow) -> Result<(), AppError> {
+pub(crate) fn require_active_conversation(row: &ConversationAccessRow) -> Result<(), AppError> {
     if row.project_archived
         || row.archived_at.is_some()
         || (row.kind == "thread" && row.parent_archived)
@@ -2589,7 +3013,7 @@ fn require_active_conversation(row: &ConversationAccessRow) -> Result<(), AppErr
     }
 }
 
-fn require_conversation_kind(
+pub(crate) fn require_conversation_kind(
     row: &ConversationAccessRow,
     expected: &'static str,
 ) -> Result<(), AppError> {
@@ -2642,7 +3066,7 @@ fn policy_allows(
     ))
 }
 
-fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
+pub(crate) fn parse_actor_kind(value: &str) -> Result<ActorKind, AppError> {
     match value {
         "human" => Ok(ActorKind::Human),
         "external_agent" => Ok(ActorKind::ExternalAgent),
@@ -2829,6 +3253,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 created_at: row
                     .message_created_at
                     .unwrap_or_else(|| row.created_at.clone()),
+                via: row.via,
             })
         }
         None => None,

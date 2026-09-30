@@ -39,6 +39,10 @@ memory so a build can never push other services into the OOM killer.
 - Resolve Actor identity server-side; clients cannot choose authorship.
 - Conversation access goes through `conversation_visible_to` (migration 0037).
   Never add a conversation query that skips it.
+- MCP calls are checked against the caller's current memberships every time
+  (`actor_can_access_project`, migration 0042). Apps connected by a person act
+  as that person; agents act as themselves. See
+  `docs/plans/agent-interface.md` for the tools.
 - Keep application Threads, Agent Runs, and provider sessions separate.
 - Use argument arrays for Git and process execution; never interpolate a shell
   command from user input.

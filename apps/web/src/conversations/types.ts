@@ -39,6 +39,8 @@ export type ConversationMessage = {
   mentionedActors: ConversationActor[]
   referencedWorkItems: ConversationWorkItemReference[]
   createdAt: string
+  /** The connected app a person sent this through, such as Claude Code. */
+  via: string | null
 }
 
 export type ConversationWorkItemReference = {
@@ -79,6 +81,11 @@ export type ConversationTimelinePage = {
     name: string
     archivedAt: string | null
     version: number
+    /** Threads: where it stands, such as Open or Decided. */
+    threadStatus: string | null
+    threadOutcome: string | null
+    /** Threads: the kind of conversation it lives under. */
+    parentKind: ConversationKind | null
   }
   linkedWorkItems: ConversationWorkItemReference[]
   entries: ConversationTimelineEntry[]
@@ -160,4 +167,18 @@ export type ProjectConversationSidebar = {
   capabilities: {
     createChannel: boolean
   }
+}
+
+/** A thread as it appears on a conversation's thread board. */
+export type ThreadSummary = {
+  id: string
+  name: string
+  status: string
+  outcome: string | null
+  originMessageId: string | null
+  messageCount: number
+  unread: boolean
+  archived: boolean
+  lastActivityAt: string
+  statusChangedAt: string | null
 }

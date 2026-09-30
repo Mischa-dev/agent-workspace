@@ -32,6 +32,7 @@ function setInert(element: HTMLElement | null, inert: boolean) {
 export function AppShell({
   children,
   context,
+  contextKey,
   direct = false,
   mainClassName,
   project = null,
@@ -42,6 +43,11 @@ export function AppShell({
   children: ReactNode
   /** The details panel (thread details, group members). */
   context?: ReactNode
+  /**
+   * Changes when the person asks to see something in the panel, such as a
+   * thread. On narrow screens the panel is a drawer, so it opens then.
+   */
+  contextKey?: string
   /** Show the Messages sidebar (DMs and groups) instead of a Project's. */
   direct?: boolean
   mainClassName?: string
@@ -52,7 +58,9 @@ export function AppShell({
 }) {
   const [railOpen, setRailOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [contextOpen, setContextOpen] = useState(false)
+  const [contextOpenState, setContextOpen] = useState(false)
+  // A panel closed from inside (a thread's close button) closes its drawer too.
+  const contextOpen = contextOpenState && Boolean(context)
   const shellRef = useRef<HTMLDivElement>(null)
   const railButtonRef = useRef<HTMLButtonElement>(null)
   const sidebarButtonRef = useRef<HTMLButtonElement>(null)
@@ -60,6 +68,19 @@ export function AppShell({
   const contextCloseButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const anyDrawerOpen = railOpen || sidebarOpen || contextOpen
+
+  // When the page asks to show something new in the panel (a thread), open
+  // the drawer on narrow screens. Adjusting state while rendering, not in an
+  // effect, avoids a second render pass.
+  const [shownContextKey, setShownContextKey] = useState<string | undefined>(undefined)
+  if (contextKey !== shownContextKey) {
+    setShownContextKey(contextKey)
+    if (contextKey && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 860px)').matches) {
+      setRailOpen(false)
+      setSidebarOpen(false)
+      setContextOpen(true)
+    }
+  }
   const realtime = useOptionalRealtime()
   const hasSidebar = Boolean(project) || direct
 

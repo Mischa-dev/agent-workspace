@@ -21,25 +21,21 @@ EXPECTED_ALLOWLIST = (
     "approval_get",
     "approval_respond",
     "conversation_list",
-    "conversation_message_send",
-    "conversation_timeline_get",
+    "conversation_read",
     "external_event_poll",
-    "external_execution_request_create",
-    "mentionable_actor_search",
-    "project_get",
-    "project_instructions_get",
+    "message_send",
+    "people_search",
+    "project_open",
     "pull_request_get",
     "repository_get",
-    "work_item_context_get",
-    "work_item_create",
-    "work_item_create_subtask",
-    "work_item_get",
-    "work_item_mark_blocked",
-    "work_item_mark_ready_for_review",
-    "work_item_post_update",
-    "work_item_search",
-    "work_item_set_status",
-    "work_item_update",
+    "run_request",
+    "task_comment",
+    "task_create",
+    "task_list",
+    "task_mark_blocked",
+    "task_mark_ready_for_review",
+    "task_open",
+    "task_update",
 )
 FORBIDDEN_FIXTURE_PATTERNS = (
     re.compile(r"aw_ext_[A-Za-z0-9_-]{12,}"),
@@ -85,7 +81,7 @@ def main() -> None:
     for tool_name in allowlist:
         if not re.search(rf"async fn {re.escape(tool_name)}\s*\(", mcp_source):
             fail(f"Hermes allowlisted tool is missing from MCP: {tool_name}")
-    if "work_item_link_pull_request" in allowlist:
+    if "task_link_pull_request" in allowlist:
         fail("GitHub publication management must remain outside the Hermes allowlist")
 
     compatibility_note = COMPATIBILITY_NOTE.read_text(encoding="utf-8")

@@ -8,6 +8,7 @@ import type {
   ConversationKind,
   ReplyRequest,
   ReplyRequestStatus,
+  ThreadSummary,
   ConversationMessage,
   ConversationTimelineEntry,
   ConversationTimelinePage,
@@ -126,6 +127,7 @@ function normalizeMessage(value: unknown): ConversationMessage | null {
           )
       : [],
     createdAt: string(message.createdAt),
+    via: typeof message.via === 'string' ? message.via.slice(0, 80) : null,
   }
 }
 
@@ -205,6 +207,11 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       name: string(conversation.name, conversationKindLabel[kind]),
       archivedAt: nullableString(conversation.archivedAt),
       version: Math.max(1, integer(conversation.version, 1)),
+      threadStatus: nullableString(conversation.threadStatus),
+      threadOutcome: nullableString(conversation.threadOutcome),
+      parentKind: ['channel', 'dm', 'group'].includes(String(conversation.parentKind))
+        ? (conversation.parentKind as ConversationKind)
+        : null,
     },
     linkedWorkItems: Array.isArray(root.linkedWorkItems)
       ? root.linkedWorkItems
@@ -497,4 +504,38 @@ export async function getProjectConversationSidebar(
       createChannel: capability(root.capabilities, 'createChannel'),
     },
   }
+}
+
+function normalizeThreadSummary(value: unknown): ThreadSummary | null {
+  const item = asRecord(value)
+  if (typeof item.id !== 'string' || typeof item.name !== 'string') return null
+  return {
+    id: item.id,
+    name: item.name,
+    status: string(item.status, 'Open'),
+    outcome: nullableString(item.outcome),
+    originMessageId: nullableString(item.originMessageId),
+    messageCount: Math.max(0, integer(item.messageCount)),
+    unread: item.unread === true,
+    archived: item.archived === true,
+    lastActivityAt: string(item.lastActivityAt),
+    statusChangedAt: nullableString(item.statusChangedAt),
+  }
+}
+
+/** The threads under a channel, DM, or group, most recent activity first. */
+export async function listThreads(conversationId: string): Promise<ThreadSummary[]> {
+  const root = asRecord(
+    await requestJson<unknown>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/threads`),
+  )
+  return Array.isArray(root.threads)
+    ? root.threads.map(normalizeThreadSummary).filter((thread): thread is ThreadSummary => thread !== null)
+    : []
+}
+
+export async function updateThread(
+  threadId: string,
+  patch: { name?: string; status?: string; outcome?: string; clearOutcome?: boolean },
+) {
+  return requestJson<unknown>(`/api/v1/threads/${encodeURIComponent(threadId)}`, { method: 'PATCH', json: patch })
 }

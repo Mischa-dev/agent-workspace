@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
@@ -16,8 +16,12 @@ import type { ComposerSubmission } from '../conversations/composerModel'
 import { useConversationTimeline } from '../conversations/hooks'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { StructuredComposer } from '../conversations/StructuredComposer'
+import { ThreadBoard, ThreadStatusChip } from '../conversations/threadBoard'
+import { useRefreshThreads, useThreads } from '../conversations/threadModel'
+import { ThreadDialog } from '../conversations/ThreadDialog'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
-import type { ConversationActor, ConversationTimelineEntry, ReplyRequest } from '../conversations/types'
+import type { ConversationActor, ConversationTimelineEntry, ReplyRequest, ThreadSummary } from '../conversations/types'
+import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
 import { AppShell } from '../shell/AppShell'
 import {
   ActorTag,
@@ -27,12 +31,14 @@ import {
   Button,
   ConversationIntro,
   ErrorState,
+  Icon,
   IconButton,
   MessageSkeleton,
   SelectField,
   actorKind,
 } from '../ui'
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
+import { ThreadPanel } from './ThreadPanel'
 
 function listNames(names: string[]) {
   if (names.length <= 1) return names.join('')
@@ -54,6 +60,12 @@ export function DirectConversationPage() {
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const [membersOpen, setMembersOpen] = useState(false)
+  const [boardOpen, setBoardOpen] = useState(false)
+  const [threadDialog, setThreadDialog] = useState<{ messageId: string; text: string; author: string } | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const openThreadId = searchParams.get('thread')
+  const threads = useThreads(conversationId)
+  const refreshThreads = useRefreshThreads()
   const markedSeen = useRef({ conversationId: '', sequence: 0 })
   const page = timeline.data
   const viewerId = session.user.actorId
@@ -78,6 +90,20 @@ export function DirectConversationPage() {
     }
     return byMessage
   }, [page?.replyRequests, valid])
+  const threadsByMessage = useMemo(() => {
+    const byMessage = new Map<string, ThreadSummary[]>()
+    for (const thread of threads.data ?? []) {
+      if (!thread.originMessageId) continue
+      byMessage.set(thread.originMessageId, [...(byMessage.get(thread.originMessageId) ?? []), thread])
+    }
+    return byMessage
+  }, [threads.data])
+  const openThread = (threadId: string | null) => {
+    const next = new URLSearchParams(searchParams)
+    if (threadId) next.set('thread', threadId)
+    else next.delete('thread')
+    setSearchParams(next)
+  }
   const lastEntry = entries.at(-1)
   const waitingForContinue = page?.agentTurnsRemaining === 0 && lastEntry?.message?.author.kind === 'external_agent'
 
@@ -135,19 +161,40 @@ export function DirectConversationPage() {
   const memberPeople = members.map((member) => ({ id: member.id, name: member.displayName, kind: actorKind(member.kind) }))
   const othersNames = members.filter((member) => member.id !== viewerId).map((member) => member.displayName)
 
+  const threadsButton = (
+    <IconButton
+      icon="messages"
+      label={boardOpen ? 'Hide threads' : 'Threads'}
+      onClick={() => {
+        openThread(null)
+        setMembersOpen(false)
+        setBoardOpen((open) => !open)
+      }}
+      pressed={boardOpen}
+      side="bottom"
+    />
+  )
+
   const header = isGroup ? (
     <ConversationHeader
       actions={
-        <button
-          aria-expanded={membersOpen}
-          aria-label={`${members.length} members`}
-          className="aw-convhead__members"
-          onClick={() => setMembersOpen((open) => !open)}
-          type="button"
-        >
-          <AvatarStack max={3} people={memberPeople} size={22} />
-          <span>{members.length}</span>
-        </button>
+        <>
+          {threadsButton}
+          <button
+            aria-expanded={membersOpen}
+            aria-label={`${members.length} members`}
+            className="aw-convhead__members"
+            onClick={() => {
+              openThread(null)
+              setBoardOpen(false)
+              setMembersOpen((open) => !open)
+            }}
+            type="button"
+          >
+            <AvatarStack max={3} people={memberPeople} size={22} />
+            <span>{members.length}</span>
+          </button>
+        </>
       }
       icon="users"
       subtitle={othersNames.length ? `With ${listNames(othersNames)}` : undefined}
@@ -155,6 +202,7 @@ export function DirectConversationPage() {
     />
   ) : (
     <ConversationHeader
+      actions={threadsButton}
       lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
       subtitle={other ? `@${other.handle}` : undefined}
       tag={<ActorTag kind={otherKind} />}
@@ -186,7 +234,26 @@ export function DirectConversationPage() {
   return (
     <AppShell
       context={
-        isGroup && membersOpen ? (
+        openThreadId && projectId ? (
+          <ThreadPanel
+            key={openThreadId}
+            members={members}
+            onClose={() => openThread(null)}
+            parentId={conversationId}
+            projectId={projectId}
+            threadId={openThreadId}
+            viewer={{ actorId: viewerId, displayName: session.user.displayName }}
+          />
+        ) : boardOpen ? (
+          <ThreadBoard
+            conversationId={conversationId}
+            onClose={() => setBoardOpen(false)}
+            onOpen={(thread) => {
+              setBoardOpen(false)
+              openThread(thread.id)
+            }}
+          />
+        ) : isGroup && membersOpen ? (
           <GroupMembers
             conversationId={conversationId}
             members={members}
@@ -196,11 +263,13 @@ export function DirectConversationPage() {
           />
         ) : undefined
       }
+      contextKey={openThreadId ?? (boardOpen ? 'threads' : membersOpen ? 'members' : undefined)}
       direct
       mainClassName="aw-main--conversation"
       user={session.user}
     >
       {header}
+      {valid && projectId ? <PinnedBar canEdit={Boolean(page?.capabilities.sendMessage)} conversationId={conversationId} direct projectId={projectId} /> : null}
       <ConversationTimeline busy={timeline.isPending} label={`Messages with ${title}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${page?.replyRequests.map((request) => request.status).join(',') ?? ''}`}>
         {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
         {overview.isPending || timeline.isPending ? <MessageSkeleton /> : null}
@@ -214,12 +283,43 @@ export function DirectConversationPage() {
           entries={entries}
           renderExtras={(entry) =>
             entry.message ? (
-              <ReplyStatusList
-                onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
-                requests={requestsByMessage.get(entry.message.id) ?? []}
-              />
+              <>
+                <ReplyStatusList
+                  onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                  requests={requestsByMessage.get(entry.message.id) ?? []}
+                />
+                {(threadsByMessage.get(entry.message.id) ?? []).map((thread) => (
+                  <button className="aw-threadlink" key={thread.id} onClick={() => openThread(thread.id)} type="button">
+                    <Icon name="messages" size={14} />
+                    <span className="aw-threadlink__name">{thread.name}</span>
+                    <ThreadStatusChip status={thread.status} />
+                    {thread.outcome ? <span className="aw-threadlink__state">{thread.outcome}</span> : null}
+                    <Icon className="aw-threadlink__chev" name="chevron-right" size={14} />
+                  </button>
+                ))}
+              </>
             ) : null
           }
+          renderToolbar={(entry) => {
+            const message = entry.message
+            if (!message || !valid || !page?.capabilities.sendMessage) return null
+            const existing = threadsByMessage.get(message.id)?.[0]
+            return (
+              <>
+                {existing ? (
+                  <IconButton icon="messages" label="Open thread" onClick={() => openThread(existing.id)} size="sm" />
+                ) : (
+                  <IconButton
+                    icon="messages"
+                    label="Start a thread"
+                    onClick={() => setThreadDialog({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
+                    size="sm"
+                  />
+                )}
+                <MessageMemoryActions conversationId={conversationId} message={message} projectId={projectId} />
+              </>
+            )
+          }}
           viewerId={viewerId}
         />
         {pending.map((item, index) => (
@@ -259,6 +359,18 @@ export function DirectConversationPage() {
                 (!needle || member.handle.toLowerCase().includes(needle) || member.displayName.toLowerCase().includes(needle)),
             )
           }}
+        />
+      ) : null}
+      {threadDialog ? (
+        <ThreadDialog
+          channelId={conversationId}
+          onClose={() => setThreadDialog(null)}
+          onCreated={(threadId) => {
+            void refreshThreads(conversationId)
+            openThread(threadId)
+          }}
+          open
+          origin={threadDialog}
         />
       ) : null}
     </AppShell>

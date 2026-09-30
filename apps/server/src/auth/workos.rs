@@ -6,7 +6,7 @@ use super::{
     AuthenticatedActor, SessionIdentity, append_cookie, cookie_value,
     establish_session_in_transaction, hash_secret, load_authenticated_actor, normalize_login_name,
     random_token, require_allowed_origin, require_authenticated_write,
-    respond_with_established_session,
+    respond_with_established_session, sign_in_return,
 };
 use crate::{
     AppState,
@@ -344,11 +344,26 @@ async fn finish_callback(
     sqlx::query("INSERT INTO audit_events (id,actor_id,session_id,authentication_class,action,target_kind,target_id,outcome) VALUES ($1,$2,$3,'workos_session','authentication.workos','user',$4,'succeeded')")
         .bind(Uuid::now_v7()).bind(row.0).bind(established.principal.session_id).bind(user_id).execute(&mut *tx).await?;
     tx.commit().await?;
+    // Someone who left an app's connect screen to sign in goes back to it,
+    // through the web app's sign-in page: the session cookie is SameSite
+    // Strict, so it isn't sent on a redirect chain that began at WorkOS.
+    let location = match attempt
+        .link_session_id
+        .is_none()
+        .then(|| sign_in_return(&state.config, headers))
+        .flatten()
+    {
+        Some(path) => format!(
+            "/sign-in?returnTo={}",
+            url::form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>()
+        ),
+        None => "/settings/account".to_owned(),
+    };
     let mut response = respond_with_established_session(state, established).await?;
     *response.status_mut() = StatusCode::SEE_OTHER;
     response.headers_mut().insert(
         header::LOCATION,
-        HeaderValue::from_static("/settings/account"),
+        HeaderValue::from_str(&location).map_err(|_| AppError::Internal("sign-in return"))?,
     );
     response
         .headers_mut()

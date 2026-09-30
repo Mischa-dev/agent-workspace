@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type FormEvent, type Keyboa
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
+import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { searchMentionableActors } from '../conversations/api'
@@ -154,6 +155,27 @@ export function WorkItemDetailPage() {
   )
 }
 
+type Claim = { claimedBy: string; claimedByKind: string; note: string | null; claimedAt: string; expiresAt: string }
+
+/** Who is working on this right now: agents claim a task before starting it. */
+function ClaimBanner({ projectId, workItemId }: { projectId: string; workItemId: string }) {
+  const claim = useQuery({
+    queryKey: ['work-item-claim', projectId, workItemId],
+    queryFn: () =>
+      requestJson<{ claim: Claim | null }>(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/claim`,
+      ),
+    refetchInterval: 60_000,
+  })
+  const current = claim.data?.claim
+  if (!current) return null
+  return (
+    <Banner icon={current.claimedByKind === 'external_agent' ? 'bot' : 'users'} title={`${current.claimedBy} is working on this.`} tone="agent">
+      {current.note ? `${current.note} · ` : ''}Claimed until {formatFullDate(current.expiresAt)}.
+    </Banner>
+  )
+}
+
 function WorkItemEditor({ item, projectArchived, workflow }: { item: WorkItem; projectArchived: boolean; workflow: Workflow }) {
   const update = useUpdateWorkItem()
   const archive = useSetWorkItemArchived()
@@ -302,6 +324,7 @@ function WorkItemEditor({ item, projectArchived, workflow }: { item: WorkItem; p
           </form>
         )}
 
+        <ClaimBanner projectId={item.projectId} workItemId={item.id} />
         {base.archivedAt && (
           <Banner icon="archive" title="This work item is archived.">
             It’s hidden from lists and can’t change until it’s restored.

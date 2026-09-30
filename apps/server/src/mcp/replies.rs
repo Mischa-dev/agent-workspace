@@ -120,7 +120,6 @@ impl<T> ReplyToolResult<T> {
     fn from_failure(failure: ReadFailure) -> Self {
         match failure {
             ReadFailure::Authorization => Self::denied(),
-            ReadFailure::Invalid => Self::invalid("request"),
             ReadFailure::NotFound => Self::NotFound {
                 message: "No such reply request for this agent.".to_owned(),
             },
@@ -158,7 +157,7 @@ pub(super) struct InboxItem {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct InboxProjection {
-    requests: Vec<InboxItem>,
+    pub(super) requests: Vec<InboxItem>,
     guidance: &'static str,
 }
 
@@ -420,10 +419,11 @@ pub(super) async fn reply_send(
         Ok(None) => return ReplyToolResult::from_failure(ReadFailure::NotFound),
         Err(_) => return ReplyToolResult::unavailable(),
     };
-    let content = serde_json::json!({
-        "version": 1,
-        "nodes": [{ "type": "text", "text": text }],
-    });
+    // @handles of people in the conversation's project become mentions.
+    let content = match super::common::content_from_text(state, principal.project_id, text).await {
+        Ok(content) => content,
+        Err(_) => return ReplyToolResult::unavailable(),
+    };
     match append_message_command(
         state,
         MessageCommandActor {
@@ -433,6 +433,7 @@ pub(super) async fn reply_send(
                 credential_id: principal.credential_id,
                 connection_id,
             }),
+            via_grant_id: None,
         },
         conversation_id,
         None,

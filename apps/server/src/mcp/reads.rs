@@ -1,4 +1,3 @@
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -9,29 +8,7 @@ use crate::policy::{
     Action, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
 };
 
-const MAX_INSTRUCTIONS_CHARACTERS: usize = 20_000;
 const MAX_DESCRIPTION_CHARACTERS: usize = 20_000;
-const MAX_SEARCH_CHARACTERS: usize = 120;
-const DEFAULT_SEARCH_LIMIT: u16 = 25;
-const MAX_SEARCH_LIMIT: u16 = 50;
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProjectInstructionsArguments {}
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkItemGetArguments {
-    pub identifier: String,
-}
-
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkItemSearchArguments {
-    pub query: Option<String>,
-    pub cursor: Option<String>,
-    pub limit: Option<u16>,
-}
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,16 +60,6 @@ impl<T> ReadResult<T> {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectInstructionsProjection {
-    pub project_id: String,
-    pub content: String,
-    pub version: i64,
-    pub truncated: bool,
-    pub canonical_url: String,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct WorkItemProjection {
     pub id: String,
     pub project_id: String,
@@ -112,43 +79,6 @@ pub struct WorkItemProjection {
     pub linked_repositories: Vec<LinkedRepositoryProjection>,
     pub linked_pull_requests: Vec<PullRequestProjection>,
     pub canonical_url: String,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkItemSummaryProjection {
-    pub id: String,
-    pub key: String,
-    pub title: String,
-    pub status: StatusProjection,
-    pub priority: String,
-    pub assignee: Option<AssigneeProjection>,
-    pub version: i64,
-    pub archived: bool,
-    pub canonical_url: String,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkItemSearchProjection {
-    pub items: Vec<WorkItemSummaryProjection>,
-    pub next_cursor: Option<String>,
-    pub truncated: bool,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkItemContextProjection {
-    pub project_instructions: ProjectInstructionsProjection,
-    pub work_item: WorkItemProjection,
-    pub source_versions: SourceVersions,
-}
-
-#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceVersions {
-    pub work_item_version: i64,
-    pub project_instructions_version: i64,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -263,12 +193,6 @@ struct WorkItemRow {
 }
 
 #[derive(Debug, FromRow)]
-struct InstructionsRow {
-    content: String,
-    version: i64,
-}
-
-#[derive(Debug, FromRow)]
 struct AcceptanceCriterionRow {
     id: Uuid,
     text: String,
@@ -327,24 +251,6 @@ struct PullRequestRow {
     version: i64,
 }
 
-pub async fn project_instructions_get(
-    state: &crate::AppState,
-    principal: &McpPrincipal,
-) -> ReadResult<ProjectInstructionsProjection> {
-    if !authorize_read(&state.pool, principal).await {
-        return ReadResult::denied();
-    }
-    match load_instructions(&state.pool, principal.project_id).await {
-        Ok(instructions) => ReadResult::Found {
-            value: instructions_projection(state, principal.project_id, instructions),
-        },
-        Err(error) => {
-            tracing::error!(error = %error, "MCP project_instructions_get failed");
-            ReadResult::unavailable()
-        }
-    }
-}
-
 pub async fn work_item_get(
     state: &crate::AppState,
     principal: &McpPrincipal,
@@ -363,100 +269,6 @@ pub async fn work_item_get(
         Ok(None) => ReadResult::not_found(),
         Err(error) => {
             tracing::error!(error = %error, "MCP work_item_get failed");
-            ReadResult::unavailable()
-        }
-    }
-}
-
-pub async fn work_item_search(
-    state: &crate::AppState,
-    principal: &McpPrincipal,
-    arguments: WorkItemSearchArguments,
-) -> ReadResult<WorkItemSearchProjection> {
-    if !authorize_read(&state.pool, principal).await {
-        return ReadResult::denied();
-    }
-    let query = arguments.query.unwrap_or_default();
-    if query.chars().count() > MAX_SEARCH_CHARACTERS {
-        return ReadResult::invalid();
-    }
-    let limit = arguments.limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
-    if !(1..=MAX_SEARCH_LIMIT).contains(&limit) {
-        return ReadResult::invalid();
-    }
-    let cursor = match arguments.cursor.as_deref().map(decode_cursor).transpose() {
-        Ok(cursor) => cursor.unwrap_or(0),
-        Err(()) => return ReadResult::invalid(),
-    };
-    let rows = sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_SELECT)
-        .bind(principal.project_id)
-        .bind(cursor)
-        .bind(query.trim())
-        .bind(i64::from(limit) + 1)
-        .fetch_all(&state.pool)
-        .await;
-    let mut rows = match rows {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::error!(error = %error, "MCP work_item_search failed");
-            return ReadResult::unavailable();
-        }
-    };
-    let truncated = rows.len() > usize::from(limit);
-    if truncated {
-        rows.pop();
-    }
-    let next_cursor = truncated
-        .then(|| rows.last().map(|row| encode_cursor(row.number)))
-        .flatten();
-    let items = rows
-        .into_iter()
-        .map(|row| summary_projection(state, row))
-        .collect();
-    ReadResult::Found {
-        value: WorkItemSearchProjection {
-            items,
-            next_cursor,
-            truncated,
-        },
-    }
-}
-
-pub async fn work_item_context_get(
-    state: &crate::AppState,
-    principal: &McpPrincipal,
-    identifier: &str,
-) -> ReadResult<WorkItemContextProjection> {
-    if !authorize_read(&state.pool, principal).await {
-        return ReadResult::denied();
-    }
-    let Some(work_item_id) =
-        resolve_work_item_id(&state.pool, principal.project_id, identifier).await
-    else {
-        return ReadResult::not_found();
-    };
-    let (item, instructions) = tokio::join!(
-        load_work_item(state, principal.project_id, work_item_id),
-        load_instructions(&state.pool, principal.project_id)
-    );
-    match (item, instructions) {
-        (Ok(Some(item)), Ok(instructions)) => {
-            let instructions = instructions_projection(state, principal.project_id, instructions);
-            let versions = SourceVersions {
-                work_item_version: item.version,
-                project_instructions_version: instructions.version,
-            };
-            ReadResult::Found {
-                value: WorkItemContextProjection {
-                    project_instructions: instructions,
-                    work_item: item,
-                    source_versions: versions,
-                },
-            }
-        }
-        (Ok(None), _) => ReadResult::not_found(),
-        (Err(error), _) | (_, Err(error)) => {
-            tracing::error!(error = %error, "MCP work_item_context_get failed");
             ReadResult::unavailable()
         }
     }
@@ -580,39 +392,6 @@ fn parse_membership_role(role: &str) -> Option<MembershipRole> {
         "viewer" => Some(MembershipRole::Viewer),
         "worker" => Some(MembershipRole::Worker),
         _ => None,
-    }
-}
-
-async fn load_instructions(
-    pool: &sqlx::PgPool,
-    project_id: Uuid,
-) -> Result<InstructionsRow, sqlx::Error> {
-    sqlx::query_as::<_, InstructionsRow>(
-        "SELECT content, version FROM project_instructions WHERE project_id = $1",
-    )
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map(|row| {
-        row.unwrap_or(InstructionsRow {
-            content: String::new(),
-            version: 1,
-        })
-    })
-}
-
-fn instructions_projection(
-    state: &crate::AppState,
-    project_id: Uuid,
-    row: InstructionsRow,
-) -> ProjectInstructionsProjection {
-    let (content, truncated) = truncate(&row.content, MAX_INSTRUCTIONS_CHARACTERS);
-    ProjectInstructionsProjection {
-        project_id: project_id.to_string(),
-        content,
-        version: row.version,
-        truncated,
-        canonical_url: canonical_url(state, &format!("/projects/{project_id}/settings")),
     }
 }
 
@@ -871,28 +650,6 @@ fn work_item_projection(
     }
 }
 
-fn summary_projection(state: &crate::AppState, row: WorkItemRow) -> WorkItemSummaryProjection {
-    let assignee = assignee_projection(&row);
-    WorkItemSummaryProjection {
-        id: row.id.to_string(),
-        key: format!("{}-{}", row.project_key, row.number),
-        title: row.title,
-        status: StatusProjection {
-            id: row.status_id.to_string(),
-            name: row.status_name,
-            semantic_category: row.semantic_category,
-        },
-        priority: row.priority,
-        assignee,
-        version: row.version,
-        archived: row.archived,
-        canonical_url: canonical_url(
-            state,
-            &format!("/projects/{}/work-items/{}", row.project_id, row.id),
-        ),
-    }
-}
-
 fn assignee_projection(row: &WorkItemRow) -> Option<AssigneeProjection> {
     Some(AssigneeProjection {
         actor_id: row.assignee_actor_id?.to_string(),
@@ -950,7 +707,7 @@ fn pull_request_projection(state: &crate::AppState, row: PullRequestRow) -> Pull
 }
 
 fn canonical_url(state: &crate::AppState, path: &str) -> String {
-    format!("http://{}{path}", state.config.server_addr)
+    format!("{}{path}", super::oauth::public_origin(state))
 }
 
 fn truncate(value: &str, max_characters: usize) -> (String, bool) {
@@ -958,17 +715,6 @@ fn truncate(value: &str, max_characters: usize) -> (String, bool) {
     let truncated = characters.clone().count() > max_characters;
     let value = characters.by_ref().take(max_characters).collect();
     (value, truncated)
-}
-
-fn encode_cursor(number: i64) -> String {
-    URL_SAFE_NO_PAD.encode(number.to_be_bytes())
-}
-
-fn decode_cursor(cursor: &str) -> Result<i64, ()> {
-    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| ())?;
-    let bytes: [u8; 8] = bytes.try_into().map_err(|_| ())?;
-    let number = i64::from_be_bytes(bytes);
-    (number >= 0).then_some(number).ok_or(())
 }
 
 const WORK_ITEM_BY_ID_SELECT: &str = r#"
@@ -1005,48 +751,6 @@ const WORK_ITEM_BY_ID_SELECT: &str = r#"
     WHERE wi.project_id = $1 AND wi.id = $2
 "#;
 
-const WORK_ITEM_SELECT: &str = r#"
-    SELECT
-        wi.id,
-        wi.project_id,
-        p.project_key,
-        wi.number,
-        wi.title,
-        wi.description,
-        wi.type_id,
-        item_type.name AS type_name,
-        wi.status_id,
-        status.name AS status_name,
-        status.semantic_category,
-        wi.priority,
-        wi.assignee_actor_id,
-        assignee.display_name AS assignee_display_name,
-        assignee.handle AS assignee_handle,
-        wi.version,
-        wi.archived_at IS NOT NULL AS archived,
-        wi.parent_work_item_id,
-        wi.blocked_reason,
-        wi.blocked_at::text AS blocked_at,
-        wi.blocked_by_actor_id
-    FROM work_items wi
-    JOIN projects p ON p.id = wi.project_id
-    JOIN work_item_types item_type
-      ON item_type.project_id = wi.project_id AND item_type.id = wi.type_id
-    JOIN work_item_statuses status
-      ON status.project_id = wi.project_id AND status.id = wi.status_id
-    LEFT JOIN project_memberships assignee
-      ON assignee.project_id = wi.project_id AND assignee.actor_id = wi.assignee_actor_id
-    WHERE wi.project_id = $1
-      AND wi.number > $2
-      AND (
-          $3 = ''
-          OR wi.title ILIKE '%' || $3 || '%'
-          OR upper(p.project_key || '-' || wi.number::text) = upper($3)
-      )
-    ORDER BY wi.number, wi.id
-    LIMIT $4
-"#;
-
 const REPOSITORY_SELECT: &str = r#"
     SELECT
         id,
@@ -1066,14 +770,7 @@ const REPOSITORY_SELECT: &str = r#"
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_cursor, encode_cursor, truncate};
-
-    #[test]
-    fn cursors_are_exact_and_bounded() {
-        let cursor = encode_cursor(42);
-        assert_eq!(decode_cursor(&cursor), Ok(42));
-        assert_eq!(decode_cursor("hostile"), Err(()));
-    }
+    use super::truncate;
 
     #[test]
     fn truncation_preserves_utf8_character_boundaries() {

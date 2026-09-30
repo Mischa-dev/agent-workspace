@@ -404,6 +404,8 @@ function OneTimeToken({
       <p className="aw-token__help">
         Point the agent’s MCP client at <code>{`${window.location.origin}/api/v1/mcp`}</code> with this token. It checks{' '}
         <code>inbox_list</code>, then answers with <code>reply_claim</code> and <code>reply_send</code>, or <code>reply_pass</code>.
+        Send the agent <a href="/connect.md" rel="noreferrer" target="_blank">{`${window.location.origin}/connect.md`}</a> for
+        step-by-step setup.
       </p>
       <div className="aw-card__actions">
         <Button

@@ -9,8 +9,11 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // 2 KiB more gzip for these added routes and controls.
   // Google and WorkOS agent controls measure 574,498 raw / 181,586 gzip bytes.
   // Allow 2 KiB raw for these controls; retain the compressed transfer limit.
-  javascriptRawBytes: 562 * 1024,
-  javascriptGzipBytes: 178 * 1024,
+  // The agent interface (connected apps, thread status and board, DM threads,
+  // pages, decisions, pins and search) measures 605,885 raw / 192,439 gzip
+  // bytes, most of it in lazily loaded routes.
+  javascriptRawBytes: 596 * 1024,
+  javascriptGzipBytes: 190 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
   cssRawBytes: 100 * 1024,

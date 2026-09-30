@@ -248,7 +248,17 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .pointer("/result/instructions")
         .and_then(Value::as_str)
         .expect("server instructions");
-    assert!(instructions[..instructions.len().min(512)].contains("expectedVersion"));
+    assert!(instructions.starts_with("Agent Workspace"));
+    for required in [
+        "Start with briefing",
+        "expectedVersion",
+        "current membership",
+    ] {
+        assert!(
+            instructions.contains(required),
+            "instructions mention {required}"
+        );
+    }
 
     let notification = mcp_request(
         &application,
@@ -272,15 +282,15 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let project_tool = tools
         .pointer("/result/tools")
         .and_then(Value::as_array)
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_get"))
-        .expect("project_get tool");
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_open"))
+        .expect("project_open tool");
     assert_eq!(
         tools
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        // 23 original tools plus the five reply-request tools.
-        Some(29)
+        // See docs/plans/agent-interface.md for the tool list.
+        Some(40)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),
@@ -289,6 +299,31 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     assert_eq!(
         project_tool.pointer("/annotations/openWorldHint"),
         Some(&json!(false))
+    );
+    // Clients on MCP 2026-07-28 (Claude Code) reject lists without cache hints.
+    let prompts = protocol_json(
+        mcp_request(
+            &application,
+            Some(&token),
+            Some(&session_id),
+            &json!({"jsonrpc":"2.0","id":3,"method":"prompts/list","params":{}}),
+        )
+        .await,
+    )
+    .await;
+    for list in [&tools, &prompts] {
+        assert!(
+            list.pointer("/result/ttlMs").is_some_and(Value::is_u64),
+            "{list}"
+        );
+        assert_eq!(list.pointer("/result/cacheScope"), Some(&json!("public")));
+    }
+    assert_eq!(
+        prompts
+            .pointer("/result/prompts")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2)
     );
 
     let project = protocol_json(
@@ -301,7 +336,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
                 "id":3,
                 "method":"tools/call",
                 "params":{
-                    "name":"project_get",
+                    "name":"project_open",
                     "arguments":{"projectId":seed.project_id.to_string()}
                 }
             }),
@@ -311,27 +346,27 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(
         project.pointer("/result/structuredContent/outcome"),
-        Some(&json!("found"))
+        Some(&json!("ok"))
     );
     assert_eq!(
-        project.pointer("/result/structuredContent/project/id"),
+        project.pointer("/result/structuredContent/value/project/id"),
         Some(&json!(seed.project_id.to_string()))
     );
 
     for (id, name, arguments, expected_outcome) in [
-        (4, "project_instructions_get", json!({}), "found"),
-        (5, "work_item_get", json!({"identifier":"AW-1"}), "found"),
+        (4, "briefing", json!({}), "ok"),
+        (5, "task_open", json!({"taskId":"AW-1"}), "ok"),
         (
             6,
-            "work_item_search",
+            "task_list",
             json!({"query":"read contract","limit":10}),
-            "found",
+            "ok",
         ),
         (
             7,
-            "work_item_context_get",
-            json!({"identifier":work_item_id.to_string()}),
-            "found",
+            "task_open",
+            json!({"taskId":work_item_id.to_string()}),
+            "ok",
         ),
         (
             8,
@@ -373,7 +408,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         20,
-        "work_item_set_status",
+        "task_update",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":1,
@@ -398,7 +433,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         10,
-        "work_item_update",
+        "task_update",
         update_arguments.clone(),
     )
     .await;
@@ -410,7 +445,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         11,
-        "work_item_update",
+        "task_update",
         update_arguments,
     )
     .await;
@@ -421,7 +456,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         12,
-        "work_item_set_status",
+        "task_update",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":1,
@@ -447,7 +482,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         13,
-        "work_item_mark_blocked",
+        "task_mark_blocked",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":2,
@@ -463,7 +498,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         14,
-        "work_item_post_update",
+        "task_comment",
         json!({
             "workItemId":work_item_id.to_string(),
             "update":"Useful bounded progress update.",
@@ -478,7 +513,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         15,
-        "work_item_create_subtask",
+        "task_create",
         json!({
             "parentWorkItemId":work_item_id.to_string(),
             "title":"Verify MCP audit",
@@ -493,7 +528,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         16,
-        "work_item_set_status",
+        "task_update",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":3,
@@ -508,7 +543,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         17,
-        "work_item_set_status",
+        "task_update",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":4,
@@ -523,7 +558,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         18,
-        "work_item_mark_ready_for_review",
+        "task_mark_ready_for_review",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":5,
@@ -538,7 +573,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         19,
-        "work_item_link_pull_request",
+        "task_link_pull_request",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":6,
@@ -610,7 +645,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         21,
-        "work_item_create",
+        "task_create",
         json!({
             "title":"M10 parity item",
             "description":"Shared command state",
@@ -703,7 +738,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         22,
-        "work_item_update",
+        "task_update",
         json!({
             "workItemId":mcp_work_item_id.to_string(),
             "expectedVersion":1,
@@ -784,7 +819,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
                 "id":30,
                 "method":"tools/call",
                 "params":{
-                    "name":"project_get",
+                    "name":"project_open",
                     "arguments":{"projectId":seed.project_id.to_string()}
                 }
             }),
@@ -794,7 +829,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(
         viewer_project.pointer("/result/structuredContent/outcome"),
-        Some(&json!("found")),
+        Some(&json!("ok")),
         "a Viewer retains MCP read authority after an immediate role downgrade"
     );
     let denied_viewer_write = call_tool(
@@ -802,7 +837,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         31,
-        "work_item_post_update",
+        "task_comment",
         json!({
             "workItemId":work_item_id.to_string(),
             "update":"This Viewer write must never be persisted.",
@@ -904,6 +939,28 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .await;
     assert_eq!(metadata["resource"], "http://127.0.0.1:3100/api/v1/mcp");
     assert_eq!(metadata["scopes_supported"], json!(["read", "write"]));
+    // The setup guide people send to agents names this server's address.
+    let guide = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/connect.md")
+                .body(Body::empty())
+                .expect("guide request"),
+        )
+        .await
+        .expect("guide response");
+    assert_eq!(guide.status(), StatusCode::OK);
+    let guide = String::from_utf8(
+        to_bytes(guide.into_body(), 100_000)
+            .await
+            .expect("guide body")
+            .to_vec(),
+    )
+    .expect("guide UTF-8");
+    assert!(guide.contains("url = \"http://127.0.0.1:3100/api/v1/mcp\""));
+    assert!(guide.contains("${AGENT_WORKSPACE_MCP_TOKEN}"));
+    assert!(!guide.contains("{origin}"));
 
     let redirect_uri = "http://127.0.0.1:45678/callback";
     let registration = json_response(
@@ -935,6 +992,34 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .unwrap_or_else(|| panic!("OAuth client ID: {registration}"))
         .to_owned();
     assert!(registration.get("client_secret").is_none());
+    // Claude Code registers as "Claude Code (<server nickname>)". Clean the
+    // name rather than refusing the connection.
+    let claude_code = json_response(
+        application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "client_name":"Claude Code (agent-workspace)",
+                            "redirect_uris":["http://localhost:45679/callback"],
+                            "token_endpoint_auth_method":"none",
+                            "grant_types":["authorization_code","refresh_token"],
+                            "response_types":["code"],
+                            "scope":"read write"
+                        }))
+                        .expect("registration JSON"),
+                    ))
+                    .expect("registration request"),
+            )
+            .await
+            .expect("registration response"),
+    )
+    .await;
+    assert_eq!(claude_code["client_name"], "Claude Code", "{claude_code}");
 
     let cookie = login(&application).await;
     let csrf = csrf_from_cookie(&cookie);
@@ -956,11 +1041,49 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         // rejecting conflicting resource targets.
         .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp")
         .append_pair("resource", "http://127.0.0.1:3100/api/v1/mcp");
+    // Signed out: go sign in, then come back to this screen.
+    let authorize_path =
+        authorize_url.path().to_owned() + "?" + authorize_url.query().expect("query");
+    let signed_out = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorize_path)
+                .body(Body::empty())
+                .expect("authorize request"),
+        )
+        .await
+        .expect("authorize response");
+    assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
+    let sign_in = url::Url::parse("http://127.0.0.1:3100")
+        .and_then(|base| {
+            base.join(
+                signed_out.headers()[header::LOCATION]
+                    .to_str()
+                    .expect("location"),
+            )
+        })
+        .expect("sign-in URL");
+    assert_eq!(sign_in.path(), "/sign-in");
+    assert_eq!(
+        sign_in
+            .query_pairs()
+            .find(|(key, _)| key == "returnTo")
+            .map(|(_, value)| value.into_owned()),
+        Some(authorize_path.clone())
+    );
+    assert!(
+        signed_out.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("cookie")
+            .contains("sign_in_return=")
+    );
+
     let consent_page = application
         .clone()
         .oneshot(
             Request::builder()
-                .uri(authorize_url.path().to_owned() + "?" + authorize_url.query().expect("query"))
+                .uri(&authorize_path)
                 .header(header::COOKIE, &cookie)
                 .body(Body::empty())
                 .expect("authorize request"),
@@ -975,7 +1098,10 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .to_vec(),
     )
     .expect("consent UTF-8");
-    assert!(consent_html.contains("Authorize codex-m6-oauth"));
+    assert!(consent_html.contains("Connect codex-m6-oauth"));
+    // Browsers send `Origin: null` on form posts under the site-wide
+    // `no-referrer` policy, which the consent endpoint rejects.
+    assert!(consent_html.contains("<meta name=referrer content=same-origin>"));
     assert!(consent_html.contains("read write"));
     assert!(!consent_html.contains(OAUTH_PASSWORD));
     let consent_form_start = consent_html.find("<form").expect("OAuth consent form");
@@ -985,8 +1111,8 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     let consent_form = &consent_html[consent_form_start..consent_form_end];
     assert!(consent_form.contains("action=/connect/confirm"));
     assert!(
-        consent_form.contains("name=project_id"),
-        "the Project selector must be submitted by the consent form"
+        consent_form.contains("name=access value=full") && consent_form.contains("name=show_via"),
+        "the access and via-label choices must be submitted by the consent form"
     );
     assert!(consent_form.contains("name=decision"));
 
@@ -1039,15 +1165,23 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         )
         .await
         .expect("consent response");
-    assert_eq!(consent_response.status(), StatusCode::SEE_OTHER);
-    let callback = url::Url::parse(
-        consent_response
-            .headers()
-            .get(header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-            .expect("consent redirect"),
+    assert_eq!(consent_response.status(), StatusCode::OK);
+    // The browser goes back to the client through a page that forwards
+    // itself; a plain redirect is blocked by `form-action 'self'`.
+    let continue_page = String::from_utf8(
+        to_bytes(consent_response.into_body(), 100_000)
+            .await
+            .expect("continue page")
+            .to_vec(),
     )
-    .expect("callback URL");
+    .expect("continue page UTF-8");
+    let target = continue_page
+        .split("url=")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("forwarding target")
+        .replace("&amp;", "&");
+    let callback = url::Url::parse(&target).expect("callback URL");
     assert_eq!(
         callback
             .query_pairs()
@@ -1105,7 +1239,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         access_token,
         &oauth_session,
         20,
-        "work_item_post_update",
+        "task_comment",
         json!({
             "workItemId":work_item_id.to_string(),
             "update":"OAuth-attributed useful update.",
