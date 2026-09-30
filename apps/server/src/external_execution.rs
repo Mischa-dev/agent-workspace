@@ -251,14 +251,17 @@ async fn request_sponsored_execution_inner(
         JOIN external_agent_connections connection
           ON connection.id = credential.external_agent_connection_id
         JOIN actors actor ON actor.id = credential.actor_id
-        JOIN projects project ON project.id = credential.project_id
+        JOIN projects project ON project.id = $2
         JOIN project_memberships membership
-          ON membership.project_id = credential.project_id
+          ON membership.project_id = project.id
          AND membership.actor_id = credential.actor_id
         JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = credential.actor_id
-        WHERE credential.id = $1 AND credential.project_id = $2
+        WHERE credential.id = $1
+          -- The credential stays anchored to its home project; the run may be
+          -- in any project this connection can act in.
+          AND agent_connection_can_access(connection.id, project.id)
           AND credential.actor_id = $3
           AND credential.external_agent_connection_id = $4
           AND credential.status = 'active' AND credential.revoked_at IS NULL

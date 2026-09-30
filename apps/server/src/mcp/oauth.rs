@@ -72,16 +72,20 @@ async fn protected_resource_metadata(
 ) -> Json<ProtectedResourceMetadata> {
     let origin = public_origin(&state);
     let mut authorization_servers = vec![origin.clone()];
+    let mut scopes_supported = vec!["read", "write"];
     if let Some(config) = &state.config.workos
         && config.agent_registration_enabled
         && let Some(domain) = &config.authkit_domain
     {
         authorization_servers.push(domain.clone());
+        // AuthKit grants are honored only under their `workspace:` names; the
+        // local authorization server accepts either spelling.
+        scopes_supported = vec!["workspace:read", "workspace:write"];
     }
     Json(ProtectedResourceMetadata {
         resource: format!("{origin}{MCP_PATH}"),
         authorization_servers,
-        scopes_supported: vec!["read", "write"],
+        scopes_supported,
         bearer_methods_supported: vec!["header"],
     })
 }
@@ -1150,7 +1154,12 @@ fn parse_scopes(scope: Option<&str>) -> Result<Vec<String>, OAuthError> {
     if scope.is_empty() || scope.len() > 32 {
         return Err(OAuthError::invalid_scope("scope is invalid"));
     }
-    let mut values = scope.split(' ').map(str::to_owned).collect::<Vec<_>>();
+    // `workspace:read`/`workspace:write` are the names advertised when AuthKit
+    // is also an authorization server; store them under the local names.
+    let mut values = scope
+        .split(' ')
+        .map(|value| value.strip_prefix("workspace:").unwrap_or(value).to_owned())
+        .collect::<Vec<_>>();
     values.sort();
     values.dedup();
     if values
@@ -1619,7 +1628,12 @@ mod tests {
             parse_scopes(Some("read write")).expect("scopes"),
             vec!["read", "write"]
         );
+        assert_eq!(
+            parse_scopes(Some("workspace:read workspace:write")).expect("scopes"),
+            vec!["read", "write"]
+        );
         assert!(parse_scopes(Some("write")).is_err());
+        assert!(parse_scopes(Some("workspace:write")).is_err());
         assert!(parse_scopes(Some("read admin")).is_err());
         assert!(secret_lookup("aw_oauth_aaaaaaaéaaaa", "aw_oauth_").is_err());
     }

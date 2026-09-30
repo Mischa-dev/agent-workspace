@@ -1875,6 +1875,67 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let mentions = response_json(mentions).await;
     assert_eq!(mentions["actors"][0]["id"], actor);
     assert_eq!(mentions["actors"][0]["kind"], "external_agent");
+    // An agent that cannot answer is not offered: a viewer cannot send, and a
+    // read-only connection cannot claim the reply.
+    let connection_id = created["connection"]["id"]
+        .as_str()
+        .expect("connection")
+        .parse::<Uuid>()
+        .expect("connection UUID");
+    let actor_id = actor.parse::<Uuid>().expect("actor UUID");
+    let original_scopes = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT scopes FROM external_agent_connections WHERE id=$1",
+    )
+    .bind(connection_id)
+    .fetch_one(&pool)
+    .await
+    .expect("connection scopes");
+    for (role, scopes) in [
+        ("viewer", vec!["read", "write", "events"]),
+        ("member", vec!["read", "events"]),
+    ] {
+        sqlx::query("UPDATE project_memberships SET role=$3 WHERE project_id=$1 AND actor_id=$2")
+            .bind(second)
+            .bind(actor_id)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .expect("set agent role");
+        sqlx::query("UPDATE external_agent_connections SET scopes=$2 WHERE id=$1")
+            .bind(connection_id)
+            .bind(&scopes)
+            .execute(&pool)
+            .await
+            .expect("set connection scopes");
+        let hidden = response_json(
+            application
+                .clone()
+                .oneshot(read_request(
+                    &format!("/api/v1/projects/{second}/mentionable-actors?q=shared_agent"),
+                    &cookie,
+                ))
+                .await
+                .expect("search project mention picker"),
+        )
+        .await;
+        assert_eq!(
+            hidden["actors"].as_array().map(Vec::len),
+            Some(0),
+            "{role} agent with {scopes:?} must not be mentionable"
+        );
+    }
+    sqlx::query("UPDATE project_memberships SET role='member' WHERE project_id=$1 AND actor_id=$2")
+        .bind(second)
+        .bind(actor_id)
+        .execute(&pool)
+        .await
+        .expect("restore agent role");
+    sqlx::query("UPDATE external_agent_connections SET scopes=$2 WHERE id=$1")
+        .bind(connection_id)
+        .bind(&original_scopes)
+        .execute(&pool)
+        .await
+        .expect("restore connection scopes");
     let allowed = call_mcp_tool(
         &application,
         token,
@@ -1987,6 +2048,166 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         1
     );
     terminate_mcp(&application, token, &session).await;
+
+    // An approval in an agent's additional project can be read and answered
+    // with the home-project credential, and only while the agent belongs there.
+    let approver = response_json(
+        application
+            .clone()
+            .oneshot(write_request(
+                "POST",
+                &format!("/api/v1/projects/{second}/external-agents"),
+                &cookie,
+                &csrf,
+                json!({"connectionName":"Approver agent","displayName":"Approver agent","handle":"approver_agent","role":"member","scopes":["read","write","approval_respond"]}),
+            ))
+            .await
+            .expect("create approver agent"),
+    )
+    .await;
+    let approver_actor = approver["connection"]["actorId"]
+        .as_str()
+        .expect("approver actor")
+        .to_owned();
+    let approver_token = approver["oneTimeCredential"]["token"]
+        .as_str()
+        .expect("approver token")
+        .to_owned();
+    let joined = application
+        .clone()
+        .oneshot(write_request(
+            "POST",
+            &format!("/api/v1/projects/{}/members", seed.project_id),
+            &cookie,
+            &csrf,
+            json!({"actorId":approver_actor,"role":"member"}),
+        ))
+        .await
+        .expect("add approver to seed project");
+    assert_eq!(joined.status(), StatusCode::OK);
+    let run_id = Uuid::now_v7();
+    let approval_id = Uuid::now_v7();
+    let mut fixture = pool.begin().await.expect("begin approval fixture");
+    sqlx::query(
+        "UPDATE execution_profiles SET status = 'available', account_state = 'authenticated' WHERE id = $1",
+    )
+    .bind(seed.execution_profile_id)
+    .execute(&mut *fixture)
+    .await
+    .expect("prepare Execution Profile");
+    sqlx::query(
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .execute(&mut *fixture)
+    .await
+    .expect("prepare repository");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, project_id, conversation_id, execution_worker_id,
+            requesting_actor_id, execution_profile_id, repository_id,
+            state, prompt, authorization_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'blocked', 'Cross-project approval', '{}'::jsonb)
+        "#,
+    )
+    .bind(run_id)
+    .bind(seed.project_id)
+    .bind(seed.thread_id)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .execute(&mut *fixture)
+    .await
+    .expect("insert approval run");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, provider_request_id,
+            kind, summary, options, eligible_role, human_required
+        ) VALUES ($1, $2, $3, $4, 'question', 'Which branch?', '[]'::jsonb, 'any_authorized', false)
+        "#,
+    )
+    .bind(approval_id)
+    .bind(run_id)
+    .bind(seed.human_actor_id)
+    .bind(format!("cross-project:{approval_id}"))
+    .execute(&mut *fixture)
+    .await
+    .expect("insert approval");
+    fixture.commit().await.expect("commit approval fixture");
+    let approver_session = initialize_mcp(&application, &approver_token).await;
+    let fetched = call_mcp_tool(
+        &application,
+        &approver_token,
+        &approver_session,
+        "approval_get",
+        json!({"approvalId":approval_id.to_string()}),
+    )
+    .await;
+    assert_eq!(fetched["outcome"], "found", "{fetched}");
+    let member_version = response_json(
+        application
+            .clone()
+            .oneshot(read_request(
+                &format!("/api/v1/projects/{}/members", seed.project_id),
+                &cookie,
+            ))
+            .await
+            .expect("list seed members"),
+    )
+    .await["members"]
+        .as_array()
+        .expect("members")
+        .iter()
+        .find(|member| member["actorId"] == approver_actor.as_str())
+        .expect("approver membership")["version"]
+        .clone();
+    let removed = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "PATCH",
+            &format!(
+                "/api/v1/projects/{}/members/{approver_actor}",
+                seed.project_id
+            ),
+            &cookie,
+            &csrf,
+            "remove-approver",
+            json!({"expectedVersion":member_version,"enabled":false}),
+        ))
+        .await
+        .expect("remove approver from seed project");
+    assert_eq!(removed.status(), StatusCode::OK);
+    let denied = mcp_request(&application,&approver_token,Some(&approver_session),json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"approval_respond","arguments":{"approvalId":approval_id.to_string(),"expectedVersion":1,"answer":"main","clientRequestId":"cross-project-denied"}}})).await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let rejoined = application
+        .clone()
+        .oneshot(write_request_with_idempotency(
+            "PATCH",
+            &format!(
+                "/api/v1/projects/{}/members/{approver_actor}",
+                seed.project_id
+            ),
+            &cookie,
+            &csrf,
+            "restore-approver",
+            json!({"expectedVersion":member_version.as_i64().expect("version") + 1,"enabled":true}),
+        ))
+        .await
+        .expect("restore approver in seed project");
+    assert_eq!(rejoined.status(), StatusCode::OK);
+    let answered = call_mcp_tool(
+        &application,
+        &approver_token,
+        &approver_session,
+        "approval_respond",
+        json!({"approvalId":approval_id.to_string(),"expectedVersion":1,"answer":"main","clientRequestId":"cross-project-answer"}),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "applied", "{answered}");
+    terminate_mcp(&application, &approver_token, &approver_session).await;
     drop(application);
     pool.close().await;
     administrative_pool
