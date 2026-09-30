@@ -364,6 +364,29 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     .1;
     assert_eq!(threads["threads"][0]["outcome"], "Going with plan B");
 
+    // Retrying thread_start with an opening message doesn't post it twice.
+    for _ in 0..2 {
+        let retried = tool(
+            &app,
+            &codex,
+            &session,
+            "thread_start",
+            json!({"conversationId": owner_dm, "fromMessageId": message_id, "text": "Picking this up"}),
+        )
+        .await;
+        assert_eq!(retried["outcome"], "ok", "{retried}");
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1 AND plain_text = 'Picking this up'",
+        )
+        .bind(thread_id.parse::<Uuid>().expect("thread UUID"))
+        .fetch_one(&pool)
+        .await
+        .expect("opening messages"),
+        1
+    );
+
     // Tasks: the app creates one in the Work project; two agents race to
     // claim it and exactly one wins.
     for agent in [mara, rook] {
@@ -478,6 +501,65 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         overview["value"]["guide"]["body"], "Use tokens.",
         "{overview}"
     );
+    // A link to the page works as its ID, even from an app anchored elsewhere.
+    let by_link = tool(
+        &app,
+        &codex,
+        &session,
+        "page_get",
+        json!({"pageId": format!("http://127.0.0.1:3100/projects/{project_id}/pages/{page_id}")}),
+    )
+    .await;
+    assert_eq!(by_link["outcome"], "ok", "{by_link}");
+
+    // Tasks link only to things in their own project, so a link can't show
+    // another project's conversation or page to the task's readers.
+    let (status, side) = send(
+        &app,
+        browser.request(
+            "POST",
+            "/api/v1/projects",
+            Some("interface-side-project"),
+            json!({"organizationId": owner.organization_id, "key": "SIDE", "name": "Side"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{side}");
+    let side_page = tool(
+        &app,
+        &codex,
+        &session,
+        "page_write",
+        json!({"projectId": side["id"], "title": "Side notes", "body": "Elsewhere."}),
+    )
+    .await;
+    assert_eq!(side_page["outcome"], "ok", "{side_page}");
+    for (key, target) in [
+        ("pageId", side_page["value"]["id"].clone()),
+        ("conversationId", json!(owner_dm)),
+        ("messageId", json!(message_id)),
+    ] {
+        let mut arguments = json!({"taskId": task_id});
+        arguments[key] = target;
+        let linked = tool(&app, &codex, &session, "task_link", arguments).await;
+        assert_eq!(linked["outcome"], "not_found", "{key}: {linked}");
+    }
+    let linked = tool(
+        &app,
+        &codex,
+        &session,
+        "task_link",
+        json!({"taskId": task_id, "pageId": page_id}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_item_links")
+            .fetch_one(&pool)
+            .await
+            .expect("links"),
+        1
+    );
 
     // A decision from a private DM stays private.
     let decided = tool(
@@ -508,6 +590,15 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     )
     .await;
     assert_eq!(read_only["outcome"], "permission_denied", "{read_only}");
+    let unread_kept = tool(
+        &app,
+        &reader,
+        &reader_session,
+        "mark_read",
+        json!({"conversationId": owner_dm}),
+    )
+    .await;
+    assert_eq!(unread_kept["outcome"], "permission_denied", "{unread_kept}");
 
     // Revoking the connection stops it at once.
     let (status, _) = send(

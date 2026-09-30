@@ -984,16 +984,24 @@ pub async fn resolve_access_token(
           ON connection.id = grant_row.external_agent_connection_id
         LEFT JOIN mcp_client_credentials backing
           ON backing.id = grant_row.backing_credential_id
-        JOIN project_memberships membership
+        LEFT JOIN project_memberships membership
           ON membership.project_id = grant_row.project_id AND membership.actor_id = grant_row.actor_id
-        JOIN organization_memberships organization_membership
+        LEFT JOIN organization_memberships organization_membership
           ON organization_membership.organization_id = project.organization_id
          AND organization_membership.actor_id = grant_row.actor_id
          AND organization_membership.enabled
         WHERE access.token_prefix = $1 AND access.revoked_at IS NULL
           AND access.expires_at > now() AND grant_row.revoked_at IS NULL
-          AND client.status = 'active' AND project.archived_at IS NULL
-          AND actor.status = 'active' AND membership.enabled
+          AND client.status = 'active' AND actor.status = 'active'
+          -- An app a person connected for their whole account keeps working
+          -- after they leave the project it was anchored to: every call is
+          -- checked against their current memberships. Project-scoped and
+          -- agent grants still need their own project.
+          AND (
+              (actor.kind = 'human' AND grant_row.account_wide)
+              OR (project.archived_at IS NULL AND membership.enabled
+                  AND organization_membership.enabled)
+          )
           AND (
               (actor.kind = 'human' AND user_account.status = 'active'
                AND grant_row.external_agent_connection_id IS NULL)
@@ -1014,13 +1022,14 @@ pub async fn resolve_access_token(
     };
     sqlx::query("UPDATE mcp_oauth_access_tokens SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
         .bind(row.token_id).execute(&state.pool).await?;
-    if let (Some(connection_id), Some(backing_credential_id), Some(scopes)) = (
+    if let (Some(connection_id), Some(backing_credential_id), Some(connection_scopes)) = (
         row.external_agent_connection_id,
         row.backing_credential_id,
         row.connection_scopes,
     ) {
-        // Signed in as an agent: behave exactly like that agent's own
-        // credential, including its connection's scopes.
+        // Signed in as an agent: behave like that agent's own credential,
+        // limited to what the person consented to for this app.
+        let scopes = agent_grant_scopes(connection_scopes, &row.scopes);
         sqlx::query("UPDATE external_agent_connections SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
             .bind(connection_id).execute(&state.pool).await?;
         return Ok(Some(McpPrincipal {
@@ -1052,6 +1061,17 @@ pub async fn resolve_access_token(
         account_wide: row.account_wide,
         project_explicit: false,
     }))
+}
+
+/// An agent grant can do what its connection allows, but no more than the
+/// person consented to: a read-only grant drops every scope that changes
+/// anything.
+fn agent_grant_scopes(connection_scopes: Vec<String>, grant_scopes: &[String]) -> Vec<String> {
+    let grant_writes = grant_scopes.iter().any(|scope| scope == "write");
+    connection_scopes
+        .into_iter()
+        .filter(|scope| grant_writes || matches!(scope.as_str(), "read" | "events"))
+        .collect()
 }
 
 #[derive(FromRow)]
@@ -1559,6 +1579,35 @@ mod tests {
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL),
             Some(&HeaderValue::from_static("no-store"))
+        );
+    }
+
+    #[test]
+    fn read_only_consent_keeps_an_agent_grant_read_only() {
+        let connection = [
+            "read",
+            "write",
+            "events",
+            "approval_respond",
+            "worker_request",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            agent_grant_scopes(connection.clone(), &["read".to_owned()]),
+            vec!["read".to_owned(), "events".to_owned()],
+        );
+        assert_eq!(
+            agent_grant_scopes(connection.clone(), &["read".to_owned(), "write".to_owned()]),
+            connection,
+        );
+        // Consent never adds what the connection itself lacks.
+        assert_eq!(
+            agent_grant_scopes(
+                vec!["read".to_owned()],
+                &["read".to_owned(), "write".to_owned()]
+            ),
+            vec!["read".to_owned()],
         );
     }
 

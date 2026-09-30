@@ -1682,12 +1682,12 @@ async fn scoped_project(
     principal: &McpPrincipal,
     args: &serde_json::Value,
 ) -> Result<Option<Uuid>, AppError> {
+    // Tools accept an ID or a link to it; read them the same way here.
     let mut target = args
         .get("projectId")
         .and_then(|v| v.as_str())
-        .map(str::parse::<Uuid>)
-        .transpose()
-        .map_err(|_| AppError::Validation("projectId"))?;
+        .map(|value| common::parse_id(value).ok_or(AppError::Validation("projectId")))
+        .transpose()?;
     if target.is_none() {
         for (key, query) in [
             (
@@ -1743,7 +1743,7 @@ async fn scoped_project(
             if let Some(id) = args
                 .get(key)
                 .and_then(|v| v.as_str())
-                .and_then(|v| v.parse::<Uuid>().ok())
+                .and_then(common::parse_id)
             {
                 let mut lookup = sqlx::query_scalar::<_, Uuid>(query).bind(id);
                 if query.contains("$2") {
@@ -1754,8 +1754,11 @@ async fn scoped_project(
             }
         }
     }
+    // An account-wide grant's own project is only where it was anchored; the
+    // person may since have left it, so it's checked like any other.
     if let Some(target) = target
-        && target != principal.project_id
+        && (target != principal.project_id
+            || (principal.actor_kind == ActorKind::Human && principal.account_wide))
     {
         // People connected for their whole account reach every Project they
         // belong to; agents reach the Projects their connection allows.
