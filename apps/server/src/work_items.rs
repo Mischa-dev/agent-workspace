@@ -223,6 +223,7 @@ struct WorkItemRow {
     archived_at: Option<String>,
     created_at: String,
     updated_at: String,
+    labels: serde_json::Value,
     acceptance_criteria: serde_json::Value,
     linked_threads: serde_json::Value,
     linked_repositories: serde_json::Value,
@@ -307,11 +308,23 @@ pub struct WorkItemView {
     archived_at: Option<String>,
     created_at: String,
     updated_at: String,
+    /// Active labels, by name. Replays stored before labels existed have
+    /// none.
+    #[serde(default)]
+    labels: Vec<WorkItemLabelView>,
     acceptance_criteria: Vec<AcceptanceCriterionView>,
     linked_threads: Vec<LinkedThreadView>,
     linked_repositories: Vec<LinkedRepositoryView>,
     linked_pull_requests: Vec<LinkedPullRequestView>,
     capabilities: WorkItemCapabilities,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemLabelView {
+    id: Uuid,
+    name: String,
+    color: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -633,6 +646,7 @@ struct WorkItemCardView {
     version: i64,
     archived_at: Option<String>,
     updated_at: String,
+    labels: Vec<WorkItemLabelView>,
     capabilities: WorkItemCapabilities,
 }
 
@@ -651,6 +665,7 @@ impl From<WorkItemView> for WorkItemCardView {
             version: item.version,
             archived_at: item.archived_at,
             updated_at: item.updated_at,
+            labels: item.labels,
             capabilities: item.capabilities,
         }
     }
@@ -953,7 +968,7 @@ async fn list_work_items(
             .clamp(1, MAX_PAGE_SIZE),
     );
     let rows = sqlx::query_as::<_, WorkItemRow>(
-        r#"
+        &format!(r#"
         SELECT
             item.id, item.project_id, project.project_key,
             item.number, item.title, ''::text AS description,
@@ -970,6 +985,7 @@ async fn list_work_items(
             item.version, item.archived_at::text AS archived_at,
             item.created_at::text AS created_at,
             item.updated_at::text AS updated_at,
+            {WORK_ITEM_LABELS_COLUMN},
             '[]'::jsonb AS acceptance_criteria,
             '[]'::jsonb AS linked_threads,
             '[]'::jsonb AS linked_repositories,
@@ -996,7 +1012,7 @@ async fn list_work_items(
           AND (($10::boolean AND item.archived_at IS NOT NULL) OR (NOT $10::boolean AND item.archived_at IS NULL))
         ORDER BY item.number DESC
         LIMIT $11
-        "#,
+        "#),
     )
     .bind(project_id)
     .bind(before_number)
@@ -1077,7 +1093,7 @@ async fn get_work_item_board(
             continue;
         }
         let rows = sqlx::query_as::<_, WorkItemRow>(
-            r#"
+            &format!(r#"
             SELECT
                 item.id, item.project_id, project.project_key,
                 item.number, item.title, ''::text AS description,
@@ -1094,6 +1110,7 @@ async fn get_work_item_board(
                 item.version, item.archived_at::text AS archived_at,
                 item.created_at::text AS created_at,
                 item.updated_at::text AS updated_at,
+                {WORK_ITEM_LABELS_COLUMN},
                 '[]'::jsonb AS acceptance_criteria,
                 '[]'::jsonb AS linked_threads,
                 '[]'::jsonb AS linked_repositories,
@@ -1117,7 +1134,7 @@ async fn get_work_item_board(
               AND (($9::boolean AND item.archived_at IS NOT NULL) OR (NOT $9::boolean AND item.archived_at IS NULL))
             ORDER BY item.board_rank, item.id
             LIMIT $10
-            "#,
+            "#),
         )
         .bind(project_id)
         .bind(status.id)
@@ -3446,7 +3463,27 @@ async fn advance_work_item_version(
     .ok_or(AppError::Internal("locked Work Item lost its version"))
 }
 
-const WORK_ITEM_SELECT: &str = r#"
+/// A task's active labels as `[{id, name, color}]`, read through the view so
+/// archived labels never show. Cards show labels too, so the list and board
+/// queries select the real thing, not `'[]'`.
+macro_rules! work_item_labels_column {
+    () => {
+        r#"
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object('id', active.label_id, 'name', active.name, 'color', active.color)
+                ORDER BY lower(active.name), active.label_id
+            )
+            FROM work_item_active_labels active
+            WHERE active.project_id = item.project_id AND active.work_item_id = item.id
+        ), '[]'::jsonb) AS labels
+        "#
+    };
+}
+const WORK_ITEM_LABELS_COLUMN: &str = work_item_labels_column!();
+
+const WORK_ITEM_SELECT: &str = concat!(
+    r#"
     SELECT
         item.id, item.project_id, project.project_key,
         item.number, item.title, item.description,
@@ -3463,6 +3500,9 @@ const WORK_ITEM_SELECT: &str = r#"
         item.version, item.archived_at::text AS archived_at,
         item.created_at::text AS created_at,
         item.updated_at::text AS updated_at,
+"#,
+    work_item_labels_column!(),
+    r#",
         COALESCE((
             SELECT jsonb_agg(
                 jsonb_build_object(
@@ -3581,7 +3621,8 @@ const WORK_ITEM_SELECT: &str = r#"
      AND assignee.actor_id = item.assignee_actor_id
     LEFT JOIN actors assignee_actor ON assignee_actor.id = assignee.actor_id
     WHERE item.project_id = $1 AND item.id = $2
-"#;
+"#
+);
 
 fn work_item_view(
     row: WorkItemRow,
@@ -3608,6 +3649,8 @@ fn work_item_view(
         (None, None, None, None, None) => None,
         _ => return Err(AppError::Internal("invalid Work Item assignee projection")),
     };
+    let labels = serde_json::from_value(row.labels)
+        .map_err(|_| AppError::Internal("invalid Work Item label projection"))?;
     let acceptance_criteria = serde_json::from_value(row.acceptance_criteria)
         .map_err(|_| AppError::Internal("invalid Work Item criteria projection"))?;
     let linked_threads = serde_json::from_value(row.linked_threads)
@@ -3638,6 +3681,7 @@ fn work_item_view(
         archived_at: row.archived_at,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        labels,
         acceptance_criteria,
         linked_threads,
         linked_repositories,

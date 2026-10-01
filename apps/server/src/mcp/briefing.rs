@@ -19,9 +19,11 @@ use super::{
     replies::{InboxItem, InboxListArguments, ReplyToolResult, inbox_list},
     talk::{ConversationSummary, ListFilter, list_rows, summary},
 };
-use crate::{AppState, error::AppError, memory, policy::ActorKind};
+use crate::{AppState, error::AppError, memory, policy::ActorKind, work_item_labels};
 
 const GUIDE_CHARACTERS: usize = 20_000;
+/// The most label names project_open lists.
+const PROJECT_LABELS: i64 = 100;
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -429,6 +431,9 @@ pub(super) struct ProjectOverview {
     pub open_threads: Vec<ConversationSummary>,
     pub channels: Vec<ConversationSummary>,
     pub repositories: Vec<RepositoryLine>,
+    /// Labels used here; label_list has colors and counts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -621,6 +626,7 @@ pub(super) async fn project_open(
         .bind(project_id)
         .fetch_all(&state.pool)
         .await?;
+        let labels = work_item_labels::project_names(&state.pool, project_id, PROJECT_LABELS).await?;
         Ok::<_, AppError>(ToolResult::ok(ProjectOverview {
             project: ProjectHeader {
                 id: project_id.to_string(),
@@ -652,6 +658,7 @@ pub(super) async fn project_open(
             open_threads,
             channels,
             repositories,
+            labels,
         }))
     }
     .await;

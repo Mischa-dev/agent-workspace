@@ -33,5 +33,6 @@ mod m7_memberships;
 mod m9_external_agents;
 mod mcp_admin;
 mod mcp_groundwork;
+mod mcp_labels;
 mod oauth_agent;
 mod reply_requests;

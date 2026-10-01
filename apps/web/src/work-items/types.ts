@@ -20,6 +20,9 @@ export type WorkItemAssignee = {
   active: boolean
 }
 
+/** A label on a work item. `color` is always `#rrggbb`. */
+export type WorkItemLabel = { id: string; name: string; color: string }
+
 export type AssignableActor = {
   id: string
   displayName: string
@@ -42,6 +45,7 @@ export type WorkItem = {
   archivedAt: string | null
   createdAt: string
   updatedAt: string
+  labels: WorkItemLabel[]
   acceptanceCriteria: AcceptanceCriterion[]
   linkedThreads: LinkedThread[]
   linkedRepositories: LinkedRepository[]

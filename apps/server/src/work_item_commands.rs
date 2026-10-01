@@ -17,7 +17,7 @@ use crate::{
         Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
         authorize,
     },
-    work_item_labels::LabelDelta,
+    work_item_labels::{self, LabelDelta, LabelPlan, MAX_LABELS_PER_TASK},
 };
 
 pub const MAX_TITLE_CHARACTERS: usize = 240;
@@ -362,9 +362,8 @@ pub async fn create_work_item(
     actor: &CommandActor,
     command: CreateWorkItemCommand<'_>,
 ) -> Result<CreateWorkItemOutcome, AppError> {
-    if !command.label_ids.is_empty() {
-        // Labels come with migration 0044; nothing passes them before then.
-        return Err(AppError::Internal("labels aren't available yet"));
+    if command.label_ids.len() > MAX_LABELS_PER_TASK {
+        return Err(AppError::Validation("labels"));
     }
     if !validate_assignee(transaction, actor.project_id, command.assignee_actor_id).await? {
         return Ok(CreateWorkItemOutcome::InvalidAssignee);
@@ -470,6 +469,16 @@ pub async fn create_work_item(
         )
         .await?;
     }
+    // Labels are stored by ID in the payloads, like a later change's
+    // labelsAdded, so history can leave out labels archived since.
+    let labels_added = work_item_labels::attach_to_new(
+        transaction,
+        actor.project_id,
+        work_item_id,
+        actor.actor_id,
+        command.label_ids,
+    )
+    .await?;
     let mut activity_metadata = command.activity_metadata;
     if let Some(metadata) = activity_metadata.as_object_mut() {
         if matches!(
@@ -484,6 +493,9 @@ pub async fn create_work_item(
                 serde_json::json!(command.acceptance_criteria.len()),
             );
         }
+        if !labels_added.is_empty() {
+            metadata.insert("labelsAdded".to_owned(), serde_json::json!(labels_added));
+        }
     }
     let mut audit_metadata = command.audit_metadata;
     if let Some(metadata) = audit_metadata.as_object_mut() {
@@ -493,6 +505,9 @@ pub async fn create_work_item(
                 "acceptanceCriteria".to_owned(),
                 serde_json::json!(command.acceptance_criteria.len()),
             );
+        }
+        if !labels_added.is_empty() {
+            metadata.insert("labelsAdded".to_owned(), serde_json::json!(labels_added));
         }
     }
     let finalized = finalize_created(
@@ -539,10 +554,6 @@ pub async fn update_locked_work_item(
     if conflict_kind(&current, command.expected_version).is_some() {
         return Ok(UpdateWorkItemOutcome::Conflict(current));
     }
-    if command.labels.is_some_and(|labels| !labels.is_empty()) {
-        // Labels come with migration 0044; nothing passes them before then.
-        return Err(AppError::Internal("labels aren't available yet"));
-    }
     let type_id = match command.type_id {
         Some(type_id) => {
             select_definition(
@@ -579,6 +590,21 @@ pub async fn update_locked_work_item(
         && !validate_assignee(transaction, actor.project_id, assignee).await?
     {
         return Ok(UpdateWorkItemOutcome::InvalidAssignee);
+    }
+    let label_plan: Option<LabelPlan> = match command.labels {
+        Some(delta) if !delta.is_empty() => {
+            Some(work_item_labels::plan(transaction, actor.project_id, current.id, &delta).await?)
+        }
+        _ => None,
+    };
+    if let Some(plan) = &label_plan
+        && !plan.added.is_empty()
+        && plan.resulting_count > MAX_LABELS_PER_TASK
+    {
+        return Ok(UpdateWorkItemOutcome::TooManyLabels {
+            limit: MAX_LABELS_PER_TASK,
+            would_have: plan.resulting_count,
+        });
     }
     let parent_work_item_id = match command.parent_work_item_id {
         Some(parent) if parent != current.parent_work_item_id => {
@@ -662,8 +688,22 @@ pub async fn update_locked_work_item(
     if position.is_some() {
         changed_fields.push("position".to_owned());
     }
+    let label_plan = label_plan.filter(LabelPlan::changes);
+    if label_plan.is_some() {
+        changed_fields.push("labels".to_owned());
+    }
     if changed_fields.is_empty() {
         return Ok(UpdateWorkItemOutcome::Noop(current));
+    }
+    if let Some(plan) = &label_plan {
+        work_item_labels::apply(
+            transaction,
+            actor.project_id,
+            current.id,
+            actor.actor_id,
+            plan,
+        )
+        .await?;
     }
     if assignee_actor_id != current.assignee_actor_id {
         enqueue_external_work_item_event(
@@ -713,6 +753,14 @@ pub async fn update_locked_work_item(
         position,
         parent: (parent_work_item_id != current.parent_work_item_id)
             .then_some((current.parent_work_item_id, parent_work_item_id)),
+        labels_added: label_plan
+            .iter()
+            .flat_map(|plan| plan.added.iter().map(|label| label.id))
+            .collect(),
+        labels_removed: label_plan
+            .iter()
+            .flat_map(|plan| plan.removed.iter().map(|label| label.id))
+            .collect(),
         ..ChangePayload::default()
     };
     let activity_payload = payload.activity();

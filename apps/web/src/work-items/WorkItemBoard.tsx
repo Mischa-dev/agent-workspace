@@ -6,6 +6,7 @@ import { useMoveWorkItem } from './hooks'
 import { workItemHref } from './links'
 import type { WorkItemCard, WorkItemStatus, WorkflowStatus } from './types'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
+import { WorkItemLabels } from './WorkItemLabels'
 
 export function WorkItemBoard({
   columns,
@@ -96,6 +97,7 @@ export function WorkItemBoard({
                   <div className="aw-board__meta">
                     <PriorityIcon priority={item.priority} />
                     <span className="aw-board__type">{item.itemType.name}</span>
+                    <WorkItemLabels labels={item.labels} max={3} />
                     {item.assignee ? (
                       <Avatar
                         className="aw-board__assignee"

@@ -173,13 +173,63 @@
     padding: 0 var(--space-3);
   }
 
-  .aw-worklist__type {
+  .aw-worklist__type,
+  .aw-worklist__row .aw-labels {
     display: none;
   }
 
   .aw-worktools__search {
     max-width: none;
   }
+}
+
+/* Labels: read-only chips. Only the dot takes the label's color, so the
+   text keeps its contrast in both themes. */
+.aw-labels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-worklist__row .aw-labels {
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+.aw-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 160px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  font: var(--t-small);
+  color: var(--content-fg);
+}
+
+.aw-label__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.aw-label__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-label--more {
+  color: var(--content-fg-muted);
 }
 
 /* Board */

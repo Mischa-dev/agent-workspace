@@ -58,6 +58,7 @@ import {
 import { workItemsHref } from './links'
 import type { AssignableActor, WorkItem, WorkItemPriority } from './types'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
+import { WorkItemLabels } from './WorkItemLabels'
 
 type Draft = {
   title: string
@@ -440,6 +441,12 @@ function WorkItemEditor({ item, projectArchived, workflow }: { item: WorkItem; p
               />
             ) : null}
           </div>
+          {base.labels.length > 0 ? (
+            <div className="aw-field">
+              <span className="aw-field__label">Labels</span>
+              <WorkItemLabels labels={base.labels} />
+            </div>
+          ) : null}
           <p aria-live="polite" className="aw-props__status">
             {update.isSuccess && !dirty ? 'Saved.' : `Updated ${shortDate(base.updatedAt)}`}
           </p>

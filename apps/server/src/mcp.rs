@@ -60,6 +60,7 @@ mod briefing;
 mod channels;
 mod collaboration;
 mod common;
+mod labels;
 mod memory_tools;
 mod oauth;
 mod reads;
@@ -193,7 +194,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Get oriented in one project: its guide page (read this first), other pages, recent decisions, what's next on the board, blocked and claimed tasks, open threads, channels and repositories.",
+        description = "Get oriented in one project: its guide page (read this first), other pages, recent decisions, what's next on the board, blocked and claimed tasks, open threads, channels, repositories and labels.",
         annotations(title = "Open project", read_only_hint = true, open_world_hint = false)
     )]
     async fn project_open(
@@ -631,7 +632,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Open a task by ID, link or key (such as AW-12): its fields, acceptance criteria, who's working on it, subtasks, linked threads, messages, pages, decisions and pull requests, and the latest comments.",
+        description = "Open a task by ID, link or key (such as AW-12): its fields and labels, acceptance criteria, who's working on it, subtasks, linked threads, messages, pages, decisions and pull requests, and the latest comments.",
         annotations(title = "Open task", read_only_hint = true, open_world_hint = false)
     )]
     async fn task_open(
@@ -842,7 +843,39 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Moving it again returns where it went.",
+        description = "List a project's labels by name, with each one's color, description, how many tasks carry it, and the version label_write needs. Archived labels are left out unless includeArchived.",
+        annotations(title = "List labels", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn label_list(
+        &self,
+        Parameters(arguments): Parameters<labels::LabelListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<labels::LabelListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(labels::label_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a label in a project, or change one (pass label: its name or ID): rename, recolor, describe, archive it (archived: true) or restore it (archived: false). Creating a name that already exists returns that label unchanged. Archiving hides it from every task until it's restored; nothing is deleted.",
+        annotations(
+            title = "Write label",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn label_write(
+        &self,
+        Parameters(arguments): Parameters<labels::LabelWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<labels::LabelWriteValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(labels::label_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, labels (by name; missing ones are created there), and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Moving it again returns where it went.",
         annotations(
             title = "Move task",
             read_only_hint = false,
@@ -2250,7 +2283,7 @@ async fn identifier_project(
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 
-    use super::{SERVER_INSTRUCTIONS, exact_bearer_token, generate_token};
+    use super::{SERVER_INSTRUCTIONS, common, exact_bearer_token, generate_token};
 
     #[test]
     fn generated_token_has_256_bits_and_only_safe_prefix_metadata() {
@@ -2308,6 +2341,12 @@ mod tests {
         let overview = serde_json::Value::Object(
             (*schema_for_output::<super::briefing::ProjectOverview>()).clone(),
         );
+        let label_list = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::labels::LabelListValue>>()).clone(),
+        );
+        let label_write = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::labels::LabelWriteValue>>()).clone(),
+        );
         for (schema, definition, skipped) in [
             (&briefing, None, &["replyRequests", "claims"][..]),
             (
@@ -2315,7 +2354,12 @@ mod tests {
                 None,
                 &["subtasks", "conversations", "links", "comments"][..],
             ),
+            (&task, Some("TaskSummary"), &["labels"][..]),
+            (&overview, None, &["guide", "labels"][..]),
             (&overview, Some("TaskOverview"), &["blocked", "claimed"][..]),
+            (&label_list, Some("LabelLine"), &["description"][..]),
+            (&label_write, Some("LabelLine"), &["description"][..]),
+            (&label_write, Some("LabelWriteValue"), &["note"][..]),
         ] {
             let required = required(schema, definition);
             assert!(!required.is_empty(), "no required list: {schema}");

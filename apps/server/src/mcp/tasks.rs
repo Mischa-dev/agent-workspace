@@ -77,7 +77,20 @@ pub(super) struct TaskSummary {
     pub project: String,
     pub version: i64,
     pub updated_at: String,
+    /// Its labels, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
+
+/// The `labels` column of a task line, read through the active-labels view
+/// so archived labels never show. There's no `#[sqlx(default)]` on the
+/// field: a query that forgets this column fails loudly.
+const TASK_LABELS_COLUMN: &str = r#"
+    COALESCE((SELECT array_agg(active.name ORDER BY lower(active.name), active.label_id)
+              FROM work_item_active_labels active
+              WHERE active.project_id = item.project_id AND active.work_item_id = item.id),
+             ARRAY[]::text[]) AS labels
+"#;
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -165,7 +178,8 @@ pub(super) async fn task_list(
                    numbered.board_position,
                    item.blocked_reason IS NOT NULL AS blocked,
                    claimer.display_name AS claimed_by, project.name AS project,
-                   item.version, item.updated_at::text AS updated_at, item.project_id
+                   item.version, item.updated_at::text AS updated_at, item.project_id,
+                   {TASK_LABELS_COLUMN}
             FROM numbered
             JOIN work_items item ON item.id = numbered.id
             JOIN projects project ON project.id = item.project_id
@@ -469,14 +483,14 @@ pub(super) async fn task_open(
             _ => return Ok(ToolResult::unavailable()),
         };
         let claimed_by = current_claim(state, task_id).await?;
-        let subtasks = sqlx::query_as::<_, TaskSummary>(
+        let subtasks = sqlx::query_as::<_, TaskSummary>(&format!(
             r#"
             SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
                    item.title, status.name AS status, status.semantic_category AS status_group,
                    item.priority, assignee.display_name AS assignee, 0::bigint AS board_position,
                    item.blocked_reason IS NOT NULL AS blocked, NULL::text AS claimed_by,
                    project.name AS project, item.version, item.updated_at::text AS updated_at,
-                   item.project_id
+                   item.project_id, {TASK_LABELS_COLUMN}
             FROM work_items item
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status
@@ -486,8 +500,8 @@ pub(super) async fn task_open(
             WHERE item.parent_work_item_id = $1 AND item.archived_at IS NULL
             ORDER BY item.number
             LIMIT 50
-            "#,
-        )
+            "#
+        ))
         .bind(task_id)
         .fetch_all(&state.pool)
         .await?;

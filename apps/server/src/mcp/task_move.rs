@@ -4,7 +4,7 @@
 //! its links and authors belong to its project. So a move carries the task
 //! over into the target project (title, description, priority, status and
 //! type by name, the assignee if they're there, acceptance criteria,
-//! subtasks, and every comment quoted with its author and date), then
+//! subtasks, labels, and every comment quoted with its author and date), then
 //! archives the original. The original keeps its history and links, and its
 //! key keeps opening the new task (migration 0043).
 
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, mark_via, parse_id, public_url},
+    common::{ToolResult, insert_audit, mark_via, parse_id, public_url},
     tasks::command_actor,
 };
 use crate::{
@@ -28,6 +28,7 @@ use crate::{
         CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, authorize_mutation, create_work_item,
         finalize_change, finalize_comment, insert_criteria, lock_membership,
     },
+    work_item_labels::{self, LabelLimit, MAX_LABELS_PER_TASK, SkipReason},
 };
 
 /// The most tasks (a task and its subtasks) one move carries.
@@ -275,6 +276,38 @@ pub(super) async fn task_move(
                 None => None,
             };
             let parent = task.parent_id.and_then(|parent| new_ids.get(&parent).copied());
+            // Labels go by name: one the target already has keeps its color
+            // there, and a missing one is created with the source's color.
+            let mut wanted = work_item_labels::active_labels_with_colors(
+                &mut *transaction,
+                source_project_id,
+                task.id,
+            )
+            .await?;
+            let over_limit = wanted.split_off(wanted.len().min(MAX_LABELS_PER_TASK));
+            let labels = work_item_labels::ensure_by_name(
+                &mut transaction,
+                target_project_id,
+                principal.actor_id,
+                &wanted,
+            )
+            .await?;
+            for label in &labels.created {
+                insert_audit(
+                    &mut transaction,
+                    principal,
+                    target_project_id,
+                    "work_item_label.mcp_created",
+                    "work_item_label",
+                    label.id,
+                    serde_json::json!({
+                        "changedFields": ["label"],
+                        "name": label.name,
+                        "movedWith": task.key,
+                    }),
+                )
+                .await?;
+            }
             let summary = format!("Work Item moved from {}", task.key);
             let outcome = create_work_item(
                 &mut transaction,
@@ -287,7 +320,7 @@ pub(super) async fn task_move(
                     priority: &task.priority,
                     assignee_actor_id: assignee,
                     parent_work_item_id: parent,
-                    label_ids: &[],
+                    label_ids: &labels.ids,
                     acceptance_criteria: &[],
                     board_placement: None,
                     activity_summary: &summary,
@@ -311,6 +344,26 @@ pub(super) async fn task_move(
             };
             let new_key = format!("{target_key}-{number}");
             new_ids.insert(task.id, new_id);
+            for (name, reason) in &labels.skipped {
+                notes.push(match reason {
+                    SkipReason::Archived => format!(
+                        "\"{name}\" is archived in {target_key}, so it wasn't put on {new_key}."
+                    ),
+                    SkipReason::ProjectFull(LabelLimit::Active) => format!(
+                        "{target_key} already has {} labels, so \"{name}\" wasn't carried to {new_key}.",
+                        work_item_labels::MAX_ACTIVE_LABELS_PER_PROJECT
+                    ),
+                    SkipReason::ProjectFull(LabelLimit::Total) => format!(
+                        "{target_key} has no room for more labels, so \"{name}\" wasn't carried to {new_key}."
+                    ),
+                });
+            }
+            for (name, _) in &over_limit {
+                notes.push(format!(
+                    "{} had more than {MAX_LABELS_PER_TASK} labels, so \"{name}\" wasn't carried to {new_key}.",
+                    task.key
+                ));
+            }
 
             carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
                 .await?;
