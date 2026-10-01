@@ -337,8 +337,8 @@ fn update_rejected<T>(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TaskCreateManyArguments {
     /// The project: ID, link, or key such as "AWD" (see projects_list).
-    /// Needed unless your connection belongs to one project. The MCP
-    /// middleware scopes the call to it.
+    /// Required for apps connected for a whole account; agents and
+    /// single-project connections default to their own project.
     pub project_id: Option<String>,
     /// 1 to 100 tasks, created in this order: parents before their subtasks.
     pub tasks: Vec<NewTask>,

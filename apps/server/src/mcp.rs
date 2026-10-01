@@ -627,7 +627,7 @@ impl McpServer {
     // -- Tasks ---------------------------------------------------------------
 
     #[tool(
-        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them), type, priority, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), words, or parent. Done and canceled tasks are left out unless includeDone, and archived ones unless includeArchived. total counts every match; pass nextCursor for the next page.",
+        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them), type, priority, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), words, or parent. Done and canceled tasks are left out unless includeDone, and archived ones unless includeArchived. total counts every match; for the next page, pass the nextCursor you got as cursor.",
         annotations(title = "List tasks", read_only_hint = true, open_world_hint = false)
     )]
     async fn task_list(

@@ -58,7 +58,7 @@ const STATUS_GROUPS: [&str; 7] = [
     "canceled",
 ];
 const UPDATED_SINCE_MESSAGE: &str = "Use a date (YYYY-MM-DD), a timestamp such as 2026-09-30T14:00:00Z, or a span such as 24h or 7d.";
-const CURSOR_MESSAGE: &str = "Pass the nextCursor you were given.";
+const CURSOR_MESSAGE: &str = "Pass the nextCursor you were given, as cursor.";
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
