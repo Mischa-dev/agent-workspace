@@ -206,14 +206,19 @@ give out access without a person seeing it:
 
 ### For the September 30 merge specifically
 
-With decisions 1 and 2:
-1. Move AW-5, AW-6 and AW-7 into AWD. The numbers are free, so they stay 5, 6
-   and 7.
-2. Archive AW, which releases its key as `AWOLD`.
-3. Rename AWD to "Agent Workspace" with key `AW`.
+AWD-4 to AWD-9 (this plan's tasks) now use numbers 5 to 7. So AW-5 to AW-7
+move in as AWD-10 to AWD-12, with their old keys kept as aliases.
 
-The tasks are then AW-1 to AW-3 (formerly AWD-1 to AWD-3) and AW-5 to AW-7,
-and every old link still works.
+That makes key `AW` for the renamed project awkward: its own AW-5 would clash
+with the alias for the old AW-5. Two clean options:
+
+- **Keep key `AWD`** and only rename the project to "Agent Workspace".
+  Recommended: nothing clashes.
+- **Take key `AW`, and drop the aliases of a project whose key is reused.**
+  Old links to AW-5 to AW-7 would then open the new tasks with those numbers.
+
+Either way, archive the old project first. Its key is released as `AWOLD`, and
+its aliases resolve as AWOLD-5 to AWOLD-7.
 
 ## Build order
 
@@ -230,7 +235,7 @@ its schema.
 - `channel_create`, `conversation_update`, `pin_set`, `decision_list`
 - `projects_list` and `project_open` changes
 
-*Done when:* the September 30 merge works end to end with one prompt.
+*Done when:* the September 30 merge works end to end with one prompt (AWD-5).
 
 **Phase 2: tasks at full strength.**
 - the `task_create`, `task_update`, `task_reorder` and `task_link` changes
