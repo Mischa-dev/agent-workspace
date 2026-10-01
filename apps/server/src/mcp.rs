@@ -2092,7 +2092,10 @@ fn is_project_key(value: &str) -> bool {
         && value.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// The one active project the caller can reach under this key.
+/// The one active project the caller can reach under this key. An older
+/// project-scoped credential reaches only its own project, so the keys of
+/// the person's other projects stay as written: a tool that refuses one
+/// names it back without giving its ID away.
 async fn project_by_key(
     state: &AppState,
     principal: &McpPrincipal,
@@ -2109,12 +2112,14 @@ async fn project_by_key(
         WHERE upper(project.project_key) = upper($3)
           AND project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
+          AND ($4::uuid IS NULL OR project.id = $4)
         LIMIT 2
         "#,
     )
     .bind(principal.actor_id)
     .bind(principal.external_agent_connection_id)
     .bind(key)
+    .bind(common::confined_project(principal))
     .fetch_all(&state.pool)
     .await?;
     Ok(match matches.as_slice() {
@@ -2124,10 +2129,10 @@ async fn project_by_key(
 }
 
 /// The task the caller can reach under this key: the task that has it now,
-/// or else the one a moved task went to (migration 0043). It matches any
-/// project the caller belongs to and can access; tools that take a
-/// connection's narrower reach check the answer against
-/// `accessible_project_ids`.
+/// or else the one a moved task went to (migration 0043). It matches the
+/// projects the caller belongs to and can access, and for an older
+/// project-scoped credential only its own project, as
+/// `accessible_project_ids` does.
 pub(super) async fn task_by_key(
     state: &AppState,
     principal: &McpPrincipal,
@@ -2157,6 +2162,7 @@ pub(super) async fn task_by_key(
          AND membership.actor_id = $1
          AND membership.enabled
         WHERE actor_can_access_project($1, $2, found.project_id)
+          AND ($5::uuid IS NULL OR found.project_id = $5)
         ORDER BY found.preference
         LIMIT 1
         "#,
@@ -2165,6 +2171,7 @@ pub(super) async fn task_by_key(
     .bind(principal.external_agent_connection_id)
     .bind(project_key)
     .bind(number)
+    .bind(common::confined_project(principal))
     .fetch_optional(&state.pool)
     .await?)
 }

@@ -1273,10 +1273,12 @@ pub enum ThreadLinkOutcome {
 }
 
 /// Links a task to a thread in its project, or unlinks it. The caller has
-/// locked the project (`lock_membership`) and the task, and refused an
-/// archived task. A call that changes nothing passes whatever version it
-/// names, so a retry answers `Unchanged`; `expected_version` is checked only
-/// when something would change.
+/// locked the project (`lock_membership`) and the task, and decided whether
+/// an archived task may change: task_link refuses it, while the web app
+/// still unlinks one (the thread page offers Unlink on archived tasks). A
+/// call that changes nothing passes whatever version it names, so a retry
+/// answers `Unchanged`; `expected_version` is checked only when something
+/// would change.
 pub async fn change_thread_link(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,

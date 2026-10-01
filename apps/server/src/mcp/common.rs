@@ -123,6 +123,14 @@ impl<T> ToolResult<T> {
     }
 }
 
+/// The one Project an older Project-scoped credential stays in, whatever
+/// else the person belongs to. None when the caller's reach is every Project
+/// `actor_can_access_project` allows.
+pub(super) fn confined_project(principal: &McpPrincipal) -> Option<Uuid> {
+    (principal.actor_kind == ActorKind::Human && !principal.account_wide)
+        .then_some(principal.project_id)
+}
+
 /// Projects this caller can act in right now.
 ///
 /// People connected through an app reach every Project they belong to. Agents
@@ -142,8 +150,8 @@ pub(super) async fn accessible_project_ids_in(
     executor: impl sqlx::PgExecutor<'_>,
     principal: &McpPrincipal,
 ) -> Result<Vec<Uuid>, AppError> {
-    if principal.actor_kind == ActorKind::Human && !principal.account_wide {
-        return Ok(vec![principal.project_id]);
+    if let Some(project_id) = confined_project(principal) {
+        return Ok(vec![project_id]);
     }
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"

@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
+    common::insert_audit,
     task_batch::BatchProblem,
     tasks::resolve_assignee,
     workflow::Workflow,
@@ -560,6 +561,24 @@ async fn resolve_labels(
                 &wanted,
             )
             .await?;
+            // Each new label gets its own audit row, as label_write's and
+            // task_move's do. A preview rolls these back with the rest.
+            for label in &ensured.created {
+                insert_audit(
+                    transaction,
+                    principal,
+                    project_id,
+                    "work_item_label.mcp_created",
+                    "work_item_label",
+                    label.id,
+                    serde_json::json!({
+                        "changedFields": ["label"],
+                        "name": label.name,
+                        "batch": "task_create_many",
+                    }),
+                )
+                .await?;
+            }
             created = ensured
                 .created
                 .into_iter()

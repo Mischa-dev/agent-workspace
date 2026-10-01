@@ -6,11 +6,14 @@
 //! repository Codex runs on without saying so, or a link written to an
 //! archived task.
 
+use std::time::Duration;
+
 use agent_workspace_server::{
+    mcp::{self, IssueCredentialCommand},
     policy::ActorKind,
     work_item_commands::{
         AuditAttribution, CommandActor, LinkWording, ThreadLinkOutcome, change_thread_link,
-        lock_work_item,
+        lock_membership, lock_work_item,
     },
 };
 use axum::http::StatusCode;
@@ -1180,8 +1183,9 @@ async fn task_link_repositories_pull_requests_and_threads() {
     );
     transaction.rollback().await.expect("rollback");
 
-    // The web app refuses new links to archived repositories, and every
-    // link change on an archived task.
+    // The web app refuses new links to archived repositories, and link
+    // changes on an archived task, except unlinking a thread: the thread
+    // page offers Unlink on every task linked to it, archived ones too.
     let web_version = version(&setup, task).await;
     let (status, refused) = send(
         app,
@@ -1219,6 +1223,45 @@ async fn task_link_repositories_pull_requests_and_threads() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let pool = &setup.pool;
+    let thread_linked = move || async move {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM work_item_conversation_links WHERE work_item_id = $1 AND conversation_id = $2)",
+        )
+        .bind(task)
+        .bind(secret)
+        .fetch_one(pool)
+        .await
+        .expect("thread link")
+    };
+    assert!(thread_linked().await);
+    let thread_link = format!(
+        "/api/v1/projects/{repo}/work-items/{task}/threads/{}",
+        threads[1].1
+    );
+    let (status, unlinked) = send(
+        app,
+        setup.browser.request(
+            "DELETE",
+            &thread_link,
+            Some("board-web-archived-unlink"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{unlinked}");
+    let (status, refused) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &thread_link,
+            Some("board-web-archived-link"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(!thread_linked().await);
 
     // A read-only connection can't link anything.
     let read_only = tool(
@@ -1240,4 +1283,171 @@ fn message_list(notes: &Value) -> String {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// An older project-scoped credential (a bearer token, or a grant from
+/// before connections covered the whole account) stays in its project. Keys
+/// of the person's other projects resolve to nothing there, so a refusal
+/// names them back as written and never hands over their IDs.
+#[tokio::test]
+async fn a_project_scoped_credential_never_learns_ids_beyond_its_project() {
+    let Some(setup) = setup("mcp_board_scoped").await else {
+        return;
+    };
+    let app = &setup.app;
+    let home = create_project(&setup, "HOME", "Home").await;
+    let secret = create_project(&setup, "SECRET", "Secret").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    for project in ["HOME", "SECRET"] {
+        let created = tool(
+            app,
+            &codex,
+            &session,
+            "task_create",
+            json!({"projectId": project, "title": "Start"}),
+        )
+        .await;
+        assert_eq!(created["outcome"], "applied", "{created}");
+    }
+    let secret_task = task_id(&setup, &secret, 1).await.to_string();
+    let scoped = mcp::issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            project_id: home.parse().expect("home ID"),
+            actor_id: owner(&setup, &home).await,
+            client_name: "scoped-test".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("issue credential")
+    .token;
+    let scoped_session = initialize(app, &scoped).await.expect("scoped MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let scoped = scoped.clone();
+        let session = scoped_session.clone();
+        async move { tool(app, &scoped, &session, name, arguments).await }
+    };
+
+    let own = call("task_list", json!({"projectIds": ["HOME"]})).await;
+    assert_eq!(own["outcome"], "ok", "{own}");
+    assert_eq!(keys(&own["value"]["tasks"]), ["HOME-1"]);
+
+    let listed = call("task_list", json!({"projectIds": ["HOME", "SECRET"]})).await;
+    let reordered = call(
+        "task_reorder",
+        json!({"taskIds": ["HOME-1"], "beforeTaskId": "SECRET-1"}),
+    )
+    .await;
+    let opened = call("task_open", json!({"taskId": "SECRET-1"})).await;
+    for refused in [&listed, &reordered, &opened] {
+        assert_eq!(refused["outcome"], "not_found", "{refused}");
+        let text = refused.to_string();
+        assert!(
+            !text.contains(&secret) && !text.contains(&secret_task),
+            "{refused}"
+        );
+    }
+    assert!(message(&listed).starts_with("Project SECRET "), "{listed}");
+    assert!(
+        message(&reordered).starts_with("Task SECRET-1 "),
+        "{reordered}"
+    );
+}
+
+/// task_claim takes its turn on the project row before it locks the task, as
+/// every task writer does. Locked the other way round, a claim deadlocked
+/// with a status change or reorder whose column held the task: the writer
+/// held the project and waited for the task, while the claim held the task
+/// and its insert waited on the project row for its foreign key.
+#[tokio::test]
+async fn a_claim_waits_behind_a_write_to_its_column() {
+    let Some(setup) = setup("mcp_board_claim").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let owner_id = owner(&setup, &work).await;
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let created = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_create",
+        json!({"projectId": "WORK", "title": "Claim me"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let project: Uuid = work.parse().expect("project ID");
+    let claimed = task_id(&setup, &work, 1).await;
+    let column = sqlx::query_scalar::<_, Uuid>("SELECT status_id FROM work_items WHERE id = $1")
+        .bind(claimed)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("status");
+
+    // A write that moves a task into this column holds the project first.
+    let mut writer = setup.pool.begin().await.expect("writer");
+    let writer_pid = sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+        .fetch_one(&mut *writer)
+        .await
+        .expect("writer pid");
+    lock_membership(&mut writer, owner_id, project)
+        .await
+        .expect("lock project")
+        .expect("owner membership");
+    let claim = tokio::spawn({
+        let app = app.clone();
+        async move {
+            tool(
+                &app,
+                &mara_token,
+                &mara_session,
+                "task_claim",
+                json!({"taskId": "WORK-1"}),
+            )
+            .await
+        }
+    });
+    let mut polls = 0;
+    while !sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))",
+    )
+    .bind(writer_pid)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("blocked sessions")
+    {
+        polls += 1;
+        assert!(polls < 400, "the claim never waited for the writer");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    // Then it locks the column, as place_in_column and task_reorder do. The
+    // claim is waiting on the project, so it holds no task yet.
+    sqlx::query("SET LOCAL lock_timeout = '10s'")
+        .execute(&mut *writer)
+        .await
+        .expect("lock timeout");
+    let locked = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM work_items
+        WHERE project_id = $1 AND status_id = $2 AND archived_at IS NULL
+        ORDER BY board_rank, id
+        FOR UPDATE
+        "#,
+    )
+    .bind(project)
+    .bind(column)
+    .fetch_all(&mut *writer)
+    .await
+    .expect("the column locks without a deadlock");
+    assert_eq!(locked, [claimed]);
+    writer.commit().await.expect("writer commits");
+    let claim = claim.await.expect("claim");
+    assert_eq!(claim["outcome"], "ok", "{claim}");
 }

@@ -860,8 +860,8 @@ async fn resolve_among(
     let Some((project_key, number)) = super::split_task_key(identifier) else {
         return Ok(None);
     };
-    // task_by_key also matches projects the caller belongs to beyond this
-    // connection's reach, so its answer is checked against `projects`.
+    // task_by_key keeps to the caller's reach; its answer is checked
+    // against `projects` all the same, the list this lookup was given.
     if let Some(id) = super::task_by_key(state, principal, project_key, number).await?
         && let Some(found) = reachable(id).await?
     {
@@ -1849,7 +1849,8 @@ async fn task_reorder_inner(
     }
 
     // The column's open tasks, locked in board order. Every writer of a
-    // column holds the project lock first, so this can't deadlock.
+    // column, and task_claim, takes its turn on the project row first, so
+    // this can't deadlock.
     let column = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
         SELECT id, board_rank FROM work_items
@@ -2134,6 +2135,17 @@ pub(super) async fn task_claim(
         }
         let mut transaction = state.pool.begin().await?;
         mark_via(&mut transaction, principal).await?;
+        // The claim takes its turn on the project row before the task, as
+        // every task write does (lock_membership) before it locks tasks and
+        // the board column a status change or reorder lands in. Locked the
+        // other way round, such a write waited for this task while this
+        // claim's insert waited on the project row for its foreign key. NO
+        // KEY UPDATE waits for those writes but never for a foreign key's
+        // share lock.
+        sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR NO KEY UPDATE")
+            .bind(project_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
         // Claimers take turns on the task row. With a shared lock here, two
         // agents claiming at once deadlocked: the winner's activity write
         // waited on the loser's lock while the loser waited on the claim.

@@ -391,6 +391,27 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     let labeled = call("task_create_many", creating).await;
     assert_eq!(labeled["outcome"], "ok", "{labeled}");
     assert_eq!(footprint(&setup).await[4], labels_before + 1);
+    // The new label has its own audit row, as label_write's and task_move's
+    // do, so its history starts where it was made.
+    let label_audits = sqlx::query_scalar::<_, Value>(
+        r#"
+        SELECT audit.metadata
+        FROM audit_events audit
+        JOIN project_labels label
+          ON label.id = audit.target_id AND label.project_id = audit.project_id
+        JOIN projects project ON project.id = label.project_id
+        WHERE audit.action = 'work_item_label.mcp_created'
+          AND audit.target_kind = 'work_item_label'
+          AND project.project_key = 'PLAN' AND label.name = 'Mobile'
+        "#,
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("label audit");
+    assert_eq!(
+        label_audits,
+        [json!({"changedFields": ["label"], "name": "Mobile", "batch": "task_create_many"})]
+    );
 
     // Too deep: the 21st level is refused, and only that task is named.
     let chain = (1..=21)

@@ -1896,7 +1896,9 @@ async fn change_work_item_thread_link(
     let current = lock_work_item(&mut transaction, project_id, work_item_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
-    if current.archived {
+    // An archived task takes no new threads, but the thread page offers
+    // Unlink on every task linked to it, archived ones included.
+    if current.archived && linked {
         return Err(AppError::Conflict("work_item", "archived"));
     }
     match change_thread_link(
