@@ -25,7 +25,6 @@ use crate::{
 };
 
 const MAX_TITLE_CHARACTERS: usize = crate::work_item_commands::MAX_TITLE_CHARACTERS;
-const MAX_DESCRIPTION_CHARACTERS: usize = crate::work_item_commands::MAX_DESCRIPTION_CHARACTERS;
 const MAX_UPDATE_CHARACTERS: usize = 20_000;
 const MAX_BLOCKED_REASON_CHARACTERS: usize = 2_000;
 
@@ -219,7 +218,7 @@ pub async fn create_work_item(
             return Ok(WriteResult::invalid("title"));
         };
         let description = match arguments.description.clone() {
-            Some(value) => match normalize_text(value, MAX_DESCRIPTION_CHARACTERS, true) {
+            Some(value) => match normalize_description(value) {
                 Some(value) => value,
                 None => return Ok(WriteResult::invalid("description")),
             },
@@ -459,11 +458,7 @@ async fn update_work_item_inner(
         Some(None) => return Ok(WriteResult::invalid("title")),
         None => None,
     };
-    arguments.description = match arguments
-        .description
-        .take()
-        .map(|value| normalize_text(value, MAX_DESCRIPTION_CHARACTERS, true))
-    {
+    arguments.description = match arguments.description.take().map(normalize_description) {
         Some(Some(value)) => Some(value),
         Some(None) => return Ok(WriteResult::invalid("description")),
         None => None,
@@ -680,7 +675,7 @@ pub async fn create_subtask(
             return Ok(WriteResult::invalid("title"));
         };
         let description = match arguments.description.clone() {
-            Some(value) => match normalize_text(value, MAX_DESCRIPTION_CHARACTERS, true) {
+            Some(value) => match normalize_description(value) {
                 Some(value) => value,
                 None => return Ok(WriteResult::invalid("description")),
             },
@@ -1249,6 +1244,11 @@ fn parse_id(value: &str) -> Option<Uuid> {
 
 fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Option<String> {
     crate::work_item_commands::normalize_single_line(&value, max_characters, allow_empty).ok()
+}
+
+/// Descriptions are Markdown and may span lines, as they can in the web app.
+fn normalize_description(value: String) -> Option<String> {
+    crate::work_item_commands::normalize_description(&value).ok()
 }
 
 fn command_error(command: &str, error: AppError) -> WriteResult {

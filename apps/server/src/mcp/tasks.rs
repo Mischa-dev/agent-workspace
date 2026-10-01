@@ -288,16 +288,16 @@ pub(super) struct TaskDetail {
     pub task: WorkItemProjection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<ClaimValue>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subtasks: Vec<TaskSummary>,
     /// Threads and conversations about this task.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conversations: Vec<LinkedItem>,
     /// Messages, pages and decisions linked to this task.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<LinkedItem>,
     /// The latest comments and updates, oldest first.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<CommentItem>,
     /// Where to read how this project works: project_open or page_get.
     #[serde(skip_serializing_if = "Option::is_none")]

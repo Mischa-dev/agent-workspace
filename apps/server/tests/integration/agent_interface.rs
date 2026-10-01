@@ -407,11 +407,42 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &codex,
         &session,
         "task_create",
-        json!({"projectId": project_id, "title": "Ship the zeppelin", "clientRequestId": "task-1"}),
+        json!({
+            "projectId": project_id,
+            "title": "Ship the zeppelin",
+            "description": "Steps:\n- inflate\n- launch",
+            "clientRequestId": "task-1"
+        }),
     )
     .await;
     assert_eq!(created["outcome"], "applied", "{created}");
     let task_id = created["workItemId"].as_str().expect("task").to_owned();
+    // A fresh task and a person's briefing have empty lists, which the results
+    // leave out; `tool` checks that their outputSchemas allow that.
+    let opened = tool(
+        &app,
+        &codex,
+        &session,
+        "task_open",
+        json!({"taskId": task_id}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(
+        opened["value"]["task"]["description"], "Steps:\n- inflate\n- launch",
+        "{opened}"
+    );
+    let briefing = tool(&app, &codex, &session, "briefing", json!({})).await;
+    assert_eq!(briefing["outcome"], "ok", "{briefing}");
+    let unclaimed = tool(
+        &app,
+        &codex,
+        &session,
+        "project_open",
+        json!({"projectId": project_id}),
+    )
+    .await;
+    assert_eq!(unclaimed["outcome"], "ok", "{unclaimed}");
     let rook_session = initialize(&app, &rook_token).await.expect("Rook MCP");
     let (mara_claim, rook_claim) = tokio::join!(
         tool(
@@ -847,10 +878,132 @@ async fn tool(
         .find(|line| !line.trim().is_empty())
         .unwrap_or(&text);
     let value: Value = serde_json::from_str(json).unwrap_or_else(|_| panic!("MCP JSON: {text}"));
-    value
+    let content = value
         .pointer("/result/structuredContent")
         .cloned()
-        .unwrap_or_else(|| panic!("no structured content for {name}: {value}"))
+        .unwrap_or_else(|| panic!("no structured content for {name}: {value}"));
+    // Clients such as Claude Code reject a result that doesn't match the
+    // tool's declared outputSchema, so every call here checks it.
+    let schema = output_schema(app, token, session, name).await;
+    if let Err(path) = conforms(&schema, &schema, &content, "") {
+        panic!("{name} result doesn't match its outputSchema at {path}: {content}");
+    }
+    content
+}
+
+async fn output_schema(app: &axum::Router, token: &str, session: &str, name: &str) -> Value {
+    let response = mcp(
+        app,
+        token,
+        Some(session),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }),
+    )
+    .await;
+    let bytes = to_bytes(response.into_body(), 4_000_000)
+        .await
+        .expect("body");
+    let text = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    let json = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&text);
+    let value: Value = serde_json::from_str(json).expect("tools/list JSON");
+    value
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == name))
+        .and_then(|tool| tool.get("outputSchema"))
+        .cloned()
+        .unwrap_or_else(|| panic!("no outputSchema for {name}"))
+}
+
+/// Checks the parts of JSON Schema our generated schemas use: `$ref`,
+/// `required`, `properties`, `items`, `const`, `type`, and the `oneOf`/`anyOf`
+/// /`allOf` combinators. Returns the path of the first mismatch.
+fn conforms(root: &Value, schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let target = reference
+            .strip_prefix('#')
+            .and_then(|pointer| root.pointer(pointer))
+            .unwrap_or_else(|| panic!("unresolved $ref {reference}"));
+        conforms(root, target, value, path)?;
+    }
+    for key in ["oneOf", "anyOf"] {
+        if let Some(branches) = schema.get(key).and_then(Value::as_array) {
+            let results = branches
+                .iter()
+                .map(|branch| conforms(root, branch, value, path))
+                .collect::<Vec<_>>();
+            let matches = results.iter().filter(|result| result.is_ok()).count();
+            if matches == 0 {
+                // The branch that got furthest is the one the value meant.
+                return Err(results
+                    .into_iter()
+                    .filter_map(Result::err)
+                    .max_by_key(String::len)
+                    .unwrap_or_else(|| format!("{path} (no {key} branches)")));
+            }
+            if key == "oneOf" && matches > 1 {
+                return Err(format!("{path} (oneOf matched {matches})"));
+            }
+        }
+    }
+    if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+        for branch in branches {
+            conforms(root, branch, value, path)?;
+        }
+    }
+    if let Some(expected) = schema.get("const")
+        && expected != value
+    {
+        return Err(format!("{path} (expected {expected})"));
+    }
+    if let Some(types) = schema.get("type") {
+        let types = types
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![types.clone()]);
+        let matches = types.iter().any(|kind| match kind.as_str() {
+            Some("object") => value.is_object(),
+            Some("array") => value.is_array(),
+            Some("string") => value.is_string(),
+            Some("boolean") => value.is_boolean(),
+            Some("null") => value.is_null(),
+            Some("integer") => value.is_i64() || value.is_u64(),
+            Some("number") => value.is_number(),
+            _ => true,
+        });
+        if !matches {
+            return Err(format!("{path} (not {types:?})"));
+        }
+    }
+    if let Some(object) = value.as_object() {
+        for required in schema
+            .get("required")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if !object.contains_key(required) {
+                return Err(format!("{path}/{required} (missing)"));
+            }
+        }
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (key, property) in properties {
+                if let Some(field) = object.get(key) {
+                    conforms(root, property, field, &format!("{path}/{key}"))?;
+                }
+            }
+        }
+    }
+    if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
+        for (index, item) in array.iter().enumerate() {
+            conforms(root, items, item, &format!("{path}/{index}"))?;
+        }
+    }
+    Ok(())
 }
 
 async fn mcp(

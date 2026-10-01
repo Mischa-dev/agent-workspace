@@ -246,13 +246,13 @@ pub(super) struct MessageItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author_id: Option<String>,
     pub text: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
     pub sent_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
     /// Threads started from this message.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<ThreadRef>,
 }
 
@@ -340,9 +340,9 @@ pub(super) struct ConversationOpenValue {
     pub messages: Vec<MessageItem>,
     /// True when older messages exist; read them with conversation_read.
     pub has_older: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_threads: Vec<ThreadItem>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recently_settled_threads: Vec<ThreadItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
