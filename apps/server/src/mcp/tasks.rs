@@ -2167,9 +2167,10 @@ pub(super) struct TaskLinkArguments {
     /// URL. With the project's GitHub automation on, a linked pull request
     /// moves the task when it's opened or merged.
     pub pull_request_id: Option<String>,
-    /// For repositoryId only: related (the default) or primary, the
-    /// repository Codex runs on this task's thread use. Making one primary
-    /// makes the old primary related.
+    /// For repositoryId only: related or primary, the repository Codex runs
+    /// on this task's thread use. Making one primary makes the old primary
+    /// related. Left out, a new link is related and an existing link keeps
+    /// its role.
     pub role: Option<String>,
     /// The version you last read. Optional; when given, a change is refused
     /// if the task has changed since. Asking for a link that's already there
@@ -2366,18 +2367,38 @@ async fn task_link_inner(
     let mut role = None;
     let (target_id, version) = match target {
         LinkTarget::Repository { id, name } => {
+            // Without a role, a repository that's already linked keeps the
+            // role it has; only a new link defaults to related. Otherwise
+            // relinking the primary would quietly make it related and move
+            // where Codex runs.
+            let kept = if linked && request.role.is_none() {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT role FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3",
+                )
+                .bind(project_id)
+                .bind(task_id)
+                .bind(id)
+                .fetch_optional(&mut *transaction)
+                .await?
+            } else {
+                None
+            };
             let desired = linked.then(|| request.role.unwrap_or("related"));
-            let version = match change_repository_link(
-                &mut transaction,
-                &actor,
-                &current,
-                request.expected_version,
-                id,
-                desired,
-                LinkWording::MCP,
-            )
-            .await?
-            {
+            let outcome = if kept.is_some() {
+                RepositoryLinkOutcome::Unchanged
+            } else {
+                change_repository_link(
+                    &mut transaction,
+                    &actor,
+                    &current,
+                    request.expected_version,
+                    id,
+                    desired,
+                    LinkWording::MCP,
+                )
+                .await?
+            };
+            let version = match outcome {
                 RepositoryLinkOutcome::RepositoryNotFound => {
                     return Ok(ToolResult::not_found("That repository"));
                 }
@@ -2430,7 +2451,7 @@ async fn task_link_inner(
                     version
                 }
             };
-            role = desired.map(str::to_owned);
+            role = kept.or_else(|| desired.map(str::to_owned));
             (id, version)
         }
         LinkTarget::PullRequest { id } => {

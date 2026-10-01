@@ -881,6 +881,28 @@ async fn task_link_repositories_pull_requests_and_threads() {
     assert_eq!(again["value"]["changed"], false, "{again}");
     assert_eq!(again["value"]["version"], 3);
 
+    // Relinking without a role keeps the role a link has: the primary stays
+    // primary, even once it's no longer eligible to be made primary.
+    sqlx::query("UPDATE repositories SET trusted = false WHERE id = $1")
+        .bind(r1)
+        .execute(&setup.pool)
+        .await
+        .expect("distrust aw");
+    let relinked = link(json!({"repositoryId": "mischa-dev/aw"})).await;
+    assert_eq!(relinked["outcome"], "ok", "{relinked}");
+    assert_eq!(relinked["value"]["changed"], false, "{relinked}");
+    assert_eq!(relinked["value"]["version"], 3);
+    assert_eq!(relinked["value"]["role"], "primary");
+    assert_eq!(primary_of().await, [r1]);
+    sqlx::query("UPDATE repositories SET trusted = true WHERE id = $1")
+        .bind(r1)
+        .execute(&setup.pool)
+        .await
+        .expect("trust aw");
+    let related_again = link(json!({"repositoryId": "raw", "expectedVersion": 1})).await;
+    assert_eq!(related_again["value"]["changed"], false, "{related_again}");
+    assert_eq!(related_again["value"]["role"], "related");
+
     // A new primary demotes the old one, in the same change, and says so.
     sqlx::query(
         "UPDATE repositories SET trusted = true, preparation_state = 'ready', prepared_at = now() WHERE id = $1",
