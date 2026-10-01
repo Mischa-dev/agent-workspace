@@ -407,7 +407,12 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &codex,
         &session,
         "task_create",
-        json!({"projectId": project_id, "title": "Ship the zeppelin", "clientRequestId": "task-1"}),
+        json!({
+            "projectId": project_id,
+            "title": "Ship the zeppelin",
+            "description": "Steps:\n- inflate\n- launch",
+            "clientRequestId": "task-1"
+        }),
     )
     .await;
     assert_eq!(created["outcome"], "applied", "{created}");
@@ -423,6 +428,10 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     )
     .await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
+    assert_eq!(
+        opened["value"]["task"]["description"], "Steps:\n- inflate\n- launch",
+        "{opened}"
+    );
     let briefing = tool(&app, &codex, &session, "briefing", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     let unclaimed = tool(
