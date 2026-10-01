@@ -140,6 +140,9 @@ export function MessageRow({
       aria-label={`${message.author.displayName}, ${formatTime(entry.createdAt)}`}
       className={['aw-msg', continued ? 'is-continued' : '', highlighted ? 'is-highlighted' : ''].filter(Boolean).join(' ')}
       id={`message-${message.id}`}
+      // Focusable by tap, not Tab: touch screens have no hover, so tapping a
+      // message is how its toolbar appears (see .aw-msg:focus-within).
+      tabIndex={-1}
     >
       <div className="aw-msg__gutter">
         {continued ? (

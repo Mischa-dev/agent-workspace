@@ -125,10 +125,12 @@ pub fn router(state: AppState) -> Router {
         )
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
+        // worker-src allows only the app's own service worker (/sw.js), which
+        // makes it installable and caches the built app shell, never API data.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
-                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; worker-src 'none'",
+                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; worker-src 'self'",
             ),
         ))
         // Browsers only honor this over HTTPS, so it is harmless on loopback.
@@ -260,6 +262,7 @@ mod tests {
         assert!(csp.contains("default-src 'self'"));
         assert!(csp.contains("object-src 'none'"));
         assert!(csp.contains("frame-ancestors 'none'"));
+        assert!(csp.contains("worker-src 'self'"));
         for (name, expected) in [
             ("x-content-type-options", "nosniff"),
             ("x-frame-options", "DENY"),

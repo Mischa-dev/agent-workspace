@@ -455,7 +455,7 @@ describe('M1 authenticated shell', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(searchButton).toHaveFocus())
 
-    const projectsButton = screen.getByRole('button', { name: 'Projects' })
+    const projectsButton = screen.getByRole('button', { name: 'Agent Workspace: open navigation' })
     fireEvent.click(projectsButton)
     expect(screen.getByRole('navigation', { name: 'Projects' })).toHaveAttribute(
       'data-mobile-open',

@@ -14,6 +14,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { BrandMark } from '../auth/AuthLayout'
 import { AppShell } from '../shell/AppShell'
+import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { ThemeProvider } from '../theme/ThemeProvider'
 import { Button, EmptyState, MessageSkeleton } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
@@ -60,165 +61,167 @@ export function App() {
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <AppErrorBoundary>
-            <Routes>
-              <Route
-                element={
-                  <PublicRouteBoundary>
-                    <SignInPage />
-                  </PublicRouteBoundary>
-                }
-                path="/sign-in"
-              />
-              <Route
-                element={
-                  <PublicRouteBoundary>
-                    <JoinPage />
-                  </PublicRouteBoundary>
-                }
-                path="/join"
-              />
-              <Route element={<SessionBoundary />}>
-                <Route path="/settings/account" element={<AuthenticatedRouteBoundary><AccountSettingsPage /></AuthenticatedRouteBoundary>} />
-                <Route element={<Navigate replace to="/home" />} path="/" />
+            <MobileNavigationProvider>
+              <Routes>
                 <Route
                   element={
-                    <AuthenticatedRouteBoundary>
-                      <HomePage />
-                    </AuthenticatedRouteBoundary>
+                    <PublicRouteBoundary>
+                      <SignInPage />
+                    </PublicRouteBoundary>
                   }
-                  path="/home"
+                  path="/sign-in"
                 />
                 <Route
                   element={
-                    <AuthenticatedRouteBoundary>
-                      <MessagesPage />
-                    </AuthenticatedRouteBoundary>
+                    <PublicRouteBoundary>
+                      <JoinPage />
+                    </PublicRouteBoundary>
                   }
-                  path="/messages"
+                  path="/join"
                 />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <AgentsPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/messages/agents"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <DirectConversationPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/messages/:conversationId"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <AppearancePage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/settings/appearance"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <CreateProjectPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/new"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <ProjectOverviewPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <ProjectSettingsPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/settings"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <WorkItemsPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/work-items"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <WorkItemDetailPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/work-items/:workItemId"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <ChannelPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/channels/:channelId"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <ConversationArchivePage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/conversations/archived"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <ThreadPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/threads/:threadId"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <PagesPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/pages"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <PageDetailPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/pages/:pageId"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <DecisionsPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/projects/:projectId/decisions"
-                />
-                <Route
-                  element={
-                    <AuthenticatedRouteBoundary>
-                      <SearchPage />
-                    </AuthenticatedRouteBoundary>
-                  }
-                  path="/search"
-                />
-                <Route element={<NotFoundPage />} path="*" />
-              </Route>
-            </Routes>
+                <Route element={<SessionBoundary />}>
+                  <Route path="/settings/account" element={<AuthenticatedRouteBoundary><AccountSettingsPage /></AuthenticatedRouteBoundary>} />
+                  <Route element={<Navigate replace to="/home" />} path="/" />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <HomePage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/home"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <MessagesPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/messages"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <AgentsPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/messages/agents"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <DirectConversationPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/messages/:conversationId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <AppearancePage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/settings/appearance"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <CreateProjectPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/new"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <ProjectOverviewPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <ProjectSettingsPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/settings"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <WorkItemsPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/work-items"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <WorkItemDetailPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/work-items/:workItemId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <ChannelPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/channels/:channelId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <ConversationArchivePage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/conversations/archived"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <ThreadPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/threads/:threadId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <PagesPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/pages"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <PageDetailPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/pages/:pageId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <DecisionsPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/decisions"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <SearchPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/search"
+                  />
+                  <Route element={<NotFoundPage />} path="*" />
+                </Route>
+              </Routes>
+            </MobileNavigationProvider>
           </AppErrorBoundary>
         </BrowserRouter>
       </QueryClientProvider>

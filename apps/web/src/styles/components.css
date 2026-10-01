@@ -173,6 +173,13 @@
   color: var(--tooltip-fg);
 }
 
+/* A tap focuses the control, which would otherwise leave its tooltip showing. */
+@media (hover: none) {
+  .aw-tooltip {
+    display: none;
+  }
+}
+
 /* Identity */
 .aw-avatar {
   position: relative;

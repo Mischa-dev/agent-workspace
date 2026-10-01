@@ -938,7 +938,9 @@ export function ThreadPage() {
   return (
     <AppShell
       context={details}
+      contextKey={details ? 'details' : undefined}
       mainClassName="aw-main--conversation"
+      onContextDismiss={() => setDetailsOpen(false)}
       project={project.data}
       selectedChannelId={parentId ?? undefined}
       thread={verifiedTimeline ? { id: threadId, name: threadName } : null}
@@ -968,6 +970,7 @@ export function ThreadPage() {
             </>
           ) : null
         }
+        back={{ label: parentChannel ? `Back to #${parentChannel.name}` : 'Back to the channel', to: channelRoute }}
         icon="messages"
         menu={
           verifiedTimeline?.capabilities.archive && !archived

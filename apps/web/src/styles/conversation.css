@@ -348,6 +348,22 @@ button.aw-convhead__title[aria-expanded="true"] {
   display: flex;
 }
 
+/* Touch screens show the toolbar when a message is tapped (it takes focus). */
+.aw-msg:focus {
+  outline: none;
+}
+
+@media (pointer: coarse) {
+  .aw-msg__toolbar {
+    top: -22px;
+  }
+
+  .aw-msg__toolbar .aw-iconbtn {
+    width: 40px;
+    height: 40px;
+  }
+}
+
 .aw-mention {
   padding: 0 2px;
   border-radius: var(--radius-xs);
