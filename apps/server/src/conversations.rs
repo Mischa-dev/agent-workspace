@@ -752,40 +752,11 @@ async fn create_channel(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
-    let conversation_id = Uuid::now_v7();
-    let inserted = sqlx::query(
-        r#"
-        INSERT INTO conversations (id, project_id, kind, name)
-        VALUES ($1, $2, 'channel', $3)
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(project_id)
-    .bind(&command.name)
-    .execute(&mut *transaction)
-    .await;
-    map_conversation_insert(inserted)?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_read_states (
-            project_id, conversation_id, actor_id, highest_seen_sequence
-        )
-        VALUES ($1, $2, $3, 0)
-        "#,
-    )
-    .bind(project_id)
-    .bind(conversation_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    enqueue_event(
+    let conversation_id = insert_channel(
         &mut transaction,
         project_id,
-        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
-            conversation_id,
-            kind: OutboxConversationKind::Channel,
-            version: 1,
-        }),
+        principal.actor_id,
+        &command.name,
     )
     .await?;
     insert_audit_event(
@@ -820,6 +791,53 @@ async fn create_channel(
     finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
     transaction.commit().await?;
     created_conversation_response(StatusCode::CREATED, &body)
+}
+
+/// Create a channel in a Project, read up to date for its creator. The caller
+/// has already checked `Action::ChannelCreate`. Shared with MCP.
+pub(crate) async fn insert_channel(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    creator_actor_id: Uuid,
+    name: &str,
+) -> Result<Uuid, AppError> {
+    let conversation_id = Uuid::now_v7();
+    let inserted = sqlx::query(
+        r#"
+        INSERT INTO conversations (id, project_id, kind, name)
+        VALUES ($1, $2, 'channel', $3)
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(project_id)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await;
+    map_conversation_insert(inserted)?;
+    sqlx::query(
+        r#"
+        INSERT INTO conversation_read_states (
+            project_id, conversation_id, actor_id, highest_seen_sequence
+        )
+        VALUES ($1, $2, $3, 0)
+        "#,
+    )
+    .bind(project_id)
+    .bind(conversation_id)
+    .bind(creator_actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    enqueue_event(
+        transaction,
+        project_id,
+        OutboxEventPayload::ConversationCreated(ConversationCreatedPayload {
+            conversation_id,
+            kind: OutboxConversationKind::Channel,
+            version: 1,
+        }),
+    )
+    .await?;
+    Ok(conversation_id)
 }
 
 async fn create_thread(
@@ -1214,6 +1232,57 @@ pub(crate) async fn update_thread(
     if let Some(outcome) = outcome {
         view.thread_outcome = outcome;
     }
+    Ok(view)
+}
+
+/// Rename a channel or group. Threads are renamed with `update_thread`, and
+/// DMs are named after the people in them. Shared with MCP.
+pub(crate) async fn rename_conversation(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    conversation_id: Uuid,
+    name: &str,
+) -> Result<ConversationView, AppError> {
+    let name = normalize_conversation_name(name)?;
+    let conversation = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
+        conversation_id,
+        Action::MessageSend,
+        false,
+    )
+    .await?;
+    let action = match conversation.kind.as_str() {
+        "channel" => Action::ChannelCreate,
+        "group" => Action::MessageSend,
+        _ => return Err(AppError::Validation("conversation kind")),
+    };
+    authorize_conversation_row_for(actor_id, actor_kind, &conversation, action, false)?;
+    let mut view = ConversationView::from(&conversation);
+    if conversation.name == name {
+        return Ok(view);
+    }
+    let updated = sqlx::query(
+        "UPDATE conversations SET name = $2, version = version + 1, updated_at = now() WHERE id = $1",
+    )
+    .bind(conversation.id)
+    .bind(&name)
+    .execute(&mut **transaction)
+    .await;
+    map_conversation_insert(updated)?;
+    view.version = conversation.version + 1;
+    view.name = name;
+    enqueue_event(
+        transaction,
+        conversation.project_id,
+        OutboxEventPayload::ConversationUpdated(crate::outbox::ConversationUpdatedPayload {
+            conversation_id: conversation.id,
+            version: view.version,
+        }),
+    )
+    .await?;
     Ok(view)
 }
 
@@ -2206,108 +2275,18 @@ async fn archive_conversation(
 ) -> Result<Json<ArchiveConversationResponse>, AppError> {
     require_authenticated_write(state, headers, principal)?;
     let mut transaction = state.pool.begin().await?;
-    let conversation = lock_conversation_access(
+    let (conversation, archived) = set_conversation_archived(
         &mut transaction,
-        principal,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
         conversation_id,
-        Action::ConversationArchive,
+        &[expected_kind],
         true,
+        Some(request.expected_version),
     )
     .await?;
-    require_conversation_kind(&conversation, expected_kind)?;
-    if conversation.archived_at.is_some() {
-        return Err(AppError::NotFound("conversation"));
-    }
-    if conversation.version != request.expected_version {
-        return Err(AppError::VersionConflict {
-            resource: "conversation",
-            current_version: conversation.version,
-        });
-    }
-    if conversation.kind == "channel" {
-        // Serialize Channel archive with run starts in existing child Threads.
-        // The parent lock already serializes concurrent Thread creation.
-        let _owned_conversation_ids = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            SELECT id
-            FROM conversations
-            WHERE id = $1 OR parent_channel_id = $1
-            ORDER BY id
-            FOR UPDATE
-            "#,
-        )
-        .bind(conversation.id)
-        .fetch_all(&mut *transaction)
-        .await?;
-    }
-    let active_run = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM agent_runs run
-            JOIN conversations owned ON owned.id = run.conversation_id
-            WHERE run.state IN (
-                'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
-            )
-              AND (
-                  owned.id = $1
-                  OR ($2 = 'channel' AND owned.parent_channel_id = $1)
-              )
-        )
-        "#,
-    )
-    .bind(conversation.id)
-    .bind(&conversation.kind)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if active_run {
-        return Err(AppError::Conflict(
-            "conversation",
-            "non-terminal Agent Run prevents archive",
-        ));
-    }
-    let archived = sqlx::query_as::<_, ConversationAccessRow>(
-        r#"
-        UPDATE conversations
-        SET archived_at = now(),
-            archived_by_actor_id = $2,
-            version = version + 1,
-            updated_at = now()
-        WHERE id = $1
-        RETURNING
-            id,
-            project_id,
-            kind,
-            parent_channel_id,
-            origin_message_id,
-            name,
-            version,
-            archived_at::text AS archived_at,
-            false AS project_archived,
-            false AS parent_archived,
-            $4::text AS parent_kind,
-            thread_status,
-            thread_outcome,
-            next_entry_sequence,
-            $3::text AS membership_role,
-            true AS membership_enabled
-        "#,
-    )
-    .bind(conversation.id)
-    .bind(principal.actor_id)
-    .bind(&conversation.membership_role)
-    .bind(&conversation.parent_kind)
-    .fetch_one(&mut *transaction)
-    .await?;
-    enqueue_event(
-        &mut transaction,
-        conversation.project_id,
-        OutboxEventPayload::ConversationArchived(ConversationArchivedPayload {
-            conversation_id: conversation.id,
-            version: archived.version,
-        }),
-    )
-    .await?;
+    // The browser archives only what it can see as active.
+    let archived = archived.ok_or(AppError::NotFound("conversation"))?;
     insert_audit_event(
         &mut transaction,
         headers,
@@ -2334,6 +2313,160 @@ async fn archive_conversation(
         conversation: ConversationView::from(&archived),
         fallback,
     }))
+}
+
+/// Archive or restore a channel or thread. Shared by the browser API and MCP.
+///
+/// Returns the conversation as it was, and as it is now if this changed it;
+/// archiving something already archived (or restoring something active)
+/// changes nothing. Archiving is refused while an Agent Run is active in it
+/// or, for a channel, in any of its threads. A thread can't be restored while
+/// its channel is archived.
+pub(crate) async fn set_conversation_archived(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    conversation_id: Uuid,
+    allowed_kinds: &[&str],
+    archive: bool,
+    expected_version: Option<i64>,
+) -> Result<(ConversationAccessRow, Option<ConversationAccessRow>), AppError> {
+    let conversation = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
+        conversation_id,
+        Action::ConversationArchive,
+        true,
+    )
+    .await?;
+    if !allowed_kinds.contains(&conversation.kind.as_str()) {
+        return Err(AppError::NotFound("conversation"));
+    }
+    if conversation.archived_at.is_some() == archive {
+        return Ok((conversation, None));
+    }
+    if let Some(expected_version) = expected_version
+        && conversation.version != expected_version
+    {
+        return Err(AppError::VersionConflict {
+            resource: "conversation",
+            current_version: conversation.version,
+        });
+    }
+    if !archive && conversation.kind == "thread" && conversation.parent_archived {
+        return Err(AppError::Conflict(
+            "conversation",
+            "restore the thread's channel first",
+        ));
+    }
+    if archive {
+        if conversation.kind == "channel" {
+            // Serialize Channel archive with run starts in existing child Threads.
+            // The parent lock already serializes concurrent Thread creation.
+            let _owned_conversation_ids = sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT id
+                FROM conversations
+                WHERE id = $1 OR parent_channel_id = $1
+                ORDER BY id
+                FOR UPDATE
+                "#,
+            )
+            .bind(conversation.id)
+            .fetch_all(&mut **transaction)
+            .await?;
+        }
+        let active_run = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM agent_runs run
+                JOIN conversations owned ON owned.id = run.conversation_id
+                WHERE run.state IN (
+                    'created', 'queued', 'starting', 'working', 'blocked', 'recovering'
+                )
+                  AND (
+                      owned.id = $1
+                      OR ($2 = 'channel' AND owned.parent_channel_id = $1)
+                  )
+            )
+            "#,
+        )
+        .bind(conversation.id)
+        .bind(&conversation.kind)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if active_run {
+            return Err(AppError::Conflict(
+                "conversation",
+                "non-terminal Agent Run prevents archive",
+            ));
+        }
+    }
+    let changed = sqlx::query_as::<_, ConversationAccessRow>(
+        r#"
+        UPDATE conversations
+        SET archived_at = CASE WHEN $5 THEN now() ELSE NULL END,
+            archived_by_actor_id = CASE WHEN $5 THEN $2 ELSE NULL END,
+            version = version + 1,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING
+            id,
+            project_id,
+            kind,
+            parent_channel_id,
+            origin_message_id,
+            name,
+            version,
+            archived_at::text AS archived_at,
+            false AS project_archived,
+            false AS parent_archived,
+            $4::text AS parent_kind,
+            thread_status,
+            thread_outcome,
+            next_entry_sequence,
+            $3::text AS membership_role,
+            true AS membership_enabled
+        "#,
+    )
+    .bind(conversation.id)
+    .bind(actor_id)
+    .bind(&conversation.membership_role)
+    .bind(&conversation.parent_kind)
+    .bind(archive)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| {
+        if matches!(
+            database_constraint(&error),
+            Some(
+                "conversations_active_channel_name_unique"
+                    | "conversations_active_thread_name_unique"
+            )
+        ) {
+            AppError::Conflict(
+                "conversation_name",
+                "an active Conversation already uses that name; rename one of them first",
+            )
+        } else {
+            error.into()
+        }
+    })?;
+    let payload = if archive {
+        OutboxEventPayload::ConversationArchived(ConversationArchivedPayload {
+            conversation_id: conversation.id,
+            version: changed.version,
+        })
+    } else {
+        OutboxEventPayload::ConversationUpdated(crate::outbox::ConversationUpdatedPayload {
+            conversation_id: conversation.id,
+            version: changed.version,
+        })
+    };
+    enqueue_event(transaction, conversation.project_id, payload).await?;
+    Ok((conversation, Some(changed)))
 }
 
 async fn search_mentionable_actors(

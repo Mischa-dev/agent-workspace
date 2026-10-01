@@ -25,7 +25,7 @@ use crate::{
 
 const PAGE_BODY_CHARACTERS: usize = 60_000;
 
-fn writer(principal: &McpPrincipal) -> Writer {
+pub(super) fn writer(principal: &McpPrincipal) -> Writer {
     Writer {
         actor_id: principal.actor_id,
         actor_kind: principal.actor_kind,
@@ -575,10 +575,82 @@ pub(super) struct DecisionValue {
     pub title: String,
     pub detail: String,
     pub status: String,
+    /// The decision that replaced this one, if it was superseded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_conversation: Option<String>,
     pub decided_by: String,
     pub decided_at: String,
+}
+
+impl From<memory::DecisionView> for DecisionValue {
+    fn from(decision: memory::DecisionView) -> Self {
+        Self {
+            id: decision.id.to_string(),
+            project_id: decision.project_id.to_string(),
+            title: decision.title,
+            detail: decision.detail,
+            status: decision.status,
+            superseded_by: decision.superseded_by_decision_id.map(|id| id.to_string()),
+            source_conversation: decision.source_conversation_name,
+            decided_by: decision.decided_by,
+            decided_at: decision.created_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct DecisionListArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// Include decisions that were later replaced.
+    pub include_superseded: Option<bool>,
+    /// How many, newest first (default 50, at most 200).
+    pub limit: Option<u16>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DecisionListValue {
+    pub decisions: Vec<DecisionValue>,
+}
+
+pub(super) async fn decision_list(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: DecisionListArguments,
+) -> ToolResult<DecisionListValue> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let result = async {
+        memory::project_access(
+            &state.pool,
+            principal.actor_id,
+            principal.actor_kind,
+            principal.project_id,
+            Action::McpRead,
+        )
+        .await?;
+        let decisions = memory::list_decisions(
+            &state.pool,
+            principal.project_id,
+            principal.actor_id,
+            arguments.include_superseded.unwrap_or(false),
+            i64::from(arguments.limit.unwrap_or(50).clamp(1, 200)),
+        )
+        .await?;
+        Ok::<_, AppError>(ToolResult::ok(DecisionListValue {
+            decisions: decisions.into_iter().map(DecisionValue::from).collect(),
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "decision_list"))
 }
 
 pub(super) async fn decision_record(
@@ -675,16 +747,7 @@ pub(super) async fn decision_record(
         let decision = memory::get_decision(&state.pool, decision_id, principal.actor_id)
             .await?
             .ok_or(AppError::NotFound("decision"))?;
-        Ok::<_, AppError>(ToolResult::ok(DecisionValue {
-            id: decision.id.to_string(),
-            project_id: decision.project_id.to_string(),
-            title: decision.title,
-            detail: decision.detail,
-            status: decision.status,
-            source_conversation: decision.source_conversation_name,
-            decided_by: decision.decided_by,
-            decided_at: decision.created_at,
-        }))
+        Ok::<_, AppError>(ToolResult::ok(DecisionValue::from(decision)))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "decision_record"))

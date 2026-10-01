@@ -270,3 +270,237 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         "{listed}"
     );
 }
+
+#[tokio::test]
+async fn channels_threads_pins_and_decisions_can_be_shaped() {
+    let Some(setup) = setup("mcp_channels").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let reader = connect_app(app, &setup.browser, "Reader", "read").await;
+    let reader_session = initialize(app, &reader).await.expect("Reader MCP");
+
+    // Creating a channel twice returns the same one.
+    let design = tool(
+        app,
+        &codex,
+        &session,
+        "channel_create",
+        json!({"projectId": "WORK", "name": "design"}),
+    )
+    .await;
+    assert_eq!(design["outcome"], "ok", "{design}");
+    assert_eq!(design["value"]["created"], true);
+    let design_id = design["value"]["id"].as_str().expect("channel").to_owned();
+    let again = tool(
+        app,
+        &codex,
+        &session,
+        "channel_create",
+        json!({"projectId": work, "name": "Design"}),
+    )
+    .await;
+    assert_eq!(again["value"]["created"], false, "{again}");
+    assert_eq!(again["value"]["id"], design_id.as_str());
+    let refused = tool(
+        app,
+        &reader,
+        &reader_session,
+        "channel_create",
+        json!({"projectId": work, "name": "lurking"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    // A message, a thread from it, and the thread's status and outcome.
+    let sent = tool(
+        app,
+        &codex,
+        &session,
+        "message_send",
+        json!({"conversationId": design_id, "text": "Let's use design tokens."}),
+    )
+    .await;
+    let message_id = sent["value"]["messageId"]
+        .as_str()
+        .expect("message")
+        .to_owned();
+    let thread = tool(
+        app,
+        &codex,
+        &session,
+        "thread_start",
+        json!({"conversationId": design_id, "fromMessageId": message_id}),
+    )
+    .await;
+    let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+    let decided = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_update",
+        json!({"conversationId": thread_id, "status": "decided", "outcome": "Tokens it is"}),
+    )
+    .await;
+    assert_eq!(decided["outcome"], "ok", "{decided}");
+    assert_eq!(decided["value"]["status"], "Decided");
+    assert_eq!(decided["value"]["outcome"], "Tokens it is");
+    let wrong_kind = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_update",
+        json!({"conversationId": design_id, "status": "Done"}),
+    )
+    .await;
+    assert_eq!(wrong_kind["outcome"], "invalid_request", "{wrong_kind}");
+
+    // Renaming, and a name that's taken.
+    let renamed = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_update",
+        json!({"conversationId": design_id, "name": "design-system"}),
+    )
+    .await;
+    assert_eq!(renamed["value"]["name"], "design-system", "{renamed}");
+    let other = tool(
+        app,
+        &codex,
+        &session,
+        "channel_create",
+        json!({"projectId": work, "name": "other"}),
+    )
+    .await;
+    let other_id = other["value"]["id"].as_str().expect("other").to_owned();
+    let taken = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_update",
+        json!({"conversationId": other_id, "name": "design-system"}),
+    )
+    .await;
+    assert_eq!(taken["outcome"], "conflict", "{taken}");
+
+    // Archive a channel, see it leave the list, and restore it.
+    let archived = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_update",
+        json!({"conversationId": design_id, "archived": true}),
+    )
+    .await;
+    assert_eq!(archived["value"]["archived"], true, "{archived}");
+    let channels = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_list",
+        json!({"projectId": work, "kind": "channel"}),
+    )
+    .await;
+    assert!(
+        !channels["value"]["conversations"]
+            .as_array()
+            .expect("conversations")
+            .iter()
+            .any(|conversation| conversation["id"] == design_id.as_str()),
+        "{channels}"
+    );
+    let restored = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_update",
+        json!({"conversationId": design_id, "archived": false, "name": "design"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    assert_eq!(restored["value"]["archived"], false);
+    assert_eq!(restored["value"]["name"], "design");
+
+    // Pins: pin the message, then unpin it.
+    let pinned = tool(
+        app,
+        &codex,
+        &session,
+        "pin_set",
+        json!({"conversationId": design_id, "messageId": message_id}),
+    )
+    .await;
+    assert_eq!(pinned["outcome"], "ok", "{pinned}");
+    assert_eq!(pinned["value"]["pins"].as_array().expect("pins").len(), 1);
+    let unpinned = tool(
+        app,
+        &codex,
+        &session,
+        "pin_set",
+        json!({"conversationId": design_id, "messageId": message_id, "pinned": false}),
+    )
+    .await;
+    assert_eq!(
+        unpinned["value"]["pins"].as_array().expect("pins").len(),
+        0,
+        "{unpinned}"
+    );
+
+    // Decisions: a superseded one drops out unless asked for.
+    let first = tool(
+        app,
+        &codex,
+        &session,
+        "decision_record",
+        json!({"projectId": work, "title": "Use CSS variables", "conversationId": design_id}),
+    )
+    .await;
+    let first_id = first["value"]["id"].as_str().expect("decision").to_owned();
+    let second = tool(
+        app,
+        &codex,
+        &session,
+        "decision_record",
+        json!({"projectId": work, "title": "Use design tokens", "supersedes": first_id}),
+    )
+    .await;
+    assert_eq!(second["outcome"], "ok", "{second}");
+    let current = tool(
+        app,
+        &codex,
+        &session,
+        "decision_list",
+        json!({"projectId": "WORK"}),
+    )
+    .await;
+    let titles = current["value"]["decisions"]
+        .as_array()
+        .expect("decisions")
+        .iter()
+        .map(|decision| decision["title"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(titles, ["Use design tokens"], "{current}");
+    let everything = tool(
+        app,
+        &codex,
+        &session,
+        "decision_list",
+        json!({"projectId": work, "includeSuperseded": true}),
+    )
+    .await;
+    let superseded = everything["value"]["decisions"]
+        .as_array()
+        .expect("decisions")
+        .iter()
+        .find(|decision| decision["id"] == first_id.as_str())
+        .cloned()
+        .expect("superseded decision");
+    assert_eq!(
+        superseded["supersededBy"], second["value"]["id"],
+        "{everything}"
+    );
+}

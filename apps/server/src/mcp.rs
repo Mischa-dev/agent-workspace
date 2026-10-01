@@ -57,6 +57,7 @@ use crate::{
 mod admin;
 mod approvals;
 mod briefing;
+mod channels;
 mod collaboration;
 mod common;
 mod memory_tools;
@@ -425,6 +426,63 @@ impl McpServer {
     ) -> Json<common::ToolResult<talk::ThreadValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(talk::thread_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a channel in a project. If an active channel with that name already exists, it's returned instead (created: false).",
+        annotations(
+            title = "Create channel",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn channel_create(
+        &self,
+        Parameters(arguments): Parameters<channels::ChannelCreateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<channels::ConversationValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(channels::channel_create(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change a channel, thread or group: rename it, set a thread's status and outcome, or archive or restore a channel or thread (archived). Archiving keeps everything and is refused while Codex is running there. DMs can't be changed.",
+        annotations(
+            title = "Update conversation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_update(
+        &self,
+        Parameters(arguments): Parameters<channels::ConversationUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<channels::ConversationValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(channels::conversation_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Pin or unpin a message, page or decision in a conversation. Pins are the conversation's brief: conversation_open shows them first.",
+        annotations(
+            title = "Pin or unpin",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn pin_set(
+        &self,
+        Parameters(arguments): Parameters<channels::PinSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<channels::PinValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(channels::pin_set(&self.state, principal, arguments).await)
     }
 
     // -- Replies (agents) ----------------------------------------------------
@@ -837,6 +895,23 @@ impl McpServer {
     ) -> Json<common::ToolResult<memory_tools::DecisionValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(memory_tools::decision_record(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List a project's decisions, newest first: what was chosen, why, and where. Superseded ones are left out unless includeSuperseded.",
+        annotations(
+            title = "List decisions",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn decision_list(
+        &self,
+        Parameters(arguments): Parameters<memory_tools::DecisionListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<memory_tools::DecisionListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(memory_tools::decision_list(&self.state, principal, arguments).await)
     }
 
     // -- Code, runs and approvals --------------------------------------------
