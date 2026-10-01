@@ -12,7 +12,7 @@ use super::{
     McpPrincipal,
     common::{
         ToolResult, accessible_project_ids, mark_via, parse_id, project_is_chosen, public_url,
-        scope_projects, snippet,
+        scope_projects, snippet, string_or_number,
     },
     reads::{self, ReadResult, WorkItemProjection},
     talk::can_write_in,
@@ -618,9 +618,30 @@ pub(super) struct TaskCreateArguments {
     /// "me", an actor ID, or an @handle.
     #[serde(alias = "assigneeActorId")]
     pub assignee: Option<String>,
-    /// Make it a subtask of this task.
+    /// Make it a subtask of this task (ID, link, or key such as AWD-3). It
+    /// goes in its parent's project.
     #[serde(alias = "parentWorkItemId")]
     pub parent_id: Option<String>,
+    /// Its status by name, such as "Ready" (see workflow_get). Left out, it
+    /// starts in the project's first status.
+    pub status: Option<String>,
+    /// Its type by name, such as "Bug" (see workflow_get).
+    #[serde(rename = "type")]
+    pub item_type: Option<String>,
+    /// Labels by name or ID, at most 20. They must exist already; create one
+    /// with label_write.
+    pub labels: Option<Vec<String>>,
+    /// What done looks like, one criterion per entry, in order (at most 50).
+    pub acceptance_criteria: Option<Vec<String>>,
+    /// Where it goes in its status column: top, bottom (the default), or a
+    /// number, where 1 is the top.
+    #[serde(default, deserialize_with = "string_or_number")]
+    #[schemars(with = "Option<String>")]
+    pub position: Option<String>,
+    /// Put it just above this task (ID, link, or key) in its column.
+    pub before_task_id: Option<String>,
+    /// Put it just below this task (ID, link, or key) in its column.
+    pub after_task_id: Option<String>,
     /// A stable ID so retrying never creates it twice.
     pub client_request_id: Option<String>,
 }
@@ -634,53 +655,76 @@ pub(super) async fn task_create(
         .client_request_id
         .clone()
         .unwrap_or_else(|| Uuid::now_v7().to_string());
-    if let Some(parent) = arguments.parent_id.as_deref() {
-        return writes::create_subtask(
-            state,
-            principal,
-            writes::CreateSubtaskArguments {
-                parent_work_item_id: parent.to_owned(),
-                title: arguments.title,
-                description: arguments.description,
-                client_request_id,
-            },
-        )
-        .await;
-    }
-    // Tasks never go in the hidden Messages space, where nobody would see them.
-    let in_messages_space =
-        sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
-            .bind(principal.project_id)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(true);
-    if !project_is_chosen(principal) || in_messages_space {
-        const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
-        return writes::WriteResult::InvalidRequest {
-            field: "projectId".to_owned(),
-            retry_category: PROJECT_MESSAGE.to_owned(),
-            message: Some(PROJECT_MESSAGE.to_owned()),
-        };
+    let details = writes::NewTaskDetails {
+        status: arguments.status.clone(),
+        item_type: arguments.item_type.clone(),
+        labels: arguments.labels.clone().filter(|labels| !labels.is_empty()),
+        acceptance_criteria: arguments
+            .acceptance_criteria
+            .clone()
+            .filter(|criteria| !criteria.is_empty()),
+        position: arguments.position.clone(),
+        before_task_id: arguments.before_task_id.clone(),
+        after_task_id: arguments.after_task_id.clone(),
+    };
+    if arguments.parent_id.is_none() {
+        // Tasks never go in the hidden Messages space, where nobody would
+        // see them. A subtask goes where its parent is.
+        let in_messages_space =
+            sqlx::query_scalar::<_, bool>("SELECT kind = 'direct' FROM projects WHERE id = $1")
+                .bind(principal.project_id)
+                .fetch_optional(&state.pool)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(true);
+        if !project_is_chosen(principal) || in_messages_space {
+            const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
+            return writes::WriteResult::InvalidRequest {
+                field: "projectId".to_owned(),
+                retry_category: PROJECT_MESSAGE.to_owned(),
+                message: Some(PROJECT_MESSAGE.to_owned()),
+            };
+        }
     }
     let assignee_actor_id =
         match assignee_for(state, principal, arguments.assignee.as_deref()).await {
             Ok(assignee) => assignee.flatten().map(|id| id.to_string()),
             Err(result) => return result,
         };
-    writes::create_work_item(
-        state,
-        principal,
-        writes::CreateWorkItemArguments {
-            title: arguments.title,
-            description: arguments.description,
-            priority: arguments.priority,
-            assignee_actor_id,
-            client_request_id,
-        },
-    )
-    .await
+    match arguments.parent_id {
+        Some(parent) => {
+            writes::create_subtask(
+                state,
+                principal,
+                writes::CreateSubtaskArguments {
+                    parent_work_item_id: parent,
+                    title: arguments.title,
+                    description: arguments.description,
+                    client_request_id,
+                    priority: arguments.priority,
+                    assignee_actor_id,
+                    details,
+                },
+            )
+            .await
+        }
+        None => {
+            writes::create_work_item(
+                state,
+                principal,
+                writes::CreateWorkItemArguments {
+                    title: arguments.title,
+                    description: arguments.description,
+                    priority: arguments.priority,
+                    assignee_actor_id,
+                    client_request_id,
+                    details,
+                },
+            )
+            .await
+        }
+    }
 }
 
 /// The assignee a task_create or task_update call named, in the project it
@@ -716,6 +760,9 @@ async fn assignee_for(
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TaskUpdateArguments {
+    // No parentWorkItemId alias here, ever: the middleware takes the
+    // project from parentWorkItemId before taskId, and a task_update must
+    // act in the task's own project.
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
     /// The version you last read (from task_open or task_list).
@@ -724,14 +771,66 @@ pub(super) struct TaskUpdateArguments {
     pub description: Option<String>,
     /// no_priority, low, medium, high, or urgent.
     pub priority: Option<String>,
-    /// "me", an actor ID, or an @handle.
+    /// "me", "none", an actor ID, or an @handle.
     #[serde(alias = "assigneeActorId")]
     pub assignee: Option<String>,
     pub clear_assignee: Option<bool>,
     /// Move to this status, by name (such as "In Progress").
     pub status: Option<String>,
+    /// Change its type, by name (such as "Bug").
+    #[serde(rename = "type")]
+    pub item_type: Option<String>,
+    /// Put it under this task (ID, link, or key) in the same project.
+    pub parent_id: Option<String>,
+    /// true makes it a top-level task again.
+    pub clear_parent: Option<bool>,
+    /// Labels to put on it, by name or ID (at most 20).
+    pub add_labels: Option<Vec<String>>,
+    /// Labels to take off it, by name or ID (at most 20).
+    pub remove_labels: Option<Vec<String>>,
+    /// Its place in its column (the new one, when status changes too): top,
+    /// bottom, or a number, where 1 is the top. A status change without one
+    /// puts it at the bottom.
+    #[serde(default, deserialize_with = "string_or_number")]
+    #[schemars(with = "Option<String>")]
+    pub position: Option<String>,
+    /// Put it just above this task (ID, link, or key) in its column.
+    pub before_task_id: Option<String>,
+    /// Put it just below this task (ID, link, or key) in its column.
+    pub after_task_id: Option<String>,
+    /// true archives it (its claim is released), false restores it. Pass it
+    /// on its own, then make other changes with the new version.
+    pub archived: Option<bool>,
     /// A stable ID so retrying is safe.
     pub client_request_id: Option<String>,
+}
+
+impl TaskUpdateArguments {
+    /// Whether the call changes anything besides the status and archived.
+    fn changes_more_than_status(&self) -> bool {
+        self.title.is_some()
+            || self.description.is_some()
+            || self.priority.is_some()
+            || self
+                .assignee
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self.clear_assignee == Some(true)
+            || self.item_type.is_some()
+            || self.parent_id.is_some()
+            || self.clear_parent == Some(true)
+            || self
+                .add_labels
+                .as_ref()
+                .is_some_and(|labels| !labels.is_empty())
+            || self
+                .remove_labels
+                .as_ref()
+                .is_some_and(|labels| !labels.is_empty())
+            || self.position.is_some()
+            || self.before_task_id.is_some()
+            || self.after_task_id.is_some()
+    }
 }
 
 pub(super) async fn task_update(
@@ -743,6 +842,25 @@ pub(super) async fn task_update(
         .client_request_id
         .clone()
         .unwrap_or_else(|| Uuid::now_v7().to_string());
+    if let Some(archived) = arguments.archived {
+        if arguments.changes_more_than_status() || arguments.status.is_some() {
+            return WriteResult::invalid(
+                "archived",
+                "Pass archived on its own. Archive or restore first, then make other changes with the new version.",
+            );
+        }
+        return writes::set_archived(
+            state,
+            principal,
+            writes::SetArchivedArguments {
+                work_item_id: arguments.task_id,
+                expected_version: arguments.expected_version,
+                archived,
+                client_request_id,
+            },
+        )
+        .await;
+    }
     let mut clear_assignee = arguments.clear_assignee;
     let assignee_actor_id =
         match assignee_for(state, principal, arguments.assignee.as_deref()).await {
@@ -755,33 +873,13 @@ pub(super) async fn task_update(
             Ok(None) => None,
             Err(result) => return result,
         };
-    let arguments = TaskUpdateArguments {
-        clear_assignee,
-        ..arguments
-    };
-    let changes_fields = arguments.title.is_some()
-        || arguments.description.is_some()
-        || arguments.priority.is_some()
-        || assignee_actor_id.is_some()
-        || arguments.clear_assignee == Some(true);
-    let Some(status) = arguments.status.clone() else {
-        return writes::update_work_item(
-            state,
-            principal,
-            writes::UpdateWorkItemArguments {
-                work_item_id: arguments.task_id,
-                expected_version: arguments.expected_version,
-                title: arguments.title,
-                description: arguments.description,
-                priority: arguments.priority,
-                assignee_actor_id,
-                clear_assignee: arguments.clear_assignee,
-                client_request_id,
-            },
-        )
-        .await;
-    };
-    if !changes_fields {
+    // Every field must count here: a status call with nothing else goes to
+    // set_status, which would drop any other change silently.
+    let changes_fields = arguments.changes_more_than_status() || clear_assignee == Some(true);
+    let status = arguments.status.clone();
+    if let Some(status) = status.clone()
+        && !changes_fields
+    {
         return writes::set_status(
             state,
             principal,
@@ -794,22 +892,28 @@ pub(super) async fn task_update(
         )
         .await;
     }
-    writes::update_work_item_and_status(
-        state,
-        principal,
-        writes::UpdateWorkItemArguments {
-            work_item_id: arguments.task_id,
-            expected_version: arguments.expected_version,
-            title: arguments.title,
-            description: arguments.description,
-            priority: arguments.priority,
-            assignee_actor_id,
-            clear_assignee: arguments.clear_assignee,
-            client_request_id,
-        },
-        status,
-    )
-    .await
+    let update = writes::UpdateWorkItemArguments {
+        work_item_id: arguments.task_id,
+        expected_version: arguments.expected_version,
+        title: arguments.title,
+        description: arguments.description,
+        priority: arguments.priority,
+        assignee_actor_id,
+        clear_assignee,
+        client_request_id,
+        item_type: arguments.item_type,
+        parent_id: arguments.parent_id,
+        clear_parent: arguments.clear_parent.filter(|clear| *clear),
+        add_labels: arguments.add_labels.filter(|labels| !labels.is_empty()),
+        remove_labels: arguments.remove_labels.filter(|labels| !labels.is_empty()),
+        position: arguments.position,
+        before_task_id: arguments.before_task_id,
+        after_task_id: arguments.after_task_id,
+    };
+    match status {
+        Some(status) => writes::update_work_item_and_status(state, principal, update, status).await,
+        None => writes::update_work_item(state, principal, update).await,
+    }
 }
 
 // ---------------------------------------------------------------------------

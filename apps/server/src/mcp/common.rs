@@ -261,6 +261,31 @@ pub(super) async fn insert_audit(
     Ok(())
 }
 
+/// Reads an argument agents send either as a string or as a number (such as
+/// a board position, `3` or `"3"`) as the string, so the tool can answer a
+/// bad value in plain words instead of failing to parse the call. Pair it
+/// with `#[schemars(with = "Option<String>")]`: the input schema stays a
+/// plain string, without an anyOf.
+pub(super) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Text(String),
+        Number(serde_json::Number),
+    }
+    Ok(
+        Option::<Raw>::deserialize(deserializer)?.map(|raw| match raw {
+            Raw::Text(text) => text,
+            Raw::Number(number) => number.to_string(),
+        }),
+    )
+}
+
 /// Accept a UUID, or an Agent Workspace URL that ends in one.
 pub(super) fn parse_id(value: &str) -> Option<Uuid> {
     let value = value.trim();
@@ -422,7 +447,7 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{parse_id, snippet, text_nodes};
+    use super::{parse_id, snippet, string_or_number, text_nodes};
 
     #[test]
     fn handles_become_mentions_only_for_known_people() {
@@ -446,6 +471,32 @@ mod tests {
             Some(id)
         );
         assert_eq!(parse_id("AW-12"), None);
+    }
+
+    #[test]
+    fn numbers_and_strings_both_read_as_strings() {
+        #[derive(serde::Deserialize)]
+        struct Arguments {
+            #[serde(default, deserialize_with = "string_or_number")]
+            position: Option<String>,
+        }
+        let read = |value: serde_json::Value| {
+            serde_json::from_value::<Arguments>(value).map(|arguments| arguments.position)
+        };
+        assert_eq!(
+            read(serde_json::json!({"position": 3})).expect("number"),
+            Some("3".to_owned())
+        );
+        assert_eq!(
+            read(serde_json::json!({"position": "top"})).expect("string"),
+            Some("top".to_owned())
+        );
+        assert_eq!(read(serde_json::json!({})).expect("absent"), None);
+        assert_eq!(
+            read(serde_json::json!({"position": null})).expect("null"),
+            None
+        );
+        assert!(read(serde_json::json!({"position": true})).is_err());
     }
 
     #[test]

@@ -34,5 +34,6 @@ mod m9_external_agents;
 mod mcp_admin;
 mod mcp_groundwork;
 mod mcp_labels;
+mod mcp_tasks;
 mod oauth_agent;
 mod reply_requests;

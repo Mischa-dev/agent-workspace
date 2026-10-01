@@ -645,7 +645,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a task in a project, or a subtask (parentId). Assign it with assignee (me or @handle).",
+        description = "Create a task in a project, or a subtask (parentId). Optional: status and type by name, labels, acceptanceCriteria (a list), assignee (me or @handle), and its place in its column (position: top, bottom, or a number; or beforeTaskId/afterTaskId). Returns its key and link. Pass clientRequestId so a retry never creates it twice.",
         annotations(
             title = "Create task",
             read_only_hint = false,
@@ -664,7 +664,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Change a task: title, description, priority, assignee, or status (by name). Pass the version you last read as expectedVersion; on a conflict, open it again and retry.",
+        description = "Change a task: title, description, priority, assignee, type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry.",
         annotations(
             title = "Update task",
             read_only_hint = false,
@@ -2415,6 +2415,29 @@ mod tests {
             added.len(),
             "every added field is described: {seen:?}"
         );
+    }
+
+    /// A board position takes a number or a word, read by a deserializer
+    /// rather than an untagged enum, so the input schema stays a plain
+    /// string instead of an anyOf some clients can't fill in.
+    #[test]
+    fn task_positions_are_plain_strings_in_input_schemas() {
+        use rmcp::handler::server::common::schema_for_input;
+
+        for schema in [
+            schema_for_input::<super::tasks::TaskCreateArguments>(),
+            schema_for_input::<super::tasks::TaskUpdateArguments>(),
+        ] {
+            let schema = serde_json::Value::Object((*schema.expect("input schema")).clone());
+            let properties = &schema["properties"];
+            let position = &properties["position"];
+            assert!(position.get("anyOf").is_none(), "{position}");
+            assert!(position.get("oneOf").is_none(), "{position}");
+            assert!(position.to_string().contains("string"), "{position}");
+            for field in ["type", "beforeTaskId", "afterTaskId"] {
+                assert!(properties.get(field).is_some(), "no {field}: {schema}");
+            }
+        }
     }
 
     #[test]

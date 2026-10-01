@@ -9,8 +9,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, archived_task_message, public_url,
-        version_conflict_message,
+        ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids, archived_task_message,
+        public_url, version_conflict_message,
     },
     workflow::Workflow,
 };
@@ -24,14 +24,17 @@ use crate::{
     message_content::MessageContent,
     policy::{Action, ActorKind, Decision},
     work_item_commands::{
-        AllocatedNumberMetadata, AuditAttribution, AuditVersionMetadata, BoardPlacement,
-        ChangeFinalization, ChangePayload, CommandActor, ConflictKind, CreateWorkItemCommand,
-        CreateWorkItemOutcome, LockedWorkItem, MAX_SUBTASK_LEVELS, ParentProblem, PlacementProblem,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, advance_version, authorize_mutation,
-        conflict_kind, create_work_item as execute_create_work_item, enqueue_update,
-        finalize_change, finalize_comment, insert_activity as insert_work_item_activity,
-        lock_membership, lock_work_item, place_in_column, record_audit, update_work_item_by_id,
+        AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
+        AuditVersionMetadata, BoardPlacement, ChangeFinalization, ChangePayload, CommandActor,
+        ConflictKind, CreateWorkItemCommand, CreateWorkItemOutcome, LockedWorkItem,
+        MAX_SUBTASK_LEVELS, ParentProblem, PlacementProblem, UpdateWorkItemCommand,
+        UpdateWorkItemOutcome, advance_version, authorize_mutation, conflict_kind,
+        create_work_item as execute_create_work_item, enqueue_update, finalize_change,
+        finalize_comment, insert_activity as insert_work_item_activity, lock_membership,
+        lock_work_item, normalize_criterion_text, place_in_column, record_audit,
+        set_archived as execute_set_archived, update_work_item_by_id,
     },
+    work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
 };
 
 const MAX_TITLE_CHARACTERS: usize = crate::work_item_commands::MAX_TITLE_CHARACTERS;
@@ -52,6 +55,12 @@ const ASSIGNEE_ID_MESSAGE: &str = "Pass the assignee as \"me\", an @handle, or a
 const ASSIGNEE_MESSAGE: &str =
     "That person can't be assigned tasks here: only active people and agents in the project can.";
 const STATUS_MESSAGE: &str = "Pass a status name, such as \"In Progress\" (see workflow_get).";
+const TYPE_MESSAGE: &str = "Pass a type name, such as \"Bug\" (see workflow_get).";
+const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
+const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
+const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, or archived.";
+/// The most acceptance criteria one task_create call takes.
+const MAX_CRITERIA_ON_CREATE: usize = 50;
 const TASK_NOT_FOUND_MESSAGE: &str = "That task wasn't found, or you can't see it.";
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -75,6 +84,11 @@ pub struct PostUpdateArguments {
     pub client_request_id: String,
 }
 
+// The argument structs below are also each write's idempotency request hash
+// (RequestHash::for_value), which follows field order. Fields added after
+// the first release go at the end and are left out when absent, so a retry
+// of an older call hashes exactly as it did.
+
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateWorkItemArguments {
@@ -87,25 +101,82 @@ pub struct UpdateWorkItemArguments {
     pub assignee_actor_id: Option<String>,
     pub clear_assignee: Option<bool>,
     pub client_request_id: String,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub item_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_parent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add_labels: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove_labels: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_task_id: Option<String>,
 }
 
+// The create arguments flatten NewTaskDetails, which serde can't combine
+// with deny_unknown_fields; the tool's own arguments (tasks.rs) deny them.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateSubtaskArguments {
     #[serde(rename = "parentId", alias = "parentWorkItemId")]
     pub parent_work_item_id: String,
     pub title: String,
     pub description: Option<String>,
     pub client_request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_actor_id: Option<String>,
+    #[serde(flatten)]
+    pub details: NewTaskDetails,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateWorkItemArguments {
     pub title: String,
     pub description: Option<String>,
     pub priority: Option<String>,
     pub assignee_actor_id: Option<String>,
+    pub client_request_id: String,
+    #[serde(flatten)]
+    pub details: NewTaskDetails,
+}
+
+/// What a new task can be given beyond its title, description, priority
+/// and assignee. Every field is left out of the request hash when absent.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NewTaskDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub item_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_criteria: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_task_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetArchivedArguments {
+    #[serde(rename = "taskId", alias = "workItemId")]
+    pub work_item_id: String,
+    pub expected_version: i64,
+    pub archived: bool,
     pub client_request_id: String,
 }
 
@@ -297,111 +368,306 @@ pub async fn create_work_item(
     arguments: CreateWorkItemArguments,
 ) -> WriteResult {
     let result = async {
-        let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false)
-        else {
-            return Ok(WriteResult::invalid("title", TITLE_MESSAGE));
-        };
-        let description = match arguments.description.clone() {
-            Some(value) => match normalize_description(value) {
-                Some(value) => value,
-                None => return Ok(WriteResult::invalid("description", DESCRIPTION_MESSAGE)),
-            },
-            None => String::new(),
-        };
-        let priority = arguments
-            .priority
-            .clone()
-            .unwrap_or_else(|| "no_priority".to_owned());
-        if !valid_priority(&priority) {
-            return Ok(WriteResult::invalid("priority", PRIORITY_MESSAGE));
-        }
-        let assignee_actor_id = match arguments.assignee_actor_id.as_deref() {
-            Some(value) => match parse_id(value) {
-                Some(actor_id) => Some(actor_id),
-                None => return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_ID_MESSAGE)),
-            },
-            None => None,
-        };
-        let Some(key) = parse_request_id(&arguments.client_request_id) else {
-            return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
-        };
-        let mut transaction = state.pool.begin().await?;
-        if let Some(result) = authorize_write(&mut transaction, principal).await? {
-            return Ok(result);
-        }
-        let scope = resource_bound_scope("mcp_work_items", principal.project_id, "create")?;
         let request_hash = RequestHash::for_value(&arguments)?;
-        let reservation = match reserve(
-            &mut transaction,
-            principal.actor_id,
-            &scope,
-            &key,
+        create_task(
+            state,
+            principal,
+            NewTask {
+                parent: None,
+                title: &arguments.title,
+                description: arguments.description.as_deref(),
+                priority: arguments.priority.as_deref(),
+                assignee_actor_id: arguments.assignee_actor_id.as_deref(),
+                details: &arguments.details,
+                client_request_id: &arguments.client_request_id,
+            },
             request_hash,
         )
-        .await?
-        {
-            IdempotencyOutcome::Replay(replay) => {
-                transaction.commit().await?;
-                return Ok(replay.decode::<WriteResult>()?.replayed());
-            }
-            IdempotencyOutcome::Reserved(reservation) => reservation,
-        };
-        let outcome = execute_create_work_item(
-            &mut transaction,
-            &mcp_actor(principal, key.as_str().to_owned()),
-            CreateWorkItemCommand {
-                title: &title,
-                description: &description,
-                type_id: None,
-                status_id: None,
-                priority: &priority,
-                assignee_actor_id,
-                parent_work_item_id: None,
-                label_ids: &[],
-                acceptance_criteria: &[],
-                board_placement: None,
-                activity_summary: "Work Item created through MCP",
-                activity_metadata: serde_json::json!({}),
-                activity_number_metadata: AllocatedNumberMetadata::Include,
-                audit_action: "work_item.mcp_created",
-                audit_metadata: serde_json::json!({}),
-            },
-        )
-        .await?;
-        let (work_item_id, finalized) = match outcome {
-            CreateWorkItemOutcome::Created {
-                work_item_id,
-                finalized,
-                ..
-            } => (work_item_id, finalized),
-            CreateWorkItemOutcome::InvalidAssignee => {
-                return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE));
-            }
-            CreateWorkItemOutcome::ParentNotFound
-            | CreateWorkItemOutcome::ParentArchived(_)
-            | CreateWorkItemOutcome::ParentTooDeep
-            | CreateWorkItemOutcome::InvalidPlacement(_) => {
-                return Err(AppError::Internal("top-level MCP Work Item had a parent"));
-            }
-        };
-        let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
-        let result = applied(
-            work_item_id,
-            1,
-            vec!["work_item".to_owned()],
-            Some(finalized.activity_id),
-            finalized.audit_id,
-            location,
-        );
-        complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
-        transaction.commit().await?;
-        Ok(result)
+        .await
     }
     .await;
     match result {
         Ok(result) => result,
         Err(error) => command_error("work_item_create", error),
     }
+}
+
+/// Creates a subtask. It takes the same path as a top-level task, so a
+/// subtask keeps its priority, assignee, status, type, labels, criteria and
+/// place on the board; only its idempotency scope and request hash differ.
+pub async fn create_subtask(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: CreateSubtaskArguments,
+) -> WriteResult {
+    let result = async {
+        let request_hash = RequestHash::for_value(&arguments)?;
+        create_task(
+            state,
+            principal,
+            NewTask {
+                parent: Some(&arguments.parent_work_item_id),
+                title: &arguments.title,
+                description: arguments.description.as_deref(),
+                priority: arguments.priority.as_deref(),
+                assignee_actor_id: arguments.assignee_actor_id.as_deref(),
+                details: &arguments.details,
+                client_request_id: &arguments.client_request_id,
+            },
+            request_hash,
+        )
+        .await
+    }
+    .await;
+    match result {
+        Ok(result) => result,
+        Err(error) => command_error("work_item_create_subtask", error),
+    }
+}
+
+/// One task_create call, top-level or a subtask.
+struct NewTask<'a> {
+    /// The parent as the call gave it; None for a top-level task.
+    parent: Option<&'a str>,
+    title: &'a str,
+    description: Option<&'a str>,
+    priority: Option<&'a str>,
+    assignee_actor_id: Option<&'a str>,
+    details: &'a NewTaskDetails,
+    client_request_id: &'a str,
+}
+
+async fn create_task(
+    state: &AppState,
+    principal: &McpPrincipal,
+    task: NewTask<'_>,
+    request_hash: RequestHash,
+) -> Result<WriteResult, AppError> {
+    let parent_id = match task.parent {
+        Some(parent) => match parse_id(parent) {
+            Some(id) => Some(id),
+            None => {
+                return Ok(WriteResult::invalid(
+                    "parentWorkItemId",
+                    "Pass the parent task's ID, link, or key such as AWD-12.",
+                ));
+            }
+        },
+        None => None,
+    };
+    let Some(title) = normalize_text(task.title.to_owned(), MAX_TITLE_CHARACTERS, false) else {
+        return Ok(WriteResult::invalid("title", TITLE_MESSAGE));
+    };
+    let description = match task.description {
+        Some(value) => match normalize_description(value.to_owned()) {
+            Some(value) => value,
+            None => return Ok(WriteResult::invalid("description", DESCRIPTION_MESSAGE)),
+        },
+        None => String::new(),
+    };
+    let priority = task.priority.unwrap_or("no_priority").to_owned();
+    if !valid_priority(&priority) {
+        return Ok(WriteResult::invalid("priority", PRIORITY_MESSAGE));
+    }
+    let assignee_actor_id = match task.assignee_actor_id {
+        Some(value) => match parse_id(value) {
+            Some(actor_id) => Some(actor_id),
+            None => return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_ID_MESSAGE)),
+        },
+        None => None,
+    };
+    let details = task.details;
+    if let Some(result) = check_name(details.status.as_deref(), "status", STATUS_MESSAGE)
+        .or_else(|| check_name(details.item_type.as_deref(), "type", TYPE_MESSAGE))
+    {
+        return Ok(result);
+    }
+    let labels = details.labels.clone().unwrap_or_default();
+    if labels.len() > MAX_LABELS_PER_TASK {
+        return Ok(WriteResult::invalid("labels", LABEL_COUNT_MESSAGE));
+    }
+    let criteria = match normalize_criteria(details.acceptance_criteria.as_deref().unwrap_or(&[])) {
+        Ok(criteria) => criteria,
+        Err(message) => return Ok(WriteResult::invalid("acceptanceCriteria", message)),
+    };
+    let placement = match requested_placement(
+        details.position.as_deref(),
+        details.before_task_id.as_deref(),
+        details.after_task_id.as_deref(),
+    ) {
+        Ok(placement) => placement,
+        Err((field, message)) => return Ok(WriteResult::invalid(field, message)),
+    };
+    let Some(key) = parse_request_id(task.client_request_id) else {
+        return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
+    };
+    let mut transaction = state.pool.begin().await?;
+    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+        return Ok(result);
+    }
+    let scope = match parent_id {
+        Some(parent_id) => resource_bound_scope("mcp_work_items", parent_id, "create_subtask")?,
+        None => resource_bound_scope("mcp_work_items", principal.project_id, "create")?,
+    };
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            transaction.commit().await?;
+            return Ok(replay.decode::<WriteResult>()?.replayed());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    // Every refusal below returns before the commit, so the reservation
+    // rolls back and a corrected retry can reuse the clientRequestId.
+    if let Some(parent_id) = parent_id
+        && let Some(elsewhere) =
+            parent_in_other_project(&mut transaction, state, principal, parent_id).await?
+    {
+        return Ok(WriteResult::invalid(
+            "parentWorkItemId",
+            format!(
+                "The parent {} is in {}, not {}. Leave out projectId: a subtask goes in its parent's project.",
+                elsewhere.key, elsewhere.project, elsewhere.here
+            ),
+        ));
+    }
+    let workflow = if details.status.is_some() || details.item_type.is_some() || placement.is_some()
+    {
+        Some(Workflow::load(&mut transaction, principal.project_id).await?)
+    } else {
+        None
+    };
+    let mut status_id = None;
+    let mut type_id = None;
+    if let Some(workflow) = &workflow {
+        if let Some(status) = details.status.as_deref() {
+            match workflow.status(status) {
+                Ok(status) => status_id = Some(status.id),
+                Err(message) => return Ok(WriteResult::invalid("status", message)),
+            }
+        }
+        if let Some(item_type) = details.item_type.as_deref() {
+            match workflow.work_type(item_type) {
+                Ok(kind) => type_id = Some(kind.id),
+                Err(message) => return Ok(WriteResult::invalid("type", message)),
+            }
+        }
+    }
+    let label_ids =
+        match resolve_labels(&mut transaction, principal.project_id, &labels, "labels").await? {
+            Ok(ids) => ids,
+            Err(result) => return Ok(result),
+        };
+    let (summary, audit_action, changed_field, metadata, number_metadata) = match parent_id {
+        Some(parent_id) => (
+            "Subtask created through MCP",
+            "work_item.mcp_subtask_created",
+            "subtask",
+            serde_json::json!({"parentWorkItemId": parent_id}),
+            AllocatedNumberMetadata::Omit,
+        ),
+        None => (
+            "Work Item created through MCP",
+            "work_item.mcp_created",
+            "work_item",
+            serde_json::json!({}),
+            AllocatedNumberMetadata::Include,
+        ),
+    };
+    let outcome = execute_create_work_item(
+        &mut transaction,
+        &mcp_actor(principal, key.as_str().to_owned()),
+        CreateWorkItemCommand {
+            title: &title,
+            description: &description,
+            type_id,
+            status_id,
+            priority: &priority,
+            assignee_actor_id,
+            parent_work_item_id: parent_id,
+            label_ids: &label_ids,
+            acceptance_criteria: &criteria,
+            board_placement: placement,
+            activity_summary: summary,
+            activity_metadata: metadata.clone(),
+            activity_number_metadata: number_metadata,
+            audit_action,
+            audit_metadata: metadata,
+        },
+    )
+    .await?;
+    let (work_item_id, finalized) = match outcome {
+        CreateWorkItemOutcome::Created {
+            work_item_id,
+            finalized,
+            ..
+        } => (work_item_id, finalized),
+        CreateWorkItemOutcome::InvalidAssignee => {
+            return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE));
+        }
+        CreateWorkItemOutcome::ParentNotFound => {
+            return Ok(WriteResult::not_found(
+                "That parent task wasn't found, or you can't see it.",
+            ));
+        }
+        CreateWorkItemOutcome::ParentArchived(parent) => {
+            let task = task_key(&mut transaction, principal.project_id, parent.number).await?;
+            return Ok(WriteResult::Conflict {
+                work_item_id: parent.id.to_string(),
+                current_version: parent.version,
+                current: Some((&parent).into()),
+                changed_fields: vec!["archived".to_owned()],
+                retry_category: "do_not_retry".to_owned(),
+                message: Some(format!(
+                    "{task} is archived. Restore it first, or pick another parent."
+                )),
+            });
+        }
+        CreateWorkItemOutcome::ParentTooDeep => {
+            return Ok(WriteResult::invalid(
+                "parentWorkItemId",
+                parent_problem_text(&ParentProblem::TooDeep, &HashMap::new()),
+            ));
+        }
+        CreateWorkItemOutcome::InvalidPlacement(problem) => {
+            let column = match (status_id, &workflow) {
+                (Some(status_id), _) => Some(status_id),
+                (None, Some(workflow)) => workflow.default_status().map(|status| status.id),
+                (None, None) => None,
+            }
+            .ok_or(AppError::Internal("a placed task has a column"))?;
+            return placement_problem(
+                &mut transaction,
+                principal.project_id,
+                column,
+                &problem,
+                placement_field(placement),
+            )
+            .await;
+        }
+    };
+    let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
+    let mut result = applied(
+        work_item_id,
+        1,
+        vec![changed_field.to_owned()],
+        Some(finalized.activity_id),
+        finalized.audit_id,
+        location,
+    );
+    if !labels.is_empty() {
+        result = with_labels(&mut transaction, result, principal.project_id, work_item_id).await?;
+    }
+    complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
+    transaction.commit().await?;
+    Ok(result)
 }
 
 pub async fn set_status(
@@ -488,6 +754,7 @@ async fn set_status_inner(
         outcome,
         "work_item.mcp_status_unchanged",
         key.as_str(),
+        false,
     )
     .await
 }
@@ -529,16 +796,25 @@ async fn update_work_item_inner(
     if arguments.expected_version < 1 {
         return Ok(WriteResult::invalid("update", EXPECTED_VERSION_MESSAGE));
     }
-    if arguments.title.is_none()
+    let add_labels = arguments.add_labels.clone().unwrap_or_default();
+    let remove_labels = arguments.remove_labels.clone().unwrap_or_default();
+    let clear_parent = arguments.clear_parent == Some(true);
+    if status.is_none()
+        && arguments.title.is_none()
         && arguments.description.is_none()
         && arguments.priority.is_none()
         && arguments.assignee_actor_id.is_none()
         && arguments.clear_assignee != Some(true)
+        && arguments.item_type.is_none()
+        && arguments.parent_id.is_none()
+        && !clear_parent
+        && add_labels.is_empty()
+        && remove_labels.is_empty()
+        && arguments.position.is_none()
+        && arguments.before_task_id.is_none()
+        && arguments.after_task_id.is_none()
     {
-        return Ok(WriteResult::invalid(
-            "update",
-            "Pass at least one change: title, description, priority, assignee, clearAssignee, or status.",
-        ));
+        return Ok(WriteResult::invalid("update", NOTHING_TO_CHANGE_MESSAGE));
     }
     if arguments.clear_assignee == Some(true) && arguments.assignee_actor_id.is_some() {
         return Ok(WriteResult::invalid(
@@ -546,11 +822,16 @@ async fn update_work_item_inner(
             "Pass assignee or clearAssignee, not both.",
         ));
     }
-    if status
-        .as_deref()
-        .is_some_and(|status| status.is_empty() || status.len() > 80)
+    if clear_parent && arguments.parent_id.is_some() {
+        return Ok(WriteResult::invalid(
+            "parentId",
+            "Pass parentId or clearParent, not both.",
+        ));
+    }
+    if let Some(result) = check_name(status.as_deref(), "status", STATUS_MESSAGE)
+        .or_else(|| check_name(arguments.item_type.as_deref(), "type", TYPE_MESSAGE))
     {
-        return Ok(WriteResult::invalid("status", STATUS_MESSAGE));
+        return Ok(result);
     }
     arguments.title = match arguments
         .title
@@ -579,6 +860,34 @@ async fn update_work_item_inner(
             None => return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_ID_MESSAGE)),
         },
         None => None,
+    };
+    let parent_id = match arguments.parent_id.as_deref() {
+        Some(value) => match super::common::parse_id(value) {
+            Some(id) => Some(id),
+            None => {
+                return Ok(WriteResult::invalid(
+                    "parentId",
+                    format!(
+                        "No task {} that you can reach. Pass the parent's ID, link, or key such as AWD-3.",
+                        echo(value)
+                    ),
+                ));
+            }
+        },
+        None => None,
+    };
+    for (field, list) in [("addLabels", &add_labels), ("removeLabels", &remove_labels)] {
+        if list.len() > MAX_LABELS_PER_TASK {
+            return Ok(WriteResult::invalid(field, LABEL_COUNT_MESSAGE));
+        }
+    }
+    let placement = match requested_placement(
+        arguments.position.as_deref(),
+        arguments.before_task_id.as_deref(),
+        arguments.after_task_id.as_deref(),
+    ) {
+        Ok(placement) => placement,
+        Err((field, message)) => return Ok(WriteResult::invalid(field, message)),
     };
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
@@ -612,21 +921,78 @@ async fn update_work_item_inner(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    // Every refusal below returns before the commit, so the reservation
+    // rolls back and a corrected retry can reuse the clientRequestId.
     let assignee_update = if arguments.clear_assignee == Some(true) {
         Some(None)
     } else {
         assignee_actor_id.map(Some)
     };
-    let status_id = match &status {
-        Some(status) => {
-            let workflow = Workflow::load(&mut transaction, principal.project_id).await?;
+    let mut status_id = None;
+    let mut type_id = None;
+    if status.is_some() || arguments.item_type.is_some() {
+        let workflow = Workflow::load(&mut transaction, principal.project_id).await?;
+        if let Some(status) = &status {
             match workflow.status(status) {
-                Ok(status) => Some(status.id),
+                Ok(status) => status_id = Some(status.id),
                 Err(message) => return Ok(WriteResult::invalid("status", message)),
             }
         }
-        None => None,
+        if let Some(item_type) = arguments.item_type.as_deref() {
+            match workflow.work_type(item_type) {
+                Ok(kind) => type_id = Some(kind.id),
+                Err(message) => return Ok(WriteResult::invalid("type", message)),
+            }
+        }
+    }
+    if let Some(parent_id) = parent_id
+        && let Some(elsewhere) =
+            parent_in_other_project(&mut transaction, state, principal, parent_id).await?
+    {
+        return Ok(WriteResult::invalid(
+            "parentId",
+            format!(
+                "{} is in {}, but this task is in {}. A subtask must be in its parent's project; move one of them first with task_move.",
+                elsewhere.key, elsewhere.project, elsewhere.here
+            ),
+        ));
+    }
+    let add = match resolve_labels(
+        &mut transaction,
+        principal.project_id,
+        &add_labels,
+        "addLabels",
+    )
+    .await?
+    {
+        Ok(ids) => ids,
+        Err(result) => return Ok(result),
     };
+    let remove = match resolve_labels(
+        &mut transaction,
+        principal.project_id,
+        &remove_labels,
+        "removeLabels",
+    )
+    .await?
+    {
+        Ok(ids) => ids,
+        Err(result) => return Ok(result),
+    };
+    if let Some(both) = add.iter().find(|id| remove.contains(id)) {
+        let name = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM project_labels WHERE project_id = $1 AND id = $2",
+        )
+        .bind(principal.project_id)
+        .bind(both)
+        .fetch_one(&mut *transaction)
+        .await?;
+        return Ok(WriteResult::invalid(
+            "removeLabels",
+            format!("\"{name}\" is in both addLabels and removeLabels. Pick one."),
+        ));
+    }
+    let labels_touched = !add.is_empty() || !remove.is_empty();
     let outcome = update_work_item_by_id(
         &mut transaction,
         &mcp_actor(principal, key.as_str().to_owned()),
@@ -635,19 +1001,50 @@ async fn update_work_item_inner(
             expected_version: arguments.expected_version,
             title: arguments.title.as_deref(),
             description: arguments.description.as_deref(),
-            type_id: None,
+            type_id,
             status_id,
             priority: arguments.priority.as_deref(),
             assignee_actor_id: assignee_update,
-            parent_work_item_id: None,
-            board_placement: None,
-            labels: None,
+            parent_work_item_id: if clear_parent {
+                Some(None)
+            } else {
+                parent_id.map(Some)
+            },
+            board_placement: placement,
+            labels: labels_touched.then_some(LabelDelta {
+                add: &add,
+                remove: &remove,
+            }),
             summary: "Work Item updated through MCP",
             audit_action: "work_item.mcp_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
         },
     )
     .await?;
+    if let UpdateWorkItemOutcome::InvalidPlacement(problem) = &outcome {
+        // The task is locked and unchanged, so its status is still the one
+        // it had when it was placed.
+        let column = match status_id {
+            Some(status_id) => status_id,
+            None => {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT status_id FROM work_items WHERE project_id = $1 AND id = $2",
+                )
+                .bind(principal.project_id)
+                .bind(work_item_id)
+                .fetch_one(&mut *transaction)
+                .await?
+            }
+        };
+        return placement_problem(
+            &mut transaction,
+            principal.project_id,
+            column,
+            problem,
+            placement_field(placement),
+        )
+        .await;
+    }
     finish_update_outcome(
         transaction,
         state,
@@ -657,6 +1054,7 @@ async fn update_work_item_inner(
         outcome,
         "work_item.mcp_update_unchanged",
         key.as_str(),
+        labels_touched,
     )
     .await
 }
@@ -769,129 +1167,6 @@ async fn post_update_inner(
     complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
     transaction.commit().await?;
     Ok(result)
-}
-
-pub async fn create_subtask(
-    state: &AppState,
-    principal: &McpPrincipal,
-    arguments: CreateSubtaskArguments,
-) -> WriteResult {
-    let result = async {
-        let Some(parent_id) = parse_id(&arguments.parent_work_item_id) else {
-            return Ok(WriteResult::invalid(
-                "parentWorkItemId",
-                "Pass the parent task's ID, link, or key such as AWD-12.",
-            ));
-        };
-        let Some(title) = normalize_text(arguments.title.clone(), MAX_TITLE_CHARACTERS, false)
-        else {
-            return Ok(WriteResult::invalid("title", TITLE_MESSAGE));
-        };
-        let description = match arguments.description.clone() {
-            Some(value) => match normalize_description(value) {
-                Some(value) => value,
-                None => return Ok(WriteResult::invalid("description", DESCRIPTION_MESSAGE)),
-            },
-            None => String::new(),
-        };
-        let Some(key) = parse_request_id(&arguments.client_request_id) else {
-            return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
-        };
-        let mut transaction = state.pool.begin().await?;
-        if let Some(result) = authorize_write(&mut transaction, principal).await? {
-            return Ok(result);
-        }
-        let scope = resource_bound_scope("mcp_work_items", parent_id, "create_subtask")?;
-        let request_hash = RequestHash::for_value(&arguments)?;
-        let reservation = match reserve(
-            &mut transaction,
-            principal.actor_id,
-            &scope,
-            &key,
-            request_hash,
-        )
-        .await?
-        {
-            IdempotencyOutcome::Replay(replay) => {
-                transaction.commit().await?;
-                return Ok(replay.decode::<WriteResult>()?.replayed());
-            }
-            IdempotencyOutcome::Reserved(reservation) => reservation,
-        };
-        let outcome = execute_create_work_item(
-            &mut transaction,
-            &mcp_actor(principal, key.as_str().to_owned()),
-            CreateWorkItemCommand {
-                title: &title,
-                description: &description,
-                type_id: None,
-                status_id: None,
-                priority: "no_priority",
-                assignee_actor_id: None,
-                parent_work_item_id: Some(parent_id),
-                label_ids: &[],
-                acceptance_criteria: &[],
-                board_placement: None,
-                activity_summary: "Subtask created through MCP",
-                activity_metadata: serde_json::json!({"parentWorkItemId": parent_id}),
-                activity_number_metadata: AllocatedNumberMetadata::Omit,
-                audit_action: "work_item.mcp_subtask_created",
-                audit_metadata: serde_json::json!({"parentWorkItemId": parent_id}),
-            },
-        )
-        .await?;
-        let (subtask_id, finalized) = match outcome {
-            CreateWorkItemOutcome::Created {
-                work_item_id,
-                finalized,
-                ..
-            } => (work_item_id, finalized),
-            CreateWorkItemOutcome::ParentNotFound => {
-                return Ok(WriteResult::not_found(
-                    "That parent task wasn't found, or you can't see it.",
-                ));
-            }
-            CreateWorkItemOutcome::ParentArchived(parent) => {
-                let task = task_key(&mut transaction, principal.project_id, parent.number).await?;
-                return Ok(WriteResult::Conflict {
-                    work_item_id: parent_id.to_string(),
-                    current_version: parent.version,
-                    current: Some((&parent).into()),
-                    changed_fields: vec!["archived".to_owned()],
-                    retry_category: "do_not_retry".to_owned(),
-                    message: Some(format!(
-                        "{task} is archived. Restore it first, or pick another parent."
-                    )),
-                });
-            }
-            CreateWorkItemOutcome::ParentTooDeep => {
-                return Ok(WriteResult::invalid(
-                    "parentWorkItemId",
-                    parent_problem_text(&ParentProblem::TooDeep, &HashMap::new()),
-                ));
-            }
-            CreateWorkItemOutcome::InvalidAssignee | CreateWorkItemOutcome::InvalidPlacement(_) => {
-                return Err(AppError::Internal("unassigned subtask was refused"));
-            }
-        };
-        let location = locate(&mut transaction, state, principal.project_id, subtask_id).await?;
-        let result = applied(
-            subtask_id,
-            1,
-            vec!["subtask".to_owned()],
-            Some(finalized.activity_id),
-            finalized.audit_id,
-            location,
-        );
-        complete(&mut transaction, &reservation, StatusCode::CREATED, &result).await?;
-        transaction.commit().await?;
-        Ok(result)
-    }
-    .await;
-    match result {
-        Ok(result) => result,
-        Err(error) => command_error("work_item_create_subtask", error),
-    }
 }
 
 pub async fn link_pull_request(
@@ -1125,6 +1400,7 @@ pub async fn mark_blocked(
                 current.version,
                 "work_item.mcp_blocker_unchanged",
                 key.as_str(),
+                false,
             )
             .await;
         }
@@ -1250,6 +1526,7 @@ pub async fn mark_ready_for_review(
                 current.version,
                 "work_item.mcp_review_unchanged",
                 key.as_str(),
+                false,
             )
             .await;
         }
@@ -1302,6 +1579,198 @@ pub async fn mark_ready_for_review(
     match result {
         Ok(result) => result,
         Err(error) => command_error("work_item_mark_ready_for_review", error),
+    }
+}
+
+/// Archives or restores a task through the one archive command the web app
+/// uses too. Archiving releases the task's claim; restoring the archived
+/// original of a moved task is refused.
+pub async fn set_archived(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: SetArchivedArguments,
+) -> WriteResult {
+    match set_archived_inner(state, principal, arguments).await {
+        Ok(result) => result,
+        Err(error) => command_error("work_item_set_archived", error),
+    }
+}
+
+async fn set_archived_inner(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: SetArchivedArguments,
+) -> Result<WriteResult, AppError> {
+    let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
+        return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
+    };
+    if arguments.expected_version < 1 {
+        return Ok(WriteResult::invalid(
+            "expectedVersion",
+            EXPECTED_VERSION_MESSAGE,
+        ));
+    }
+    let Some(key) = parse_request_id(&arguments.client_request_id) else {
+        return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
+    };
+    let mut transaction = state.pool.begin().await?;
+    if let Some(result) = authorize_write(&mut transaction, principal).await? {
+        return Ok(result);
+    }
+    let scope = resource_bound_scope(
+        "mcp_work_items",
+        work_item_id,
+        if arguments.archived {
+            "archive"
+        } else {
+            "restore"
+        },
+    )?;
+    let request_hash = RequestHash::for_value(&arguments)?;
+    let reservation = match reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            transaction.commit().await?;
+            return Ok(replay.decode::<WriteResult>()?.replayed());
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
+    let (summary, audit_action, unchanged_action) = if arguments.archived {
+        (
+            "Work Item archived through MCP",
+            "work_item.mcp_archived",
+            "work_item.mcp_archive_unchanged",
+        )
+    } else {
+        (
+            "Work Item restored through MCP",
+            "work_item.mcp_restored",
+            "work_item.mcp_restore_unchanged",
+        )
+    };
+    let outcome = execute_set_archived(
+        &mut transaction,
+        &mcp_actor(principal, key.as_str().to_owned()),
+        work_item_id,
+        ArchiveCommand {
+            expected_version: arguments.expected_version,
+            archived: arguments.archived,
+            summary,
+            audit_action,
+        },
+    )
+    .await?;
+    match outcome {
+        ArchiveOutcome::Applied {
+            version,
+            finalized,
+            open_subtasks,
+        } => {
+            let location =
+                locate(&mut transaction, state, principal.project_id, work_item_id).await?;
+            let mut result = applied(
+                work_item_id,
+                version,
+                vec!["archived".to_owned()],
+                Some(finalized.activity_id),
+                finalized.audit_id,
+                location,
+            );
+            if !open_subtasks.is_empty()
+                && let WriteResult::Applied { message, .. } = &mut result
+            {
+                let keys =
+                    keys_in_project(&mut transaction, principal.project_id, &open_subtasks).await?;
+                let names = open_subtasks
+                    .iter()
+                    .filter_map(|id| keys.get(id).cloned())
+                    .collect::<Vec<_>>();
+                let more = if open_subtasks.len() >= 20 {
+                    " (and maybe more; task_list with parentId lists them)"
+                } else {
+                    ""
+                };
+                *message = Some(if names.len() == 1 {
+                    format!("Archived. Its subtask {} is still open{more}.", names[0])
+                } else {
+                    format!(
+                        "Archived. Its subtasks {} are still open{more}.",
+                        join_and(&names)
+                    )
+                });
+            }
+            complete(&mut transaction, &reservation, StatusCode::OK, &result).await?;
+            transaction.commit().await?;
+            Ok(result)
+        }
+        ArchiveOutcome::Unchanged(current) => {
+            finalize_noop(
+                transaction,
+                state,
+                principal,
+                &reservation,
+                current.id,
+                current.version,
+                unchanged_action,
+                key.as_str(),
+                false,
+            )
+            .await
+        }
+        ArchiveOutcome::VersionConflict(current) => Ok(conflict_for(
+            &mut transaction,
+            principal.project_id,
+            &current,
+            arguments.expected_version,
+        )
+        .await?
+        .ok_or(AppError::Internal("archive returned an empty conflict"))?),
+        ArchiveOutcome::MovedAway { moved_to } => {
+            let (number, version) = sqlx::query_as::<_, (i64, i64)>(
+                "SELECT number, version FROM work_items WHERE project_id = $1 AND id = $2",
+            )
+            .bind(principal.project_id)
+            .bind(work_item_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            let original = task_key(&mut transaction, principal.project_id, number).await?;
+            // Name the new task only to someone who can reach its project.
+            let moved = sqlx::query_as::<_, (Uuid, String)>(
+                r#"
+                SELECT item.project_id, project.project_key || '-' || item.number::text
+                FROM work_items item JOIN projects project ON project.id = item.project_id
+                WHERE item.id = $1
+                "#,
+            )
+            .bind(moved_to)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let reachable = accessible_project_ids(state, principal).await?;
+            let message = match moved {
+                Some((project_id, moved_key)) if reachable.contains(&project_id) => format!(
+                    "{original} was moved to {moved_key}. Work on {moved_key}; this original stays archived as its history."
+                ),
+                _ => format!(
+                    "{original} was moved to another project; this original stays archived as its history."
+                ),
+            };
+            Ok(WriteResult::Conflict {
+                work_item_id: work_item_id.to_string(),
+                current_version: version,
+                current: None,
+                changed_fields: vec!["archived".to_owned()],
+                retry_category: "do_not_retry".to_owned(),
+                message: Some(message),
+            })
+        }
+        ArchiveOutcome::NotFound => Ok(WriteResult::not_found(TASK_NOT_FOUND_MESSAGE)),
     }
 }
 
@@ -1467,6 +1936,7 @@ async fn finish_update_outcome(
     outcome: UpdateWorkItemOutcome,
     noop_action: &str,
     request_id: &str,
+    report_labels: bool,
 ) -> Result<WriteResult, AppError> {
     match outcome {
         UpdateWorkItemOutcome::Applied {
@@ -1477,7 +1947,7 @@ async fn finish_update_outcome(
         } => {
             let location =
                 locate(&mut transaction, state, principal.project_id, work_item_id).await?;
-            let result = applied(
+            let mut result = applied(
                 work_item_id,
                 version,
                 changed_fields,
@@ -1485,6 +1955,10 @@ async fn finish_update_outcome(
                 finalized.audit_id,
                 location,
             );
+            if report_labels {
+                result = with_labels(&mut transaction, result, principal.project_id, work_item_id)
+                    .await?;
+            }
             complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
             transaction.commit().await?;
             Ok(result)
@@ -1499,6 +1973,7 @@ async fn finish_update_outcome(
                 current.version,
                 noop_action,
                 request_id,
+                report_labels,
             )
             .await
         }
@@ -1608,6 +2083,255 @@ pub(super) fn placement_problem_text(
             "That column has {open_tasks} other open tasks, so use a position from 1 to {} (or top or bottom).",
             open_tasks + 1
         ),
+    }
+}
+
+/// A board position as agents write it: top, bottom, or a number where 1
+/// is the top of the column.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BoardPosition {
+    Top,
+    Bottom,
+    /// 1-based.
+    Number(usize),
+}
+
+/// The highest position number accepted; a column never holds more.
+const MAX_POSITION: usize = 10_000;
+
+pub(super) fn parse_position(value: &str) -> Option<BoardPosition> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("top") {
+        return Some(BoardPosition::Top);
+    }
+    if value.eq_ignore_ascii_case("bottom") {
+        return Some(BoardPosition::Bottom);
+    }
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|number| (1..=MAX_POSITION).contains(number))
+        .map(BoardPosition::Number)
+}
+
+/// An argument that won't do: the field, and what would work instead.
+type Refusal = (&'static str, String);
+
+/// Where a call asked to put a task in its status column: `position`, or
+/// next to an anchor task (`beforeTaskId`, `afterTaskId`). At most one.
+fn requested_placement(
+    position: Option<&str>,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Result<Option<BoardPlacement>, Refusal> {
+    let anchor = |value: &str, field: &'static str| {
+        super::common::parse_id(value).ok_or_else(|| {
+            (
+                field,
+                format!(
+                    "No task {} that you can reach. Pass an open task from the same column by its ID, link, or key such as AWD-12.",
+                    echo(value)
+                ),
+            )
+        })
+    };
+    match (position, before, after) {
+        (None, None, None) => Ok(None),
+        (Some(position), None, None) => match parse_position(position) {
+            Some(BoardPosition::Top) => Ok(Some(BoardPlacement::Top)),
+            Some(BoardPosition::Bottom) => Ok(Some(BoardPlacement::Bottom)),
+            Some(BoardPosition::Number(number)) => Ok(Some(BoardPlacement::Index(number - 1))),
+            None => Err(("position", POSITION_MESSAGE.to_owned())),
+        },
+        (None, Some(before), None) => {
+            anchor(before, "beforeTaskId").map(|id| Some(BoardPlacement::Before(id)))
+        }
+        (None, None, Some(after)) => {
+            anchor(after, "afterTaskId").map(|id| Some(BoardPlacement::After(id)))
+        }
+        _ => Err((
+            "position",
+            "Pass one of position, beforeTaskId, or afterTaskId, not several.".to_owned(),
+        )),
+    }
+}
+
+/// The argument a placement came from, for the error that refuses it.
+fn placement_field(placement: Option<BoardPlacement>) -> &'static str {
+    match placement {
+        Some(BoardPlacement::Before(_)) => "beforeTaskId",
+        Some(BoardPlacement::After(_)) => "afterTaskId",
+        _ => "position",
+    }
+}
+
+/// Plain words for a place on the board that won't do, naming the column
+/// the task goes in. Only tasks in this project are ever named.
+async fn placement_problem(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    column: Uuid,
+    problem: &PlacementProblem,
+    field: &str,
+) -> Result<WriteResult, AppError> {
+    let workflow = Workflow::load(transaction, project_id).await?;
+    let column = workflow.status_name(column).to_owned();
+    let instead = format!(
+        "Pass a task from the {column} column, or use position (top, bottom, or a number)."
+    );
+    let message = match problem {
+        PlacementProblem::AnchorIsSelf => "A task can't go before or after itself.".to_owned(),
+        PlacementProblem::OutOfRange { open_tasks } => {
+            return Ok(WriteResult::invalid(
+                "position",
+                format!(
+                    "{column} has {open_tasks} other open tasks, so use a position from 1 to {} (or top or bottom).",
+                    open_tasks + 1
+                ),
+            ));
+        }
+        PlacementProblem::AnchorNotInColumn { anchor } => {
+            let found = sqlx::query_as::<_, (String, Uuid, bool)>(
+                r#"
+                SELECT project.project_key || '-' || item.number::text, item.status_id,
+                       item.archived_at IS NOT NULL
+                FROM work_items item JOIN projects project ON project.id = item.project_id
+                WHERE item.project_id = $1 AND item.id = $2
+                "#,
+            )
+            .bind(project_id)
+            .bind(anchor)
+            .fetch_optional(&mut **transaction)
+            .await?;
+            match found {
+                Some((key, _, true)) => format!("{key} is archived. {instead}"),
+                Some((key, status, false)) => format!(
+                    "{key} is in {}, but this task goes in {column}. {instead}",
+                    workflow.status_name(status)
+                ),
+                None => format!("That task isn't in this project. {instead}"),
+            }
+        }
+    };
+    Ok(WriteResult::invalid(field, message))
+}
+
+/// A parent in another project the caller can reach, named so the agent
+/// can fix the call. A task in a project the caller can't reach is never
+/// named: the command then answers that no such task is in this project.
+struct ParentElsewhere {
+    key: String,
+    project: String,
+    here: String,
+}
+
+async fn parent_in_other_project(
+    transaction: &mut Transaction<'_, Postgres>,
+    state: &AppState,
+    principal: &McpPrincipal,
+    parent_id: Uuid,
+) -> Result<Option<ParentElsewhere>, AppError> {
+    let found = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+        SELECT item.project_id, project.project_key || '-' || item.number::text, project.name
+        FROM work_items item JOIN projects project ON project.id = item.project_id
+        WHERE item.id = $1
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some((project_id, key, project)) = found else {
+        return Ok(None);
+    };
+    if project_id == principal.project_id
+        || !accessible_project_ids(state, principal)
+            .await?
+            .contains(&project_id)
+    {
+        return Ok(None);
+    }
+    let here = sqlx::query_scalar::<_, String>("SELECT name FROM projects WHERE id = $1")
+        .bind(principal.project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+    Ok(Some(ParentElsewhere { key, project, here }))
+}
+
+/// Label IDs for names or IDs among the project's active labels, or the
+/// error naming what's unknown or archived and the labels it has.
+async fn resolve_labels(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    references: &[String],
+    field: &str,
+) -> Result<Result<Vec<Uuid>, WriteResult>, AppError> {
+    if references.is_empty() {
+        return Ok(Ok(Vec::new()));
+    }
+    let resolution = work_item_labels::resolve(transaction, project_id, references).await?;
+    if !resolution.is_complete() {
+        let message =
+            work_item_labels::unknown_message(transaction, project_id, &resolution).await?;
+        return Ok(Err(WriteResult::invalid(field, message)));
+    }
+    Ok(Ok(resolution.ids()))
+}
+
+/// Adds the task's labels after the change to an applied result, before
+/// it's stored for replays.
+async fn with_labels(
+    transaction: &mut Transaction<'_, Postgres>,
+    mut result: WriteResult,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<WriteResult, AppError> {
+    if let WriteResult::Applied { labels, .. } = &mut result {
+        *labels = Some(
+            work_item_labels::active_names(&mut **transaction, project_id, work_item_id).await?,
+        );
+    }
+    Ok(result)
+}
+
+/// Acceptance criteria for a new task, normalized, or the error naming the
+/// one that won't do.
+fn normalize_criteria(texts: &[String]) -> Result<Vec<String>, String> {
+    if texts.len() > MAX_CRITERIA_ON_CREATE {
+        return Err(format!(
+            "Pass at most {MAX_CRITERIA_ON_CREATE} acceptance criteria when creating a task."
+        ));
+    }
+    texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            normalize_criterion_text(text).map_err(|_| {
+                format!(
+                    "Acceptance criterion {} is empty, longer than 1,000 characters, or has control characters other than line breaks.",
+                    index + 1
+                )
+            })
+        })
+        .collect()
+}
+
+/// A status or type name of a sensible length, or the error for it.
+fn check_name(value: Option<&str>, field: &str, message: &str) -> Option<WriteResult> {
+    value
+        .filter(|value| value.trim().is_empty() || value.len() > 80)
+        .map(|_| WriteResult::invalid(field, message))
+}
+
+/// "A", "A and B", "A, B and C".
+fn join_and(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -1762,6 +2486,7 @@ async fn finalize_noop(
     version: i64,
     action: &str,
     request_id: &str,
+    report_labels: bool,
 ) -> Result<WriteResult, AppError> {
     let result_id = insert_mcp_audit(
         &mut transaction,
@@ -1773,7 +2498,10 @@ async fn finalize_noop(
     )
     .await?;
     let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
-    let result = applied(work_item_id, version, Vec::new(), None, result_id, location);
+    let mut result = applied(work_item_id, version, Vec::new(), None, result_id, location);
+    if report_labels {
+        result = with_labels(&mut transaction, result, principal.project_id, work_item_id).await?;
+    }
     complete(&mut transaction, reservation, StatusCode::OK, &result).await?;
     transaction.commit().await?;
     Ok(result)
@@ -1852,7 +2580,11 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    use super::{WriteResult, normalize_text, parse_id, parse_request_id};
+    use super::{
+        BoardPlacement, BoardPosition, CreateSubtaskArguments, CreateWorkItemArguments,
+        NewTaskDetails, UpdateWorkItemArguments, WriteResult, normalize_text, parse_id,
+        parse_position, parse_request_id, requested_placement,
+    };
 
     #[test]
     fn immutable_ids_and_text_bounds_are_fail_closed() {
@@ -1938,6 +2670,128 @@ mod tests {
             let decoded = serde_json::from_value::<WriteResult>(old.clone())
                 .unwrap_or_else(|error| panic!("{old}: {error}"));
             assert_eq!(serde_json::to_value(&decoded).expect("re-encode"), old);
+        }
+    }
+
+    /// The argument structs are the idempotency request hash. A call shaped
+    /// as before Phase 2 must encode byte for byte as it did, or a retry
+    /// across the deploy would be refused (or, for a create, made twice).
+    #[test]
+    fn older_calls_hash_exactly_as_before() {
+        let create = CreateWorkItemArguments {
+            title: "Offline mode".to_owned(),
+            description: None,
+            priority: Some("high".to_owned()),
+            assignee_actor_id: None,
+            client_request_id: "plan-1".to_owned(),
+            details: NewTaskDetails::default(),
+        };
+        assert_eq!(
+            serde_json::to_string(&create).expect("create"),
+            r#"{"title":"Offline mode","description":null,"priority":"high","assigneeActorId":null,"clientRequestId":"plan-1"}"#
+        );
+        let subtask = CreateSubtaskArguments {
+            parent_work_item_id: Uuid::nil().to_string(),
+            title: "Sync".to_owned(),
+            description: Some("Both ways".to_owned()),
+            client_request_id: "plan-2".to_owned(),
+            priority: None,
+            assignee_actor_id: None,
+            details: NewTaskDetails::default(),
+        };
+        assert_eq!(
+            serde_json::to_string(&subtask).expect("subtask"),
+            format!(
+                r#"{{"parentId":"{}","title":"Sync","description":"Both ways","clientRequestId":"plan-2"}}"#,
+                Uuid::nil()
+            )
+        );
+        let update = UpdateWorkItemArguments {
+            work_item_id: Uuid::nil().to_string(),
+            expected_version: 3,
+            title: Some("Renamed".to_owned()),
+            description: None,
+            priority: None,
+            assignee_actor_id: None,
+            clear_assignee: None,
+            client_request_id: "plan-3".to_owned(),
+            item_type: None,
+            parent_id: None,
+            clear_parent: None,
+            add_labels: None,
+            remove_labels: None,
+            position: None,
+            before_task_id: None,
+            after_task_id: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&update).expect("update"),
+            format!(
+                r#"{{"taskId":"{}","expectedVersion":3,"title":"Renamed","description":null,"priority":null,"assigneeActorId":null,"clearAssignee":null,"clientRequestId":"plan-3"}}"#,
+                Uuid::nil()
+            )
+        );
+        // New fields are hashed when they're given.
+        let typed = CreateWorkItemArguments {
+            details: NewTaskDetails {
+                item_type: Some("Bug".to_owned()),
+                ..NewTaskDetails::default()
+            },
+            ..create
+        };
+        assert!(
+            serde_json::to_string(&typed)
+                .expect("typed")
+                .ends_with(r#""clientRequestId":"plan-1","type":"Bug"}"#)
+        );
+    }
+
+    #[test]
+    fn positions_read_as_agents_write_them() {
+        assert_eq!(parse_position("3"), Some(BoardPosition::Number(3)));
+        assert_eq!(parse_position(" 1 "), Some(BoardPosition::Number(1)));
+        assert_eq!(parse_position("Top"), Some(BoardPosition::Top));
+        assert_eq!(parse_position("BOTTOM"), Some(BoardPosition::Bottom));
+        for refused in [
+            "0",
+            "-1",
+            "+2",
+            "1.5",
+            "middle",
+            "",
+            "10001",
+            "99999999999999999999",
+        ] {
+            assert_eq!(parse_position(refused), None, "{refused}");
+        }
+        assert_eq!(
+            requested_placement(Some("2"), None, None).expect("index"),
+            Some(BoardPlacement::Index(1))
+        );
+        let anchor = Uuid::now_v7();
+        assert_eq!(
+            requested_placement(
+                None,
+                None,
+                Some(&format!(
+                    "https://example.test/projects/x/work-items/{anchor}"
+                ))
+            )
+            .expect("link"),
+            Some(BoardPlacement::After(anchor))
+        );
+        assert_eq!(requested_placement(None, None, None).expect("none"), None);
+        for (position, before, field) in [
+            (Some("middle"), None, "position"),
+            (Some("top"), Some(anchor.to_string()), "position"),
+            (None, Some("AWD-12".to_owned()), "beforeTaskId"),
+        ] {
+            let Err((refused, message)) = requested_placement(position, before.as_deref(), None)
+            else {
+                panic!("{position:?} {before:?} was accepted");
+            };
+            assert_eq!(refused, field);
+            assert!(!message.is_empty());
         }
     }
 

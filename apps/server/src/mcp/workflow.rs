@@ -154,7 +154,6 @@ impl Workflow {
     }
 
     /// A type by ID or name, among the enabled ones.
-    #[allow(dead_code)] // task_create and the batch tools resolve types next.
     pub(super) fn work_type(&self, value: &str) -> Result<&TypeDef, String> {
         let value = value.trim();
         let id = value.parse::<Uuid>().ok();
@@ -174,7 +173,6 @@ impl Workflow {
             })
     }
 
-    #[allow(dead_code)] // The batch tools fill in defaults next.
     pub(super) fn default_status(&self) -> Option<&StatusDef> {
         self.enabled_statuses().find(|status| status.is_default)
     }
