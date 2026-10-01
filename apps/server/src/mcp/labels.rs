@@ -383,8 +383,17 @@ pub(super) async fn label_write(
             return Ok(ToolResult::ok(value));
         };
 
-        // Change.
-        let label_id = match work_item_labels::find(&mut transaction, project_id, reference).await? {
+        // Change. A restore by name finds the archived label, not an active
+        // one that has taken its name since.
+        let restoring = checked.archived == Some(false);
+        let label_id = match work_item_labels::find(
+            &mut transaction,
+            project_id,
+            reference,
+            restoring,
+        )
+        .await?
+        {
             LabelLookup::Found(id) => id,
             LabelLookup::NotFound => {
                 return Ok(ToolResult::NotFound {
@@ -404,7 +413,6 @@ pub(super) async fn label_write(
                 ));
             }
         };
-        let restoring = checked.archived == Some(false);
         let outcome = work_item_labels::change_label(
             &mut transaction,
             project_id,

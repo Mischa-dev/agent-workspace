@@ -722,9 +722,13 @@ async fn filter_labels(
         };
         values.push(value);
     }
-    let rows = sqlx::query_as::<_, (String, Option<String>, Option<bool>)>(
+    // The page query compares lower(active.name) with these, so they're
+    // lowercased by the same lower() here, never in Rust (Unicode rules such
+    // as a final sigma differ from the database's).
+    let rows = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<bool>)>(
         r#"
-        SELECT requested.value, label.name, label.archived_at IS NOT NULL
+        SELECT requested.value, label.name, lower(label.name),
+               label.archived_at IS NOT NULL
         FROM unnest($2::text[]) WITH ORDINALITY AS requested(value, ordinality)
         LEFT JOIN project_labels label
           ON label.project_id = ANY($1)
@@ -741,13 +745,15 @@ async fn filter_labels(
     for value in &values {
         let matches = rows
             .iter()
-            .filter(|(requested, _, _)| requested == value)
-            .filter_map(|(_, name, archived)| name.as_deref().zip(*archived))
+            .filter(|(requested, ..)| requested == value)
+            .filter_map(|(_, name, lowered, archived)| {
+                Some((name.as_deref()?, lowered.as_deref()?, (*archived)?))
+            })
             .collect::<Vec<_>>();
         let active = matches
             .iter()
-            .filter(|(_, archived)| !archived)
-            .map(|(name, _)| name.to_lowercase())
+            .filter(|(_, _, archived)| !archived)
+            .map(|(_, lowered, _)| (*lowered).to_owned())
             .collect::<Vec<_>>();
         if !active.is_empty() {
             for name in active {
@@ -755,7 +761,7 @@ async fn filter_labels(
                     names.push(name);
                 }
             }
-        } else if let Some((name, _)) = matches.first() {
+        } else if let Some((name, ..)) = matches.first() {
             resolution.archived.push((*name).to_owned());
         } else {
             resolution.unknown.push(value.clone());

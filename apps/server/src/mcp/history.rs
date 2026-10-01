@@ -375,13 +375,20 @@ async fn look_up(
     if found.moved_from.is_some() || found.moved_to {
         let reachable = accessible_project_ids(state, principal).await?;
         if let Some(key) = &found.moved_from {
+            // Each move points every alias that led to the task at where it
+            // went (task_move), so once this task has moved on too, the
+            // original's alias points past it, to the same place as this
+            // task's own alias.
             lookups.moved_from = sqlx::query_scalar::<_, Uuid>(
                 r#"
                 SELECT alias.source_work_item_id
                 FROM work_item_key_aliases alias
                 JOIN work_items source ON source.id = alias.source_work_item_id
-                WHERE alias.work_item_id = $1
-                  AND upper(alias.project_key || '-' || alias.number::text) = upper($2)
+                WHERE upper(alias.project_key || '-' || alias.number::text) = upper($2)
+                  AND (alias.work_item_id = $1 OR alias.work_item_id = (
+                      SELECT onward.work_item_id FROM work_item_key_aliases onward
+                      WHERE onward.source_work_item_id = $1
+                  ))
                   AND source.project_id = ANY($3)
                 LIMIT 1
                 "#,

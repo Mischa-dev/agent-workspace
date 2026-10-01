@@ -1716,7 +1716,8 @@ pub struct PlannedCriterionChange {
     pub operation_index: usize,
     pub criterion_id: Uuid,
     pub kind: CriterionChangeKind,
-    /// False when the criterion was already that way: no activity is written.
+    /// False when the criterion was already that way, or a later operation
+    /// in the call set its completion back: no activity is written.
     pub changed: bool,
     /// 1-based, after the operation; for a removal, where it was.
     pub position: i32,
@@ -1901,7 +1902,55 @@ pub fn plan_criteria(
     if list.len() > MAX_CRITERIA_PER_WORK_ITEM {
         return Err(CriteriaPlanError::TooMany { count: list.len() });
     }
+    record_net_completion(snapshot, &list, &mut changes);
     Ok((list, changes))
+}
+
+/// Records each kept criterion's completion once, as the call's net effect,
+/// which is also what `persist_criteria` writes: unchecking a criterion and
+/// checking it again leaves it as it was, completer included. An operation
+/// whose check or uncheck a later one in the call undid, or that a later one
+/// repeated, records no completion: it records its text or place change
+/// instead, or nothing. So history never credits a check to someone who
+/// left the criterion as they found it. A criterion the call removes keeps
+/// what each operation did.
+fn record_net_completion(
+    snapshot: &[CriterionState],
+    planned: &[CriterionState],
+    changes: &mut [PlannedCriterionChange],
+) {
+    let completion = |kind| {
+        matches!(
+            kind,
+            CriterionChangeKind::Completed | CriterionChangeKind::Reopened
+        )
+    };
+    let before = snapshot
+        .iter()
+        .map(|criterion| (criterion.id, criterion.completed))
+        .collect::<HashMap<_, _>>();
+    let after = planned
+        .iter()
+        .map(|criterion| (criterion.id, criterion.completed))
+        .collect::<HashMap<_, _>>();
+    let mut last = HashMap::new();
+    for (index, change) in changes.iter().enumerate() {
+        if completion(change.kind) {
+            last.insert(change.criterion_id, index);
+        }
+    }
+    for (index, change) in changes.iter_mut().enumerate() {
+        let Some(&completed) = after.get(&change.criterion_id) else {
+            continue;
+        };
+        if completion(change.kind)
+            && (before.get(&change.criterion_id) == Some(&completed)
+                || last.get(&change.criterion_id) != Some(&index))
+        {
+            change.kind = CriterionChangeKind::Updated;
+            change.changed = !change.fields.is_empty();
+        }
+    }
 }
 
 pub struct CriteriaCommand<'a> {
@@ -2688,8 +2737,9 @@ mod tests {
     use super::{
         BOARD_RANK_STEP, BoardPlacement, ChangePayload, CriteriaOperation, CriteriaPlanError,
         CriterionChangeKind, CriterionState, CriterionTarget, LinkChange, PlacementProblem,
-        allocate_board_ranks, normalize_criterion_text, normalize_description,
-        normalize_single_line, normalize_title, plan_criteria, target_index, validate_priority,
+        PlannedCriterionChange, allocate_board_ranks, normalize_criterion_text,
+        normalize_description, normalize_single_line, normalize_title, plan_criteria, target_index,
+        validate_priority,
     };
 
     #[test]
@@ -3086,6 +3136,96 @@ mod tests {
         assert_eq!(
             changes[0].activity_payload(),
             serde_json::json!({"criterionId": snapshot[1].id})
+        );
+    }
+
+    #[test]
+    fn criteria_completion_records_the_net_effect() {
+        let mut snapshot = criteria(&["a", "b"]);
+        snapshot[0].completed = true;
+        let kinds = |changes: &[PlannedCriterionChange]| {
+            changes
+                .iter()
+                .map(|change| (change.kind, change.changed))
+                .collect::<Vec<_>>()
+        };
+
+        // Unchecking a criterion someone else checked and checking it again
+        // leaves it (and its completer) as it was: nothing to record.
+        let (list, changes) = plan_criteria(
+            &snapshot,
+            &[
+                update(CriterionTarget::Position(1), None, Some(false)),
+                update(CriterionTarget::Position(1), None, Some(true)),
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert!(list[0].completed);
+        assert!(changes.iter().all(|change| !change.changed), "{changes:?}");
+
+        // Checked, unchecked and checked again: one completion, the last.
+        let (_, changes) = plan_criteria(
+            &snapshot,
+            &[
+                update(CriterionTarget::Position(2), None, Some(true)),
+                update(CriterionTarget::Position(2), None, Some(false)),
+                update(CriterionTarget::Position(2), None, Some(true)),
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert_eq!(
+            kinds(&changes),
+            [
+                (CriterionChangeKind::Updated, false),
+                (CriterionChangeKind::Updated, false),
+                (CriterionChangeKind::Completed, true),
+            ]
+        );
+
+        // A reworded criterion whose uncheck was undone records the rewording.
+        let (_, changes) = plan_criteria(
+            &snapshot,
+            &[
+                CriteriaOperation::Update {
+                    target: CriterionTarget::Position(1),
+                    text: Some("a, reworded".to_owned()),
+                    position: None,
+                    completed: Some(false),
+                },
+                update(CriterionTarget::Position(1), None, Some(true)),
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert_eq!(
+            kinds(&changes),
+            [
+                (CriterionChangeKind::Updated, true),
+                (CriterionChangeKind::Updated, false),
+            ]
+        );
+        assert_eq!(changes[0].fields, ["text"]);
+
+        // A criterion the call removes keeps what each operation did.
+        let (_, changes) = plan_criteria(
+            &snapshot,
+            &[
+                update(CriterionTarget::Position(2), None, Some(true)),
+                CriteriaOperation::Remove {
+                    target: CriterionTarget::Position(2),
+                },
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert_eq!(
+            kinds(&changes),
+            [
+                (CriterionChangeKind::Completed, true),
+                (CriterionChangeKind::Removed, true),
+            ]
         );
     }
 

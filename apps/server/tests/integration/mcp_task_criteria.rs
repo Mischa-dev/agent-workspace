@@ -936,4 +936,24 @@ async fn history_of_a_moved_task_points_back_only_where_the_reader_reaches() {
     // names where it went; the history line itself doesn't.)
     assert!(!last.to_string().contains("NEW-1"), "{last}");
     assert!(!last.to_string().contains(&new), "{last}");
+
+    // Moved on again, the task in between still points back to the
+    // original, though the original's alias now points past it.
+    create_project(&setup, "THIRD", "Third work").await;
+    let between = id(&moved["value"]["moved"][0]["id"]);
+    let moved_on = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "NEW-1", "toProjectId": "THIRD"}),
+    )
+    .await;
+    assert_eq!(moved_on["value"]["moved"][0]["to"], "THIRD-1", "{moved_on}");
+    let entries = history(&codex, &session, json!(between)).await;
+    assert_eq!(entries[0]["text"], "Moved here from OLD-1", "{entries}");
+    assert_eq!(id(&entries[0]["fromTaskId"]), original);
+    let entries = history(&codex, &session, json!("THIRD-1")).await;
+    assert_eq!(entries[0]["text"], "Moved here from NEW-1", "{entries}");
+    assert_eq!(id(&entries[0]["fromTaskId"]), between);
 }

@@ -3455,6 +3455,18 @@ async fn complete_pull_request_sync_job(
     let requested_reviewers = serde_json::to_value(&projection.requested_reviewers)
         .map_err(|_| AppError::Internal("serialize requested reviewers"))?;
     let mut transaction = state.pool.begin().await?;
+    // The automation below changes task statuses, so it takes its turn on the
+    // project row before anything else, as every task write does
+    // (work_item_commands::lock_membership) before it locks tasks and the
+    // board column a status change lands in. Locked the other way round,
+    // such a write would wait for a task this holds while this waits for the
+    // project row (its audit rows' foreign key share-locks it). NO KEY
+    // UPDATE waits for those writers but never for a foreign key's share
+    // lock, so other GitHub jobs that only reference the project don't wait.
+    sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(job.project_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
     let updated = sqlx::query(
         r#"
         UPDATE github_jobs
@@ -3617,6 +3629,8 @@ struct AutomationWorkItemRow {
     archived: bool,
 }
 
+/// Moves the pull request's explicitly linked tasks on. The caller holds the
+/// project row lock (see `complete_pull_request_sync_job`).
 async fn apply_pull_request_work_item_automation(
     transaction: &mut Transaction<'_, Postgres>,
     job: &ClaimedPullRequestSyncJob,

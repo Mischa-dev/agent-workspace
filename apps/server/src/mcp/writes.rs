@@ -9,8 +9,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids, archived_task_message,
-        public_url, version_conflict_message,
+        ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids_in,
+        archived_task_message, parse_id, public_url, version_conflict_message,
     },
     workflow::Workflow,
 };
@@ -529,7 +529,7 @@ async fn create_task(
     // rolls back and a corrected retry can reuse the clientRequestId.
     if let Some(parent_id) = parent_id
         && let Some(elsewhere) =
-            parent_in_other_project(&mut transaction, state, principal, parent_id).await?
+            parent_in_other_project(&mut transaction, principal, parent_id).await?
     {
         return Ok(WriteResult::invalid(
             "parentWorkItemId",
@@ -863,7 +863,7 @@ async fn update_work_item_inner(
         None => None,
     };
     let parent_id = match arguments.parent_id.as_deref() {
-        Some(value) => match super::common::parse_id(value) {
+        Some(value) => match parse_id(value) {
             Some(id) => Some(id),
             None => {
                 return Ok(WriteResult::invalid(
@@ -948,7 +948,7 @@ async fn update_work_item_inner(
     }
     if let Some(parent_id) = parent_id
         && let Some(elsewhere) =
-            parent_in_other_project(&mut transaction, state, principal, parent_id).await?
+            parent_in_other_project(&mut transaction, principal, parent_id).await?
     {
         return Ok(WriteResult::invalid(
             "parentId",
@@ -1831,7 +1831,7 @@ async fn set_archived_inner(
             .bind(moved_to)
             .fetch_optional(&mut *transaction)
             .await?;
-            let reachable = accessible_project_ids(state, principal).await?;
+            let reachable = accessible_project_ids_in(&mut *transaction, principal).await?;
             let message = moved_away_message(
                 &original,
                 moved
@@ -2219,7 +2219,7 @@ fn requested_placement(
     after: Option<&str>,
 ) -> Result<Option<BoardPlacement>, Refusal> {
     let anchor = |value: &str, field: &'static str| {
-        super::common::parse_id(value).ok_or_else(|| {
+        parse_id(value).ok_or_else(|| {
             (
                 field,
                 format!(
@@ -2321,7 +2321,6 @@ struct ParentElsewhere {
 
 async fn parent_in_other_project(
     transaction: &mut Transaction<'_, Postgres>,
-    state: &AppState,
     principal: &McpPrincipal,
     parent_id: Uuid,
 ) -> Result<Option<ParentElsewhere>, AppError> {
@@ -2339,7 +2338,7 @@ async fn parent_in_other_project(
         return Ok(None);
     };
     if project_id == principal.project_id
-        || !accessible_project_ids(state, principal)
+        || !accessible_project_ids_in(&mut **transaction, principal)
             .await?
             .contains(&project_id)
     {
@@ -2622,12 +2621,6 @@ fn applied(
 
 pub(super) fn valid_priority(value: &str) -> bool {
     matches!(value, "no_priority" | "low" | "medium" | "high" | "urgent")
-}
-
-fn parse_id(value: &str) -> Option<Uuid> {
-    (value.len() <= 64)
-        .then(|| value.parse::<Uuid>().ok())
-        .flatten()
 }
 
 fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Option<String> {

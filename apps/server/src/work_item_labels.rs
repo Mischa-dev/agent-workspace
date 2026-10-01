@@ -85,10 +85,18 @@ pub fn normalize_color(value: &str) -> Option<String> {
 /// What a label means, on one line of at most 200 characters. Empty clears it.
 pub fn normalize_label_description(value: &str) -> Option<String> {
     let value = value.trim();
-    if value.chars().any(char::is_control) || value.chars().count() > MAX_DESCRIPTION_CHARACTERS {
+    if value.chars().any(breaks_description) || value.chars().count() > MAX_DESCRIPTION_CHARACTERS {
         return None;
     }
     Some(value.to_owned())
+}
+
+/// A control character (Unicode Cc: U+0000 to U+001F and U+007F to U+009F)
+/// or a line or paragraph separator (U+2028, U+2029). The database's CHECK
+/// on label descriptions names these same code points (migration 0046)
+/// rather than `[[:cntrl:]]`, whose meaning follows the database's locale.
+fn breaks_description(character: char) -> bool {
+    character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
 }
 
 /// The color a label gets when none is given. It depends only on the name,
@@ -406,37 +414,61 @@ pub fn echo(value: &str) -> String {
 pub enum LabelLookup {
     Found(Uuid),
     NotFound,
-    /// No active label has the name, and several archived ones do.
+    /// Several archived labels have the name, and either none is active or
+    /// the call restores one.
     AmbiguousArchived,
 }
 
-/// Finds one label of the project by ID or name: the active label with that
-/// name, or else the one archived label with it.
+/// Finds one label of the project by ID or name. A name finds the active
+/// label with it, or else the one archived label with it. When `restoring`,
+/// a name finds the one archived label with it first, so a restore never
+/// lands on an active label that took the name since; only without one
+/// does it find the active label.
 pub async fn find(
     connection: &mut PgConnection,
     project_id: Uuid,
     reference: &str,
+    restoring: bool,
 ) -> Result<LabelLookup, AppError> {
     let value = reference_value(reference);
     let by_id = value.parse::<Uuid>().is_ok();
+    // At most one active label has a name, and it sorts first, so three rows
+    // are enough to tell whether two archived ones share it.
     let rows = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
         SELECT id, archived_at IS NOT NULL
         FROM project_labels
         WHERE project_id = $1 AND (id::text = lower($2) OR lower(name) = lower($2))
         ORDER BY archived_at IS NOT NULL, archived_at DESC
-        LIMIT 2
+        LIMIT 3
         "#,
     )
     .bind(project_id)
     .bind(&value)
     .fetch_all(&mut *connection)
     .await?;
-    Ok(match rows.as_slice() {
-        [] => LabelLookup::NotFound,
-        [(id, false), ..] | [(id, true)] => LabelLookup::Found(*id),
-        [(id, true), ..] if by_id => LabelLookup::Found(*id),
-        [..] => LabelLookup::AmbiguousArchived,
+    if by_id {
+        // Names are never shaped like IDs, so an ID matches one label.
+        return Ok(rows
+            .first()
+            .map_or(LabelLookup::NotFound, |(id, _)| LabelLookup::Found(*id)));
+    }
+    let active = rows
+        .iter()
+        .find(|(_, archived)| !archived)
+        .map(|(id, _)| *id);
+    let archived = rows
+        .iter()
+        .filter(|(_, archived)| *archived)
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>();
+    Ok(match (archived.as_slice(), active) {
+        ([only], _) if restoring => LabelLookup::Found(*only),
+        ([_, _, ..], _) if restoring => LabelLookup::AmbiguousArchived,
+        (_, Some(id)) => LabelLookup::Found(id),
+        ([only], None) => LabelLookup::Found(*only),
+        ([], None) => LabelLookup::NotFound,
+        ([_, _, ..], None) => LabelLookup::AmbiguousArchived,
     })
 }
 

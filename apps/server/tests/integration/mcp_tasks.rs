@@ -703,6 +703,32 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
         "parentId",
         "more than 20 levels deep",
     );
+
+    // A parent's link works as its ID or key does, in task_create as in
+    // task_update, and so does the task's own link.
+    let shelf = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Shelf"}),
+    )
+    .await;
+    assert_eq!(shelf["outcome"], "applied", "{shelf}");
+    let book = call(
+        "task_create",
+        json!({"parentId": shelf["url"], "title": "Book"}),
+    )
+    .await;
+    assert_eq!(book["outcome"], "applied", "{book}");
+    assert_eq!(
+        parent(&setup, id(&book["workItemId"])).await,
+        Some(id(&shelf["workItemId"]))
+    );
+    let renamed = call(
+        "task_update",
+        json!({"taskId": book["url"], "expectedVersion": 1, "parentId": shelf["url"], "title": "A book"}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "applied", "{renamed}");
+    assert_eq!(renamed["changedFields"], json!(["title"]), "{renamed}");
 }
 
 #[tokio::test]

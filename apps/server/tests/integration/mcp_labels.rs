@@ -271,6 +271,32 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
     .await;
     assert_eq!(bad_color["outcome"], "invalid_request", "{bad_color}");
     assert_eq!(bad_color["field"], "color");
+    // A description stays on one line. The server and the database's CHECK
+    // refuse the same characters, line separators included, whatever the
+    // database's locale makes of [[:cntrl:]].
+    let two_lines = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "label_write",
+        json!({"projectId": "WORK", "label": "Mobile", "description": "Phone\u{2028}apps"}),
+    )
+    .await;
+    assert_eq!(two_lines["outcome"], "invalid_request", "{two_lines}");
+    assert_eq!(two_lines["field"], "description");
+    let refused = sqlx::query("UPDATE project_labels SET description = $2 WHERE id = $1")
+        .bind(id(mobile["value"]["label"]["id"].as_str().expect("id")))
+        .bind("Phone\u{2028}apps")
+        .execute(&setup.pool)
+        .await
+        .expect_err("the CHECK refuses a line separator");
+    assert_eq!(
+        refused
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
     let id_shaped = tool(
         app,
         &mara_token,
@@ -755,12 +781,27 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         message(&clash).contains("Another active label is called \"mobile\""),
         "{clash}"
     );
+    // By name, a restore finds the archived label, never the active one
+    // that took its name (which would answer ok and change nothing).
+    let clash = tool(
+        app,
+        &codex,
+        &session,
+        "label_write",
+        json!({"projectId": "WORK", "label": "Mobile", "archived": false}),
+    )
+    .await;
+    assert_eq!(clash["outcome"], "conflict", "{clash}");
+    assert!(
+        message(&clash).contains("Another active label is called \"mobile\""),
+        "{clash}"
+    );
     let restored = tool(
         app,
         &codex,
         &session,
         "label_write",
-        json!({"projectId": "WORK", "label": label_ids["Mobile"], "archived": false, "name": "Mobile app"}),
+        json!({"projectId": "WORK", "label": "Mobile", "archived": false, "name": "Mobile app"}),
     )
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");

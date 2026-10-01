@@ -6,6 +6,13 @@
 //! repository Codex runs on without saying so, or a link written to an
 //! archived task.
 
+use agent_workspace_server::{
+    policy::ActorKind,
+    work_item_commands::{
+        AuditAttribution, CommandActor, LinkWording, ThreadLinkOutcome, change_thread_link,
+        lock_work_item,
+    },
+};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -506,6 +513,20 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         ["ALPHA-1"],
         "{her_labelled}"
     );
+
+    // Names are lowercased by the database on both sides of the match. Rust
+    // lowercases a final capital sigma to ς, the database to σ, so a name
+    // lowercased in Rust would match no task.
+    let road = call("label_write", json!({"projectId": "BETA", "name": "ΟΔΟΣ"})).await;
+    assert_eq!(road["outcome"], "ok", "{road}");
+    let tagged = call(
+        "task_update",
+        json!({"taskId": "BETA-1", "expectedVersion": version(&setup, created[3]).await, "addLabels": ["ΟΔΟΣ"]}),
+    )
+    .await;
+    assert_eq!(tagged["outcome"], "applied", "{tagged}");
+    let roads = list(json!({"labels": ["ΟΔΟΣ"]})).await;
+    assert_eq!(keys(&roads["tasks"]), ["BETA-1"], "{roads}");
 }
 
 #[tokio::test]
@@ -1102,6 +1123,62 @@ async fn task_link_repositories_pull_requests_and_threads() {
     assert_eq!(hidden["outcome"], "not_found", "{hidden}");
     let visible_to_owner = link(json!({"conversationId": threads[1].1})).await;
     assert_eq!(visible_to_owner["outcome"], "ok", "{visible_to_owner}");
+    // task_link checks visibility before the command, but the web app's
+    // thread links rely on change_thread_link alone, so the command itself
+    // must refuse a thread its actor can't see, linking or unlinking.
+    let project_id: Uuid = repo.parse().expect("project id");
+    let secret: Uuid = threads[1].1.parse().expect("thread id");
+    let actor = |actor_id, actor_kind| CommandActor {
+        actor_id,
+        actor_kind,
+        project_id,
+        audit: AuditAttribution::Mcp {
+            authentication_class: "mcp_bearer",
+            request_id: "thread-visibility".to_owned(),
+            client_name: "test".to_owned(),
+            mcp_credential_id: None,
+            oauth_grant_id: None,
+            external_agent_connection_id: None,
+        },
+    };
+    let mut transaction = setup.pool.begin().await.expect("transaction");
+    let current = lock_work_item(&mut transaction, project_id, task)
+        .await
+        .expect("lock task")
+        .expect("task");
+    for linked in [true, false] {
+        let outcome = change_thread_link(
+            &mut transaction,
+            &actor(mara, ActorKind::ExternalAgent),
+            &current,
+            None,
+            secret,
+            linked,
+            LinkWording::WEB,
+        )
+        .await
+        .expect("change thread link");
+        assert!(
+            matches!(outcome, ThreadLinkOutcome::ThreadNotFound),
+            "{outcome:?}"
+        );
+    }
+    let owner_sees = change_thread_link(
+        &mut transaction,
+        &actor(owner_id, ActorKind::Human),
+        &current,
+        None,
+        secret,
+        true,
+        LinkWording::WEB,
+    )
+    .await
+    .expect("change thread link");
+    assert!(
+        matches!(owner_sees, ThreadLinkOutcome::Unchanged),
+        "{owner_sees:?}"
+    );
+    transaction.rollback().await.expect("rollback");
 
     // The web app refuses new links to archived repositories, and every
     // link change on an archived task.

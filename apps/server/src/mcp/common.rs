@@ -132,6 +132,16 @@ pub(super) async fn accessible_project_ids(
     state: &AppState,
     principal: &McpPrincipal,
 ) -> Result<Vec<Uuid>, AppError> {
+    accessible_project_ids_in(&state.pool, principal).await
+}
+
+/// `accessible_project_ids` on a connection the caller already has. A write
+/// transaction that holds locks reads it here rather than waiting for a
+/// second pool connection.
+pub(super) async fn accessible_project_ids_in(
+    executor: impl sqlx::PgExecutor<'_>,
+    principal: &McpPrincipal,
+) -> Result<Vec<Uuid>, AppError> {
     if principal.actor_kind == ActorKind::Human && !principal.account_wide {
         return Ok(vec![principal.project_id]);
     }
@@ -151,7 +161,7 @@ pub(super) async fn accessible_project_ids(
     )
     .bind(principal.actor_id)
     .bind(principal.external_agent_connection_id)
-    .fetch_all(&state.pool)
+    .fetch_all(executor)
     .await?)
 }
 
