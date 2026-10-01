@@ -38,7 +38,7 @@ pub(super) struct Briefing {
     pub you: You,
     /// Agents only: messages people asked you to answer. Claim one with
     /// reply_claim.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reply_requests: Vec<InboxItem>,
     /// Messages that @mention you and that you haven't read.
     pub mentions: Vec<Mention>,
@@ -47,7 +47,7 @@ pub(super) struct Briefing {
     /// Open tasks assigned to you, most recently changed first.
     pub tasks: Vec<TaskLine>,
     /// Tasks you've claimed and are working on.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claims: Vec<TaskLine>,
     /// Threads whose status or outcome changed in the last week.
     pub thread_updates: Vec<ThreadUpdate>,
@@ -443,9 +443,9 @@ pub(super) struct TaskOverview {
     pub by_status: Vec<StatusCount>,
     /// The first open tasks in board order: what's next.
     pub next: Vec<TaskLine>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<TaskLine>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claimed: Vec<TaskLine>,
 }
 

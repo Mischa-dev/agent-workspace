@@ -306,7 +306,7 @@ pub(super) struct PageValue {
     pub project_id: String,
     pub title: String,
     pub body: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
     pub is_guide: bool,
     /// Pass this as expectedVersion when you save.

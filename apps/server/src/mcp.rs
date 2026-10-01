@@ -1892,6 +1892,53 @@ mod tests {
         assert_eq!(exact_bearer_token(&headers), None);
     }
 
+    /// rmcp builds outputSchemas for deserializing, where only `default` makes
+    /// a field optional. A field skipped when empty needs it too, or clients
+    /// such as Claude Code reject the result.
+    #[test]
+    fn fields_left_out_when_empty_are_optional_in_output_schemas() {
+        use rmcp::handler::server::common::schema_for_output;
+
+        fn required(schema: &serde_json::Value, definition: Option<&str>) -> Vec<String> {
+            let schema = match definition {
+                Some(name) => &schema["$defs"][name],
+                None => schema,
+            };
+            schema["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        }
+
+        let briefing =
+            serde_json::Value::Object((*schema_for_output::<super::briefing::Briefing>()).clone());
+        let task =
+            serde_json::Value::Object((*schema_for_output::<super::tasks::TaskDetail>()).clone());
+        let overview = serde_json::Value::Object(
+            (*schema_for_output::<super::briefing::ProjectOverview>()).clone(),
+        );
+        for (schema, definition, skipped) in [
+            (&briefing, None, &["replyRequests", "claims"][..]),
+            (
+                &task,
+                None,
+                &["subtasks", "conversations", "links", "comments"][..],
+            ),
+            (&overview, Some("TaskOverview"), &["blocked", "claimed"][..]),
+        ] {
+            let required = required(schema, definition);
+            assert!(!required.is_empty(), "no required list: {schema}");
+            for field in skipped {
+                assert!(
+                    !required.iter().any(|name| name == field),
+                    "{field} is required"
+                );
+            }
+        }
+    }
+
     #[test]
     fn instructions_point_at_the_workflow_and_the_safety_rules() {
         for required in [
