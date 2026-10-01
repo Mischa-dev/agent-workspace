@@ -29,16 +29,22 @@ use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const PASSWORD: &str = "correct horse battery staple";
+pub(super) const PASSWORD: &str = "correct horse battery staple";
 const REDIRECT: &str = "http://127.0.0.1:49152/callback";
 
-struct Browser {
-    cookie: String,
-    csrf: String,
+pub(super) struct Browser {
+    pub(super) cookie: String,
+    pub(super) csrf: String,
 }
 
 impl Browser {
-    fn request(&self, method: &str, uri: &str, key: Option<&str>, body: Value) -> Request<Body> {
+    pub(super) fn request(
+        &self,
+        method: &str,
+        uri: &str,
+        key: Option<&str>,
+        body: Value,
+    ) -> Request<Body> {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
@@ -656,7 +662,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         .expect("drop schema");
 }
 
-async fn create_agent(
+pub(super) async fn create_agent(
     app: &axum::Router,
     browser: &Browser,
     space: &str,
@@ -693,7 +699,12 @@ async fn create_agent(
 }
 
 /// Run the OAuth flow for a local app and return its access token.
-async fn connect_app(app: &axum::Router, browser: &Browser, name: &str, access: &str) -> String {
+pub(super) async fn connect_app(
+    app: &axum::Router,
+    browser: &Browser,
+    name: &str,
+    access: &str,
+) -> String {
     let (status, registration) = send(
         app,
         Request::builder()
@@ -802,7 +813,7 @@ async fn visible(pool: &PgPool, conversation: &str, actor: Uuid) -> bool {
         .expect("visibility")
 }
 
-async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {
+pub(super) async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value) {
     let response = app.clone().oneshot(request).await.expect("response");
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 4_000_000)
@@ -814,7 +825,7 @@ async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Value)
     )
 }
 
-async fn initialize(app: &axum::Router, token: &str) -> Option<String> {
+pub(super) async fn initialize(app: &axum::Router, token: &str) -> Option<String> {
     let response = mcp(
         app,
         token,
@@ -847,7 +858,7 @@ async fn initialize(app: &axum::Router, token: &str) -> Option<String> {
     (initialized.status() == StatusCode::ACCEPTED).then_some(session)
 }
 
-async fn tool(
+pub(super) async fn tool(
     app: &axum::Router,
     token: &str,
     session: &str,
@@ -1034,7 +1045,7 @@ async fn mcp(
         .expect("MCP response")
 }
 
-async fn login(app: &axum::Router) -> Browser {
+pub(super) async fn login(app: &axum::Router) -> Browser {
     let response = app
         .clone()
         .oneshot(
@@ -1069,7 +1080,7 @@ async fn login(app: &axum::Router) -> Browser {
     }
 }
 
-fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
+pub(super) fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
     let config = AppConfig::from_values(&BTreeMap::from([(
         "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
         database_url.to_owned(),
@@ -1085,7 +1096,7 @@ fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
     })
 }
 
-async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
+pub(super) async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
     let schema = Arc::new(schema.to_owned());
     PgPoolOptions::new()
         .max_connections(6)

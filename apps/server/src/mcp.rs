@@ -54,6 +54,7 @@ use crate::{
     },
 };
 
+mod admin;
 mod approvals;
 mod briefing;
 mod collaboration;
@@ -197,6 +198,72 @@ impl McpServer {
     ) -> Json<common::ToolResult<briefing::ProjectOverview>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(briefing::project_open(&self.state, principal, arguments).await)
+    }
+
+    // -- Projects and people -------------------------------------------------
+
+    #[tool(
+        description = "A project's task types, statuses (in board order, with their category) and the status changes allowed. Use the status names with task_update and task_list.",
+        annotations(title = "Get workflow", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn workflow_get(
+        &self,
+        Parameters(arguments): Parameters<admin::WorkflowArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::WorkflowValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::workflow_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List a project's members: people and agents, with their roles. Owners and admins only; anyone can find people to mention with people_search.",
+        annotations(title = "List members", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn project_members(
+        &self,
+        Parameters(arguments): Parameters<admin::MembersArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::MembersValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_members(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Rename a project. Its key stays the same, so task keys and links keep working. Owners and admins only, as themselves.",
+        annotations(
+            title = "Rename project",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_update(
+        &self,
+        Parameters(arguments): Parameters<admin::ProjectUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::ProjectValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Archive a project, or restore one with archived: false. Archiving hides the project, its tasks and its channels from everyone, and is refused while Codex is running there. Nothing is deleted. Owners and admins only, as themselves.",
+        annotations(
+            title = "Archive or restore project",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_archive(
+        &self,
+        Parameters(arguments): Parameters<admin::ProjectArchiveArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::ProjectValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_archive(&self.state, principal, arguments).await)
     }
 
     // -- Conversations -------------------------------------------------------
@@ -1078,9 +1145,21 @@ async fn authenticate_mcp(
                     Ok(bytes) => bytes,
                     Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
                 };
-                if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                let mut bytes = bytes;
+                if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&bytes)
                     && body.get("method").and_then(serde_json::Value::as_str) == Some("tools/call")
                 {
+                    // People name projects by key ("AWD"); tools take IDs.
+                    match project_key_to_id(&state, &principal, &mut body["params"]["arguments"])
+                        .await
+                    {
+                        Ok(true) => match serde_json::to_vec(&body) {
+                            Ok(rewritten) => bytes = rewritten.into(),
+                            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+                        },
+                        Ok(false) => {}
+                        Err(error) => return error.into_response(),
+                    }
                     let tool = body["params"]["name"].as_str().unwrap_or_default();
                     match scoped_project(&state, &principal, tool, &body["params"]["arguments"])
                         .await
@@ -1678,6 +1757,56 @@ async fn insert_credential_audit(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// Replaces a project key in `projectId` (such as "AWD") with the ID of the
+/// one project the caller can reach under that key. Returns whether it
+/// changed anything; an unknown key is left for the tool to reject.
+async fn project_key_to_id(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: &mut serde_json::Value,
+) -> Result<bool, AppError> {
+    let Some(key) = arguments
+        .get("projectId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| common::parse_id(value).is_none())
+        .map(str::trim)
+        .filter(|value| {
+            (2..=12).contains(&value.len())
+                && value.starts_with(|c: char| c.is_ascii_alphabetic())
+                && value.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+        .map(str::to_owned)
+    else {
+        return Ok(false);
+    };
+    let matches = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT project.id
+        FROM projects project
+        JOIN project_memberships membership
+          ON membership.project_id = project.id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE lower(project.project_key) = lower($3)
+          AND project.archived_at IS NULL
+          AND actor_can_access_project($1, $2, project.id)
+        LIMIT 2
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(&key)
+    .fetch_all(&state.pool)
+    .await?;
+    match matches.as_slice() {
+        [project_id] => {
+            arguments["projectId"] = serde_json::Value::String(project_id.to_string());
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 async fn scoped_project(
