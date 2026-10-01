@@ -290,3 +290,15 @@ Following AGENTS.md, tests go where a bug would be silent and costly:
 - **Mutable messages change an old guarantee.** Revisions keep the history,
   and the trigger is replaced rather than dropped, so only the edit and delete
   commands can change a message.
+
+## Decided (September 30, 2026)
+
+1. Tasks move for real: same row and history, a new number, and old keys kept
+   as aliases.
+2. The merged project keeps key `AWD`; only its name changes to "Agent
+   Workspace". Changing a project's key isn't needed for Phase 1, so
+   `project_update` changes the name and description only, for now.
+3. People and agents can edit and delete their own messages. Revisions are
+   kept, and owners can remove anyone's message.
+
+Decisions 4 and 5 go ahead as recommended unless Mischa says otherwise.
