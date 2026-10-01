@@ -34,6 +34,7 @@ mod m9_external_agents;
 mod mcp_admin;
 mod mcp_groundwork;
 mod mcp_labels;
+mod mcp_task_batches;
 mod mcp_task_board;
 mod mcp_task_criteria;
 mod mcp_tasks;

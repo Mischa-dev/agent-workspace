@@ -6,7 +6,7 @@
 - Verified client: `codex-cli 0.146.0`
 - Negotiated protocol: MCP `2025-06-18`
 - Transport: Streamable HTTP at `http://127.0.0.1:3100/api/v1/mcp`
-- Request ceiling: 256 KiB
+- Request ceiling: 1 MiB (a 100-task task_create_many plan fits)
 - Session mode: legacy session compatibility with JSON request/response enabled
 - Network boundary: the ordinary loopback application listener, reached from
   the Mac only through SSH forwarding

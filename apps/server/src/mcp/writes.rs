@@ -47,17 +47,18 @@ const MAX_REQUEST_ID_BYTES: usize = 128;
 const TASK_ID_MESSAGE: &str = "Pass the task's ID, link, or key such as AWD-12.";
 const EXPECTED_VERSION_MESSAGE: &str =
     "Pass the version you last read (from task_open or task_list) as expectedVersion.";
-const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 letters, digits, dashes, dots or underscores, and send the same one when you retry.";
-const TITLE_MESSAGE: &str = "Give it a title of 1 to 240 characters, on one line.";
-const DESCRIPTION_MESSAGE: &str = "The description can be at most 100,000 characters, with no control characters except line breaks and tabs.";
-const PRIORITY_MESSAGE: &str = "Use no_priority, low, medium, high, or urgent.";
+pub(super) const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 letters, digits, dashes, dots or underscores, and send the same one when you retry.";
+pub(super) const TITLE_MESSAGE: &str = "Give it a title of 1 to 240 characters, on one line.";
+pub(super) const DESCRIPTION_MESSAGE: &str = "The description can be at most 100,000 characters, with no control characters except line breaks and tabs.";
+pub(super) const PRIORITY_MESSAGE: &str = "Use no_priority, low, medium, high, or urgent.";
 const ASSIGNEE_ID_MESSAGE: &str = "Pass the assignee as \"me\", an @handle, or an actor ID.";
 const ASSIGNEE_MESSAGE: &str =
     "That person can't be assigned tasks here: only active people and agents in the project can.";
-const STATUS_MESSAGE: &str = "Pass a status name, such as \"In Progress\" (see workflow_get).";
-const TYPE_MESSAGE: &str = "Pass a type name, such as \"Bug\" (see workflow_get).";
+pub(super) const STATUS_MESSAGE: &str =
+    "Pass a status name, such as \"In Progress\" (see workflow_get).";
+pub(super) const TYPE_MESSAGE: &str = "Pass a type name, such as \"Bug\" (see workflow_get).";
 const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
-const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
+pub(super) const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
 const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, or archived.";
 /// The most acceptance criteria one task_create call takes.
 const MAX_CRITERIA_ON_CREATE: usize = 50;
@@ -1831,14 +1832,13 @@ async fn set_archived_inner(
             .fetch_optional(&mut *transaction)
             .await?;
             let reachable = accessible_project_ids(state, principal).await?;
-            let message = match moved {
-                Some((project_id, moved_key)) if reachable.contains(&project_id) => format!(
-                    "{original} was moved to {moved_key}. Work on {moved_key}; this original stays archived as its history."
-                ),
-                _ => format!(
-                    "{original} was moved to another project; this original stays archived as its history."
-                ),
-            };
+            let message = moved_away_message(
+                &original,
+                moved
+                    .as_ref()
+                    .filter(|(project_id, _)| reachable.contains(project_id))
+                    .map(|(_, moved_key)| moved_key.as_str()),
+            );
             Ok(WriteResult::Conflict {
                 work_item_id: work_item_id.to_string(),
                 current_version: version,
@@ -1849,6 +1849,19 @@ async fn set_archived_inner(
             })
         }
         ArchiveOutcome::NotFound => Ok(WriteResult::not_found(TASK_NOT_FOUND_MESSAGE)),
+    }
+}
+
+/// Why the archived original of a moved task can't be restored. `moved_to`
+/// is the new task's key, given only when the caller can reach its project.
+pub(super) fn moved_away_message(original: &str, moved_to: Option<&str>) -> String {
+    match moved_to {
+        Some(moved_key) => format!(
+            "{original} was moved to {moved_key}. Work on {moved_key}; this original stays archived as its history."
+        ),
+        None => format!(
+            "{original} was moved to another project; this original stays archived as its history."
+        ),
     }
 }
 
@@ -2377,7 +2390,7 @@ async fn with_labels(
 
 /// Acceptance criteria for a new task, normalized, or the error naming the
 /// one that won't do.
-fn normalize_criteria(texts: &[String]) -> Result<Vec<String>, String> {
+pub(super) fn normalize_criteria(texts: &[String]) -> Result<Vec<String>, String> {
     if texts.len() > MAX_CRITERIA_ON_CREATE {
         return Err(format!(
             "Pass at most {MAX_CRITERIA_ON_CREATE} acceptance criteria when creating a task."
@@ -2405,7 +2418,7 @@ fn check_name(value: Option<&str>, field: &str, message: &str) -> Option<WriteRe
 }
 
 /// "A", "A and B", "A, B and C".
-fn join_and(names: &[String]) -> String {
+pub(super) fn join_and(names: &[String]) -> String {
     match names {
         [] => String::new(),
         [only] => only.clone(),
@@ -2607,7 +2620,7 @@ fn applied(
     }
 }
 
-fn valid_priority(value: &str) -> bool {
+pub(super) fn valid_priority(value: &str) -> bool {
     matches!(value, "no_priority" | "low" | "medium" | "high" | "urgent")
 }
 

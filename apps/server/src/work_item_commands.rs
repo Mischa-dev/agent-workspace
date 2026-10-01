@@ -359,6 +359,11 @@ pub async fn lock_work_items(
     .await?)
 }
 
+/// Creates a task with its criteria and labels, under one created activity.
+///
+/// task_create_many previews run this and then roll back, so every side
+/// effect here (and in `finalize_created`) must stay a write in this
+/// transaction: never a NOTIFY, an in-process broadcast or a network call.
 pub async fn create_work_item(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
@@ -377,9 +382,7 @@ pub async fn create_work_item(
         if parent.archived {
             return Ok(CreateWorkItemOutcome::ParentArchived(parent));
         }
-        let parent_levels = ancestor_chain(transaction, actor.project_id, parent_id)
-            .await?
-            .len();
+        let parent_levels = subtask_level(transaction, actor.project_id, parent_id).await?;
         if parent_levels + 1 > MAX_SUBTASK_LEVELS {
             return Ok(CreateWorkItemOutcome::ParentTooDeep);
         }
@@ -547,6 +550,9 @@ pub async fn update_work_item_by_id(
 /// Changes a task the caller has locked. Whatever mix of fields changes, the
 /// task gets one version bump, one activity, one audit row and one outbox
 /// event.
+///
+/// task_update_many previews run this and then roll back, so every side
+/// effect must stay a write in this transaction.
 pub async fn update_locked_work_item(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
@@ -815,6 +821,19 @@ async fn ancestor_chain(
     .bind(start)
     .fetch_all(&mut **transaction)
     .await?)
+}
+
+/// How deep a task sits: 1 for a top-level task, 2 for its subtasks, and so
+/// on. A subtask of it would sit one level deeper, at most
+/// MAX_SUBTASK_LEVELS.
+pub async fn subtask_level(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<usize, AppError> {
+    Ok(ancestor_chain(transaction, project_id, work_item_id)
+        .await?
+        .len())
 }
 
 /// How many levels of subtasks sit under a task (0 when it has none).
@@ -2316,6 +2335,9 @@ pub async fn advance_version(
     .ok_or(AppError::Internal("locked Work Item version changed"))
 }
 
+/// Records a change: its activity, the outbox event, a note for an assigned
+/// agent, and the audit row. Batch previews roll all of it back, so it must
+/// only ever write in this transaction.
 pub async fn finalize_change(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,

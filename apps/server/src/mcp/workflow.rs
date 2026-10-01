@@ -177,7 +177,6 @@ impl Workflow {
         self.enabled_statuses().find(|status| status.is_default)
     }
 
-    #[allow(dead_code)] // The batch tools fill in defaults next.
     pub(super) fn default_type(&self) -> Option<&TypeDef> {
         self.types.iter().find(|kind| kind.is_default)
     }
@@ -230,6 +229,13 @@ impl Workflow {
             }
         }
         None
+    }
+
+    pub(super) fn type_name(&self, id: Uuid) -> &str {
+        self.types
+            .iter()
+            .find(|kind| kind.id == id)
+            .map_or("an unknown type", |kind| kind.name.as_str())
     }
 
     pub(super) fn status_name(&self, id: Uuid) -> &str {
