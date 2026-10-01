@@ -183,6 +183,8 @@ export type WorkItemTimelineEntry = {
     actor: AssignableActor
     kind: string
     summary: string
+    /** The connected app it was done through, when the actor shows it. */
+    via?: string | null
   } | null
   comment: {
     id: string
@@ -192,6 +194,8 @@ export type WorkItemTimelineEntry = {
     mentionedActors: AssignableActor[]
     referencedWorkItems: ConversationWorkItemReference[]
     createdAt: string
+    /** The connected app it was written through, when the author shows it. */
+    via?: string | null
   } | null
 }
 

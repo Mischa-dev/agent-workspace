@@ -813,6 +813,12 @@
   color: var(--content-fg-muted);
 }
 
+/* Connected-app label on task activity done through an app, such as Codex */
+.aw-activity__via {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
 .aw-activity__content {
   margin-top: 4px;
   font: var(--t-body);

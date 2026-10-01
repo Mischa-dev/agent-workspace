@@ -1129,6 +1129,7 @@ function WorkItemActivity({ disabled, item }: { disabled: boolean; item: WorkIte
                     <p className="aw-activity__line">
                       <strong>{name}</strong>
                       <ActorTag kind={kind} />
+                      {entry.comment.via ? <span className="aw-activity__via">via {entry.comment.via}</span> : null}
                       {when}
                     </p>
                     <div className="aw-activity__content">
@@ -1154,6 +1155,7 @@ function WorkItemActivity({ disabled, item }: { disabled: boolean; item: WorkIte
                   <strong>{name}</strong>
                   <span aria-hidden="true">·</span>
                   {entry.activity?.summary}
+                  {entry.activity?.via ? <span className="aw-activity__via">via {entry.activity.via}</span> : null}
                   {when}
                 </p>
               </li>

@@ -611,6 +611,7 @@ export async function getWorkItemTimeline(
               },
               kind: string(activity.kind),
               summary: string(activity.summary),
+              via: typeof activity.via === 'string' ? activity.via.slice(0, 80) : null,
             }
           : null,
       comment:
@@ -636,6 +637,7 @@ export async function getWorkItemTimeline(
                 return [{ id: string(item.id), key: string(item.key), title: string(item.title), statusCategory: string(item.statusCategory), archivedAt: nullableString(item.archivedAt), href }]
               }),
               createdAt: string(comment.createdAt),
+              via: typeof comment.via === 'string' ? comment.via.slice(0, 80) : null,
             }
           : null,
     }

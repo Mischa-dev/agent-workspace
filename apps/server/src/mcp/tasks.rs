@@ -19,6 +19,7 @@ use super::{
         flag_or_text, mark_via, parse_id, parse_since, project_is_chosen, public_url,
         scope_projects, snippet, string_or_number, version_conflict_message,
     },
+    history,
     reads::{self, ReadResult, WorkItemProjection},
     talk::can_write_in,
     writes::{self, PullRequestLinkChange, WriteAccess, WriteResult},
@@ -34,6 +35,7 @@ use crate::{
         lock_work_items, ranks_for_placement, record_audit, validate_assignee, validate_priority,
     },
     work_item_labels::{self, echo},
+    work_items::decode_work_item_timeline_cursor,
 };
 
 const DEFAULT_CLAIM_MINUTES: i32 = 120;
@@ -975,6 +977,63 @@ pub(super) struct TaskOpenArguments {
     /// The task's ID, link, or key such as AW-12.
     #[serde(alias = "identifier")]
     pub task_id: String,
+    /// Extra parts to return. "history": what happened to the task (status
+    /// changes, edits, criteria, links and comments), with who, when, and
+    /// through which app.
+    pub include: Option<Vec<String>>,
+    /// With include history: how many entries (default 30, at most 100).
+    pub history_limit: Option<u16>,
+    /// With include history: the olderCursor from a previous call, for
+    /// earlier entries.
+    pub history_before: Option<String>,
+}
+
+/// What task_open's include asks for, checked before anything is read.
+struct HistoryRequest {
+    limit: u16,
+    before: Option<String>,
+}
+
+/// The include arguments, checked before anything is read: what to return,
+/// or the field at fault and what would work.
+fn history_request(
+    arguments: &TaskOpenArguments,
+) -> Result<Option<HistoryRequest>, (&'static str, String)> {
+    let mut wants_history = false;
+    for part in arguments.include.iter().flatten() {
+        if part.trim().eq_ignore_ascii_case("history") {
+            wants_history = true;
+        } else {
+            return Err((
+                "include",
+                "Use include: [\"history\"]. Nothing else can be included yet.".to_owned(),
+            ));
+        }
+    }
+    if !wants_history {
+        for (field, given) in [
+            ("historyBefore", arguments.history_before.is_some()),
+            ("historyLimit", arguments.history_limit.is_some()),
+        ] {
+            if given {
+                return Err((field, format!("Pass include: [\"history\"] with {field}.")));
+            }
+        }
+        return Ok(None);
+    }
+    let limit = arguments
+        .history_limit
+        .unwrap_or(history::DEFAULT_HISTORY_LIMIT);
+    if !(1..=history::MAX_HISTORY_LIMIT).contains(&limit) {
+        return Err((
+            "historyLimit",
+            "Use a historyLimit from 1 to 100.".to_owned(),
+        ));
+    }
+    Ok(Some(HistoryRequest {
+        limit,
+        before: arguments.history_before.clone(),
+    }))
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -997,6 +1056,9 @@ pub(super) struct TaskDetail {
     /// Where to read how this project works: project_open or page_get.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide_page_id: Option<String>,
+    /// With include: ["history"], what happened to the task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<history::TaskHistory>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -1028,6 +1090,10 @@ pub(super) async fn task_open(
     if !principal.can_read() {
         return ToolResult::denied("This connection can't read.");
     }
+    let history_request = match history_request(&arguments) {
+        Ok(request) => request,
+        Err((field, message)) => return ToolResult::invalid(field, message),
+    };
     let result = async {
         let Some((task_id, project_id)) = resolve_task(state, principal, &arguments.task_id).await?
         else {
@@ -1041,6 +1107,40 @@ pub(super) async fn task_open(
                 return Ok(ToolResult::denied("You can't read tasks in that project."));
             }
             _ => return Ok(ToolResult::unavailable()),
+        };
+        // History comes only once the task was found for this reader. Its
+        // cursor is bound to the task, so it's checked now.
+        let history = match history_request {
+            Some(request) => {
+                let before = match request.before.as_deref() {
+                    Some(cursor) => match decode_work_item_timeline_cursor(
+                        cursor.trim(),
+                        project_id,
+                        task_id,
+                    ) {
+                        Ok(sequence) => Some(sequence),
+                        Err(_) => {
+                            return Ok(ToolResult::invalid(
+                                "historyBefore",
+                                "Pass the olderCursor you were given for this same task.",
+                            ));
+                        }
+                    },
+                    None => None,
+                };
+                Some(
+                    history::task_history(
+                        state,
+                        principal,
+                        project_id,
+                        task_id,
+                        request.limit,
+                        before,
+                    )
+                    .await?,
+                )
+            }
+            None => None,
         };
         let claimed_by = current_claim(state, task_id).await?;
         let subtasks = sqlx::query_as::<_, TaskSummary>(&format!(
@@ -1158,6 +1258,7 @@ pub(super) async fn task_open(
             links,
             comments,
             guide_page_id,
+            history,
         }))
     }
     .await;

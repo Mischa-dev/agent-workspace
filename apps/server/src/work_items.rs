@@ -27,13 +27,14 @@ use crate::{
     policy::{Action, ActorKind, Decision, MembershipRole},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
-        AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor,
-        CreateWorkItemCommand, CreateWorkItemOutcome, LinkWording, PlacementProblem,
+        AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
+        CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
+        CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording, PlacementProblem,
         ProjectMembership, RepositoryLinkOutcome, ThreadLinkOutcome, UpdateWorkItemCommand,
-        UpdateWorkItemOutcome, authorize_mutation, change_repository_link, change_thread_link,
-        create_work_item as execute_create_work_item, finalize_change, finalize_comment,
-        insert_activity, lock_membership, lock_work_item, place_in_column, set_archived,
-        update_work_item_by_id,
+        UpdateWorkItemOutcome, authorize_mutation, change_criteria, change_repository_link,
+        change_thread_link, conflict_kind, create_work_item as execute_create_work_item,
+        finalize_change, finalize_comment, insert_activity, lock_membership, lock_work_item,
+        place_in_column, set_archived, update_work_item_by_id,
     },
 };
 
@@ -455,6 +456,10 @@ struct WorkItemCommentView {
     mentioned_actors: Vec<ActorView>,
     referenced_work_items: Vec<WorkItemReferenceView>,
     created_at: String,
+    /// The connected app it was written through, when the author shows it.
+    /// Stored comment replays predate it, so it has a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -472,22 +477,34 @@ struct WorkItemTimelineQuery {
     limit: Option<u16>,
 }
 
-#[derive(Debug, FromRow)]
-struct WorkItemTimelineRow {
-    sequence: i64,
-    kind: String,
-    created_at: String,
-    activity_id: Option<Uuid>,
-    activity_kind: Option<String>,
-    activity_summary: Option<String>,
-    activity_payload: Option<serde_json::Value>,
-    comment_id: Option<Uuid>,
-    comment_content: Option<serde_json::Value>,
-    comment_plain_text: Option<String>,
-    actor_id: Uuid,
-    actor_kind: String,
-    actor_display_name: String,
-    actor_handle: String,
+/// One entry of a task's timeline: an activity or a comment, with who made
+/// it and the connected app they made it through, if they show it.
+#[derive(Clone, Debug, FromRow)]
+pub(crate) struct WorkItemTimelineRow {
+    pub(crate) sequence: i64,
+    /// "activity" or "comment".
+    pub(crate) kind: String,
+    pub(crate) created_at: String,
+    pub(crate) activity_id: Option<Uuid>,
+    pub(crate) activity_kind: Option<String>,
+    pub(crate) activity_summary: Option<String>,
+    pub(crate) activity_payload: Option<serde_json::Value>,
+    pub(crate) comment_id: Option<Uuid>,
+    pub(crate) comment_content: Option<serde_json::Value>,
+    pub(crate) comment_plain_text: Option<String>,
+    pub(crate) actor_id: Uuid,
+    pub(crate) actor_kind: String,
+    pub(crate) actor_display_name: String,
+    pub(crate) actor_handle: String,
+    /// The connected app's name, when the person shows it (migration 0042).
+    pub(crate) via: Option<String>,
+}
+
+/// A page of a task's timeline, newest first.
+pub(crate) struct TimelinePage {
+    pub(crate) rows: Vec<WorkItemTimelineRow>,
+    /// Whether there are entries before the oldest row here.
+    pub(crate) has_more: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -524,6 +541,9 @@ struct WorkItemActivityView {
     kind: String,
     summary: String,
     payload: serde_json::Value,
+    /// The connected app it was done through, when the actor shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -563,13 +583,6 @@ struct AssigneeSearchRow {
     display_name: String,
     handle: String,
     kind: String,
-}
-
-#[derive(Debug, FromRow)]
-struct CriterionRow {
-    text: String,
-    position: i32,
-    completed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -2481,52 +2494,32 @@ async fn create_acceptance_criterion(
     if current.archived_at.is_some() {
         return Err(AppError::Conflict("work_item", "archived"));
     }
-    let position = sqlx::query_scalar::<_, i32>(
-        "SELECT COALESCE(max(position), 0) + 1 FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2",
+    let operations = [CriteriaOperation::Add {
+        text: request.text.clone(),
+        position: None,
+    }];
+    let outcome = change_criteria(
+        &mut transaction,
+        &browser_actor(&headers, &principal, project_id)?,
+        work_item_id,
+        CriteriaCommand {
+            expected_version: request.expected_version,
+            operations: &operations,
+            audit_action: "work_item.criterion_created",
+        },
     )
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_one(&mut *transaction)
     .await?;
-    if position > 1000 {
-        return Err(AppError::Validation("acceptanceCriteria"));
+    if !matches!(outcome, CriteriaOutcome::Applied { .. }) {
+        return criteria_refusal(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            request.expected_version,
+            outcome,
+            item_capabilities,
+        )
+        .await;
     }
-    let criterion_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO work_item_acceptance_criteria (
-            id, project_id, work_item_id, text, position, created_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-    )
-    .bind(criterion_id)
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(&request.text)
-    .bind(position)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    let version = advance_work_item_version(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        request.expected_version,
-    )
-    .await?;
-    record_work_item_change(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        "criterion_created",
-        "Acceptance criterion added",
-        "work_item.criterion_created",
-        serde_json::json!({"criterionId": criterion_id, "position": position}),
-        version,
-    )
-    .await?;
     let item = current_work_item_view(
         &mut transaction,
         project_id,
@@ -2599,116 +2592,38 @@ async fn update_acceptance_criterion(
     if current.archived_at.is_some() {
         return Err(AppError::Conflict("work_item", "archived"));
     }
-    let criterion = sqlx::query_as::<_, CriterionRow>(
-        r#"
-        SELECT text, position, completed
-        FROM work_item_acceptance_criteria
-        WHERE project_id = $1 AND work_item_id = $2 AND id = $3
-        FOR UPDATE
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(criterion_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("acceptance_criterion"))?;
-    let count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2",
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    let target_position = request.position.unwrap_or(criterion.position);
-    if target_position < 1 || i64::from(target_position) > count {
-        return Err(AppError::Validation("position"));
-    }
-    let text = request.text.unwrap_or_else(|| criterion.text.clone());
-    let completed_state = request.completed.unwrap_or(criterion.completed);
-    if text == criterion.text
-        && target_position == criterion.position
-        && completed_state == criterion.completed
-    {
-        let item = work_item_view(current, item_capabilities)?;
-        complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-        transaction.commit().await?;
-        return work_item_response(StatusCode::OK, item);
-    }
-    if target_position != criterion.position {
-        sqlx::query("SET CONSTRAINTS work_item_acceptance_criteria_position_unique DEFERRED")
-            .execute(&mut *transaction)
-            .await?;
-        if target_position > criterion.position {
-            sqlx::query(
-                "UPDATE work_item_acceptance_criteria SET position = position - 1, updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND position > $3 AND position <= $4",
-            )
-            .bind(project_id)
-            .bind(work_item_id)
-            .bind(criterion.position)
-            .bind(target_position)
-            .execute(&mut *transaction)
-            .await?;
-        } else {
-            sqlx::query(
-                "UPDATE work_item_acceptance_criteria SET position = position + 1, updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND position >= $3 AND position < $4",
-            )
-            .bind(project_id)
-            .bind(work_item_id)
-            .bind(target_position)
-            .bind(criterion.position)
-            .execute(&mut *transaction)
-            .await?;
-        }
-    }
-    sqlx::query(
-        r#"
-        UPDATE work_item_acceptance_criteria
-        SET text = $4, position = $5, completed = $6,
-            completed_by_actor_id = CASE WHEN $6 THEN
-                CASE WHEN completed THEN completed_by_actor_id ELSE $7 END
-                ELSE NULL END,
-            completed_at = CASE WHEN $6 THEN
-                CASE WHEN completed THEN completed_at ELSE now() END
-                ELSE NULL END,
-            updated_at = now()
-        WHERE project_id = $1 AND work_item_id = $2 AND id = $3
-        "#,
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(criterion_id)
-    .bind(&text)
-    .bind(target_position)
-    .bind(completed_state)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    let version = advance_work_item_version(
+    let operations = [CriteriaOperation::Update {
+        target: CriterionTarget::Id(criterion_id),
+        text: request.text.clone(),
+        position: request.position,
+        completed: request.completed,
+    }];
+    let outcome = change_criteria(
         &mut transaction,
-        project_id,
+        &browser_actor(&headers, &principal, project_id)?,
         work_item_id,
-        request.expected_version,
+        CriteriaCommand {
+            expected_version: request.expected_version,
+            operations: &operations,
+            audit_action: "work_item.criterion_updated",
+        },
     )
     .await?;
-    let (kind, summary) = match (criterion.completed, completed_state) {
-        (false, true) => ("criterion_completed", "Acceptance criterion completed"),
-        (true, false) => ("criterion_reopened", "Acceptance criterion reopened"),
-        _ => ("criterion_updated", "Acceptance criterion updated"),
-    };
-    record_work_item_change(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        kind,
-        summary,
-        "work_item.criterion_updated",
-        serde_json::json!({"criterionId": criterion_id}),
-        version,
-    )
-    .await?;
+    if !matches!(
+        outcome,
+        CriteriaOutcome::Applied { .. } | CriteriaOutcome::Unchanged { .. }
+    ) {
+        return criteria_refusal(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            request.expected_version,
+            outcome,
+            item_capabilities,
+        )
+        .await;
+    }
+    // Unchanged answers 200 with the item as it is, without a version bump.
     let item = current_work_item_view(
         &mut transaction,
         project_id,
@@ -2771,43 +2686,31 @@ async fn remove_acceptance_criterion(
     if current.archived_at.is_some() || membership.project_archived_at.is_some() {
         return Err(AppError::Conflict("work_item", "archived"));
     }
-    let position = sqlx::query_scalar::<_, i32>(
-        "DELETE FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2 AND id = $3 RETURNING position",
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(criterion_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("acceptance_criterion"))?;
-    sqlx::query(
-        "UPDATE work_item_acceptance_criteria SET position = position - 1, updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND position > $3",
-    )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(position)
-    .execute(&mut *transaction)
-    .await?;
-    let version = advance_work_item_version(
+    let operations = [CriteriaOperation::Remove {
+        target: CriterionTarget::Id(criterion_id),
+    }];
+    let outcome = change_criteria(
         &mut transaction,
-        project_id,
+        &browser_actor(&headers, &principal, project_id)?,
         work_item_id,
-        request.expected_version,
+        CriteriaCommand {
+            expected_version: request.expected_version,
+            operations: &operations,
+            audit_action: "work_item.criterion_removed",
+        },
     )
     .await?;
-    record_work_item_change(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        "criterion_removed",
-        "Acceptance criterion removed",
-        "work_item.criterion_removed",
-        serde_json::json!({"criterionId": criterion_id, "position": position}),
-        version,
-    )
-    .await?;
+    if !matches!(outcome, CriteriaOutcome::Applied { .. }) {
+        return criteria_refusal(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            request.expected_version,
+            outcome,
+            item_capabilities,
+        )
+        .await;
+    }
     let item = current_work_item_view(
         &mut transaction,
         project_id,
@@ -2818,6 +2721,47 @@ async fn remove_acceptance_criterion(
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
     work_item_response(StatusCode::OK, item)
+}
+
+/// The response for a criteria change the shared command didn't apply, in
+/// the shapes the web app has always had. The handlers check the version and
+/// archive state under the same lock first, so a conflict here is rare.
+async fn criteria_refusal(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    expected_version: i64,
+    outcome: CriteriaOutcome,
+    item_capabilities: WorkItemCapabilities,
+) -> Result<Response, AppError> {
+    match outcome {
+        CriteriaOutcome::Conflict(current)
+            if conflict_kind(&current, expected_version) == Some(ConflictKind::Version) =>
+        {
+            work_item_version_conflict_response(
+                current_work_item_view(transaction, project_id, work_item_id, item_capabilities)
+                    .await?,
+            )
+        }
+        CriteriaOutcome::Conflict(_) => Err(AppError::Conflict("work_item", "archived")),
+        CriteriaOutcome::NotFound => Err(AppError::NotFound("work_item")),
+        CriteriaOutcome::Plan {
+            error: CriteriaPlanError::TooMany { .. },
+            ..
+        } => Err(AppError::Validation("acceptanceCriteria")),
+        CriteriaOutcome::Plan {
+            error: CriteriaPlanError::Position { .. },
+            ..
+        } => Err(AppError::Validation("position")),
+        CriteriaOutcome::Plan {
+            error:
+                CriteriaPlanError::UnknownCriterion { .. } | CriteriaPlanError::RemovedEarlier { .. },
+            ..
+        } => Err(AppError::NotFound("acceptance_criterion")),
+        CriteriaOutcome::Applied { .. } | CriteriaOutcome::Unchanged { .. } => Err(
+            AppError::Internal("an applied criteria change has no refusal"),
+        ),
+    }
 }
 
 async fn create_work_item_comment(
@@ -2972,6 +2916,7 @@ async fn create_work_item_comment(
                 .map(|row| work_item_reference_view(project_id, row))
                 .collect(),
             created_at,
+            via: None,
         },
     };
     complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
@@ -3003,37 +2948,14 @@ async fn get_work_item_timeline(
         .map(|cursor| decode_work_item_timeline_cursor(cursor, project_id, work_item_id))
         .transpose()?;
     let limit = i64::from(query.limit.unwrap_or(50).clamp(1, 100));
-    let rows = sqlx::query_as::<_, WorkItemTimelineRow>(
-        r#"
-        SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
-               activity.id AS activity_id, activity.kind AS activity_kind,
-               activity.summary AS activity_summary,
-               activity.payload AS activity_payload,
-               comment.id AS comment_id, comment.content AS comment_content,
-               comment.plain_text AS comment_plain_text,
-               actor.id AS actor_id, actor.kind AS actor_kind,
-               membership.display_name AS actor_display_name,
-               membership.handle AS actor_handle
-        FROM work_item_timeline_entries entry
-        LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
-        LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
-        JOIN actors actor ON actor.id = COALESCE(activity.actor_id, comment.author_actor_id)
-        JOIN project_memberships membership
-          ON membership.project_id = entry.project_id AND membership.actor_id = actor.id
-        WHERE entry.project_id = $1 AND entry.work_item_id = $2
-          AND ($3::bigint IS NULL OR entry.sequence < $3)
-        ORDER BY entry.sequence DESC
-        LIMIT $4
-        "#,
+    let TimelinePage { rows, has_more } = fetch_timeline_rows(
+        &state.pool,
+        project_id,
+        work_item_id,
+        before_sequence,
+        limit,
     )
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(before_sequence)
-    .bind(limit + 1)
-    .fetch_all(&state.pool)
     .await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
     let next_cursor = if has_more {
         rows.last()
             .map(|row| encode_work_item_timeline_cursor(project_id, work_item_id, row.sequence))
@@ -3049,6 +2971,57 @@ async fn get_work_item_timeline(
         entries,
         next_cursor,
     }))
+}
+
+/// A page of a task's timeline, newest first: up to `limit` entries before
+/// `before_sequence` (or the latest ones), for the web timeline and MCP
+/// history alike. The caller has checked the reader may see the task.
+pub(crate) async fn fetch_timeline_rows(
+    pool: &PgPool,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    before_sequence: Option<i64>,
+    limit: i64,
+) -> Result<TimelinePage, AppError> {
+    let limit = limit.clamp(1, 100);
+    let mut rows = sqlx::query_as::<_, WorkItemTimelineRow>(
+        r#"
+        SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
+               activity.id AS activity_id, activity.kind AS activity_kind,
+               activity.summary AS activity_summary,
+               activity.payload AS activity_payload,
+               comment.id AS comment_id, comment.content AS comment_content,
+               comment.plain_text AS comment_plain_text,
+               actor.id AS actor_id, actor.kind AS actor_kind,
+               membership.display_name AS actor_display_name,
+               membership.handle AS actor_handle,
+               via_client.client_name AS via
+        FROM work_item_timeline_entries entry
+        LEFT JOIN work_item_activity activity ON activity.id = entry.activity_id
+        LEFT JOIN work_item_comments comment ON comment.id = entry.comment_id
+        JOIN actors actor ON actor.id = COALESCE(activity.actor_id, comment.author_actor_id)
+        JOIN project_memberships membership
+          ON membership.project_id = entry.project_id AND membership.actor_id = actor.id
+        LEFT JOIN mcp_oauth_grants via_grant
+          ON via_grant.id = COALESCE(activity.via_oauth_grant_id, comment.via_oauth_grant_id)
+         AND via_grant.show_via
+        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        WHERE entry.project_id = $1 AND entry.work_item_id = $2
+          AND ($3::bigint IS NULL OR entry.sequence < $3)
+        ORDER BY entry.sequence DESC
+        LIMIT $4
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(before_sequence)
+    .bind(limit + 1)
+    .fetch_all(pool)
+    .await?;
+    let page = usize::try_from(limit).unwrap_or(100);
+    let has_more = rows.len() > page;
+    rows.truncate(page);
+    Ok(TimelinePage { rows, has_more })
 }
 
 async fn fetch_comment_actor_rows(
@@ -3157,6 +3130,7 @@ async fn timeline_entry_view(
                 payload: row
                     .activity_payload
                     .ok_or(AppError::Internal("activity timeline payload"))?,
+                via: row.via,
             }),
             comment: None,
         }),
@@ -3238,6 +3212,7 @@ async fn timeline_entry_view(
                     mentioned_actors,
                     referenced_work_items,
                     created_at: row.created_at,
+                    via: row.via,
                 }),
             })
         }
@@ -3739,7 +3714,7 @@ fn decode_cursor(value: &str, project_id: Uuid) -> Result<i64, AppError> {
     Ok(number)
 }
 
-fn encode_work_item_timeline_cursor(
+pub(crate) fn encode_work_item_timeline_cursor(
     project_id: Uuid,
     work_item_id: Uuid,
     before_sequence: i64,
@@ -3755,7 +3730,7 @@ fn encode_work_item_timeline_cursor(
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn decode_work_item_timeline_cursor(
+pub(crate) fn decode_work_item_timeline_cursor(
     value: &str,
     project_id: Uuid,
     work_item_id: Uuid,

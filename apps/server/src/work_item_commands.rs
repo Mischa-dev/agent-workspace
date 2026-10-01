@@ -6,6 +6,8 @@
 //! workflow checks, version advancement, and exactly-once mutation side
 //! effects inside the caller's transaction.
 
+use std::collections::HashMap;
+
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -1553,37 +1555,584 @@ pub async fn insert_criteria(
     if last.is_none_or(|last| last > MAX_CRITERIA_PER_WORK_ITEM) {
         return Err(AppError::Validation("acceptanceCriteria"));
     }
-    let ids = criteria.iter().map(|_| Uuid::now_v7()).collect::<Vec<_>>();
-    let texts = criteria
-        .iter()
-        .map(|(text, _)| text.clone())
-        .collect::<Vec<_>>();
-    let completed = criteria
-        .iter()
-        .map(|(_, completed)| *completed)
-        .collect::<Vec<_>>();
+    let mut rows = Vec::with_capacity(criteria.len());
+    for (offset, (text, completed)) in criteria.iter().enumerate() {
+        let position = i32::try_from(offset)
+            .ok()
+            .and_then(|offset| start_position.checked_add(offset))
+            .ok_or(AppError::Validation("acceptanceCriteria"))?;
+        rows.push(NewCriterionRow {
+            id: Uuid::now_v7(),
+            text: text.clone(),
+            position,
+            completed: *completed,
+        });
+    }
+    insert_criterion_rows(transaction, project_id, work_item_id, actor_id, &rows).await
+}
+
+/// A criterion row to insert, with its ID and place already chosen.
+struct NewCriterionRow {
+    id: Uuid,
+    text: String,
+    position: i32,
+    completed: bool,
+}
+
+/// The one INSERT for acceptance criteria, used by creates, moves and
+/// criteria changes alike.
+async fn insert_criterion_rows(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    actor_id: Uuid,
+    rows: &[NewCriterionRow],
+) -> Result<(), AppError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let texts = rows.iter().map(|row| row.text.clone()).collect::<Vec<_>>();
+    let positions = rows.iter().map(|row| row.position).collect::<Vec<_>>();
+    let completed = rows.iter().map(|row| row.completed).collect::<Vec<_>>();
     sqlx::query(
         r#"
         INSERT INTO work_item_acceptance_criteria (
             id, project_id, work_item_id, text, position, completed,
             completed_by_actor_id, completed_at, created_by_actor_id
         )
-        SELECT item.id, $1, $2, item.text, (item.ord - 1 + $4)::int, item.completed,
+        SELECT item.id, $1, $2, item.text, item.position, item.completed,
                CASE WHEN item.completed THEN $3::uuid END,
                CASE WHEN item.completed THEN now() END, $3
-        FROM unnest($5::uuid[], $6::text[], $7::bool[])
-             WITH ORDINALITY AS item(id, text, completed, ord)
+        FROM unnest($4::uuid[], $5::text[], $6::int[], $7::bool[])
+             AS item(id, text, position, completed)
         "#,
     )
     .bind(project_id)
     .bind(work_item_id)
     .bind(actor_id)
-    .bind(start_position)
     .bind(&ids)
     .bind(&texts)
+    .bind(&positions)
     .bind(&completed)
     .execute(&mut **transaction)
     .await?;
+    Ok(())
+}
+
+/// A criterion as it stands. A list of them is in position order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CriterionState {
+    pub id: Uuid,
+    pub text: String,
+    pub completed: bool,
+}
+
+/// Which criterion an operation names, as of the version the caller read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CriterionTarget {
+    Id(Uuid),
+    /// 1-based, in the list at the version the caller read. Every criteria
+    /// change bumps the task's version, so this is unambiguous.
+    Position(i32),
+}
+
+/// One change to a task's acceptance criteria. `position` on add and update
+/// counts in the list as it stands after the operations before it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CriteriaOperation {
+    /// Text already normalized. None puts it at the end.
+    Add {
+        text: String,
+        position: Option<i32>,
+    },
+    Update {
+        target: CriterionTarget,
+        /// Already normalized.
+        text: Option<String>,
+        position: Option<i32>,
+        completed: Option<bool>,
+    },
+    Remove {
+        target: CriterionTarget,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CriterionChangeKind {
+    Created,
+    Updated,
+    Completed,
+    Reopened,
+    Removed,
+}
+
+impl CriterionChangeKind {
+    /// The activity kind, as the web app has always written it.
+    pub fn activity_kind(self) -> &'static str {
+        match self {
+            Self::Created => "criterion_created",
+            Self::Updated => "criterion_updated",
+            Self::Completed => "criterion_completed",
+            Self::Reopened => "criterion_reopened",
+            Self::Removed => "criterion_removed",
+        }
+    }
+
+    /// The activity summary, identical whichever app made the change.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::Created => "Acceptance criterion added",
+            Self::Updated => "Acceptance criterion updated",
+            Self::Completed => "Acceptance criterion completed",
+            Self::Reopened => "Acceptance criterion reopened",
+            Self::Removed => "Acceptance criterion removed",
+        }
+    }
+}
+
+/// What one operation does. Plans have exactly one per operation, in order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedCriterionChange {
+    pub operation_index: usize,
+    pub criterion_id: Uuid,
+    pub kind: CriterionChangeKind,
+    /// False when the criterion was already that way: no activity is written.
+    pub changed: bool,
+    /// 1-based, after the operation; for a removal, where it was.
+    pub position: i32,
+    /// For an update: "text" and/or "position".
+    pub fields: Vec<&'static str>,
+}
+
+impl PlannedCriterionChange {
+    /// The activity payload: IDs and positions only, never the text, so
+    /// taking down pasted text also takes it out of the history.
+    pub fn activity_payload(&self) -> serde_json::Value {
+        match self.kind {
+            CriterionChangeKind::Created | CriterionChangeKind::Removed => {
+                serde_json::json!({"criterionId": self.criterion_id, "position": self.position})
+            }
+            CriterionChangeKind::Updated => serde_json::json!({
+                "criterionId": self.criterion_id,
+                "position": self.position,
+                "fields": self.fields,
+            }),
+            CriterionChangeKind::Completed | CriterionChangeKind::Reopened => {
+                serde_json::json!({"criterionId": self.criterion_id})
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CriteriaPlanError {
+    /// The operation names a criterion that isn't in the snapshot.
+    UnknownCriterion { operation_index: usize },
+    /// The operation names a criterion an earlier operation removed.
+    RemovedEarlier {
+        operation_index: usize,
+        removed_by: usize,
+    },
+    /// The position is outside 1..=max.
+    Position { operation_index: usize, max: i32 },
+    /// The task would have more than MAX_CRITERIA_PER_WORK_ITEM.
+    TooMany { count: usize },
+}
+
+/// Applies `operations` in order to `snapshot` (the list at the version the
+/// caller read) and returns the resulting list and what each operation did.
+/// Targets name criteria in the snapshot; new criteria can't be targeted,
+/// since callers don't know their IDs yet. Nothing is written.
+pub fn plan_criteria(
+    snapshot: &[CriterionState],
+    operations: &[CriteriaOperation],
+    mut new_id: impl FnMut() -> Uuid,
+) -> Result<(Vec<CriterionState>, Vec<PlannedCriterionChange>), CriteriaPlanError> {
+    let mut list = snapshot.to_vec();
+    let mut removed: HashMap<Uuid, usize> = HashMap::new();
+    let mut changes = Vec::with_capacity(operations.len());
+    let length = |list: &[CriterionState]| i32::try_from(list.len()).unwrap_or(i32::MAX);
+    let resolve = |operation_index: usize,
+                   target: CriterionTarget,
+                   removed: &HashMap<Uuid, usize>|
+     -> Result<Uuid, CriteriaPlanError> {
+        let found = match target {
+            CriterionTarget::Id(id) => snapshot.iter().find(|criterion| criterion.id == id),
+            CriterionTarget::Position(position) => usize::try_from(position)
+                .ok()
+                .and_then(|position| position.checked_sub(1))
+                .and_then(|index| snapshot.get(index)),
+        };
+        let id = found
+            .map(|criterion| criterion.id)
+            .ok_or(CriteriaPlanError::UnknownCriterion { operation_index })?;
+        match removed.get(&id) {
+            Some(&removed_by) => Err(CriteriaPlanError::RemovedEarlier {
+                operation_index,
+                removed_by,
+            }),
+            None => Ok(id),
+        }
+    };
+    let index_of = |list: &[CriterionState], id: Uuid, operation_index: usize| {
+        list.iter()
+            .position(|criterion| criterion.id == id)
+            .ok_or(CriteriaPlanError::UnknownCriterion { operation_index })
+    };
+    for (operation_index, operation) in operations.iter().enumerate() {
+        match operation {
+            CriteriaOperation::Add { text, position } => {
+                let max = length(&list).saturating_add(1);
+                let position = position.unwrap_or(max);
+                if !(1..=max).contains(&position) {
+                    return Err(CriteriaPlanError::Position {
+                        operation_index,
+                        max,
+                    });
+                }
+                let id = new_id();
+                list.insert(
+                    usize::try_from(position - 1).unwrap_or(list.len()),
+                    CriterionState {
+                        id,
+                        text: text.clone(),
+                        completed: false,
+                    },
+                );
+                changes.push(PlannedCriterionChange {
+                    operation_index,
+                    criterion_id: id,
+                    kind: CriterionChangeKind::Created,
+                    changed: true,
+                    position,
+                    fields: Vec::new(),
+                });
+            }
+            CriteriaOperation::Update {
+                target,
+                text,
+                position,
+                completed,
+            } => {
+                let id = resolve(operation_index, *target, &removed)?;
+                let index = index_of(&list, id, operation_index)?;
+                let max = length(&list);
+                if let Some(position) = position
+                    && !(1..=max).contains(position)
+                {
+                    return Err(CriteriaPlanError::Position {
+                        operation_index,
+                        max,
+                    });
+                }
+                let current_position = i32::try_from(index + 1).unwrap_or(i32::MAX);
+                let target_position = position.unwrap_or(current_position);
+                let mut criterion = list.remove(index);
+                let mut fields = Vec::new();
+                if let Some(text) = text
+                    && *text != criterion.text
+                {
+                    criterion.text = text.clone();
+                    fields.push("text");
+                }
+                if target_position != current_position {
+                    fields.push("position");
+                }
+                let completion = completed.filter(|completed| *completed != criterion.completed);
+                if let Some(completed) = completion {
+                    criterion.completed = completed;
+                }
+                list.insert(
+                    usize::try_from(target_position - 1).unwrap_or(list.len()),
+                    criterion,
+                );
+                // As in the web app, a change of completion is what the one
+                // activity records, even when the text or place changed too.
+                let kind = match completion {
+                    Some(true) => CriterionChangeKind::Completed,
+                    Some(false) => CriterionChangeKind::Reopened,
+                    None => CriterionChangeKind::Updated,
+                };
+                changes.push(PlannedCriterionChange {
+                    operation_index,
+                    criterion_id: id,
+                    kind,
+                    changed: completion.is_some() || !fields.is_empty(),
+                    position: target_position,
+                    fields,
+                });
+            }
+            CriteriaOperation::Remove { target } => {
+                let id = resolve(operation_index, *target, &removed)?;
+                let index = index_of(&list, id, operation_index)?;
+                list.remove(index);
+                removed.insert(id, operation_index);
+                changes.push(PlannedCriterionChange {
+                    operation_index,
+                    criterion_id: id,
+                    kind: CriterionChangeKind::Removed,
+                    changed: true,
+                    position: i32::try_from(index + 1).unwrap_or(i32::MAX),
+                    fields: Vec::new(),
+                });
+            }
+        }
+    }
+    if list.len() > MAX_CRITERIA_PER_WORK_ITEM {
+        return Err(CriteriaPlanError::TooMany { count: list.len() });
+    }
+    Ok((list, changes))
+}
+
+pub struct CriteriaCommand<'a> {
+    pub expected_version: i64,
+    pub operations: &'a [CriteriaOperation],
+    pub audit_action: &'a str,
+}
+
+#[derive(Debug)]
+pub enum CriteriaOutcome {
+    Applied {
+        version: i64,
+        changes: Vec<PlannedCriterionChange>,
+        finalized: FinalizedBatch,
+    },
+    /// Every operation found the criteria already that way: no version bump,
+    /// no activity, and no audit row (the caller may write one).
+    Unchanged {
+        current: LockedWorkItem,
+        changes: Vec<PlannedCriterionChange>,
+    },
+    /// The version is stale or the task is archived (`conflict_kind`).
+    Conflict(LockedWorkItem),
+    NotFound,
+    /// Nothing was written. `criteria` is how many the task has.
+    Plan {
+        error: CriteriaPlanError,
+        criteria: usize,
+    },
+}
+
+/// Changes a task's acceptance criteria, all operations or none, for the
+/// web app and MCP alike. The caller has locked the project
+/// (`lock_membership`) and checked the actor may edit tasks there. However
+/// many operations apply, the task gets one version bump, one outbox event
+/// and one audit row, with an activity for each operation that changed
+/// something.
+pub async fn change_criteria(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    command: CriteriaCommand<'_>,
+) -> Result<CriteriaOutcome, AppError> {
+    let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
+        return Ok(CriteriaOutcome::NotFound);
+    };
+    if conflict_kind(&current, command.expected_version).is_some() {
+        return Ok(CriteriaOutcome::Conflict(current));
+    }
+    let snapshot = sqlx::query_as::<_, (Uuid, String, bool)>(
+        r#"
+        SELECT id, text, completed FROM work_item_acceptance_criteria
+        WHERE project_id = $1 AND work_item_id = $2
+        ORDER BY position
+        FOR UPDATE
+        "#,
+    )
+    .bind(actor.project_id)
+    .bind(work_item_id)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .map(|(id, text, completed)| CriterionState {
+        id,
+        text,
+        completed,
+    })
+    .collect::<Vec<_>>();
+    let (planned, changes) = match plan_criteria(&snapshot, command.operations, Uuid::now_v7) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return Ok(CriteriaOutcome::Plan {
+                error,
+                criteria: snapshot.len(),
+            });
+        }
+    };
+    if !changes.iter().any(|change| change.changed) {
+        return Ok(CriteriaOutcome::Unchanged { current, changes });
+    }
+    persist_criteria(transaction, actor, work_item_id, &snapshot, &planned).await?;
+    let version = advance_version(
+        transaction,
+        actor.project_id,
+        work_item_id,
+        command.expected_version,
+    )
+    .await?;
+    let changed = changes
+        .iter()
+        .filter(|change| change.changed)
+        .collect::<Vec<_>>();
+    let activities = changed
+        .iter()
+        .map(|change| ActivityRecord {
+            kind: change.kind.activity_kind(),
+            summary: change.kind.summary(),
+            payload: change.activity_payload(),
+        })
+        .collect::<Vec<_>>();
+    let audit_changes = changed
+        .iter()
+        .map(|change| {
+            let mut payload = change.activity_payload();
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "kind".to_owned(),
+                    serde_json::json!(change.kind.activity_kind()),
+                );
+            }
+            payload
+        })
+        .collect::<Vec<_>>();
+    let finalized = finalize_changes(
+        transaction,
+        actor,
+        work_item_id,
+        &activities,
+        command.audit_action,
+        serde_json::json!({"changes": audit_changes, "version": version}),
+        version,
+    )
+    .await?;
+    Ok(CriteriaOutcome::Applied {
+        version,
+        changes,
+        finalized,
+    })
+}
+
+/// Writes the net difference between `snapshot` and `planned`: removed rows
+/// go, changed rows take their final text, place and completion, and new
+/// rows go in at their final places. Writing final positions directly keeps
+/// every row inside the position CHECK; the unique position constraint is
+/// checked again before returning, so a clash surfaces here, not at commit.
+async fn persist_criteria(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    snapshot: &[CriterionState],
+    planned: &[CriterionState],
+) -> Result<(), AppError> {
+    let before = snapshot
+        .iter()
+        .enumerate()
+        .map(|(index, criterion)| (criterion.id, (index, criterion)))
+        .collect::<HashMap<_, _>>();
+    let kept = planned
+        .iter()
+        .map(|criterion| criterion.id)
+        .collect::<std::collections::HashSet<_>>();
+    let removed = snapshot
+        .iter()
+        .filter(|criterion| !kept.contains(&criterion.id))
+        .map(|criterion| criterion.id)
+        .collect::<Vec<_>>();
+    let mut updated = Vec::new();
+    let mut inserted = Vec::new();
+    for (index, criterion) in planned.iter().enumerate() {
+        let position = i32::try_from(index + 1).map_err(|_| AppError::Validation("position"))?;
+        match before.get(&criterion.id) {
+            Some((was, old)) => {
+                if *was != index
+                    || old.text != criterion.text
+                    || old.completed != criterion.completed
+                {
+                    updated.push((criterion, position));
+                }
+            }
+            None => inserted.push(NewCriterionRow {
+                id: criterion.id,
+                text: criterion.text.clone(),
+                position,
+                completed: criterion.completed,
+            }),
+        }
+    }
+    if removed.is_empty() && updated.is_empty() && inserted.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("SET CONSTRAINTS work_item_acceptance_criteria_position_unique DEFERRED")
+        .execute(&mut **transaction)
+        .await?;
+    if !removed.is_empty() {
+        sqlx::query(
+            "DELETE FROM work_item_acceptance_criteria WHERE project_id = $1 AND work_item_id = $2 AND id = ANY($3)",
+        )
+        .bind(actor.project_id)
+        .bind(work_item_id)
+        .bind(&removed)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    if !updated.is_empty() {
+        let ids = updated
+            .iter()
+            .map(|(criterion, _)| criterion.id)
+            .collect::<Vec<_>>();
+        let texts = updated
+            .iter()
+            .map(|(criterion, _)| criterion.text.clone())
+            .collect::<Vec<_>>();
+        let positions = updated
+            .iter()
+            .map(|(_, position)| *position)
+            .collect::<Vec<_>>();
+        let completed = updated
+            .iter()
+            .map(|(criterion, _)| criterion.completed)
+            .collect::<Vec<_>>();
+        // Someone who checks a criterion is its completer; one already
+        // checked keeps whoever checked it.
+        sqlx::query(
+            r#"
+            UPDATE work_item_acceptance_criteria criterion
+            SET text = change.text, position = change.position, completed = change.completed,
+                completed_by_actor_id = CASE WHEN change.completed THEN
+                    CASE WHEN criterion.completed THEN criterion.completed_by_actor_id ELSE $3 END
+                END,
+                completed_at = CASE WHEN change.completed THEN
+                    CASE WHEN criterion.completed THEN criterion.completed_at ELSE now() END
+                END,
+                updated_at = now()
+            FROM unnest($4::uuid[], $5::text[], $6::int[], $7::bool[])
+                 AS change(id, text, position, completed)
+            WHERE criterion.project_id = $1 AND criterion.work_item_id = $2
+              AND criterion.id = change.id
+            "#,
+        )
+        .bind(actor.project_id)
+        .bind(work_item_id)
+        .bind(actor.actor_id)
+        .bind(&ids)
+        .bind(&texts)
+        .bind(&positions)
+        .bind(&completed)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    insert_criterion_rows(
+        transaction,
+        actor.project_id,
+        work_item_id,
+        actor.actor_id,
+        &inserted,
+    )
+    .await?;
+    sqlx::query("SET CONSTRAINTS work_item_acceptance_criteria_position_unique IMMEDIATE")
+        .execute(&mut **transaction)
+        .await?;
     Ok(())
 }
 
@@ -2115,9 +2664,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        BOARD_RANK_STEP, BoardPlacement, ChangePayload, LinkChange, PlacementProblem,
+        BOARD_RANK_STEP, BoardPlacement, ChangePayload, CriteriaOperation, CriteriaPlanError,
+        CriterionChangeKind, CriterionState, CriterionTarget, LinkChange, PlacementProblem,
         allocate_board_ranks, normalize_criterion_text, normalize_description,
-        normalize_single_line, normalize_title, target_index, validate_priority,
+        normalize_single_line, normalize_title, plan_criteria, target_index, validate_priority,
     };
 
     #[test]
@@ -2300,5 +2850,241 @@ mod tests {
         assert!(normalize_criterion_text("   ").is_err());
         assert!(normalize_criterion_text("bell\u{7}").is_err());
         assert!(normalize_criterion_text(&"x".repeat(1001)).is_err());
+    }
+
+    fn criteria(texts: &[&str]) -> Vec<CriterionState> {
+        texts
+            .iter()
+            .map(|text| CriterionState {
+                id: Uuid::now_v7(),
+                text: (*text).to_owned(),
+                completed: false,
+            })
+            .collect()
+    }
+
+    fn texts(list: &[CriterionState]) -> Vec<&str> {
+        list.iter()
+            .map(|criterion| criterion.text.as_str())
+            .collect()
+    }
+
+    fn add(text: &str, position: Option<i32>) -> CriteriaOperation {
+        CriteriaOperation::Add {
+            text: text.to_owned(),
+            position,
+        }
+    }
+
+    fn update(
+        target: CriterionTarget,
+        position: Option<i32>,
+        completed: Option<bool>,
+    ) -> CriteriaOperation {
+        CriteriaOperation::Update {
+            target,
+            text: None,
+            position,
+            completed,
+        }
+    }
+
+    #[test]
+    fn criteria_added_anywhere_keep_positions_without_gaps() {
+        let snapshot = criteria(&["a", "b"]);
+        let (list, changes) = plan_criteria(
+            &snapshot,
+            &[
+                add("end", None),
+                add("first", Some(1)),
+                add("middle", Some(3)),
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert_eq!(texts(&list), ["first", "a", "middle", "b", "end"]);
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| (change.kind, change.position, change.changed))
+                .collect::<Vec<_>>(),
+            [
+                (CriterionChangeKind::Created, 3, true),
+                (CriterionChangeKind::Created, 1, true),
+                (CriterionChangeKind::Created, 3, true),
+            ]
+        );
+        assert_eq!(changes[1].criterion_id, list[0].id);
+        assert_eq!(
+            plan_criteria(&snapshot, &[add("far", Some(4))], Uuid::now_v7),
+            Err(CriteriaPlanError::Position {
+                operation_index: 0,
+                max: 3
+            })
+        );
+        assert_eq!(
+            plan_criteria(&snapshot, &[add("zero", Some(0))], Uuid::now_v7),
+            Err(CriteriaPlanError::Position {
+                operation_index: 0,
+                max: 3
+            })
+        );
+    }
+
+    #[test]
+    fn criteria_move_down_and_up() {
+        let snapshot = criteria(&["a", "b", "c", "d"]);
+        let (list, changes) = plan_criteria(
+            &snapshot,
+            &[update(CriterionTarget::Position(1), Some(3), None)],
+            Uuid::now_v7,
+        )
+        .expect("down");
+        assert_eq!(texts(&list), ["b", "c", "a", "d"]);
+        assert_eq!(changes[0].kind, CriterionChangeKind::Updated);
+        assert_eq!(changes[0].fields, ["position"]);
+        assert_eq!(changes[0].position, 3);
+        let (list, _) = plan_criteria(
+            &snapshot,
+            &[update(CriterionTarget::Id(snapshot[3].id), Some(1), None)],
+            Uuid::now_v7,
+        )
+        .expect("up");
+        assert_eq!(texts(&list), ["d", "a", "b", "c"]);
+        let (_, changes) = plan_criteria(
+            &snapshot,
+            &[update(CriterionTarget::Position(2), Some(2), None)],
+            Uuid::now_v7,
+        )
+        .expect("same place");
+        assert!(!changes[0].changed);
+        assert_eq!(
+            plan_criteria(
+                &snapshot,
+                &[update(CriterionTarget::Position(1), Some(5), None)],
+                Uuid::now_v7,
+            ),
+            Err(CriteriaPlanError::Position {
+                operation_index: 0,
+                max: 4
+            })
+        );
+    }
+
+    #[test]
+    fn criteria_targets_name_the_list_as_it_was_read() {
+        let snapshot = criteria(&["a", "b", "c"]);
+        let (list, changes) = plan_criteria(
+            &snapshot,
+            &[
+                CriteriaOperation::Remove {
+                    target: CriterionTarget::Position(1),
+                },
+                update(CriterionTarget::Position(2), None, Some(true)),
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        // Position 2 is the original #2 ("b"), not what's second after the
+        // removal.
+        assert_eq!(texts(&list), ["b", "c"]);
+        assert!(list[0].completed && !list[1].completed);
+        assert_eq!(changes[0].position, 1);
+        assert_eq!(changes[1].kind, CriterionChangeKind::Completed);
+        assert_eq!(changes[1].criterion_id, snapshot[1].id);
+
+        let a = CriterionTarget::Id(snapshot[0].id);
+        assert_eq!(
+            plan_criteria(
+                &snapshot,
+                &[
+                    CriteriaOperation::Remove { target: a },
+                    update(a, None, Some(true)),
+                ],
+                Uuid::now_v7,
+            ),
+            Err(CriteriaPlanError::RemovedEarlier {
+                operation_index: 1,
+                removed_by: 0
+            })
+        );
+        for target in [
+            CriterionTarget::Id(Uuid::now_v7()),
+            CriterionTarget::Position(4),
+            CriterionTarget::Position(0),
+        ] {
+            assert_eq!(
+                plan_criteria(
+                    &snapshot,
+                    &[CriteriaOperation::Remove { target }],
+                    Uuid::now_v7
+                ),
+                Err(CriteriaPlanError::UnknownCriterion { operation_index: 0 })
+            );
+        }
+    }
+
+    #[test]
+    fn criteria_already_that_way_change_nothing() {
+        let mut snapshot = criteria(&["a", "b"]);
+        snapshot[0].completed = true;
+        let (_, changes) = plan_criteria(
+            &snapshot,
+            &[
+                update(CriterionTarget::Position(1), None, Some(true)),
+                CriteriaOperation::Update {
+                    target: CriterionTarget::Position(2),
+                    text: Some("b".to_owned()),
+                    position: None,
+                    completed: Some(false),
+                },
+            ],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert!(changes.iter().all(|change| !change.changed), "{changes:?}");
+
+        // Text and completion together are one change, recorded as the
+        // completion, as the web app records it.
+        let (list, changes) = plan_criteria(
+            &snapshot,
+            &[CriteriaOperation::Update {
+                target: CriterionTarget::Position(2),
+                text: Some("b, reworded".to_owned()),
+                position: Some(1),
+                completed: Some(true),
+            }],
+            Uuid::now_v7,
+        )
+        .expect("plan");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, CriterionChangeKind::Completed);
+        assert_eq!(changes[0].fields, ["text", "position"]);
+        assert_eq!(texts(&list), ["b, reworded", "a"]);
+        assert_eq!(
+            changes[0].activity_payload(),
+            serde_json::json!({"criterionId": snapshot[1].id})
+        );
+    }
+
+    #[test]
+    fn criteria_stop_at_one_thousand() {
+        let snapshot = criteria(&["x"; 1000]);
+        assert_eq!(
+            plan_criteria(&snapshot, &[add("one more", None)], Uuid::now_v7),
+            Err(CriteriaPlanError::TooMany { count: 1001 })
+        );
+        let (list, _) = plan_criteria(
+            &snapshot,
+            &[
+                CriteriaOperation::Remove {
+                    target: CriterionTarget::Position(1),
+                },
+                add("one more", None),
+            ],
+            Uuid::now_v7,
+        )
+        .expect("room after a removal");
+        assert_eq!(list.len(), 1000);
     }
 }
