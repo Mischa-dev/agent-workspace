@@ -504,3 +504,82 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
         "{everything}"
     );
 }
+
+#[tokio::test]
+async fn owners_add_change_and_remove_members() {
+    let Some(setup) = setup("mcp_members").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = send(
+        app,
+        setup
+            .browser
+            .request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await
+    .1["projectId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
+    let (_, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+
+    let set = |arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, "project_member_set", arguments).await }
+    };
+
+    let added = set(json!({"projectId": work, "person": "@mara"})).await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    assert_eq!(added["value"]["role"], "member");
+    assert_eq!(added["value"]["kind"], "agent");
+    let again = set(json!({"projectId": work, "person": "mara"})).await;
+    assert_eq!(again["outcome"], "ok", "adding twice is harmless: {again}");
+    let refused = set(json!({"projectId": work, "person": "@mara", "role": "admin"})).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let viewer = set(json!({"projectId": work, "person": "@mara", "role": "viewer"})).await;
+    assert_eq!(viewer["value"]["role"], "viewer", "{viewer}");
+    let own = set(json!({"projectId": work, "person": "@owner", "remove": true})).await;
+    assert_eq!(own["outcome"], "invalid_request", "{own}");
+
+    // Mara can't manage members, and loses access the moment she's removed.
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let hers = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "project_member_set",
+        json!({"projectId": work, "person": "@owner", "role": "viewer"}),
+    )
+    .await;
+    assert_eq!(hers["outcome"], "permission_denied", "{hers}");
+    let before = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "workflow_get",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_eq!(before["outcome"], "ok", "{before}");
+    let removed = set(json!({"projectId": work, "person": "@mara", "remove": true})).await;
+    assert_eq!(removed["value"]["active"], false, "{removed}");
+    let after = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "workflow_get",
+        json!({"projectId": work}),
+    )
+    .await;
+    assert_ne!(after["outcome"], "ok", "{after}");
+
+    // Adding her back restores her.
+    let back = set(json!({"projectId": work, "person": "@mara", "role": "member"})).await;
+    assert_eq!(back["value"]["active"], true, "{back}");
+    assert_eq!(back["value"]["role"], "member");
+}

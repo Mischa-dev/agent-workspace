@@ -230,6 +230,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Add someone from your organization to a project, change their role, or remove them (remove: true). Removing ends their access at once; what they wrote stays. Owners and admins only, as themselves.",
+        annotations(
+            title = "Set project member",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_member_set(
+        &self,
+        Parameters(arguments): Parameters<admin::MemberSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::MemberLine>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_member_set(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Rename a project. Its key stays the same, so task keys and links keep working. Owners and admins only, as themselves.",
         annotations(
             title = "Rename project",

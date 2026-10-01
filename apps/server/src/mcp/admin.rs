@@ -538,3 +538,167 @@ async fn project_reference(
     .await?;
     Ok(matches.first().copied())
 }
+
+// ---------------------------------------------------------------------------
+// project_member_set
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct MemberSetArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// Who: an @handle or actor ID of someone in your organization, person
+    /// or agent.
+    pub person: String,
+    /// admin, member, or viewer. Agents can be members or viewers. Leave it
+    /// out when removing; new members default to member.
+    pub role: Option<String>,
+    /// True to remove them from the project. Their access ends at once;
+    /// what they wrote stays.
+    pub remove: Option<bool>,
+    /// Their membership version from project_members. Leave it out to change
+    /// the current one.
+    pub expected_version: Option<i64>,
+}
+
+pub(super) async fn project_member_set(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: MemberSetArguments,
+) -> ToolResult<MemberLine> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if principal.actor_kind != ActorKind::Human {
+        return ToolResult::denied(ADMIN_ONLY);
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let remove = arguments.remove.unwrap_or(false);
+    if remove && arguments.role.is_some() {
+        return ToolResult::invalid("role", "Leave out role when removing someone.");
+    }
+    if let Some(role) = arguments.role.as_deref()
+        && !matches!(role, "admin" | "member" | "viewer")
+    {
+        return ToolResult::invalid(
+            "role",
+            "Use admin, member, or viewer. Ownership can only be given in the web app.",
+        );
+    }
+    let project_id = principal.project_id;
+    let result = async {
+        let Some(row) = admin_row(state, principal, project_id).await? else {
+            return Ok(ToolResult::not_found("That project"));
+        };
+        if !may_administer(principal, project_id, &row) {
+            return Ok(ToolResult::denied(ADMIN_ONLY));
+        }
+        let person = arguments.person.trim();
+        let Some(actor_id) = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT profile.actor_id
+            FROM projects project
+            JOIN organization_actor_profiles profile
+              ON profile.organization_id = project.organization_id
+            WHERE project.id = $1
+              AND (profile.actor_id::text = $2 OR lower(profile.handle) = lower($3))
+            LIMIT 1
+            "#,
+        )
+        .bind(project_id)
+        .bind(person)
+        .bind(person.trim_start_matches('@'))
+        .fetch_optional(&state.pool)
+        .await?
+        else {
+            return Ok(ToolResult::not_found(&format!(
+                "{person} in your organization"
+            )));
+        };
+        if actor_id == principal.actor_id {
+            return Ok(ToolResult::invalid(
+                "person",
+                "You can't change your own membership. Ask another owner.",
+            ));
+        }
+        let existing = sqlx::query_scalar::<_, bool>(
+            "SELECT enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let mut transaction = state.pool.begin().await?;
+        let action = match (existing, remove) {
+            (None, true) => {
+                return Ok(ToolResult::not_found(&format!("{person} in this project")));
+            }
+            (None, false) => {
+                let added = crate::memberships::add_member(
+                    &mut transaction,
+                    principal.actor_id,
+                    project_id,
+                    actor_id,
+                    arguments.role.as_deref().unwrap_or("member"),
+                )
+                .await?;
+                added.inserted.then_some("project_membership.mcp_added")
+            }
+            (Some(_), _) => {
+                let change = crate::memberships::change_member(
+                    &mut transaction,
+                    principal.actor_id,
+                    project_id,
+                    actor_id,
+                    arguments.role.as_deref(),
+                    Some(!remove),
+                    arguments.expected_version,
+                )
+                .await?;
+                change.updated.is_some().then_some(if remove {
+                    "project_membership.mcp_removed"
+                } else {
+                    "project_membership.mcp_changed"
+                })
+            }
+        };
+        if let Some(action) = action {
+            insert_audit(
+                &mut transaction,
+                principal,
+                project_id,
+                action,
+                "actor",
+                actor_id,
+                serde_json::json!({ "role": arguments.role }),
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        let member = sqlx::query_as::<_, MemberLine>(
+            r#"
+            SELECT membership.actor_id::text, membership.display_name AS name, membership.handle,
+                   CASE actor.kind WHEN 'external_agent' THEN 'agent' ELSE 'person' END AS kind,
+                   membership.role, membership.enabled AS active, membership.version,
+                   membership.created_at::text AS joined_at
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.actor_id = $2
+            "#,
+        )
+        .bind(project_id)
+        .bind(actor_id)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok::<_, AppError>(ToolResult::ok(member))
+    }
+    .await;
+    result.unwrap_or_else(|error| match error {
+        AppError::Forbidden => ToolResult::denied(
+            "You can't change that person's access. Admins manage members and viewers; only owners manage admins, and agents can only be members or viewers.",
+        ),
+        error => ToolResult::from_error(error, "project_member_set"),
+    })
+}
