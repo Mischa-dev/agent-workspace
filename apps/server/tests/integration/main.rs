@@ -1,0 +1,35 @@
+//! Every server integration test, built as one binary so the server is
+//! compiled and linked for tests once rather than once per file.
+
+mod agent_interface;
+mod direct_conversations;
+mod m0_database;
+mod m1_api_policy_database;
+mod m1_bootstrap_database;
+mod m1_http_projects;
+mod m1_identity_projects_database;
+mod m1_realtime_websocket;
+mod m1_recovery_provider_sessions;
+mod m2_actor_realtime_convergence;
+mod m2_concurrent_commands;
+mod m2_conversations_database;
+mod m2_conversations_http;
+mod m2_outbox_publisher;
+mod m2_provider_session_terminal_state;
+mod m2_start_failure;
+mod m3_account_http;
+mod m3_attention_isolation;
+mod m3_execution_foundation_database;
+mod m3_execution_http;
+mod m3_repositories_http;
+mod m3_repository_mirror_upgrade;
+mod m3_scheduler_http;
+mod m4_work_items_http;
+mod m5_github_foundation;
+mod m6_mcp_foundation;
+mod m7_execution_profiles;
+mod m7_invitations;
+mod m7_memberships;
+mod m9_external_agents;
+mod oauth_agent;
+mod reply_requests;

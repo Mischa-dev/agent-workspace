@@ -106,8 +106,8 @@ async fn legacy_mirror_is_copied_to_canonical_layout_without_removing_history() 
         .expect("set pre-M3 legacy mirror path");
 
     for migration in [
-        include_str!("../migrations/0009_m3_execution_foundation.sql"),
-        include_str!("../migrations/0010_m3_execution_admission_hardening.sql"),
+        include_str!("../../migrations/0009_m3_execution_foundation.sql"),
+        include_str!("../../migrations/0010_m3_execution_admission_hardening.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)
@@ -141,7 +141,7 @@ async fn legacy_mirror_is_copied_to_canonical_layout_without_removing_history() 
     assert!(preflight.required);
     assert_eq!(preflight.mirrors_adopted, 1);
     sqlx::raw_sql(include_str!(
-        "../migrations/0011_m3_canonical_repository_mirrors.sql"
+        "../../migrations/0011_m3_canonical_repository_mirrors.sql"
     ))
     .execute(&pool)
     .await
@@ -170,14 +170,14 @@ async fn legacy_mirror_is_copied_to_canonical_layout_without_removing_history() 
 
 async fn apply_through_m2(pool: &PgPool) {
     for migration in [
-        include_str!("../migrations/0001_foundation.sql"),
-        include_str!("../migrations/0002_walking_skeleton.sql"),
-        include_str!("../migrations/0003_m0_consistency.sql"),
-        include_str!("../migrations/0004_m1_identity_projects.sql"),
-        include_str!("../migrations/0005_m2_conversations.sql"),
-        include_str!("../migrations/0006_m2_message_mentions_projection.sql"),
-        include_str!("../migrations/0007_m2_archived_parent_navigation.sql"),
-        include_str!("../migrations/0008_m2_conversation_lock_boundaries.sql"),
+        include_str!("../../migrations/0001_foundation.sql"),
+        include_str!("../../migrations/0002_walking_skeleton.sql"),
+        include_str!("../../migrations/0003_m0_consistency.sql"),
+        include_str!("../../migrations/0004_m1_identity_projects.sql"),
+        include_str!("../../migrations/0005_m2_conversations.sql"),
+        include_str!("../../migrations/0006_m2_message_mentions_projection.sql"),
+        include_str!("../../migrations/0007_m2_archived_parent_navigation.sql"),
+        include_str!("../../migrations/0008_m2_conversation_lock_boundaries.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(pool)
