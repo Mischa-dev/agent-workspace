@@ -16,6 +16,24 @@ pub(super) const SNIPPET_CHARACTERS: usize = 280;
 /// Longest message text returned when reading a conversation.
 pub(super) const MESSAGE_CHARACTERS: usize = 8_000;
 
+/// Shared wording, so every tool says the same thing about the same problem.
+pub(super) const READ_ONLY_MESSAGE: &str =
+    "This connection is read-only. Reconnect it with full access to make changes.";
+pub(super) const ARCHIVED_PROJECT_MESSAGE: &str =
+    "This project is archived. Restore it with project_archive (archived: false) first.";
+
+/// Someone else changed a task between the caller's read and write.
+pub(super) fn version_conflict_message(task: &str, version: i64) -> String {
+    format!(
+        "Someone changed {task} first (now version {version}). Open it again with task_open, then retry with expectedVersion {version}."
+    )
+}
+
+/// An archived task refuses every change but a restore.
+pub(super) fn archived_task_message(task: &str) -> String {
+    format!("{task} is archived. Restore it before changing it.")
+}
+
 /// The result shape every newer tool uses. `message` is written for the agent
 /// reading it: it says what happened and what to try next.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -58,7 +76,7 @@ impl<T> ToolResult<T> {
     }
 
     pub(super) fn read_only() -> Self {
-        Self::denied("This connection is read-only. Reconnect it with full access to make changes.")
+        Self::denied(READ_ONLY_MESSAGE)
     }
 
     pub(super) fn conflict(message: impl Into<String>) -> Self {

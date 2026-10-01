@@ -16,6 +16,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, mark_via, parse_id, public_url},
+    tasks::command_actor,
 };
 use crate::{
     AppState,
@@ -23,9 +24,9 @@ use crate::{
     message_content::MessageContent,
     policy::{Action, Decision},
     work_item_commands::{
-        AllocatedNumberMetadata, AuditAttribution, ChangeFinalization, CommandActor,
-        CreateWorkItemCommand, CreateWorkItemOutcome, authorize_mutation, create_work_item,
-        finalize_change, finalize_comment, lock_membership,
+        AllocatedNumberMetadata, ChangeFinalization, CommandActor, CreateWorkItemCommand,
+        CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, authorize_mutation, create_work_item,
+        finalize_change, finalize_comment, insert_criteria, lock_membership,
     },
 };
 
@@ -143,8 +144,8 @@ pub(super) async fn task_move(
 
         let mut transaction = state.pool.begin().await?;
         mark_via(&mut transaction, principal).await?;
-        let source_actor = actor(principal, source_project_id);
-        let target_actor = actor(principal, target_project_id);
+        let source_actor = command_actor(principal, source_project_id);
+        let target_actor = command_actor(principal, target_project_id);
         for (actor, project, what) in [
             (&source_actor, source_project_id, "this task's project"),
             (&target_actor, target_project_id, "the target project"),
@@ -201,7 +202,7 @@ pub(super) async fn task_move(
                 SELECT child.id, tree.depth + 1
                 FROM work_items child
                 JOIN tree ON child.parent_work_item_id = tree.id
-                WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < 20
+                WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < $3
             )
             SELECT item.id,
                    CASE WHEN item.id = $2 THEN NULL ELSE item.parent_work_item_id END AS parent_id,
@@ -227,6 +228,8 @@ pub(super) async fn task_move(
         )
         .bind(source_project_id)
         .bind(task_id)
+        // Depth 0 is the task itself, so this walks every level a tree can have.
+        .bind(i32::try_from(MAX_SUBTASK_LEVELS - 1).unwrap_or(i32::MAX))
         .fetch_all(&mut *transaction)
         .await?;
         if tasks.len() > MAX_TASKS {
@@ -284,6 +287,9 @@ pub(super) async fn task_move(
                     priority: &task.priority,
                     assignee_actor_id: assignee,
                     parent_work_item_id: parent,
+                    label_ids: &[],
+                    acceptance_criteria: &[],
+                    board_placement: None,
                     activity_summary: &summary,
                     activity_metadata: serde_json::json!({ "movedFrom": task.key }),
                     activity_number_metadata: AllocatedNumberMetadata::Include,
@@ -418,22 +424,6 @@ pub(super) async fn task_move(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "task_move"))
 }
 
-fn actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
-    CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind,
-        project_id,
-        audit: AuditAttribution::Mcp {
-            authentication_class: principal.authentication_class,
-            request_id: Uuid::now_v7().to_string(),
-            client_name: principal.client_name.clone(),
-            mcp_credential_id: principal.mcp_credential_id,
-            oauth_grant_id: principal.oauth_grant_id,
-            external_agent_connection_id: principal.external_agent_connection_id,
-        },
-    }
-}
-
 /// The status with the same name in the target project, or else its first
 /// status in the same category, or else its default.
 async fn matching_status(
@@ -516,29 +506,19 @@ async fn carry_criteria(
     .bind(source_id)
     .fetch_all(&mut **transaction)
     .await?;
-    for (position, criterion) in criteria.iter().enumerate() {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_acceptance_criteria (
-                id, project_id, work_item_id, text, position, completed,
-                completed_by_actor_id, completed_at, created_by_actor_id
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6,
-                CASE WHEN $6 THEN $7 END, CASE WHEN $6 THEN now() END, $7
-            )
-            "#,
-        )
-        .bind(Uuid::now_v7())
-        .bind(target_project_id)
-        .bind(target_id)
-        .bind(&criterion.text)
-        .bind(i32::try_from(position + 1).unwrap_or(i32::MAX))
-        .bind(criterion.completed)
-        .bind(principal.actor_id)
-        .execute(&mut **transaction)
-        .await?;
-    }
-    Ok(())
+    let criteria = criteria
+        .into_iter()
+        .map(|criterion| (criterion.text, criterion.completed))
+        .collect::<Vec<_>>();
+    insert_criteria(
+        transaction,
+        target_project_id,
+        target_id,
+        principal.actor_id,
+        1,
+        &criteria,
+    )
+    .await
 }
 
 /// Threads, repositories and pull requests linked to the original. They stay

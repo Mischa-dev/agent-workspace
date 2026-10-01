@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, parse_id, project_role, public_url, role_allows},
+    workflow::Workflow,
 };
 use crate::{
     AppState,
@@ -88,38 +89,43 @@ pub(super) async fn workflow_get(
             Action::WorkItemView,
         )
         .await?;
-        let types = sqlx::query_as::<_, WorkflowType>(
-            "SELECT id::text, name, is_default FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position, id",
-        )
-        .bind(principal.project_id)
-        .fetch_all(&state.pool)
-        .await?;
-        let statuses = sqlx::query_as::<_, WorkflowStatus>(
-            r#"
-            SELECT id::text, name, semantic_category AS category, is_default
-            FROM work_item_statuses
-            WHERE project_id = $1 AND enabled
-            ORDER BY position, id
-            "#,
-        )
-        .bind(principal.project_id)
-        .fetch_all(&state.pool)
-        .await?;
-        let transitions = sqlx::query_as::<_, WorkflowTransition>(
-            r#"
-            SELECT source.name AS "from", target.name AS "to"
-            FROM work_item_status_transitions transition
-            JOIN work_item_statuses source
-              ON source.project_id = transition.project_id AND source.id = transition.from_status_id
-            JOIN work_item_statuses target
-              ON target.project_id = transition.project_id AND target.id = transition.to_status_id
-            WHERE transition.project_id = $1 AND source.enabled AND target.enabled
-            ORDER BY source.position, target.position
-            "#,
-        )
-        .bind(principal.project_id)
-        .fetch_all(&state.pool)
-        .await?;
+        let mut connection = state.pool.acquire().await?;
+        let workflow = Workflow::load(&mut connection, principal.project_id).await?;
+        let types = workflow
+            .types
+            .iter()
+            .map(|kind| WorkflowType {
+                id: kind.id.to_string(),
+                name: kind.name.clone(),
+                is_default: kind.is_default,
+            })
+            .collect();
+        let statuses = workflow
+            .statuses
+            .iter()
+            .filter(|status| status.enabled)
+            .map(|status| WorkflowStatus {
+                id: status.id.to_string(),
+                name: status.name.clone(),
+                category: status.category.clone(),
+                is_default: status.is_default,
+            })
+            .collect();
+        let enabled = |id: Uuid| {
+            workflow
+                .statuses
+                .iter()
+                .any(|status| status.id == id && status.enabled)
+        };
+        let transitions = workflow
+            .transitions
+            .iter()
+            .filter(|(from, to)| enabled(*from) && enabled(*to))
+            .map(|(from, to)| WorkflowTransition {
+                from: workflow.status_name(*from).to_owned(),
+                to: workflow.status_name(*to).to_owned(),
+            })
+            .collect();
         Ok::<_, AppError>(ToolResult::ok(WorkflowValue {
             types,
             statuses,

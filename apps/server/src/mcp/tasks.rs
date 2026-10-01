@@ -5,7 +5,7 @@
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use super::{
@@ -23,11 +23,11 @@ use crate::{
     error::AppError,
     policy::Action,
     work_item_commands::{
-        AuditAttribution, CommandActor, enqueue_update, insert_activity, record_audit,
+        BOARD_RANK_STEP, CommandActor, enqueue_update, insert_activity, record_audit,
+        validate_assignee,
     },
 };
 
-const BOARD_RANK_STEP: i64 = 1024;
 const DEFAULT_CLAIM_MINUTES: i32 = 120;
 
 // ---------------------------------------------------------------------------
@@ -230,41 +230,162 @@ async fn resolve_actor(
 }
 
 /// Find a task by ID, link, or key (such as AW-12) among the caller's
-/// projects. Returns the task and its project.
+/// projects. Returns the task and its project. A moved task's old key leads
+/// to where it went when the caller can reach that project; anyone else
+/// gets the archived original they could always see.
 pub(super) async fn resolve_task(
     state: &AppState,
     principal: &McpPrincipal,
     identifier: &str,
 ) -> Result<Option<(Uuid, Uuid)>, AppError> {
     let projects = accessible_project_ids(state, principal).await?;
-    let found = if let Some(id) = parse_id(identifier) {
+    resolve_among(state, principal, &projects, identifier).await
+}
+
+/// `resolve_task` for several references, in order, reading the caller's
+/// projects once.
+#[allow(dead_code)] // The batch tools resolve their task lists with it next.
+pub(super) async fn resolve_tasks(
+    state: &AppState,
+    principal: &McpPrincipal,
+    references: &[String],
+) -> Result<Vec<Option<(Uuid, Uuid)>>, AppError> {
+    let projects = accessible_project_ids(state, principal).await?;
+    let mut found = Vec::with_capacity(references.len());
+    for reference in references {
+        found.push(resolve_among(state, principal, &projects, reference).await?);
+    }
+    Ok(found)
+}
+
+async fn resolve_among(
+    state: &AppState,
+    principal: &McpPrincipal,
+    projects: &[Uuid],
+    identifier: &str,
+) -> Result<Option<(Uuid, Uuid)>, AppError> {
+    let reachable = |id: Uuid| {
         sqlx::query_as::<_, (Uuid, Uuid)>(
             "SELECT id, project_id FROM work_items WHERE id = $1 AND project_id = ANY($2)",
         )
         .bind(id)
-        .bind(&projects)
+        .bind(projects)
         .fetch_optional(&state.pool)
-        .await?
-    } else {
-        sqlx::query_as::<_, (Uuid, Uuid)>(
-            r#"
-            SELECT item.id, item.project_id
-            FROM work_items item
-            JOIN projects project ON project.id = item.project_id
-            WHERE item.project_id = ANY($2)
-              AND upper(project.project_key || '-' || item.number::text) = upper(trim($1))
-            LIMIT 1
-            "#,
-        )
-        .bind(identifier)
-        .bind(&projects)
-        .fetch_optional(&state.pool)
-        .await?
     };
-    Ok(found)
+    if let Some(id) = parse_id(identifier) {
+        return Ok(reachable(id).await?);
+    }
+    let Some((project_key, number)) = super::split_task_key(identifier) else {
+        return Ok(None);
+    };
+    // task_by_key also matches projects the caller belongs to beyond this
+    // connection's reach, so its answer is checked against `projects`.
+    if let Some(id) = super::task_by_key(state, principal, project_key, number).await?
+        && let Some(found) = reachable(id).await?
+    {
+        return Ok(Some(found));
+    }
+    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT item.id, item.project_id
+        FROM work_items item
+        JOIN projects project ON project.id = item.project_id
+        WHERE item.project_id = ANY($3)
+          AND upper(project.project_key) = upper($1) AND item.number = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(project_key)
+    .bind(number)
+    .bind(projects)
+    .fetch_optional(&state.pool)
+    .await?)
 }
 
-fn scoped(principal: &McpPrincipal, project_id: Uuid) -> McpPrincipal {
+/// Why an assignee can't be used.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum AssigneeProblem {
+    /// Nobody by that handle or ID is in the project.
+    NotInProject(String),
+    /// They're in the project but can't hold tasks (inactive, or not a
+    /// person or agent).
+    CantBeAssigned(String),
+}
+
+impl AssigneeProblem {
+    pub(super) fn message(&self) -> &str {
+        match self {
+            Self::NotInProject(message) | Self::CantBeAssigned(message) => message,
+        }
+    }
+}
+
+/// An assignee as agents write one: "me", "none" (nobody), an @handle or an
+/// actor ID of someone in the project who can hold tasks. `Ok(None)` means
+/// unassigned.
+pub(super) async fn resolve_assignee(
+    connection: &mut PgConnection,
+    principal: &McpPrincipal,
+    project_id: Uuid,
+    value: &str,
+) -> Result<Result<Option<Uuid>, AssigneeProblem>, AppError> {
+    let value = value.trim();
+    match value.to_lowercase().as_str() {
+        "me" => return Ok(Ok(Some(principal.actor_id))),
+        "none" => return Ok(Ok(None)),
+        _ => {}
+    }
+    let found = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"
+        SELECT membership.actor_id, membership.display_name, project.project_key
+        FROM project_memberships membership
+        JOIN projects project ON project.id = membership.project_id
+        WHERE membership.project_id = $1 AND membership.enabled
+          AND (membership.actor_id = $2 OR lower(membership.handle) = lower($3))
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(value.parse::<Uuid>().ok())
+    .bind(value.trim_start_matches('@'))
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((actor_id, name, project_key)) = found else {
+        let project_key =
+            sqlx::query_scalar::<_, String>("SELECT project_key FROM projects WHERE id = $1")
+                .bind(project_id)
+                .fetch_optional(&mut *connection)
+                .await?
+                .unwrap_or_else(|| "that project".to_owned());
+        return Ok(Err(AssigneeProblem::NotInProject(format!(
+            "No one called {value} is in {project_key}. Find people with people_search."
+        ))));
+    };
+    if !validate_assignee(connection, project_id, Some(actor_id)).await? {
+        return Ok(Err(AssigneeProblem::CantBeAssigned(format!(
+            "{name} can't be assigned tasks in {project_key}: only active people and agents in the project can."
+        ))));
+    }
+    Ok(Ok(Some(actor_id)))
+}
+
+/// The two shapes task_create and task_update have always given for an
+/// assignee they can't use: an unknown handle names the person in
+/// retryCategory, and an ID that can't be assigned is a correct_input.
+fn assignee_error(person: &str, problem: AssigneeProblem) -> WriteResult {
+    match problem {
+        AssigneeProblem::NotInProject(message) if person.parse::<Uuid>().is_err() => {
+            WriteResult::InvalidRequest {
+                field: "assignee".to_owned(),
+                retry_category: format!("No one called {person} is in that project."),
+                message: Some(message),
+            }
+        }
+        problem => WriteResult::invalid("assigneeActorId", problem.message()),
+    }
+}
+
+pub(super) fn scoped(principal: &McpPrincipal, project_id: Uuid) -> McpPrincipal {
     let mut scoped = principal.clone();
     scoped.project_id = project_id;
     scoped.project_explicit = true;
@@ -522,24 +643,18 @@ pub(super) async fn task_create(
             .flatten()
             .unwrap_or(true);
     if !project_is_chosen(principal) || in_messages_space {
+        const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
         return writes::WriteResult::InvalidRequest {
             field: "projectId".to_owned(),
-            retry_category: "Say which project with projectId (see projects_list).".to_owned(),
+            retry_category: PROJECT_MESSAGE.to_owned(),
+            message: Some(PROJECT_MESSAGE.to_owned()),
         };
     }
-    let assignee_actor_id = match arguments.assignee.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some("me") => Some(principal.actor_id.to_string()),
-        Some(person) => match resolve_actor(state, &[principal.project_id], person).await {
-            Ok(Some(id)) => Some(id.to_string()),
-            _ => {
-                return writes::WriteResult::InvalidRequest {
-                    field: "assignee".to_owned(),
-                    retry_category: format!("No one called {person} is in that project."),
-                };
-            }
-        },
-    };
+    let assignee_actor_id =
+        match assignee_for(state, principal, arguments.assignee.as_deref()).await {
+            Ok(assignee) => assignee.flatten().map(|id| id.to_string()),
+            Err(result) => return result,
+        };
     writes::create_work_item(
         state,
         principal,
@@ -552,6 +667,36 @@ pub(super) async fn task_create(
         },
     )
     .await
+}
+
+/// The assignee a task_create or task_update call named, in the project it
+/// acts in: None when it named none, `Some(None)` for "none".
+async fn assignee_for(
+    state: &AppState,
+    principal: &McpPrincipal,
+    assignee: Option<&str>,
+) -> Result<Option<Option<Uuid>>, WriteResult> {
+    let Some(person) = assignee.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let resolved = async {
+        let mut connection = state.pool.acquire().await?;
+        resolve_assignee(&mut connection, principal, principal.project_id, person).await
+    }
+    .await;
+    match resolved {
+        Ok(Ok(assignee)) => Ok(Some(assignee)),
+        Ok(Err(problem)) => Err(assignee_error(person, problem)),
+        Err(error) => {
+            tracing::error!(
+                category = error.log_category(),
+                "MCP assignee lookup failed"
+            );
+            Err(WriteResult::TemporarilyUnavailable {
+                retry_category: "retry_with_backoff".to_owned(),
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -584,18 +729,21 @@ pub(super) async fn task_update(
         .client_request_id
         .clone()
         .unwrap_or_else(|| Uuid::now_v7().to_string());
-    let assignee_actor_id = match arguments.assignee.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some("me") => Some(principal.actor_id.to_string()),
-        Some(person) => match resolve_actor(state, &[principal.project_id], person).await {
-            Ok(Some(id)) => Some(id.to_string()),
-            _ => {
-                return writes::WriteResult::InvalidRequest {
-                    field: "assignee".to_owned(),
-                    retry_category: format!("No one called {person} is in that project."),
-                };
+    let mut clear_assignee = arguments.clear_assignee;
+    let assignee_actor_id =
+        match assignee_for(state, principal, arguments.assignee.as_deref()).await {
+            Ok(Some(Some(id))) => Some(id.to_string()),
+            // "none" leaves it unassigned.
+            Ok(Some(None)) => {
+                clear_assignee = Some(true);
+                None
             }
-        },
+            Ok(None) => None,
+            Err(result) => return result,
+        };
+    let arguments = TaskUpdateArguments {
+        clear_assignee,
+        ..arguments
     };
     let changes_fields = arguments.title.is_some()
         || arguments.description.is_some()
@@ -815,20 +963,10 @@ pub(super) async fn task_reorder(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "task_reorder"))
 }
 
-fn command_actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
-    CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind,
-        project_id,
-        audit: AuditAttribution::Mcp {
-            authentication_class: principal.authentication_class,
-            request_id: Uuid::now_v7().to_string(),
-            client_name: principal.client_name.clone(),
-            mcp_credential_id: principal.mcp_credential_id,
-            oauth_grant_id: principal.oauth_grant_id,
-            external_agent_connection_id: principal.external_agent_connection_id,
-        },
-    }
+/// The command actor for a write in `project_id` that takes no
+/// clientRequestId; the audit row gets a fresh request ID.
+pub(super) fn command_actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
+    writes::mcp_actor(&scoped(principal, project_id), Uuid::now_v7().to_string())
 }
 
 // ---------------------------------------------------------------------------

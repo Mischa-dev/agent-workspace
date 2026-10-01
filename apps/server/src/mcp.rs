@@ -67,6 +67,7 @@ mod replies;
 mod talk;
 mod task_move;
 mod tasks;
+mod workflow;
 mod writes;
 
 pub const MCP_PATH: &str = "/api/v1/mcp";
@@ -153,6 +154,7 @@ fn unauthenticated<T>() -> common::ToolResult<T> {
 fn write_denied() -> writes::WriteResult {
     writes::WriteResult::PermissionDenied {
         retry_category: "reauthenticate".to_owned(),
+        message: Some("Sign in again: this connection isn't authorized.".to_owned()),
     }
 }
 
@@ -1879,12 +1881,20 @@ async fn insert_credential_audit(
     Ok(())
 }
 
+/// The most `projectIds` entries rewritten from keys; tools refuse longer
+/// lists anyway.
+const MAX_PROJECT_IDS: usize = 50;
+
 /// Replaces keys with IDs in the arguments that take one: a project key such
-/// as "AWD" in `projectId` or `toProjectId`, and a task key such as "AWD-12"
-/// in `taskId`, `workItemId` or `parentId` (and `identifier` for task_open).
-/// A key resolves only among projects the caller can reach, and a moved
-/// task's old key resolves to where it went. Returns whether anything
-/// changed; an unknown key is left for the tool to reject.
+/// as "AWD" in `projectId`, `toProjectId` or the `projectIds` list, and a
+/// task key such as "AWD-12" in `taskId`, `workItemId`, `parentId`,
+/// `parentWorkItemId`, `beforeTaskId` or `afterTaskId` (and `identifier` for
+/// task_open). A key resolves only among projects the caller can reach, and
+/// a moved task's old key resolves to where it went. Returns whether
+/// anything changed; an unknown key is left for the tool to reject.
+///
+/// Lists of tasks (such as `taskIds`) are resolved by the tools, with
+/// `tasks::resolve_tasks`, so they can answer for each entry as written.
 async fn keys_to_ids(
     state: &AppState,
     principal: &McpPrincipal,
@@ -1901,16 +1911,46 @@ async fn keys_to_ids(
             changed = true;
         }
     }
+    if let Some(projects) = arguments
+        .get_mut("projectIds")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for entry in projects.iter_mut().take(MAX_PROJECT_IDS) {
+            if let Some(key) = entry
+                .as_str()
+                .filter(|value| common::parse_id(value).is_none())
+                .map(|value| value.trim().to_owned())
+                && is_project_key(&key)
+                && let Some(project_id) = project_by_key(state, principal, &key).await?
+            {
+                *entry = serde_json::Value::String(project_id.to_string());
+                changed = true;
+            }
+        }
+    }
     let task_fields: &[&str] = if tool == "task_open" {
-        &["taskId", "workItemId", "parentId", "identifier"]
+        &[
+            "taskId",
+            "workItemId",
+            "parentId",
+            "parentWorkItemId",
+            "beforeTaskId",
+            "afterTaskId",
+            "identifier",
+        ]
     } else {
-        &["taskId", "workItemId", "parentId"]
+        &[
+            "taskId",
+            "workItemId",
+            "parentId",
+            "parentWorkItemId",
+            "beforeTaskId",
+            "afterTaskId",
+        ]
     };
     for field in task_fields {
         if let Some(key) = unresolved(arguments, field)
-            && let Some((project_key, number)) = key.rsplit_once('-')
-            && is_project_key(project_key)
-            && let Ok(number) = number.parse::<i64>()
+            && let Some((project_key, number)) = split_task_key(&key)
             && let Some(task_id) = task_by_key(state, principal, project_key, number).await?
         {
             arguments[*field] = serde_json::Value::String(task_id.to_string());
@@ -1918,6 +1958,19 @@ async fn keys_to_ids(
         }
     }
     Ok(changed)
+}
+
+/// Splits a task key such as "AWD-12" into its project key and number.
+pub(super) fn split_task_key(value: &str) -> Option<(&str, i64)> {
+    let (project_key, number) = value.trim().rsplit_once('-')?;
+    if !is_project_key(project_key) || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    number
+        .parse::<i64>()
+        .ok()
+        .filter(|number| *number > 0)
+        .map(|number| (project_key, number))
 }
 
 /// A string argument that isn't already an ID or link.
@@ -1967,8 +2020,11 @@ async fn project_by_key(
 }
 
 /// The task the caller can reach under this key: the task that has it now,
-/// or else the one a moved task went to (migration 0043).
-async fn task_by_key(
+/// or else the one a moved task went to (migration 0043). It matches any
+/// project the caller belongs to and can access; tools that take a
+/// connection's narrower reach check the answer against
+/// `accessible_project_ids`.
+pub(super) async fn task_by_key(
     state: &AppState,
     principal: &McpPrincipal,
     project_key: &str,
@@ -2051,6 +2107,10 @@ async fn scoped_project(
                 "approvalId",
                 "SELECT conversation.project_id FROM agent_approvals approval JOIN agent_runs run ON run.id = approval.agent_run_id JOIN conversations conversation ON conversation.id = run.conversation_id WHERE approval.id = $1",
             ),
+            // taskId must stay ahead of parentId: task_update acts in the
+            // task's own project, never in a parent it was given. Task
+            // anchors (beforeTaskId, afterTaskId) are left out on purpose:
+            // an anchor must never pick the project a task is created in.
             ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
             (
                 "parentId",
@@ -2266,6 +2326,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Fields added to WriteResult after its first release must never be
+    /// required, or clients built against the old schema reject results.
+    #[test]
+    fn write_results_never_require_the_added_fields() {
+        use rmcp::handler::server::common::schema_for_output;
+
+        let schema =
+            serde_json::Value::Object((*schema_for_output::<super::writes::WriteResult>()).clone());
+        let branches = schema["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no oneOf: {schema}"));
+        assert_eq!(branches.len(), 7, "{schema}");
+        let added = [
+            "key",
+            "url",
+            "message",
+            "labels",
+            "currentStatus",
+            "requestedStatus",
+            "allowedStatuses",
+            "path",
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for branch in branches {
+            let required = branch["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>();
+            assert!(required.contains(&"outcome"), "{branch}");
+            for field in added {
+                assert!(!required.contains(&field), "{field} is required: {branch}");
+                if branch["properties"].get(field).is_some() {
+                    seen.insert(field);
+                }
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            added.len(),
+            "every added field is described: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn task_keys_split_into_project_and_number() {
+        assert_eq!(super::split_task_key("AWD-12"), Some(("AWD", 12)));
+        assert_eq!(super::split_task_key(" awd-3 "), Some(("awd", 3)));
+        assert_eq!(super::split_task_key("AWD-0"), None);
+        assert_eq!(super::split_task_key("AWD-+3"), None);
+        assert_eq!(super::split_task_key("A-3"), None);
+        assert_eq!(super::split_task_key("AWD"), None);
+        assert_eq!(super::split_task_key("my-task-3"), None);
     }
 
     #[test]

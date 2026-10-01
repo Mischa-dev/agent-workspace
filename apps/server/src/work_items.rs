@@ -26,11 +26,12 @@ use crate::{
     },
     policy::{Action, ActorKind, Decision, MembershipRole},
     work_item_commands::{
-        AllocatedNumberMetadata, AuditAttribution, AuditVersionMetadata, ChangeFinalization,
-        CommandActor, CreateWorkItemCommand, CreateWorkItemOutcome, ProjectMembership,
+        AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
+        AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor,
+        CreateWorkItemCommand, CreateWorkItemOutcome, PlacementProblem, ProjectMembership,
         UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
         create_work_item as execute_create_work_item, finalize_change, finalize_comment,
-        insert_activity, lock_membership, update_work_item_by_id,
+        insert_activity, lock_membership, place_in_column, set_archived, update_work_item_by_id,
     },
 };
 
@@ -39,7 +40,6 @@ const MAX_DESCRIPTION_CHARACTERS: usize = crate::work_item_commands::MAX_DESCRIP
 const MAX_SEARCH_CHARACTERS: usize = 120;
 const DEFAULT_PAGE_SIZE: u16 = 50;
 const MAX_PAGE_SIZE: u16 = 100;
-const BOARD_RANK_STEP: i64 = 1024;
 
 const DEFAULT_TYPES: [(&str, i32, bool); 6] = [
     ("Feature", 1, false),
@@ -1327,6 +1327,9 @@ async fn update_work_item(
             status_id: request.status_id,
             priority: request.priority.as_deref(),
             assignee_actor_id: request.assignee_actor_id,
+            parent_work_item_id: None,
+            board_placement: None,
+            labels: None,
             summary: "Work Item updated",
             audit_action: "work_item.updated",
             audit_version_metadata: AuditVersionMetadata::Omit,
@@ -1349,6 +1352,13 @@ async fn update_work_item(
                 .await?
                 .ok_or(AppError::NotFound("work_item"))?;
             return work_item_version_conflict_response(work_item_view(row, capabilities)?);
+        }
+        UpdateWorkItemOutcome::TooManyLabels { .. }
+        | UpdateWorkItemOutcome::InvalidParent(_)
+        | UpdateWorkItemOutcome::InvalidPlacement(_) => {
+            return Err(AppError::Internal(
+                "the web update changed labels, parent or position",
+            ));
         }
         UpdateWorkItemOutcome::Noop(_) | UpdateWorkItemOutcome::Applied { .. } => {}
     }
@@ -1446,86 +1456,38 @@ async fn set_work_item_archived(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current_row = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
     let capabilities = capabilities(&membership)?;
-    let already_in_target_state = current_row.archived_at.is_some() == archived;
-    if already_in_target_state {
-        let item = work_item_view(current_row, capabilities)?;
-        complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-        transaction.commit().await?;
-        return work_item_response(StatusCode::OK, item);
-    }
-    if current_row.version != request.expected_version {
-        let current = work_item_view(current_row, capabilities)?;
-        return work_item_version_conflict_response(current);
-    }
-    let updated = if archived {
-        sqlx::query(
-            r#"
-            UPDATE work_items
-            SET archived_at = now(), archived_by_actor_id = $3,
-                version = version + 1, updated_at = now()
-            WHERE project_id = $1 AND id = $2 AND version = $4
-            "#,
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(principal.actor_id)
-        .bind(request.expected_version)
-        .execute(&mut *transaction)
-        .await?
+    let (summary, audit_action) = if archived {
+        ("Work Item archived", "work_item.archived")
     } else {
-        sqlx::query(
-            r#"
-            UPDATE work_items
-            SET archived_at = NULL, archived_by_actor_id = NULL,
-                version = version + 1, updated_at = now()
-            WHERE project_id = $1 AND id = $2 AND version = $3
-            "#,
-        )
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(request.expected_version)
-        .execute(&mut *transaction)
-        .await?
+        ("Work Item restored", "work_item.restored")
     };
-    if updated.rows_affected() != 1 {
-        return Err(AppError::Internal(
-            "locked Work Item archive lost its version",
-        ));
-    }
-    let version = request
-        .expected_version
-        .checked_add(1)
-        .ok_or(AppError::Validation("expectedVersion"))?;
-    let (kind, summary, audit_action) = if archived {
-        (
-            "work_item_archived",
-            "Work Item archived",
-            "work_item.archived",
-        )
-    } else {
-        (
-            "work_item_restored",
-            "Work Item restored",
-            "work_item.restored",
-        )
-    };
-    record_work_item_change(
+    let outcome = set_archived(
         &mut transaction,
-        headers,
-        principal,
-        project_id,
+        &browser_actor(headers, principal, project_id)?,
         work_item_id,
-        kind,
-        summary,
-        audit_action,
-        serde_json::json!({"previousVersion": request.expected_version}),
-        version,
+        ArchiveCommand {
+            expected_version: request.expected_version,
+            archived,
+            summary,
+            audit_action,
+        },
     )
     .await?;
+    match outcome {
+        ArchiveOutcome::NotFound => return Err(AppError::NotFound("work_item")),
+        // Restoring the original of a moved task would make a live copy
+        // whose old key opens the moved one.
+        ArchiveOutcome::MovedAway { .. } => return Err(AppError::Conflict("work_item", "moved")),
+        ArchiveOutcome::VersionConflict(_) => {
+            let current =
+                fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
+                    .await?
+                    .ok_or(AppError::NotFound("work_item"))?;
+            return work_item_version_conflict_response(work_item_view(current, capabilities)?);
+        }
+        ArchiveOutcome::Unchanged(_) | ArchiveOutcome::Applied { .. } => {}
+    }
     let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
         .await?
         .ok_or(AppError::Internal("archived Work Item is unavailable"))?;
@@ -2336,46 +2298,31 @@ async fn move_work_item(
             return Err(AppError::Conflict("work_item_status", "transition"));
         }
     }
-    let mut target_rows = sqlx::query_as::<_, (Uuid, i64)>(
-        r#"
-        SELECT id, board_rank FROM work_items
-        WHERE project_id = $1 AND status_id = $2 AND id <> $3 AND archived_at IS NULL
-        ORDER BY board_rank, id
-        FOR UPDATE
-        "#,
+    let current_rank = sqlx::query_scalar::<_, i64>(
+        "SELECT board_rank FROM work_items WHERE project_id = $1 AND id = $2",
     )
     .bind(project_id)
-    .bind(request.target_status_id)
     .bind(work_item_id)
-    .fetch_all(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await?;
     let target_index = usize::try_from(request.target_position - 1)
         .map_err(|_| AppError::Validation("targetPosition"))?;
-    if target_index > target_rows.len() {
-        return Err(AppError::Validation("targetPosition"));
-    }
-    let mut rank = allocate_board_rank(&target_rows, target_index)?;
-    if rank.is_none() {
-        for (index, (id, existing_rank)) in target_rows.iter_mut().enumerate() {
-            let balanced_rank = i64::try_from(index + 1)
-                .ok()
-                .and_then(|value| value.checked_mul(BOARD_RANK_STEP))
-                .ok_or(AppError::Internal("rebalance Work Item board rank"))?;
-            if *existing_rank != balanced_rank {
-                sqlx::query(
-                    "UPDATE work_items SET board_rank = $3 WHERE project_id = $1 AND id = $2",
-                )
-                .bind(project_id)
-                .bind(*id)
-                .bind(balanced_rank)
-                .execute(&mut *transaction)
-                .await?;
-                *existing_rank = balanced_rank;
-            }
+    let board_rank = match place_in_column(
+        &mut transaction,
+        project_id,
+        request.target_status_id,
+        work_item_id,
+        Some((current.status_id, current_rank)),
+        BoardPlacement::Index(target_index),
+    )
+    .await?
+    {
+        Ok(placed) => placed.board_rank,
+        Err(PlacementProblem::OutOfRange { .. }) => {
+            return Err(AppError::Validation("targetPosition"));
         }
-        rank = allocate_board_rank(&target_rows, target_index)?;
-    }
-    let board_rank = rank.ok_or(AppError::Internal("allocate Work Item board rank"))?;
+        Err(_) => return Err(AppError::Internal("place a Work Item on the board")),
+    };
     let updated = sqlx::query(
         r#"
         UPDATE work_items
@@ -2418,27 +2365,6 @@ async fn move_work_item(
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
     work_item_response(StatusCode::OK, item)
-}
-
-fn allocate_board_rank(rows: &[(Uuid, i64)], index: usize) -> Result<Option<i64>, AppError> {
-    let previous = index
-        .checked_sub(1)
-        .and_then(|previous| rows.get(previous))
-        .map(|row| row.1);
-    let next = rows.get(index).map(|row| row.1);
-    match (previous, next) {
-        (None, None) => Ok(Some(BOARD_RANK_STEP)),
-        (Some(previous), None) => previous
-            .checked_add(BOARD_RANK_STEP)
-            .map(Some)
-            .ok_or(AppError::Internal("append Work Item board rank")),
-        (None, Some(next)) if next > 1 => Ok(Some(next / 2)),
-        (None, Some(_)) => Ok(None),
-        (Some(previous), Some(next)) if next - previous > 1 => {
-            Ok(Some(previous + (next - previous) / 2))
-        }
-        (Some(_), Some(_)) => Ok(None),
-    }
 }
 
 async fn create_work_item(
@@ -2490,6 +2416,9 @@ async fn create_work_item(
                     priority: &request.priority,
                     assignee_actor_id: request.assignee_actor_id,
                     parent_work_item_id: None,
+                    label_ids: &[],
+                    acceptance_criteria: &[],
+                    board_placement: None,
                     activity_summary: "Work Item created",
                     activity_metadata: serde_json::json!({}),
                     activity_number_metadata: AllocatedNumberMetadata::Omit,
@@ -2504,7 +2433,9 @@ async fn create_work_item(
                     return Err(AppError::Validation("assigneeActorId"));
                 }
                 CreateWorkItemOutcome::ParentNotFound
-                | CreateWorkItemOutcome::ParentArchived(_) => {
+                | CreateWorkItemOutcome::ParentArchived(_)
+                | CreateWorkItemOutcome::ParentTooDeep
+                | CreateWorkItemOutcome::InvalidPlacement(_) => {
                     return Err(AppError::Internal("top-level Work Item had a parent"));
                 }
             };
@@ -3724,16 +3655,7 @@ fn normalize_description(value: &str) -> Result<String, AppError> {
 }
 
 fn normalize_criterion_text(value: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.chars().count() > 1000
-        || value
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
-    {
-        return Err(AppError::Validation("criterion text"));
-    }
-    Ok(value.to_owned())
+    crate::work_item_commands::normalize_criterion_text(value)
 }
 
 fn normalize_search(value: Option<&str>) -> Result<Option<String>, AppError> {

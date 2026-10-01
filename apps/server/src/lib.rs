@@ -42,6 +42,7 @@ pub mod seed;
 pub mod storage_admission;
 pub mod telemetry;
 pub mod work_item_commands;
+pub mod work_item_labels;
 pub mod work_items;
 
 use std::sync::Arc;
