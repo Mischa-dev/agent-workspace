@@ -173,7 +173,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List the projects you can work in, with open task and unread counts. The Messages space holds DMs and groups.",
+        description = "List the projects you can work in, with their keys, your role, and open task and unread counts. The Messages space holds DMs and groups. includeArchived also lists archived ones, which project_archive can restore.",
         annotations(
             title = "List projects",
             read_only_hint = true,
@@ -182,10 +182,11 @@ impl McpServer {
     )]
     async fn projects_list(
         &self,
+        Parameters(arguments): Parameters<briefing::ProjectsListArguments>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<common::ToolResult<briefing::ProjectsValue>> {
         let principal = principal_or!(parts, unauthenticated());
-        Json(briefing::projects_list(&self.state, principal).await)
+        Json(briefing::projects_list(&self.state, principal, arguments).await)
     }
 
     #[tool(

@@ -238,6 +238,22 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
             .any(|project| project["id"] == old.as_str()),
         "{listed}"
     );
+    let with_archived = tool(
+        app,
+        &codex,
+        &session,
+        "projects_list",
+        json!({"includeArchived": true}),
+    )
+    .await;
+    assert!(
+        with_archived["value"]["projects"]
+            .as_array()
+            .expect("projects")
+            .iter()
+            .any(|project| project["id"] == old.as_str() && project["archived"] == true),
+        "{with_archived}"
+    );
     let again = tool(
         app,
         &codex,
