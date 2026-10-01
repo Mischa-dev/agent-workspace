@@ -103,7 +103,7 @@ async fn column(app: &axum::Router, token: &str, session: &str, status: &str) ->
 }
 
 /// The Messages space every owner has, where agents are created.
-async fn space(setup: &Setup) -> String {
+pub(super) async fn space(setup: &Setup) -> String {
     send(
         &setup.app,
         setup
@@ -117,7 +117,7 @@ async fn space(setup: &Setup) -> String {
         .to_owned()
 }
 
-async fn add_member(setup: &Setup, project: &str, actor: Uuid, role: &str) {
+pub(super) async fn add_member(setup: &Setup, project: &str, actor: Uuid, role: &str) {
     let (status, added) = send(
         &setup.app,
         setup.browser.request(

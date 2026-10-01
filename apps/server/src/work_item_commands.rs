@@ -1206,6 +1206,315 @@ pub async fn place_in_column(
 }
 
 // ---------------------------------------------------------------------------
+// Links to threads and repositories
+
+/// How a link change is written down. The web app and MCP name the same
+/// change differently in the audit log and the activity summary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinkWording {
+    /// Prefix of every audit action, such as "work_item.mcp_" for
+    /// "work_item.mcp_thread_linked".
+    pub audit_prefix: &'static str,
+    /// Appended to every activity summary, such as " through MCP".
+    pub summary_suffix: &'static str,
+}
+
+impl LinkWording {
+    pub const WEB: Self = Self {
+        audit_prefix: "work_item.",
+        summary_suffix: "",
+    };
+    pub const MCP: Self = Self {
+        audit_prefix: "work_item.mcp_",
+        summary_suffix: " through MCP",
+    };
+
+    fn audit_action(self, kind: &str) -> String {
+        format!("{}{kind}", self.audit_prefix)
+    }
+
+    fn summary(self, summary: &str) -> String {
+        format!("{summary}{}", self.summary_suffix)
+    }
+}
+
+#[derive(Debug)]
+pub enum ThreadLinkOutcome {
+    /// No thread in the task's project that the actor can see.
+    ThreadNotFound,
+    Unchanged,
+    /// The change would apply, but the task isn't at the version given.
+    VersionConflict,
+    Changed {
+        version: i64,
+        finalized: FinalizedChange,
+    },
+}
+
+/// Links a task to a thread in its project, or unlinks it. The caller has
+/// locked the project (`lock_membership`) and the task, and refused an
+/// archived task. A call that changes nothing passes whatever version it
+/// names, so a retry answers `Unchanged`; `expected_version` is checked only
+/// when something would change.
+pub async fn change_thread_link(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    current: &LockedWorkItem,
+    expected_version: Option<i64>,
+    conversation_id: Uuid,
+    link: bool,
+    wording: LinkWording,
+) -> Result<ThreadLinkOutcome, AppError> {
+    // No conversation query skips conversation_visible_to (AGENTS.md): a
+    // thread in a private channel stays out of reach for non-members.
+    let thread = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM conversations
+            WHERE project_id = $1 AND id = $2 AND kind = 'thread'
+              AND conversation_visible_to(id, $3)
+        )
+        "#,
+    )
+    .bind(actor.project_id)
+    .bind(conversation_id)
+    .bind(actor.actor_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !thread {
+        return Ok(ThreadLinkOutcome::ThreadNotFound);
+    }
+    let linked = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM work_item_conversation_links
+            WHERE project_id = $1 AND work_item_id = $2 AND conversation_id = $3
+        )
+        "#,
+    )
+    .bind(actor.project_id)
+    .bind(current.id)
+    .bind(conversation_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if linked == link {
+        return Ok(ThreadLinkOutcome::Unchanged);
+    }
+    if expected_version.is_some_and(|expected| expected != current.version) {
+        return Ok(ThreadLinkOutcome::VersionConflict);
+    }
+    if link {
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_conversation_links (
+                project_id, work_item_id, conversation_id, created_by_actor_id
+            ) VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(actor.project_id)
+        .bind(current.id)
+        .bind(conversation_id)
+        .bind(actor.actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM work_item_conversation_links WHERE project_id = $1 AND work_item_id = $2 AND conversation_id = $3",
+        )
+        .bind(actor.project_id)
+        .bind(current.id)
+        .bind(conversation_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    let version =
+        advance_version(transaction, actor.project_id, current.id, current.version).await?;
+    let (kind, summary) = if link {
+        ("thread_linked", "Thread linked")
+    } else {
+        ("thread_unlinked", "Thread unlinked")
+    };
+    let payload = serde_json::json!({"conversationId": conversation_id});
+    let finalized = finalize_change(
+        transaction,
+        actor,
+        current.id,
+        ChangeFinalization {
+            activity_kind: kind,
+            summary: &wording.summary(summary),
+            audit_action: &wording.audit_action(kind),
+            activity_payload: payload.clone(),
+            audit_metadata: payload,
+            version,
+        },
+    )
+    .await?;
+    Ok(ThreadLinkOutcome::Changed { version, finalized })
+}
+
+#[derive(Debug)]
+pub enum RepositoryLinkOutcome {
+    /// No such repository in the task's project.
+    RepositoryNotFound,
+    /// Only an enabled, trusted, ready and active repository can be primary.
+    NotEligibleForPrimary {
+        enabled: bool,
+        trusted: bool,
+        preparation_state: String,
+        archived: bool,
+    },
+    /// A new link to an archived repository. Unlinking one, or making it
+    /// related, still works.
+    RepositoryArchived,
+    Unchanged,
+    /// The change would apply, but the task isn't at the version given.
+    VersionConflict,
+    Changed {
+        version: i64,
+        /// The repository that was primary until this made another one
+        /// primary; it's related now.
+        demoted_primary: Option<Uuid>,
+        finalized: FinalizedChange,
+    },
+}
+
+/// Links a task to a repository in its project as `primary` or `related`, or
+/// unlinks it (`desired_role` None). Making one primary makes the old
+/// primary related, in the same change. The caller has locked the project
+/// and the task and refused an archived task; `expected_version` is checked
+/// only when something would change, as in `change_thread_link`.
+pub async fn change_repository_link(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    current: &LockedWorkItem,
+    expected_version: Option<i64>,
+    repository_id: Uuid,
+    desired_role: Option<&str>,
+    wording: LinkWording,
+) -> Result<RepositoryLinkOutcome, AppError> {
+    if desired_role.is_some_and(|role| !matches!(role, "primary" | "related")) {
+        return Err(AppError::Validation("repository role"));
+    }
+    let Some((enabled, trusted, preparation_state, archived)) =
+        sqlx::query_as::<_, (bool, bool, String, bool)>(
+            r#"
+            SELECT enabled, trusted, preparation_state, archived_at IS NOT NULL
+            FROM repositories WHERE project_id = $1 AND id = $2
+            "#,
+        )
+        .bind(actor.project_id)
+        .bind(repository_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Ok(RepositoryLinkOutcome::RepositoryNotFound);
+    };
+    if desired_role == Some("primary")
+        && (!enabled || !trusted || preparation_state != "ready" || archived)
+    {
+        return Ok(RepositoryLinkOutcome::NotEligibleForPrimary {
+            enabled,
+            trusted,
+            preparation_state,
+            archived,
+        });
+    }
+    let existing_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3",
+    )
+    .bind(actor.project_id)
+    .bind(current.id)
+    .bind(repository_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if desired_role.is_some() && existing_role.is_none() && archived {
+        return Ok(RepositoryLinkOutcome::RepositoryArchived);
+    }
+    if existing_role.as_deref() == desired_role {
+        return Ok(RepositoryLinkOutcome::Unchanged);
+    }
+    if expected_version.is_some_and(|expected| expected != current.version) {
+        return Ok(RepositoryLinkOutcome::VersionConflict);
+    }
+    let mut demoted_primary = None;
+    match desired_role {
+        None => {
+            sqlx::query(
+                "DELETE FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3",
+            )
+            .bind(actor.project_id)
+            .bind(current.id)
+            .bind(repository_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        Some(role) => {
+            if role == "primary" {
+                demoted_primary = sqlx::query_scalar::<_, Uuid>(
+                    r#"
+                    UPDATE work_item_repository_links
+                    SET role = 'related', updated_at = now()
+                    WHERE project_id = $1 AND work_item_id = $2 AND role = 'primary'
+                      AND repository_id <> $3
+                    RETURNING repository_id
+                    "#,
+                )
+                .bind(actor.project_id)
+                .bind(current.id)
+                .bind(repository_id)
+                .fetch_optional(&mut **transaction)
+                .await?;
+            }
+            sqlx::query(
+                r#"
+                INSERT INTO work_item_repository_links (
+                    project_id, work_item_id, repository_id, role, created_by_actor_id
+                ) VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (work_item_id, repository_id)
+                DO UPDATE SET role = EXCLUDED.role, updated_at = now()
+                "#,
+            )
+            .bind(actor.project_id)
+            .bind(current.id)
+            .bind(repository_id)
+            .bind(role)
+            .bind(actor.actor_id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+    }
+    let version =
+        advance_version(transaction, actor.project_id, current.id, current.version).await?;
+    let (kind, summary) = match desired_role {
+        None => ("repository_unlinked", "Repository unlinked"),
+        Some("primary") if existing_role.is_some() => {
+            ("repository_primary_changed", "Primary repository changed")
+        }
+        _ => ("repository_linked", "Repository linked"),
+    };
+    let payload = serde_json::json!({"repositoryId": repository_id, "role": desired_role});
+    let finalized = finalize_change(
+        transaction,
+        actor,
+        current.id,
+        ChangeFinalization {
+            activity_kind: kind,
+            summary: &wording.summary(summary),
+            audit_action: &wording.audit_action(kind),
+            activity_payload: payload.clone(),
+            audit_metadata: payload,
+            version,
+        },
+    )
+    .await?;
+    Ok(RepositoryLinkOutcome::Changed {
+        version,
+        demoted_primary,
+        finalized,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance criteria
 
 /// Trims a criterion and checks it: 1 to 1,000 characters, with newlines and

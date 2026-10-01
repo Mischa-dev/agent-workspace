@@ -619,7 +619,7 @@ impl McpServer {
     // -- Tasks ---------------------------------------------------------------
 
     #[tool(
-        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project, status, assignee (me, none, @handle), words, or parent. Done and canceled tasks are left out unless includeDone.",
+        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them), type, priority, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), words, or parent. Done and canceled tasks are left out unless includeDone, and archived ones unless includeArchived. total counts every match; pass nextCursor for the next page.",
         annotations(title = "List tasks", read_only_hint = true, open_world_hint = false)
     )]
     async fn task_list(
@@ -746,7 +746,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Link a GitHub pull request that Agent Workspace already knows about to a task.",
+        description = "Older name for task_link with pullRequestId, kept for one release so existing bridges keep working. Links a GitHub pull request Agent Workspace already knows about to a task. Needs expectedVersion and clientRequestId.",
         annotations(
             title = "Link pull request",
             read_only_hint = false,
@@ -767,7 +767,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Put tasks in order on the board: pass them in the order you want, all from one status column, and they go to the top (or bottom) in that order.",
+        description = "Put tasks in order on the board, all from one status column. Pass them in the order you want, then say where: position top (the default) or bottom, or beforeTaskId / afterTaskId to place them next to another task in that column. Calling it again with the same arguments changes nothing.",
         annotations(
             title = "Reorder tasks",
             read_only_hint = false,
@@ -824,13 +824,13 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Link a task to where it came from or is discussed: a thread or conversation, a message, a page, or a decision. Pass remove to unlink.",
+        description = "Link a task to where it came from or what it touches: a thread or conversation, a message, a page, a decision, a repository (role primary or related; the primary is the one Codex runs on this task's thread use), or a pull request Agent Workspace already knows about (with the project's GitHub automation on, a linked pull request moves the task when it's opened or merged). Pass remove to unlink. Linking twice changes nothing.",
         annotations(
             title = "Link task",
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = true,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     async fn task_link(
@@ -2347,6 +2347,12 @@ mod tests {
         let label_write = serde_json::Value::Object(
             (*schema_for_output::<common::ToolResult<super::labels::LabelWriteValue>>()).clone(),
         );
+        let task_list = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::tasks::TaskListValue>>()).clone(),
+        );
+        let task_link = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::tasks::LinkValue>>()).clone(),
+        );
         for (schema, definition, skipped) in [
             (&briefing, None, &["replyRequests", "claims"][..]),
             (
@@ -2354,7 +2360,14 @@ mod tests {
                 None,
                 &["subtasks", "conversations", "links", "comments"][..],
             ),
-            (&task, Some("TaskSummary"), &["labels"][..]),
+            (&task, Some("TaskSummary"), &["labels", "archived"][..]),
+            (&task_list, Some("TaskListValue"), &["nextCursor"][..]),
+            (
+                &task_list,
+                Some("TaskSummary"),
+                &["labels", "archived", "assignee", "claimedBy"][..],
+            ),
+            (&task_link, Some("LinkValue"), &["role", "notes"][..]),
             (&overview, None, &["guide", "labels"][..]),
             (&overview, Some("TaskOverview"), &["blocked", "claimed"][..]),
             (&label_list, Some("LabelLine"), &["description"][..]),
@@ -2437,6 +2450,73 @@ mod tests {
             for field in ["type", "beforeTaskId", "afterTaskId"] {
                 assert!(properties.get(field).is_some(), "no {field}: {schema}");
             }
+        }
+    }
+
+    /// Fields a task list, a reorder and a link always carry stay required,
+    /// so clients can rely on them.
+    #[test]
+    fn board_results_always_carry_their_counts_and_versions() {
+        use rmcp::handler::server::common::schema_for_output;
+
+        let required = |schema: &serde_json::Value, definition: &str| {
+            schema["$defs"][definition]["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        let list = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::tasks::TaskListValue>>()).clone(),
+        );
+        assert!(required(&list, "TaskListValue").contains(&"total".to_owned()));
+        assert!(required(&list, "TaskSummary").contains(&"type".to_owned()));
+        let reorder = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::tasks::ReorderValue>>()).clone(),
+        );
+        for field in ["status", "column", "changed", "tasks"] {
+            assert!(
+                required(&reorder, "ReorderValue").contains(&field.to_owned()),
+                "{field}"
+            );
+        }
+        let link = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::tasks::LinkValue>>()).clone(),
+        );
+        for field in ["key", "version", "changed", "linked", "taskUrl"] {
+            assert!(
+                required(&link, "LinkValue").contains(&field.to_owned()),
+                "{field}"
+            );
+        }
+    }
+
+    /// claimed takes true, false or a word, through a deserializer, so the
+    /// input schema stays a plain string.
+    #[test]
+    fn task_list_filters_are_plain_inputs() {
+        use rmcp::handler::server::common::schema_for_input;
+
+        let schema = serde_json::Value::Object(
+            (*schema_for_input::<super::tasks::TaskListArguments>().expect("input schema")).clone(),
+        );
+        let properties = &schema["properties"];
+        let claimed = &properties["claimed"];
+        assert!(claimed.get("anyOf").is_none(), "{claimed}");
+        assert!(claimed.get("oneOf").is_none(), "{claimed}");
+        assert!(claimed.to_string().contains("string"), "{claimed}");
+        for field in [
+            "projectIds",
+            "labels",
+            "type",
+            "priority",
+            "createdBy",
+            "updatedSince",
+            "blocked",
+            "includeArchived",
+        ] {
+            assert!(properties.get(field).is_some(), "no {field}: {schema}");
         }
     }
 

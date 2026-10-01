@@ -28,10 +28,12 @@ use crate::{
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor,
-        CreateWorkItemCommand, CreateWorkItemOutcome, PlacementProblem, ProjectMembership,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation,
+        CreateWorkItemCommand, CreateWorkItemOutcome, LinkWording, PlacementProblem,
+        ProjectMembership, RepositoryLinkOutcome, ThreadLinkOutcome, UpdateWorkItemCommand,
+        UpdateWorkItemOutcome, authorize_mutation, change_repository_link, change_thread_link,
         create_work_item as execute_create_work_item, finalize_change, finalize_comment,
-        insert_activity, lock_membership, place_in_column, set_archived, update_work_item_by_id,
+        insert_activity, lock_membership, lock_work_item, place_in_column, set_archived,
+        update_work_item_by_id,
     },
 };
 
@@ -1878,53 +1880,28 @@ async fn change_work_item_thread_link(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+    let current = lock_work_item(&mut transaction, project_id, work_item_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
-    let thread_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
-    ).bind(project_id).bind(conversation_id).fetch_one(&mut *transaction).await?;
-    if !thread_exists {
-        return Err(AppError::NotFound("conversation"));
+    if current.archived {
+        return Err(AppError::Conflict("work_item", "archived"));
     }
-    let changed = if linked {
-        sqlx::query(r#"
-            INSERT INTO work_item_conversation_links (project_id, work_item_id, conversation_id, created_by_actor_id)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (work_item_id, conversation_id) DO NOTHING
-        "#).bind(project_id).bind(work_item_id).bind(conversation_id).bind(principal.actor_id)
-            .execute(&mut *transaction).await?.rows_affected() == 1
-    } else {
-        sqlx::query("DELETE FROM work_item_conversation_links WHERE project_id = $1 AND work_item_id = $2 AND conversation_id = $3")
-            .bind(project_id).bind(work_item_id).bind(conversation_id)
-            .execute(&mut *transaction).await?.rows_affected() == 1
-    };
-    if changed {
-        let version =
-            advance_work_item_version(&mut transaction, project_id, work_item_id, current.version)
-                .await?;
-        let (kind, summary, audit_action) = if linked {
-            ("thread_linked", "Thread linked", "work_item.thread_linked")
-        } else {
-            (
-                "thread_unlinked",
-                "Thread unlinked",
-                "work_item.thread_unlinked",
-            )
-        };
-        record_work_item_change(
-            &mut transaction,
-            headers,
-            principal,
-            project_id,
-            work_item_id,
-            kind,
-            summary,
-            audit_action,
-            serde_json::json!({"conversationId": conversation_id}),
-            version,
-        )
-        .await?;
+    match change_thread_link(
+        &mut transaction,
+        &browser_actor(headers, principal, project_id)?,
+        &current,
+        None,
+        conversation_id,
+        linked,
+        LinkWording::WEB,
+    )
+    .await?
+    {
+        ThreadLinkOutcome::ThreadNotFound => return Err(AppError::NotFound("conversation")),
+        ThreadLinkOutcome::VersionConflict => {
+            return Err(AppError::Internal("thread link checked no version"));
+        }
+        ThreadLinkOutcome::Unchanged | ThreadLinkOutcome::Changed { .. } => {}
     }
     let item = current_work_item_view(
         &mut transaction,
@@ -2049,88 +2026,49 @@ async fn change_work_item_repository_link(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
+    let current = lock_work_item(&mut transaction, project_id, work_item_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
     let caps = capabilities(&membership)?;
     if current.version != expected_version {
-        return work_item_version_conflict_response(work_item_view(current, caps)?);
+        let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
+            .await?
+            .ok_or(AppError::NotFound("work_item"))?;
+        return work_item_version_conflict_response(work_item_view(row, caps)?);
     }
-    let repository = sqlx::query_as::<_, (bool, bool, String, Option<String>)>(
-        r#"
-        SELECT enabled, trusted, preparation_state, archived_at::text
-        FROM repositories WHERE project_id = $1 AND id = $2
-    "#,
+    if current.archived {
+        return Err(AppError::Conflict("work_item", "archived"));
+    }
+    match change_repository_link(
+        &mut transaction,
+        &browser_actor(headers, principal, project_id)?,
+        &current,
+        None,
+        repository_id,
+        desired_role.as_deref(),
+        LinkWording::WEB,
     )
-    .bind(project_id)
-    .bind(repository_id)
-    .fetch_optional(&mut *transaction)
     .await?
-    .ok_or(AppError::NotFound("repository"))?;
-    if desired_role.as_deref() == Some("primary")
-        && (!repository.0 || !repository.1 || repository.2 != "ready" || repository.3.is_some())
     {
-        return Err(AppError::Conflict(
-            "repository",
-            "the primary repository must be enabled, trusted, ready, and active",
-        ));
-    }
-    let existing_role = sqlx::query_scalar::<_, String>(
-        "SELECT role FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3",
-    ).bind(project_id).bind(work_item_id).bind(repository_id).fetch_optional(&mut *transaction).await?;
-    let changed = match desired_role.as_deref() {
-        None => sqlx::query("DELETE FROM work_item_repository_links WHERE project_id = $1 AND work_item_id = $2 AND repository_id = $3")
-            .bind(project_id).bind(work_item_id).bind(repository_id)
-            .execute(&mut *transaction).await?.rows_affected() == 1,
-        Some(role) if existing_role.as_deref() == Some(role) => false,
-        Some(role) => {
-            if role == "primary" {
-                sqlx::query("UPDATE work_item_repository_links SET role = 'related', updated_at = now() WHERE project_id = $1 AND work_item_id = $2 AND role = 'primary'")
-                    .bind(project_id).bind(work_item_id).execute(&mut *transaction).await?;
-            }
-            sqlx::query(r#"
-                INSERT INTO work_item_repository_links (project_id, work_item_id, repository_id, role, created_by_actor_id)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (work_item_id, repository_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()
-            "#).bind(project_id).bind(work_item_id).bind(repository_id).bind(role).bind(principal.actor_id)
-                .execute(&mut *transaction).await?;
-            true
+        RepositoryLinkOutcome::RepositoryNotFound => {
+            return Err(AppError::NotFound("repository"));
         }
-    };
-    if changed {
-        let version =
-            advance_work_item_version(&mut transaction, project_id, work_item_id, expected_version)
-                .await?;
-        let (kind, summary, audit_action) = match desired_role.as_deref() {
-            None => (
-                "repository_unlinked",
-                "Repository unlinked",
-                "work_item.repository_unlinked",
-            ),
-            Some("primary") if existing_role.is_some() => (
-                "repository_primary_changed",
-                "Primary repository changed",
-                "work_item.repository_primary_changed",
-            ),
-            _ => (
-                "repository_linked",
-                "Repository linked",
-                "work_item.repository_linked",
-            ),
-        };
-        record_work_item_change(
-            &mut transaction,
-            headers,
-            principal,
-            project_id,
-            work_item_id,
-            kind,
-            summary,
-            audit_action,
-            serde_json::json!({"repositoryId": repository_id, "role": desired_role}),
-            version,
-        )
-        .await?;
+        RepositoryLinkOutcome::NotEligibleForPrimary { .. } => {
+            return Err(AppError::Conflict(
+                "repository",
+                "the primary repository must be enabled, trusted, ready, and active",
+            ));
+        }
+        RepositoryLinkOutcome::RepositoryArchived => {
+            return Err(AppError::Conflict(
+                "repository",
+                "archived repositories can't be linked",
+            ));
+        }
+        RepositoryLinkOutcome::VersionConflict => {
+            return Err(AppError::Internal("repository link checked its version"));
+        }
+        RepositoryLinkOutcome::Unchanged | RepositoryLinkOutcome::Changed { .. } => {}
     }
     let item = current_work_item_view(&mut transaction, project_id, work_item_id, caps).await?;
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;

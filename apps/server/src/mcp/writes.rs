@@ -1229,70 +1229,33 @@ pub async fn link_pull_request(
         {
             return Ok(conflict);
         }
-        let pr_exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM github_pull_requests WHERE project_id = $1 AND id = $2)",
+        let (changed, version, activity_id) = match change_pull_request_link(
+            &mut transaction,
+            principal.project_id,
+            work_item_id,
+            current.version,
+            None,
+            pull_request_id,
+            principal.actor_id,
+            true,
+            "Pull request linked through MCP",
         )
-        .bind(principal.project_id)
-        .bind(pull_request_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !pr_exists {
-            return Ok(WriteResult::not_found(
-                "That pull request wasn't found in this task's project.",
-            ));
-        }
-        let inserted = sqlx::query(
-            r#"
-            INSERT INTO github_pull_request_work_item_links (
-                project_id, github_pull_request_id, work_item_id, source,
-                confirmed, created_by_actor_id
-            ) VALUES ($1, $2, $3, 'explicit', true, $4)
-            ON CONFLICT (github_pull_request_id, work_item_id) DO NOTHING
-            "#,
-        )
-        .bind(principal.project_id)
-        .bind(pull_request_id)
-        .bind(work_item_id)
-        .bind(principal.actor_id)
-        .execute(&mut *transaction)
-        .await?;
-        let changed = inserted.rows_affected() == 1;
-        let version = if changed {
-            advance_version(
-                &mut transaction,
-                principal.project_id,
-                work_item_id,
-                arguments.expected_version,
-            )
-            .await?
-        } else {
-            current.version
-        };
-        let activity_id = if changed {
-            Some(
-                insert_work_item_activity(
-                    &mut transaction,
-                    principal.project_id,
-                    work_item_id,
-                    principal.actor_id,
-                    "work_item_updated",
-                    "Pull request linked through MCP",
-                    &serde_json::json!({"pullRequestId": pull_request_id}),
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        if changed {
-            enqueue_update(
-                &mut transaction,
-                principal.project_id,
-                work_item_id,
+        .await?
+        {
+            PullRequestLinkChange::NotInProject => {
+                return Ok(WriteResult::not_found(
+                    "That pull request wasn't found in this task's project.",
+                ));
+            }
+            PullRequestLinkChange::Unchanged => (false, current.version, None),
+            PullRequestLinkChange::Changed {
                 version,
-            )
-            .await?;
-        }
+                activity_id,
+            } => (true, version, Some(activity_id)),
+            PullRequestLinkChange::VersionConflict => {
+                return Err(AppError::Internal("pull request link checked its version"));
+            }
+        };
         let result_id = insert_mcp_audit(
             &mut transaction,
             principal,
@@ -1324,6 +1287,121 @@ pub async fn link_pull_request(
         Ok(result) => result,
         Err(error) => command_error("work_item_link_pull_request", error),
     }
+}
+
+/// What linking or unlinking a pull request did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PullRequestLinkChange {
+    /// No such pull request in the task's project.
+    NotInProject,
+    Unchanged,
+    /// The change would apply, but the task isn't at the version given.
+    VersionConflict,
+    Changed {
+        version: i64,
+        activity_id: Uuid,
+    },
+}
+
+/// Links a pull request Agent Workspace knows about to a task in the same
+/// project, or unlinks it, for task_link and task_link_pull_request alike. A
+/// link made here is explicit and confirmed, so the project's GitHub
+/// automation moves the task when the pull request opens or merges; a
+/// suggested link (from a branch name) becomes explicit. A change bumps the
+/// version and writes the activity and the outbox event; the caller has
+/// locked the project and the task and writes the audit row.
+/// `expected_version` is checked only when something would change, so a
+/// retry of a link that's already there answers `Unchanged`.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn change_pull_request_link(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    current_version: i64,
+    expected_version: Option<i64>,
+    pull_request_id: Uuid,
+    actor_id: Uuid,
+    link: bool,
+    activity_summary: &str,
+) -> Result<PullRequestLinkChange, AppError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM github_pull_requests WHERE project_id = $1 AND id = $2)",
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !exists {
+        return Ok(PullRequestLinkChange::NotInProject);
+    }
+    let source = sqlx::query_scalar::<_, String>(
+        "SELECT source FROM github_pull_request_work_item_links WHERE project_id = $1 AND github_pull_request_id = $2 AND work_item_id = $3",
+    )
+    .bind(project_id)
+    .bind(pull_request_id)
+    .bind(work_item_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let already = if link {
+        source.as_deref() == Some("explicit")
+    } else {
+        source.is_none()
+    };
+    if already {
+        return Ok(PullRequestLinkChange::Unchanged);
+    }
+    if expected_version.is_some_and(|expected| expected != current_version) {
+        return Ok(PullRequestLinkChange::VersionConflict);
+    }
+    let changed = if link {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_work_item_links (
+                project_id, github_pull_request_id, work_item_id, source,
+                confirmed, created_by_actor_id
+            ) VALUES ($1, $2, $3, 'explicit', true, $4)
+            ON CONFLICT (github_pull_request_id, work_item_id) DO UPDATE
+            SET source = 'explicit', confirmed = true
+            WHERE github_pull_request_work_item_links.source <> 'explicit'
+            "#,
+        )
+        .bind(project_id)
+        .bind(pull_request_id)
+        .bind(work_item_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?
+    } else {
+        sqlx::query(
+            "DELETE FROM github_pull_request_work_item_links WHERE project_id = $1 AND work_item_id = $2 AND github_pull_request_id = $3",
+        )
+        .bind(project_id)
+        .bind(work_item_id)
+        .bind(pull_request_id)
+        .execute(&mut **transaction)
+        .await?
+    }
+    .rows_affected()
+        == 1;
+    if !changed {
+        return Ok(PullRequestLinkChange::Unchanged);
+    }
+    let version = advance_version(transaction, project_id, work_item_id, current_version).await?;
+    let activity_id = insert_work_item_activity(
+        transaction,
+        project_id,
+        work_item_id,
+        actor_id,
+        "work_item_updated",
+        activity_summary,
+        &serde_json::json!({"pullRequestId": pull_request_id, "linked": link}),
+    )
+    .await?;
+    enqueue_update(transaction, project_id, work_item_id, version).await?;
+    Ok(PullRequestLinkChange::Changed {
+        version,
+        activity_id,
+    })
 }
 
 pub async fn mark_blocked(
