@@ -38,7 +38,7 @@ async fn m0_to_m2_upgrade_preserves_history_and_enforces_conversation_invariants
 
     apply_through_m1(&pool).await;
     let fixture = insert_m1_history(&pool).await;
-    sqlx::raw_sql(include_str!("../migrations/0005_m2_conversations.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0005_m2_conversations.sql"))
         .execute(&pool)
         .await
         .expect("upgrade M1 data to M2");
@@ -85,19 +85,19 @@ async fn m0_to_m2_upgrade_preserves_history_and_enforces_conversation_invariants
     .expect("insert distinct-Actor 0005 mention projection row");
 
     sqlx::raw_sql(include_str!(
-        "../migrations/0006_m2_message_mentions_projection.sql"
+        "../../migrations/0006_m2_message_mentions_projection.sql"
     ))
     .execute(&pool)
     .await
     .expect("reconcile M2 mention projection");
     sqlx::raw_sql(include_str!(
-        "../migrations/0007_m2_archived_parent_navigation.sql"
+        "../../migrations/0007_m2_archived_parent_navigation.sql"
     ))
     .execute(&pool)
     .await
     .expect("apply archived-parent navigation boundary");
     sqlx::raw_sql(include_str!(
-        "../migrations/0008_m2_conversation_lock_boundaries.sql"
+        "../../migrations/0008_m2_conversation_lock_boundaries.sql"
     ))
     .execute(&pool)
     .await
@@ -1431,10 +1431,10 @@ async fn insert_run(
 
 async fn apply_through_m1(pool: &PgPool) {
     for migration in [
-        include_str!("../migrations/0001_foundation.sql"),
-        include_str!("../migrations/0002_walking_skeleton.sql"),
-        include_str!("../migrations/0003_m0_consistency.sql"),
-        include_str!("../migrations/0004_m1_identity_projects.sql"),
+        include_str!("../../migrations/0001_foundation.sql"),
+        include_str!("../../migrations/0002_walking_skeleton.sql"),
+        include_str!("../../migrations/0003_m0_consistency.sql"),
+        include_str!("../../migrations/0004_m1_identity_projects.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(pool)
@@ -1445,24 +1445,24 @@ async fn apply_through_m1(pool: &PgPool) {
 
 async fn apply_all_migrations(pool: &PgPool) {
     apply_through_m1(pool).await;
-    sqlx::raw_sql(include_str!("../migrations/0005_m2_conversations.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0005_m2_conversations.sql"))
         .execute(pool)
         .await
         .expect("apply M2 migration");
     sqlx::raw_sql(include_str!(
-        "../migrations/0006_m2_message_mentions_projection.sql"
+        "../../migrations/0006_m2_message_mentions_projection.sql"
     ))
     .execute(pool)
     .await
     .expect("apply M2 mention projection reconciliation");
     sqlx::raw_sql(include_str!(
-        "../migrations/0007_m2_archived_parent_navigation.sql"
+        "../../migrations/0007_m2_archived_parent_navigation.sql"
     ))
     .execute(pool)
     .await
     .expect("apply M2 archived-parent navigation boundary");
     sqlx::raw_sql(include_str!(
-        "../migrations/0008_m2_conversation_lock_boundaries.sql"
+        "../../migrations/0008_m2_conversation_lock_boundaries.sql"
     ))
     .execute(pool)
     .await

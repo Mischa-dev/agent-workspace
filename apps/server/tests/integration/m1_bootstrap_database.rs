@@ -27,15 +27,15 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
         .expect("create isolated bootstrap schema");
     let pool = schema_pool(&database_url, &schema).await;
 
-    sqlx::raw_sql(include_str!("../migrations/0001_foundation.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0001_foundation.sql"))
         .execute(&pool)
         .await
         .expect("apply foundation migration");
-    sqlx::raw_sql(include_str!("../migrations/0002_walking_skeleton.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0002_walking_skeleton.sql"))
         .execute(&pool)
         .await
         .expect("apply walking-skeleton migration");
-    sqlx::raw_sql(include_str!("../migrations/0003_m0_consistency.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0003_m0_consistency.sql"))
         .execute(&pool)
         .await
         .expect("apply M0 consistency migration");
@@ -76,10 +76,12 @@ async fn bootstrap_adopts_m0_owner_and_has_exactly_one_concurrent_winner() {
     .execute(&pool)
     .await
     .expect("insert M0 ownership");
-    sqlx::raw_sql(include_str!("../migrations/0004_m1_identity_projects.sql"))
-        .execute(&pool)
-        .await
-        .expect("apply M1 migration");
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0004_m1_identity_projects.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("apply M1 migration");
 
     let command = BootstrapCommand {
         login_name: "mischa".to_owned(),
@@ -279,10 +281,10 @@ async fn bootstrap_rolls_back_every_insert_when_a_late_database_write_fails() {
         .expect("create isolated bootstrap rollback schema");
     let pool = schema_pool(&database_url, &schema).await;
     for migration in [
-        include_str!("../migrations/0001_foundation.sql"),
-        include_str!("../migrations/0002_walking_skeleton.sql"),
-        include_str!("../migrations/0003_m0_consistency.sql"),
-        include_str!("../migrations/0004_m1_identity_projects.sql"),
+        include_str!("../../migrations/0001_foundation.sql"),
+        include_str!("../../migrations/0002_walking_skeleton.sql"),
+        include_str!("../../migrations/0003_m0_consistency.sql"),
+        include_str!("../../migrations/0004_m1_identity_projects.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&pool)

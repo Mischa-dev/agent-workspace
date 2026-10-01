@@ -22,9 +22,9 @@ async fn m1_upgrade_rejects_incompatible_legacy_actor_roles_without_rewriting_th
         .await
         .expect("select isolated legacy-role schema");
     for migration in [
-        include_str!("../migrations/0001_foundation.sql"),
-        include_str!("../migrations/0002_walking_skeleton.sql"),
-        include_str!("../migrations/0003_m0_consistency.sql"),
+        include_str!("../../migrations/0001_foundation.sql"),
+        include_str!("../../migrations/0002_walking_skeleton.sql"),
+        include_str!("../../migrations/0003_m0_consistency.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&mut *connection)
@@ -69,9 +69,11 @@ async fn m1_upgrade_rejects_incompatible_legacy_actor_roles_without_rewriting_th
     .await
     .expect("insert M0-compatible mismatched role");
 
-    let upgrade = sqlx::raw_sql(include_str!("../migrations/0004_m1_identity_projects.sql"))
-        .execute(&mut *connection)
-        .await;
+    let upgrade = sqlx::raw_sql(include_str!(
+        "../../migrations/0004_m1_identity_projects.sql"
+    ))
+    .execute(&mut *connection)
+    .await;
     assert!(
         upgrade.is_err(),
         "M1 must reject an incompatible legacy Actor role instead of rewriting authority"
@@ -105,15 +107,15 @@ async fn m0_to_m1_identity_and_project_upgrade_enforces_invariants() {
         .await
         .expect("select isolated migration schema");
 
-    sqlx::raw_sql(include_str!("../migrations/0001_foundation.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0001_foundation.sql"))
         .execute(&mut *connection)
         .await
         .expect("apply M0 foundation migration");
-    sqlx::raw_sql(include_str!("../migrations/0002_walking_skeleton.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0002_walking_skeleton.sql"))
         .execute(&mut *connection)
         .await
         .expect("apply M0 walking-skeleton migration");
-    sqlx::raw_sql(include_str!("../migrations/0003_m0_consistency.sql"))
+    sqlx::raw_sql(include_str!("../../migrations/0003_m0_consistency.sql"))
         .execute(&mut *connection)
         .await
         .expect("apply M0 consistency migration");
@@ -177,10 +179,12 @@ async fn m0_to_m1_identity_and_project_upgrade_enforces_invariants() {
     .await
     .expect("insert M0 Project memberships");
 
-    sqlx::raw_sql(include_str!("../migrations/0004_m1_identity_projects.sql"))
-        .execute(&mut *connection)
-        .await
-        .expect("upgrade M0 schema to M1");
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0004_m1_identity_projects.sql"
+    ))
+    .execute(&mut *connection)
+    .await
+    .expect("upgrade M0 schema to M1");
 
     let upgraded_project = sqlx::query(
         r#"

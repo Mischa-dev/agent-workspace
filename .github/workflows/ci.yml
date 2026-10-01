@@ -18,7 +18,29 @@ concurrency:
 # per-run schemas. The repository is private, so only collaborators can start
 # jobs here.
 jobs:
+  # Pull requests run only the jobs their files touch; pushes to main run both.
+  changes:
+    runs-on: [self-hosted, redhat-aw]
+    outputs:
+      rust: ${{ steps.areas.outputs.rust || 'true' }}
+      web: ${{ steps.areas.outputs.web || 'true' }}
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - id: areas
+        if: github.event_name == 'pull_request'
+        run: >-
+          ./tools/ci-changed-areas.sh
+          ${{ github.event.pull_request.base.sha }}
+          ${{ github.event.pull_request.head.sha }}
+          >> "$GITHUB_OUTPUT"
+
   rust:
+    needs: changes
+    # Runs if the change filter itself failed: a skipped job would count as passing.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: [self-hosted, redhat-aw]
     env:
       AGENT_WORKSPACE_DATABASE_URL: postgres://aw_test:aw_test@127.0.0.1:55433/aw_ci
@@ -36,6 +58,9 @@ jobs:
       - run: cargo deny check
 
   web:
+    needs: changes
+    # Runs if the change filter itself failed: a skipped job would count as passing.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.web == 'true') }}
     runs-on: [self-hosted, redhat-aw]
     steps:
       # actions/checkout v7.0.1
