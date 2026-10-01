@@ -599,3 +599,208 @@ async fn owners_add_change_and_remove_members() {
     assert_eq!(back["value"]["active"], true, "{back}");
     assert_eq!(back["value"]["role"], "member");
 }
+
+#[tokio::test]
+async fn moved_tasks_carry_over_and_old_keys_follow_them() {
+    let Some(setup) = setup("mcp_move").await else {
+        return;
+    };
+    let app = &setup.app;
+    let old = create_project(&setup, "OLD", "Old work").await;
+    let new = create_project(&setup, "NEW", "New work").await;
+    let space = send(
+        app,
+        setup
+            .browser
+            .request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await
+    .1["projectId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
+    // Mara works only in the old project, so she can't follow the task.
+    let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
+    let (status, added) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{old}/members"),
+            None,
+            json!({"actorId": mara, "role": "member"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+
+    let created = tool(
+        app,
+        &codex,
+        &session,
+        "task_create",
+        json!({
+            "projectId": "OLD",
+            "title": "Private repositories can't prepare mirrors",
+            "description": "Steps:\n1. Add a private repo\n2. Watch it fail",
+            "priority": "urgent",
+            "assignee": "@mara"
+        }),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let task = created["workItemId"].as_str().expect("task").to_owned();
+    let subtask = tool(
+        app,
+        &codex,
+        &session,
+        "task_create",
+        json!({"parentId": task, "title": "Write a failing test"}),
+    )
+    .await;
+    assert_eq!(subtask["outcome"], "applied", "{subtask}");
+    let commented = tool(
+        app,
+        &codex,
+        &session,
+        "task_comment",
+        json!({"taskId": "OLD-1", "text": "Repro: the clone needs a token.", "clientRequestId": "c1"}),
+    )
+    .await;
+    assert_eq!(
+        commented["outcome"], "applied",
+        "keys work in task_comment: {commented}"
+    );
+    let started = tool(
+        app,
+        &codex,
+        &session,
+        "task_update",
+        json!({"taskId": task, "expectedVersion": 1, "status": "Ready"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "applied", "{started}");
+    let (status, criterion) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{old}/work-items/{task}/acceptance-criteria"),
+            Some("criterion-1"),
+            json!({"expectedVersion": started["version"], "text": "Mirrors prepare with a token"}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{criterion}");
+
+    let moved = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": "OLD-1", "toProjectId": "NEW"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let moved_tasks = moved["value"]["moved"].as_array().expect("moved");
+    assert_eq!(moved_tasks.len(), 2, "the subtask moves too: {moved}");
+    assert_eq!(moved_tasks[0]["from"], "OLD-1");
+    assert_eq!(moved_tasks[0]["to"], "NEW-1");
+    assert_eq!(moved_tasks[1]["from"], "OLD-2");
+    assert!(
+        moved["value"]["notes"]
+            .as_array()
+            .expect("notes")
+            .iter()
+            .any(|note| note.as_str().unwrap_or_default().contains("Mara")),
+        "{moved}"
+    );
+    let new_task = moved_tasks[0]["id"].as_str().expect("new task").to_owned();
+
+    // The old key opens the new task, with everything carried over.
+    let opened = tool(
+        app,
+        &codex,
+        &session,
+        "task_open",
+        json!({"taskId": "OLD-1"}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let carried = &opened["value"]["task"];
+    assert_eq!(carried["id"], new_task.as_str(), "{opened}");
+    assert_eq!(carried["projectId"], new.as_str());
+    assert_eq!(
+        carried["description"],
+        "Steps:\n1. Add a private repo\n2. Watch it fail"
+    );
+    assert_eq!(carried["priority"], "urgent");
+    assert_eq!(carried["status"]["name"], "Ready", "{opened}");
+    assert!(carried["assignee"].is_null(), "{opened}");
+    assert_eq!(
+        carried["acceptanceCriteria"][0]["text"], "Mirrors prepare with a token",
+        "{opened}"
+    );
+    assert_eq!(
+        opened["value"]["subtasks"].as_array().map(Vec::len),
+        Some(1),
+        "{opened}"
+    );
+    let comments = opened["value"]["comments"].to_string();
+    assert!(comments.contains("Moved from OLD-1"), "{comments}");
+    assert!(
+        comments.contains("Repro: the clone needs a token."),
+        "{comments}"
+    );
+
+    // The original is archived and gone from the old project's board.
+    let board = tool(
+        app,
+        &codex,
+        &session,
+        "task_list",
+        json!({"projectId": old}),
+    )
+    .await;
+    assert_eq!(
+        board["value"]["tasks"].as_array().map(Vec::len),
+        Some(0),
+        "{board}"
+    );
+
+    // Moving again returns where it went instead of copying it twice.
+    let again = tool(
+        app,
+        &codex,
+        &session,
+        "task_move",
+        json!({"taskId": task, "toProjectId": new}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["created"], false);
+    assert_eq!(again["value"]["moved"][0]["id"], new_task.as_str());
+
+    // Mara isn't in the new project, so the old key opens what she could
+    // always see: the archived original, pointing at where it went.
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let original = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_open",
+        json!({"taskId": "OLD-1"}),
+    )
+    .await;
+    assert_eq!(original["value"]["task"]["id"], task.as_str(), "{original}");
+    assert_eq!(original["value"]["task"]["archived"], true);
+    let direct = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_open",
+        json!({"taskId": new_task}),
+    )
+    .await;
+    assert_ne!(direct["outcome"], "ok", "{direct}");
+}

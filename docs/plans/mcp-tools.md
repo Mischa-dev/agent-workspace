@@ -312,7 +312,7 @@ and restore), `channel_create`, `conversation_update`, `pin_set`,
 (such as `AWD`) accepted wherever a `projectId` is. That's 49 tools. Channel
 archiving and membership changes now share one code path with the web app.
 
-## Decision 1 needs another look
+## Decision 1, revisited (September 30, 2026)
 
 A real move isn't possible without taking apart guarantees the database
 was built on. A task's links point at things that stay in the old project:
@@ -339,3 +339,10 @@ Options:
    immutability triggers for moves, relaxing the membership checks on
    comment authors, and rewriting or dropping cross-project links. It's a lot
    of risky work for a rare operation.
+
+Mischa chose option 1. `task_move` carries a task and its subtasks over and
+archives the originals. Migration 0043 adds `work_item_key_aliases`. A moved
+task's old key opens the new one for anyone who can see it; anyone else gets
+the archived original, which they could always see. This also means
+`taskId`, `workItemId` and `parentId` take task keys in every tool now. Moving
+a task again returns where it went. That brings the count to 50 tools.

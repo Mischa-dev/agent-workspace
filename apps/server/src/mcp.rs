@@ -65,6 +65,7 @@ mod oauth;
 mod reads;
 mod replies;
 mod talk;
+mod task_move;
 mod tasks;
 mod writes;
 
@@ -838,6 +839,25 @@ impl McpServer {
         Json(tasks::task_link(&self.state, principal, arguments).await)
     }
 
+    #[tool(
+        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Moving it again returns where it went.",
+        annotations(
+            title = "Move task",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_move(
+        &self,
+        Parameters(arguments): Parameters<task_move::TaskMoveArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<task_move::TaskMoveValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(task_move::task_move(&self.state, principal, arguments).await)
+    }
+
     // -- Search and memory ---------------------------------------------------
 
     #[tool(
@@ -1244,8 +1264,13 @@ async fn authenticate_mcp(
                 if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&bytes)
                     && body.get("method").and_then(serde_json::Value::as_str) == Some("tools/call")
                 {
-                    // People name projects by key ("AWD"); tools take IDs.
-                    match project_key_to_id(&state, &principal, &mut body["params"]["arguments"])
+                    // People name projects and tasks by key ("AWD", "AWD-12");
+                    // tools take IDs.
+                    let tool = body["params"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    match keys_to_ids(&state, &principal, &tool, &mut body["params"]["arguments"])
                         .await
                     {
                         Ok(true) => match serde_json::to_vec(&body) {
@@ -1854,28 +1879,68 @@ async fn insert_credential_audit(
     Ok(())
 }
 
-/// Replaces a project key in `projectId` (such as "AWD") with the ID of the
-/// one project the caller can reach under that key. Returns whether it
-/// changed anything; an unknown key is left for the tool to reject.
-async fn project_key_to_id(
+/// Replaces keys with IDs in the arguments that take one: a project key such
+/// as "AWD" in `projectId` or `toProjectId`, and a task key such as "AWD-12"
+/// in `taskId`, `workItemId` or `parentId` (and `identifier` for task_open).
+/// A key resolves only among projects the caller can reach, and a moved
+/// task's old key resolves to where it went. Returns whether anything
+/// changed; an unknown key is left for the tool to reject.
+async fn keys_to_ids(
     state: &AppState,
     principal: &McpPrincipal,
+    tool: &str,
     arguments: &mut serde_json::Value,
 ) -> Result<bool, AppError> {
-    let Some(key) = arguments
-        .get("projectId")
+    let mut changed = false;
+    for field in ["projectId", "toProjectId"] {
+        if let Some(key) = unresolved(arguments, field)
+            && is_project_key(&key)
+            && let Some(project_id) = project_by_key(state, principal, &key).await?
+        {
+            arguments[field] = serde_json::Value::String(project_id.to_string());
+            changed = true;
+        }
+    }
+    let task_fields: &[&str] = if tool == "task_open" {
+        &["taskId", "workItemId", "parentId", "identifier"]
+    } else {
+        &["taskId", "workItemId", "parentId"]
+    };
+    for field in task_fields {
+        if let Some(key) = unresolved(arguments, field)
+            && let Some((project_key, number)) = key.rsplit_once('-')
+            && is_project_key(project_key)
+            && let Ok(number) = number.parse::<i64>()
+            && let Some(task_id) = task_by_key(state, principal, project_key, number).await?
+        {
+            arguments[*field] = serde_json::Value::String(task_id.to_string());
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// A string argument that isn't already an ID or link.
+fn unresolved(arguments: &serde_json::Value, field: &str) -> Option<String> {
+    arguments
+        .get(field)
         .and_then(serde_json::Value::as_str)
         .filter(|value| common::parse_id(value).is_none())
-        .map(str::trim)
-        .filter(|value| {
-            (2..=12).contains(&value.len())
-                && value.starts_with(|c: char| c.is_ascii_alphabetic())
-                && value.chars().all(|c| c.is_ascii_alphanumeric())
-        })
-        .map(str::to_owned)
-    else {
-        return Ok(false);
-    };
+        .map(|value| value.trim().to_owned())
+}
+
+fn is_project_key(value: &str) -> bool {
+    (2..=12).contains(&value.len())
+        && value.starts_with(|c: char| c.is_ascii_alphabetic())
+        && value.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// The one active project the caller can reach under this key.
+async fn project_by_key(
+    state: &AppState,
+    principal: &McpPrincipal,
+    key: &str,
+) -> Result<Option<Uuid>, AppError> {
     let matches = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project.id
@@ -1884,7 +1949,7 @@ async fn project_key_to_id(
           ON membership.project_id = project.id
          AND membership.actor_id = $1
          AND membership.enabled
-        WHERE lower(project.project_key) = lower($3)
+        WHERE upper(project.project_key) = upper($3)
           AND project.archived_at IS NULL
           AND actor_can_access_project($1, $2, project.id)
         LIMIT 2
@@ -1892,16 +1957,56 @@ async fn project_key_to_id(
     )
     .bind(principal.actor_id)
     .bind(principal.external_agent_connection_id)
-    .bind(&key)
+    .bind(key)
     .fetch_all(&state.pool)
     .await?;
-    match matches.as_slice() {
-        [project_id] => {
-            arguments["projectId"] = serde_json::Value::String(project_id.to_string());
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
+    Ok(match matches.as_slice() {
+        [project_id] => Some(*project_id),
+        _ => None,
+    })
+}
+
+/// The task the caller can reach under this key: the task that has it now,
+/// or else the one a moved task went to (migration 0043).
+async fn task_by_key(
+    state: &AppState,
+    principal: &McpPrincipal,
+    project_key: &str,
+    number: i64,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT found.id FROM (
+            SELECT item.id, 0 AS preference, item.project_id
+            FROM work_items item
+            JOIN projects project ON project.id = item.project_id
+            WHERE upper(project.project_key) = upper($3) AND item.number = $4
+              AND project.archived_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM work_item_key_aliases moved
+                  WHERE moved.source_work_item_id = item.id
+              )
+            UNION ALL
+            SELECT alias.work_item_id, 1, item.project_id
+            FROM work_item_key_aliases alias
+            JOIN work_items item ON item.id = alias.work_item_id
+            WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
+        ) found
+        JOIN project_memberships membership
+          ON membership.project_id = found.project_id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE actor_can_access_project($1, $2, found.project_id)
+        ORDER BY found.preference
+        LIMIT 1
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(project_key)
+    .bind(number)
+    .fetch_optional(&state.pool)
+    .await?)
 }
 
 async fn scoped_project(
