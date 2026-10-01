@@ -1,11 +1,14 @@
 /* The app frame: rail | sidebar | main | details panel. */
 
 .aw-shell {
+  --inset-bottom: var(--app-inset-bottom, env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: var(--size-rail) minmax(0, 1fr);
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
+  /* Keeps the composer and rail off the home indicator and out of landscape notches. */
+  padding: 0 env(safe-area-inset-right) var(--inset-bottom) env(safe-area-inset-left);
   background: var(--content-bg);
 }
 
@@ -491,11 +494,11 @@ button.aw-sidebar__title[aria-expanded="true"] {
   color: var(--content-fg-muted);
 }
 
-/* Mobile bar and drawers */
-.aw-mobilebar {
-  display: none;
-}
-
+/* Phone layout: the rail and sidebar open together as one navigation drawer,
+   and the details panel is a drawer on the right. */
+.aw-mobilebar,
+.aw-menubutton,
+.aw-convhead__back,
 .aw-drawer-backdrop {
   display: none;
 }
@@ -523,13 +526,21 @@ button.aw-sidebar__title[aria-expanded="true"] {
   .aw-rail {
     left: 0;
     width: var(--size-rail);
+    padding-bottom: calc(var(--space-3) + var(--inset-bottom));
     transform: translateX(-100%);
   }
 
+  .aw-sidebar__scroll,
+  .aw-panel {
+    padding-bottom: var(--inset-bottom);
+  }
+
+  /* Beside the rail, leaving a strip of the page to tap closed. */
   .aw-sidebar {
-    left: 0;
-    width: min(320px, 86vw);
-    transform: translateX(-100%);
+    left: var(--size-rail);
+    width: min(300px, calc(100vw - var(--size-rail) - 48px));
+    transform: translateX(calc(-100% - var(--size-rail)));
+    box-shadow: var(--shadow-dialog);
   }
 
   .aw-panel {
@@ -563,45 +574,104 @@ button.aw-sidebar__title[aria-expanded="true"] {
     z-index: var(--layer-sticky);
     display: flex;
     align-items: center;
-    gap: var(--space-1);
     flex: none;
-    min-height: 48px;
-    padding: var(--space-1) var(--space-2);
+    min-height: var(--size-header);
+    padding: 0 var(--space-2);
     background: var(--sidebar-bg);
     color: var(--sidebar-fg-strong);
     --r-focus: var(--sidebar-fg-strong);
   }
 
-  .aw-mobilebar__button {
+  .aw-menubutton {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    min-height: 40px;
-    padding: 0 var(--space-3);
+    justify-content: center;
+    gap: var(--space-2);
+    flex: none;
+    min-width: 44px;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 0 var(--space-3) 0 10px;
     border: 0;
     border-radius: var(--radius-sm);
     background: none;
     color: inherit;
-    font: var(--t-ui-strong);
+    font: var(--t-title);
   }
 
-  .aw-mobilebar__button:hover,
-  .aw-mobilebar__button[aria-expanded="true"] {
+  .aw-menubutton[aria-expanded="true"] {
     background: var(--sidebar-hover);
   }
 
-  .aw-mobilebar__details {
-    margin-left: auto;
+  .aw-menubutton__space {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .aw-mobilebar__space {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    max-width: 52vw;
-    overflow: hidden;
-    font: var(--t-title);
-    white-space: nowrap;
+  /* In a conversation the header is the top bar: icon only, in content colors. */
+  .aw-convhead .aw-menubutton,
+  .aw-convhead__back {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 40px;
+    min-width: 0;
+    height: 40px;
+    min-height: 0;
+    margin-right: calc(var(--space-1) - var(--space-3));
+    padding: 0;
+    border-radius: var(--radius-sm);
+    color: var(--content-fg-muted);
+  }
+
+  .aw-convhead .aw-menubutton[aria-expanded="true"] {
+    background: var(--content-hover);
+  }
+}
+
+/* Only where hover is real: iOS leaves :hover stuck on whatever was tapped last. */
+@media (max-width: 860px) and (hover: hover) {
+  .aw-menubutton:hover {
+    background: var(--sidebar-hover);
+  }
+
+  .aw-convhead .aw-menubutton:hover,
+  .aw-convhead__back:hover {
+    background: var(--content-hover);
+    color: var(--content-fg);
+  }
+}
+
+/* Touch screens: bigger rows and no hover-only controls or tooltips. */
+@media (pointer: coarse) {
+  /* Follows the visible area while the keyboard is open (useKeyboardViewport).
+     The translate also makes the drawers, which are fixed, open within it. */
+  .aw-shell {
+    height: var(--app-height, 100dvh);
+    translate: 0 var(--app-top, 0px);
+  }
+
+  .aw-item {
+    height: 40px;
+  }
+
+  .aw-item--nested {
+    height: 36px;
+  }
+
+  .aw-section__head {
+    height: 36px;
+  }
+
+  .aw-section__toggle {
+    height: 34px;
+  }
+}
+
+@media (hover: none) {
+  .aw-section__add {
+    opacity: 1;
   }
 }
 

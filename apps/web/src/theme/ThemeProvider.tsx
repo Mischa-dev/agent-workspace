@@ -9,6 +9,7 @@ import {
 } from './preferences'
 import { ALL_SLOTS, DERIVED_SLOTS, themeProperties } from './slots'
 import { ThemeContext, type ThemeContextValue } from './themeContext'
+import { syncThemeColor } from './themeColor'
 
 function prefersDark() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
@@ -36,9 +37,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.dataset.textSize = preferences.textSize
     for (const slot of new Set([...ALL_SLOTS, ...Object.keys(DERIVED_SLOTS)])) root.style.removeProperty(`--${slot}`)
     for (const [name, value] of Object.entries(themeProperties(preferences.overrides))) root.style.setProperty(name, value)
-    const meta = document.querySelector('meta[name="theme-color"]')
-    const rail = getComputedStyle(root).getPropertyValue('--rail-bg').trim()
-    if (meta && rail) meta.setAttribute('content', rail)
+    syncThemeColor()
   }, [preferences, preset])
 
   const value = useMemo<ThemeContextValue>(() => {

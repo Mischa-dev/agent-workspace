@@ -5,6 +5,7 @@ import '@fontsource-variable/figtree/wght.css'
 import '@fontsource/jetbrains-mono/latin-400.css'
 import '@fontsource/jetbrains-mono/latin-500.css'
 import { App } from './app/App'
+import { registerServiceWorker } from './app/serviceWorker'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/components.css'
@@ -24,3 +25,5 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 )
+
+registerServiceWorker()

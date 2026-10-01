@@ -15,6 +15,9 @@ import {
 const MAX_RECENT_EVENT_IDS = 512
 const INVALIDATION_DELAY_MS = 40
 const MAX_RECONNECT_DELAY_MS = 10_000
+// Phones suspend a page in the background, and its socket can die without a
+// close event. After this long away, reconnect on return rather than trust it.
+const RESUME_RECONNECT_AFTER_MS = 30_000
 
 function websocketUrl() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -177,14 +180,17 @@ export function useRealtimeConnection(): RealtimeContextValue {
     const connect = () => {
       if (disposed) return
       setConnection(reconnectAttempt.current === 0 ? 'connecting' : 'retrying')
-      socket = new WebSocket(websocketUrl())
-      socket.addEventListener('open', () => {
+      const current = new WebSocket(websocketUrl())
+      socket = current
+      current.addEventListener('open', () => {
+        if (socket !== current) return
         reconnectAttempt.current = 0
         setConnection('live')
         resetStreams()
         refetchAuthenticatedState()
       })
-      socket.addEventListener('message', (event) => {
+      current.addEventListener('message', (event) => {
+        if (socket !== current) return
         if (typeof event.data !== 'string' || event.data.length > 70_000) return
         let wire: unknown
         try {
@@ -221,8 +227,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
         }
         invalidateProject(legacy.projectId)
       })
-      socket.addEventListener('close', () => {
-        if (disposed) return
+      current.addEventListener('close', () => {
+        // A socket replaced by reconnectNow closes quietly.
+        if (disposed || socket !== current) return
         reconnectAttempt.current += 1
         setConnection('retrying')
         resetStreams()
@@ -235,9 +242,40 @@ export function useRealtimeConnection(): RealtimeContextValue {
       })
     }
 
+    const reconnectNow = () => {
+      if (disposed) return
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer)
+        reconnectTimer = undefined
+      }
+      const previous = socket
+      socket = undefined
+      previous?.close()
+      reconnectAttempt.current = 0
+      connect()
+    }
+
+    let hiddenAt: number | undefined
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now()
+        return
+      }
+      const away = hiddenAt === undefined ? 0 : Date.now() - hiddenAt
+      hiddenAt = undefined
+      if (socket?.readyState !== WebSocket.OPEN || away > RESUME_RECONNECT_AFTER_MS) reconnectNow()
+    }
+    const onOnline = () => {
+      if (socket?.readyState !== WebSocket.OPEN) reconnectNow()
+    }
+
     connect()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', onOnline)
     return () => {
       disposed = true
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('online', onOnline)
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
       if (streamFrame !== undefined) window.cancelAnimationFrame(streamFrame)
       for (const timer of invalidationTimers.values()) window.clearTimeout(timer)

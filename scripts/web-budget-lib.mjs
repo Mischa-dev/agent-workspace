@@ -12,8 +12,11 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // The agent interface (connected apps, thread status and board, DM threads,
   // pages, decisions, pins and search) measures 605,885 raw / 192,439 gzip
   // bytes, most of it in lazily loaded routes.
-  javascriptRawBytes: 596 * 1024,
-  javascriptGzipBytes: 190 * 1024,
+  // Mobile support (the service worker, one phone drawer, swipes, the keyboard
+  // viewport, reconnect on resume) adds 9,350 raw / 5,358 gzip bytes over
+  // 607,316 / 193,011, measuring 616,666 / 198,369; sw.js alone is 3,524 / 1,406.
+  javascriptRawBytes: 604 * 1024,
+  javascriptGzipBytes: 195 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
   cssRawBytes: 100 * 1024,

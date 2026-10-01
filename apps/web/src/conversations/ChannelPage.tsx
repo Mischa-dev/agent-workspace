@@ -223,6 +223,7 @@ export function ChannelPage() {
       }
       contextKey={boardOpen ? 'threads' : undefined}
       mainClassName="aw-main--conversation"
+      onContextDismiss={() => setBoardOpen(false)}
       project={project.data}
       selectedChannelId={validBoundary ? channelId : undefined}
       user={session.user}

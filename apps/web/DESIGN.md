@@ -47,9 +47,19 @@ caption 12/16, tag 11/14 bold. Text size scales them all through
 ## Layout
 
 Rail 72px, sidebar 264px, header 52px, details panel 420px, message line
-length capped at 760px. At 860px and below the rail, sidebar and details become
-drawers and a top bar opens them. Conversation pages own their scrolling: header
-and composer stay put, the timeline scrolls and stays on the newest message.
+length capped at 760px. Conversation pages own their scrolling: header and
+composer stay put, the timeline scrolls and stays on the newest message.
+
+Phones (860px and below): the rail and sidebar open together as one drawer from
+the menu button, and it stays open when you pick a Project or Messages so the
+next tap chooses a channel. Conversation headers carry that button (a thread
+shows a back arrow to its channel instead); other pages get a thin bar with it.
+Details open as a drawer on the right when the page's own toggle is pressed.
+Swipe right to open the drawer, left to close it. Touch screens get 40px rows,
+no tooltips or hover-only controls, 16px fields (iOS zooms into smaller ones),
+and a tap on a message shows its toolbar. The app is installable (manifest,
+`public/sw.js`), follows the keyboard on iOS, and keeps clear of the home
+indicator.
 
 Other pages use `.aw-page` (1040px) with a `PageHeader`: `--narrow` (720px) for
 Home, `--form` (640px) for Create Project, `--settings` (880px) and `--wide`
