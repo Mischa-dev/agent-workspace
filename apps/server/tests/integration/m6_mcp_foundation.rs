@@ -289,8 +289,8 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .map(Vec::len),
-        // See docs/plans/agent-interface.md for the tool list.
-        Some(40)
+        // See docs/plans/mcp-tools.md for the tool list.
+        Some(50)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),

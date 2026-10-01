@@ -54,8 +54,10 @@ use crate::{
     },
 };
 
+mod admin;
 mod approvals;
 mod briefing;
+mod channels;
 mod collaboration;
 mod common;
 mod memory_tools;
@@ -63,6 +65,7 @@ mod oauth;
 mod reads;
 mod replies;
 mod talk;
+mod task_move;
 mod tasks;
 mod writes;
 
@@ -171,7 +174,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List the projects you can work in, with open task and unread counts. The Messages space holds DMs and groups.",
+        description = "List the projects you can work in, with their keys, your role, and open task and unread counts. The Messages space holds DMs and groups. includeArchived also lists archived ones, which project_archive can restore.",
         annotations(
             title = "List projects",
             read_only_hint = true,
@@ -180,10 +183,11 @@ impl McpServer {
     )]
     async fn projects_list(
         &self,
+        Parameters(arguments): Parameters<briefing::ProjectsListArguments>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Json<common::ToolResult<briefing::ProjectsValue>> {
         let principal = principal_or!(parts, unauthenticated());
-        Json(briefing::projects_list(&self.state, principal).await)
+        Json(briefing::projects_list(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -197,6 +201,91 @@ impl McpServer {
     ) -> Json<common::ToolResult<briefing::ProjectOverview>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(briefing::project_open(&self.state, principal, arguments).await)
+    }
+
+    // -- Projects and people -------------------------------------------------
+
+    #[tool(
+        description = "A project's task types, statuses (in board order, with their category) and the status changes allowed. Use the status names with task_update and task_list.",
+        annotations(title = "Get workflow", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn workflow_get(
+        &self,
+        Parameters(arguments): Parameters<admin::WorkflowArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::WorkflowValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::workflow_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List a project's members: people and agents, with their roles. Owners and admins only; anyone can find people to mention with people_search.",
+        annotations(title = "List members", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn project_members(
+        &self,
+        Parameters(arguments): Parameters<admin::MembersArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::MembersValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_members(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Add someone from your organization to a project, change their role, or remove them (remove: true). Removing ends their access at once; what they wrote stays. Owners and admins only, as themselves.",
+        annotations(
+            title = "Set project member",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_member_set(
+        &self,
+        Parameters(arguments): Parameters<admin::MemberSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::MemberLine>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_member_set(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Rename a project. Its key stays the same, so task keys and links keep working. Owners and admins only, as themselves.",
+        annotations(
+            title = "Rename project",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_update(
+        &self,
+        Parameters(arguments): Parameters<admin::ProjectUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::ProjectValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Archive a project, or restore one with archived: false. Archiving hides the project, its tasks and its channels from everyone, and is refused while Codex is running there. Nothing is deleted. Owners and admins only, as themselves.",
+        annotations(
+            title = "Archive or restore project",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_archive(
+        &self,
+        Parameters(arguments): Parameters<admin::ProjectArchiveArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::ProjectValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_archive(&self.state, principal, arguments).await)
     }
 
     // -- Conversations -------------------------------------------------------
@@ -358,6 +447,63 @@ impl McpServer {
     ) -> Json<common::ToolResult<talk::ThreadValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(talk::thread_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a channel in a project. If an active channel with that name already exists, it's returned instead (created: false).",
+        annotations(
+            title = "Create channel",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn channel_create(
+        &self,
+        Parameters(arguments): Parameters<channels::ChannelCreateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<channels::ConversationValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(channels::channel_create(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change a channel, thread or group: rename it, set a thread's status and outcome, or archive or restore a channel or thread (archived). Archiving keeps everything and is refused while Codex is running there. DMs can't be changed.",
+        annotations(
+            title = "Update conversation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_update(
+        &self,
+        Parameters(arguments): Parameters<channels::ConversationUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<channels::ConversationValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(channels::conversation_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Pin or unpin a message, page or decision in a conversation. Pins are the conversation's brief: conversation_open shows them first.",
+        annotations(
+            title = "Pin or unpin",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn pin_set(
+        &self,
+        Parameters(arguments): Parameters<channels::PinSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<channels::PinValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(channels::pin_set(&self.state, principal, arguments).await)
     }
 
     // -- Replies (agents) ----------------------------------------------------
@@ -693,6 +839,25 @@ impl McpServer {
         Json(tasks::task_link(&self.state, principal, arguments).await)
     }
 
+    #[tool(
+        description = "Move a task, with its subtasks, to another project. The new task gets the title, description, priority, status and type (matched by name), the assignee if they're in that project, acceptance criteria, and every comment quoted with its author and date. The original is archived with its full history and links, and its old key (such as AW-7) opens the new task. Moving it again returns where it went.",
+        annotations(
+            title = "Move task",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_move(
+        &self,
+        Parameters(arguments): Parameters<task_move::TaskMoveArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<task_move::TaskMoveValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(task_move::task_move(&self.state, principal, arguments).await)
+    }
+
     // -- Search and memory ---------------------------------------------------
 
     #[tool(
@@ -770,6 +935,23 @@ impl McpServer {
     ) -> Json<common::ToolResult<memory_tools::DecisionValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(memory_tools::decision_record(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List a project's decisions, newest first: what was chosen, why, and where. Superseded ones are left out unless includeSuperseded.",
+        annotations(
+            title = "List decisions",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn decision_list(
+        &self,
+        Parameters(arguments): Parameters<memory_tools::DecisionListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<memory_tools::DecisionListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(memory_tools::decision_list(&self.state, principal, arguments).await)
     }
 
     // -- Code, runs and approvals --------------------------------------------
@@ -1078,9 +1260,26 @@ async fn authenticate_mcp(
                     Ok(bytes) => bytes,
                     Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
                 };
-                if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                let mut bytes = bytes;
+                if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&bytes)
                     && body.get("method").and_then(serde_json::Value::as_str) == Some("tools/call")
                 {
+                    // People name projects and tasks by key ("AWD", "AWD-12");
+                    // tools take IDs.
+                    let tool = body["params"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    match keys_to_ids(&state, &principal, &tool, &mut body["params"]["arguments"])
+                        .await
+                    {
+                        Ok(true) => match serde_json::to_vec(&body) {
+                            Ok(rewritten) => bytes = rewritten.into(),
+                            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+                        },
+                        Ok(false) => {}
+                        Err(error) => return error.into_response(),
+                    }
                     let tool = body["params"]["name"].as_str().unwrap_or_default();
                     match scoped_project(&state, &principal, tool, &body["params"]["arguments"])
                         .await
@@ -1678,6 +1877,136 @@ async fn insert_credential_audit(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// Replaces keys with IDs in the arguments that take one: a project key such
+/// as "AWD" in `projectId` or `toProjectId`, and a task key such as "AWD-12"
+/// in `taskId`, `workItemId` or `parentId` (and `identifier` for task_open).
+/// A key resolves only among projects the caller can reach, and a moved
+/// task's old key resolves to where it went. Returns whether anything
+/// changed; an unknown key is left for the tool to reject.
+async fn keys_to_ids(
+    state: &AppState,
+    principal: &McpPrincipal,
+    tool: &str,
+    arguments: &mut serde_json::Value,
+) -> Result<bool, AppError> {
+    let mut changed = false;
+    for field in ["projectId", "toProjectId"] {
+        if let Some(key) = unresolved(arguments, field)
+            && is_project_key(&key)
+            && let Some(project_id) = project_by_key(state, principal, &key).await?
+        {
+            arguments[field] = serde_json::Value::String(project_id.to_string());
+            changed = true;
+        }
+    }
+    let task_fields: &[&str] = if tool == "task_open" {
+        &["taskId", "workItemId", "parentId", "identifier"]
+    } else {
+        &["taskId", "workItemId", "parentId"]
+    };
+    for field in task_fields {
+        if let Some(key) = unresolved(arguments, field)
+            && let Some((project_key, number)) = key.rsplit_once('-')
+            && is_project_key(project_key)
+            && let Ok(number) = number.parse::<i64>()
+            && let Some(task_id) = task_by_key(state, principal, project_key, number).await?
+        {
+            arguments[*field] = serde_json::Value::String(task_id.to_string());
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// A string argument that isn't already an ID or link.
+fn unresolved(arguments: &serde_json::Value, field: &str) -> Option<String> {
+    arguments
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| common::parse_id(value).is_none())
+        .map(|value| value.trim().to_owned())
+}
+
+fn is_project_key(value: &str) -> bool {
+    (2..=12).contains(&value.len())
+        && value.starts_with(|c: char| c.is_ascii_alphabetic())
+        && value.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// The one active project the caller can reach under this key.
+async fn project_by_key(
+    state: &AppState,
+    principal: &McpPrincipal,
+    key: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let matches = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT project.id
+        FROM projects project
+        JOIN project_memberships membership
+          ON membership.project_id = project.id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE upper(project.project_key) = upper($3)
+          AND project.archived_at IS NULL
+          AND actor_can_access_project($1, $2, project.id)
+        LIMIT 2
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(key)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(match matches.as_slice() {
+        [project_id] => Some(*project_id),
+        _ => None,
+    })
+}
+
+/// The task the caller can reach under this key: the task that has it now,
+/// or else the one a moved task went to (migration 0043).
+async fn task_by_key(
+    state: &AppState,
+    principal: &McpPrincipal,
+    project_key: &str,
+    number: i64,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT found.id FROM (
+            SELECT item.id, 0 AS preference, item.project_id
+            FROM work_items item
+            JOIN projects project ON project.id = item.project_id
+            WHERE upper(project.project_key) = upper($3) AND item.number = $4
+              AND project.archived_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM work_item_key_aliases moved
+                  WHERE moved.source_work_item_id = item.id
+              )
+            UNION ALL
+            SELECT alias.work_item_id, 1, item.project_id
+            FROM work_item_key_aliases alias
+            JOIN work_items item ON item.id = alias.work_item_id
+            WHERE upper(alias.project_key) = upper($3) AND alias.number = $4
+        ) found
+        JOIN project_memberships membership
+          ON membership.project_id = found.project_id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE actor_can_access_project($1, $2, found.project_id)
+        ORDER BY found.preference
+        LIMIT 1
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(project_key)
+    .bind(number)
+    .fetch_optional(&state.pool)
+    .await?)
 }
 
 async fn scoped_project(

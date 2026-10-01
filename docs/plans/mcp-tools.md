@@ -302,3 +302,47 @@ Following AGENTS.md, tests go where a bug would be silent and costly:
    kept, and owners can remove anyone's message.
 
 Decisions 4 and 5 go ahead as recommended unless Mischa says otherwise.
+
+## Built so far (September 30, 2026)
+
+On `claude/mcp-phase-1`: `workflow_get`, `project_members`,
+`project_member_set`, `project_update` (rename), `project_archive` (archive
+and restore), `channel_create`, `conversation_update`, `pin_set`,
+`decision_list`, `projects_list` with `includeArchived`, and project keys
+(such as `AWD`) accepted wherever a `projectId` is. That's 49 tools. Channel
+archiving and membership changes now share one code path with the web app.
+
+## Decision 1, revisited (September 30, 2026)
+
+A real move isn't possible without taking apart guarantees the database
+was built on. A task's links point at things that stay in the old project:
+conversations, messages, repositories and pull requests. Comments, mentions
+and acceptance criteria require their authors to be members of the task's
+project. And comments, mentions and message references are immutable, with
+triggers that reject any update, including a cascading `project_id` change.
+
+Options:
+
+1. **Carry over, then archive the original (recommended).** The new task
+   gets everything that can move:
+   - title, description, priority and labels
+   - status and type, matched by name, then by category
+   - the assignee, if they're in the target project
+   - acceptance criteria and subtasks
+   - every comment, quoted with its original author and date
+
+   The original is archived with "Moved to AWD-12" and keeps its full
+   history and links. Its old key goes in `work_item_key_aliases`, so
+   `task_open AW-7` and old links open the new task. Links to threads and PRs
+   are listed on the new task, pointing back to where they still live.
+2. **Loosen the database to allow a real move.** This means dropping the
+   immutability triggers for moves, relaxing the membership checks on
+   comment authors, and rewriting or dropping cross-project links. It's a lot
+   of risky work for a rare operation.
+
+Mischa chose option 1. `task_move` carries a task and its subtasks over and
+archives the originals. Migration 0043 adds `work_item_key_aliases`. A moved
+task's old key opens the new one for anyone who can see it; anyone else gets
+the archived original, which they could always see. This also means
+`taskId`, `workItemId` and `parentId` take task keys in every tool now. Moving
+a task again returns where it went. That brings the count to 50 tools.

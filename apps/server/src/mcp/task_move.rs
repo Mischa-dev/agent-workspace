@@ -1,0 +1,693 @@
+//! Moving tasks between projects (docs/plans/mcp-tools.md, decision 1).
+//!
+//! A task can't change projects in place: its comments are immutable, and
+//! its links and authors belong to its project. So a move carries the task
+//! over into the target project (title, description, priority, status and
+//! type by name, the assignee if they're there, acceptance criteria,
+//! subtasks, and every comment quoted with its author and date), then
+//! archives the original. The original keeps its history and links, and its
+//! key keeps opening the new task (migration 0043).
+
+use rmcp::schemars;
+use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, Postgres, Transaction};
+use uuid::Uuid;
+
+use super::{
+    McpPrincipal,
+    common::{ToolResult, mark_via, parse_id, public_url},
+};
+use crate::{
+    AppState,
+    error::AppError,
+    message_content::MessageContent,
+    policy::{Action, Decision},
+    work_item_commands::{
+        AllocatedNumberMetadata, AuditAttribution, ChangeFinalization, CommandActor,
+        CreateWorkItemCommand, CreateWorkItemOutcome, authorize_mutation, create_work_item,
+        finalize_change, finalize_comment, lock_membership,
+    },
+};
+
+/// The most tasks (a task and its subtasks) one move carries.
+const MAX_TASKS: usize = 100;
+/// The most comments carried over per task; the rest stay on the original.
+const MAX_COMMENTS: usize = 200;
+/// Comments are at most 20,000 characters; leave room for the quote header.
+/// Each carried comment gets the clock time, so they keep their order within
+/// the one transaction.
+const MAX_QUOTED_CHARACTERS: usize = 19_000;
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct TaskMoveArguments {
+    /// The task's ID, link, or key such as AW-7. Its subtasks move with it.
+    pub task_id: String,
+    /// Where it goes: a project ID, link, or key such as "AWD".
+    pub to_project_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MovedTask {
+    /// The old key, which now opens the new task.
+    pub from: String,
+    /// The new key.
+    pub to: String,
+    pub id: String,
+    pub title: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TaskMoveValue {
+    /// The task first, then its subtasks.
+    pub moved: Vec<MovedTask>,
+    /// Anything that didn't carry over exactly, such as an assignee who isn't
+    /// in the target project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    /// False when the task had already been moved; this is where it went.
+    pub created: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct SourceTask {
+    id: Uuid,
+    parent_id: Option<Uuid>,
+    key: String,
+    number: i64,
+    title: String,
+    description: String,
+    priority: String,
+    type_name: String,
+    status_name: String,
+    status_category: String,
+    assignee_actor_id: Option<Uuid>,
+    assignee_name: Option<String>,
+    blocked_reason: Option<String>,
+    version: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct SourceComment {
+    author: String,
+    created_at: String,
+    plain_text: String,
+}
+
+#[derive(Debug, FromRow)]
+struct SourceCriterion {
+    text: String,
+    completed: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct LinkLine {
+    kind: String,
+    label: String,
+}
+
+pub(super) async fn task_move(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: TaskMoveArguments,
+) -> ToolResult<TaskMoveValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    let Some(task_id) = parse_id(&arguments.task_id) else {
+        return ToolResult::not_found("That task");
+    };
+    let Some(target_project_id) = parse_id(&arguments.to_project_id) else {
+        return ToolResult::not_found("That target project");
+    };
+    let source_project_id = principal.project_id;
+    if target_project_id == source_project_id {
+        return ToolResult::invalid("toProjectId", "The task is already in that project.");
+    }
+    let result = async {
+        let target_reachable = sqlx::query_scalar::<_, bool>(
+            "SELECT actor_can_access_project($1, $2, $3) AND kind = 'standard' FROM projects WHERE id = $3",
+        )
+        .bind(principal.actor_id)
+        .bind(principal.external_agent_connection_id)
+        .bind(target_project_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or(false);
+        if !target_reachable {
+            return Ok(ToolResult::not_found("That target project"));
+        }
+
+        let mut transaction = state.pool.begin().await?;
+        mark_via(&mut transaction, principal).await?;
+        let source_actor = actor(principal, source_project_id);
+        let target_actor = actor(principal, target_project_id);
+        for (actor, project, what) in [
+            (&source_actor, source_project_id, "this task's project"),
+            (&target_actor, target_project_id, "the target project"),
+        ] {
+            let Some(membership) =
+                lock_membership(&mut transaction, principal.actor_id, project).await?
+            else {
+                return Ok(ToolResult::not_found("That project"));
+            };
+            if membership.project_archived_at.is_some() || !membership.enabled {
+                return Ok(ToolResult::not_found("That project"));
+            }
+            let decision = authorize_mutation(actor, &membership, Action::McpWrite, None)?;
+            if !matches!(decision, Decision::Allow) {
+                return Ok(ToolResult::denied(format!(
+                    "You can't change tasks in {what}."
+                )));
+            }
+        }
+
+        // Moving a task that was already moved returns where it went, so a
+        // retry never makes a second copy.
+        let archived = sqlx::query_scalar::<_, bool>(
+            "SELECT archived_at IS NOT NULL FROM work_items WHERE project_id = $1 AND id = $2 FOR UPDATE",
+        )
+        .bind(source_project_id)
+        .bind(task_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(archived) = archived else {
+            return Ok(ToolResult::not_found("That task"));
+        };
+        if archived {
+            let moved = already_moved(&mut transaction, state, task_id).await?;
+            transaction.commit().await?;
+            return Ok(match moved {
+                Some(moved) => ToolResult::ok(TaskMoveValue {
+                    moved,
+                    notes: Vec::new(),
+                    created: false,
+                }),
+                None => ToolResult::conflict(
+                    "That task is archived. Restore it before moving it.",
+                ),
+            });
+        }
+
+        let tasks = sqlx::query_as::<_, SourceTask>(
+            r#"
+            WITH RECURSIVE tree AS (
+                SELECT id, 0 AS depth FROM work_items
+                WHERE project_id = $1 AND id = $2
+                UNION ALL
+                SELECT child.id, tree.depth + 1
+                FROM work_items child
+                JOIN tree ON child.parent_work_item_id = tree.id
+                WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < 20
+            )
+            SELECT item.id,
+                   CASE WHEN item.id = $2 THEN NULL ELSE item.parent_work_item_id END AS parent_id,
+                   project.project_key || '-' || item.number AS key,
+                   item.number, item.title, item.description, item.priority,
+                   item_type.name AS type_name, status.name AS status_name,
+                   status.semantic_category AS status_category,
+                   item.assignee_actor_id, assignee.display_name AS assignee_name,
+                   item.blocked_reason, item.version
+            FROM tree
+            JOIN work_items item ON item.id = tree.id
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_types item_type
+              ON item_type.project_id = item.project_id AND item_type.id = item.type_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            LEFT JOIN project_memberships assignee
+              ON assignee.project_id = item.project_id
+             AND assignee.actor_id = item.assignee_actor_id
+            ORDER BY tree.depth, item.number
+            FOR UPDATE OF item
+            "#,
+        )
+        .bind(source_project_id)
+        .bind(task_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if tasks.len() > MAX_TASKS {
+            return Ok(ToolResult::invalid(
+                "taskId",
+                format!(
+                    "That task has {} subtasks; one move carries at most {MAX_TASKS} tasks. Move some subtasks first.",
+                    tasks.len() - 1
+                ),
+            ));
+        }
+        let (target_key, organization_id) = sqlx::query_as::<_, (String, Uuid)>(
+            "SELECT project_key, organization_id FROM projects WHERE id = $1",
+        )
+        .bind(target_project_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        let mut notes = Vec::new();
+        let mut moved = Vec::new();
+        let mut new_ids = std::collections::HashMap::new();
+        for task in &tasks {
+            let status_id = matching_status(&mut transaction, target_project_id, task).await?;
+            let type_id = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM work_item_types WHERE project_id = $1 AND enabled AND lower(name) = lower($2)",
+            )
+            .bind(target_project_id)
+            .bind(&task.type_name)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let assignee = match task.assignee_actor_id {
+                Some(assignee) if is_member(&mut transaction, target_project_id, assignee).await? => {
+                    Some(assignee)
+                }
+                Some(_) => {
+                    notes.push(format!(
+                        "{} isn't in {target_key}, so the task moved from {} is unassigned.",
+                        task.assignee_name.as_deref().unwrap_or("Its assignee"),
+                        task.key
+                    ));
+                    None
+                }
+                None => None,
+            };
+            let parent = task.parent_id.and_then(|parent| new_ids.get(&parent).copied());
+            let summary = format!("Work Item moved from {}", task.key);
+            let outcome = create_work_item(
+                &mut transaction,
+                &target_actor,
+                CreateWorkItemCommand {
+                    title: &task.title,
+                    description: &task.description,
+                    type_id,
+                    status_id,
+                    priority: &task.priority,
+                    assignee_actor_id: assignee,
+                    parent_work_item_id: parent,
+                    activity_summary: &summary,
+                    activity_metadata: serde_json::json!({ "movedFrom": task.key }),
+                    activity_number_metadata: AllocatedNumberMetadata::Include,
+                    audit_action: "work_item.mcp_moved_in",
+                    audit_metadata: serde_json::json!({
+                        "moved_from": task.key,
+                        "source_work_item_id": task.id,
+                    }),
+                },
+            )
+            .await?;
+            let CreateWorkItemOutcome::Created {
+                work_item_id: new_id,
+                number,
+                ..
+            } = outcome
+            else {
+                return Err(AppError::Internal("moved task could not be created"));
+            };
+            let new_key = format!("{target_key}-{number}");
+            new_ids.insert(task.id, new_id);
+
+            carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
+                .await?;
+            let links = links_left_behind(&mut transaction, source_project_id, task.id).await?;
+            let mut provenance = format!(
+                "Moved from {} by {}. The original is archived with its full history.",
+                task.key,
+                mover_name(&mut transaction, source_project_id, principal.actor_id).await?
+            );
+            if let Some(reason) = &task.blocked_reason {
+                provenance.push_str(&format!("\n\nIt was blocked: {reason}"));
+            }
+            if !links.is_empty() {
+                provenance.push_str(&format!("\n\nStill linked on {}:", task.key));
+                for link in &links {
+                    provenance.push_str(&format!("\n- {}: {}", link.kind, link.label));
+                }
+            }
+            add_comment(&mut transaction, &target_actor, new_id, &provenance).await?;
+            let comments = sqlx::query_as::<_, SourceComment>(
+                r#"
+                SELECT COALESCE(author.display_name, 'Someone') AS author,
+                       to_char(comment.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI "UTC"') AS created_at,
+                       comment.plain_text
+                FROM work_item_comments comment
+                LEFT JOIN project_memberships author
+                  ON author.project_id = comment.project_id
+                 AND author.actor_id = comment.author_actor_id
+                WHERE comment.project_id = $1 AND comment.work_item_id = $2
+                ORDER BY comment.created_at, comment.id
+                "#,
+            )
+            .bind(source_project_id)
+            .bind(task.id)
+            .fetch_all(&mut *transaction)
+            .await?;
+            for comment in comments.iter().take(MAX_COMMENTS) {
+                let text = comment.plain_text.chars().take(MAX_QUOTED_CHARACTERS).collect::<String>();
+                let quoted = format!(
+                    "{} wrote on {} (on {}):\n\n{}",
+                    comment.author, comment.created_at, task.key, text
+                );
+                add_comment(&mut transaction, &target_actor, new_id, &quoted).await?;
+            }
+            if comments.len() > MAX_COMMENTS {
+                notes.push(format!(
+                    "{} has {} comments; the first {MAX_COMMENTS} were carried over and the rest are on the original.",
+                    task.key,
+                    comments.len()
+                ));
+            }
+
+            // Point the original at its new home, then archive it.
+            add_comment(
+                &mut transaction,
+                &source_actor,
+                task.id,
+                &format!(
+                    "Moved to {new_key}: {}",
+                    public_url(state, &format!("/projects/{target_project_id}/work-items/{new_id}"))
+                ),
+            )
+            .await?;
+            archive(&mut transaction, &source_actor, task, &new_key).await?;
+            sqlx::query(
+                r#"
+                INSERT INTO work_item_key_aliases (
+                    id, organization_id, project_key, number, source_work_item_id,
+                    work_item_id, moved_by_actor_id
+                )
+                SELECT $1, $2, project.project_key, $4, $5, $6, $7
+                FROM projects project WHERE project.id = $3
+                "#,
+            )
+            .bind(Uuid::now_v7())
+            .bind(organization_id)
+            .bind(source_project_id)
+            .bind(task.number)
+            .bind(task.id)
+            .bind(new_id)
+            .bind(principal.actor_id)
+            .execute(&mut *transaction)
+            .await?;
+            // Anything that pointed at the old key follows it, including keys
+            // the original had itself inherited from an earlier move.
+            sqlx::query("UPDATE work_item_key_aliases SET work_item_id = $2 WHERE work_item_id = $1")
+                .bind(task.id)
+                .bind(new_id)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("DELETE FROM work_item_claims WHERE work_item_id = $1")
+                .bind(task.id)
+                .execute(&mut *transaction)
+                .await?;
+            moved.push(MovedTask {
+                from: task.key.clone(),
+                to: new_key,
+                id: new_id.to_string(),
+                title: task.title.clone(),
+                url: public_url(state, &format!("/projects/{target_project_id}/work-items/{new_id}")),
+            });
+        }
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(TaskMoveValue {
+            moved,
+            notes,
+            created: true,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "task_move"))
+}
+
+fn actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
+    CommandActor {
+        actor_id: principal.actor_id,
+        actor_kind: principal.actor_kind,
+        project_id,
+        audit: AuditAttribution::Mcp {
+            authentication_class: principal.authentication_class,
+            request_id: Uuid::now_v7().to_string(),
+            client_name: principal.client_name.clone(),
+            mcp_credential_id: principal.mcp_credential_id,
+            oauth_grant_id: principal.oauth_grant_id,
+            external_agent_connection_id: principal.external_agent_connection_id,
+        },
+    }
+}
+
+/// The status with the same name in the target project, or else its first
+/// status in the same category, or else its default.
+async fn matching_status(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    task: &SourceTask,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM work_item_statuses
+        WHERE project_id = $1 AND enabled
+          AND (lower(name) = lower($2) OR semantic_category = $3)
+        ORDER BY lower(name) = lower($2) DESC, position
+        LIMIT 1
+        "#,
+    )
+    .bind(project_id)
+    .bind(&task.status_name)
+    .bind(&task.status_category)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
+async fn is_member(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1 AND membership.actor_id = $2
+              AND membership.enabled AND actor.status = 'active'
+              AND actor.kind IN ('human', 'external_agent')
+        )
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+async fn mover_name(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+) -> Result<String, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or_else(|| "someone".to_owned()))
+}
+
+/// Copy acceptance criteria in order. Whoever moves the task is recorded as
+/// creating them, and as completing the ones that were done, since the
+/// original authors may not be in the target project.
+async fn carry_criteria(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    source_project_id: Uuid,
+    target_project_id: Uuid,
+    source_id: Uuid,
+    target_id: Uuid,
+) -> Result<(), AppError> {
+    let criteria = sqlx::query_as::<_, SourceCriterion>(
+        r#"
+        SELECT text, completed FROM work_item_acceptance_criteria
+        WHERE project_id = $1 AND work_item_id = $2
+        ORDER BY position
+        "#,
+    )
+    .bind(source_project_id)
+    .bind(source_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for (position, criterion) in criteria.iter().enumerate() {
+        sqlx::query(
+            r#"
+            INSERT INTO work_item_acceptance_criteria (
+                id, project_id, work_item_id, text, position, completed,
+                completed_by_actor_id, completed_at, created_by_actor_id
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                CASE WHEN $6 THEN $7 END, CASE WHEN $6 THEN now() END, $7
+            )
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(target_project_id)
+        .bind(target_id)
+        .bind(&criterion.text)
+        .bind(i32::try_from(position + 1).unwrap_or(i32::MAX))
+        .bind(criterion.completed)
+        .bind(principal.actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Threads, repositories and pull requests linked to the original. They stay
+/// in its project, so the new task lists them.
+async fn links_left_behind(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<Vec<LinkLine>, AppError> {
+    Ok(sqlx::query_as::<_, LinkLine>(
+        r#"
+        SELECT 'Conversation' AS kind, conversation.name AS label
+        FROM work_item_conversation_links link
+        JOIN conversations conversation ON conversation.id = link.conversation_id
+        WHERE link.project_id = $1 AND link.work_item_id = $2
+        UNION ALL
+        SELECT 'Repository', repository.owner || '/' || repository.name
+        FROM work_item_repository_links link
+        JOIN repositories repository ON repository.id = link.repository_id
+        WHERE link.project_id = $1 AND link.work_item_id = $2
+        UNION ALL
+        SELECT 'Pull request', pull_request.html_url
+        FROM github_pull_request_work_item_links link
+        JOIN github_pull_requests pull_request ON pull_request.id = link.github_pull_request_id
+        WHERE link.project_id = $1 AND link.work_item_id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+async fn add_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    text: &str,
+) -> Result<(), AppError> {
+    let validated = MessageContent::from_plain_text(text.to_owned())
+        .map_err(|_| AppError::Validation("comment"))?;
+    let content = serde_json::to_value(validated.content())
+        .map_err(|_| AppError::Internal("serialize moved comment"))?;
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM work_items WHERE project_id = $1 AND id = $2",
+    )
+    .bind(actor.project_id)
+    .bind(work_item_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let comment_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_comments (
+            id, project_id, work_item_id, author_actor_id, content_version, content, plain_text,
+            created_at
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6, clock_timestamp())
+        "#,
+    )
+    .bind(comment_id)
+    .bind(actor.project_id)
+    .bind(work_item_id)
+    .bind(actor.actor_id)
+    .bind(content)
+    .bind(text)
+    .execute(&mut **transaction)
+    .await?;
+    finalize_comment(
+        transaction,
+        actor,
+        work_item_id,
+        comment_id,
+        version,
+        "work_item.mcp_move_comment",
+    )
+    .await?;
+    Ok(())
+}
+
+async fn archive(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    task: &SourceTask,
+    new_key: &str,
+) -> Result<(), AppError> {
+    let version = sqlx::query_scalar::<_, i64>(
+        r#"
+        UPDATE work_items
+        SET archived_at = now(), archived_by_actor_id = $3,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND archived_at IS NULL
+        RETURNING version
+        "#,
+    )
+    .bind(actor.project_id)
+    .bind(task.id)
+    .bind(actor.actor_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let summary = format!("Work Item moved to {new_key}");
+    finalize_change(
+        transaction,
+        actor,
+        task.id,
+        ChangeFinalization {
+            activity_kind: "work_item_archived",
+            summary: &summary,
+            audit_action: "work_item.mcp_moved_out",
+            activity_payload: serde_json::json!({ "movedTo": new_key, "previousVersion": task.version }),
+            audit_metadata: serde_json::json!({ "moved_to": new_key }),
+            version,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Where an archived task went, with any subtasks that moved with it.
+async fn already_moved(
+    transaction: &mut Transaction<'_, Postgres>,
+    state: &AppState,
+    source_id: Uuid,
+) -> Result<Option<Vec<MovedTask>>, AppError> {
+    let rows = sqlx::query_as::<_, (String, String, Uuid, Uuid, String)>(
+        r#"
+        SELECT alias.project_key || '-' || alias.number,
+               project.project_key || '-' || item.number,
+               item.id, item.project_id, item.title
+        FROM work_item_key_aliases alias
+        JOIN work_items item ON item.id = alias.work_item_id
+        JOIN projects project ON project.id = item.project_id
+        WHERE alias.source_work_item_id = $1
+        "#,
+    )
+    .bind(source_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        rows.into_iter()
+            .map(|(from, to, id, project_id, title)| MovedTask {
+                from,
+                to,
+                id: id.to_string(),
+                title,
+                url: public_url(state, &format!("/projects/{project_id}/work-items/{id}")),
+            })
+            .collect(),
+    ))
+}

@@ -1191,7 +1191,7 @@ fn normalize_project_key(value: &str) -> Result<String, AppError> {
     Ok(key)
 }
 
-fn normalize_project_name(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_project_name(value: &str) -> Result<String, AppError> {
     let name = value.trim();
     if name.is_empty() || name.len() > MAX_PROJECT_NAME_BYTES || name.chars().any(char::is_control)
     {

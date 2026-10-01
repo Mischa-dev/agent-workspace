@@ -41,26 +41,26 @@ struct AccessRow {
 }
 
 #[derive(Clone, Debug, FromRow)]
-struct MemberRow {
-    id: Uuid,
-    project_id: Uuid,
-    organization_id: Uuid,
-    actor_id: Uuid,
-    organization_role: String,
-    actor_kind: String,
-    role: String,
-    display_name: String,
-    handle: String,
-    enabled: bool,
-    version: i64,
-    invited_by_actor_id: Option<Uuid>,
-    invited_by_display_name: Option<String>,
-    accepted_invitation_id: Option<Uuid>,
-    accepted_at: Option<String>,
-    disabled_by_actor_id: Option<Uuid>,
-    disabled_at: Option<String>,
-    created_at: String,
-    profile_readiness: String,
+pub(crate) struct MemberRow {
+    pub(crate) id: Uuid,
+    pub(crate) project_id: Uuid,
+    pub(crate) organization_id: Uuid,
+    pub(crate) actor_id: Uuid,
+    pub(crate) organization_role: String,
+    pub(crate) actor_kind: String,
+    pub(crate) role: String,
+    pub(crate) display_name: String,
+    pub(crate) handle: String,
+    pub(crate) enabled: bool,
+    pub(crate) version: i64,
+    pub(crate) invited_by_actor_id: Option<Uuid>,
+    pub(crate) invited_by_display_name: Option<String>,
+    pub(crate) accepted_invitation_id: Option<Uuid>,
+    pub(crate) accepted_at: Option<String>,
+    pub(crate) disabled_by_actor_id: Option<Uuid>,
+    pub(crate) disabled_at: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) profile_readiness: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -122,7 +122,12 @@ async fn list_members(
     let access = load_access(&state, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    authorize_access(&principal, &access, project_id, Action::MembershipView)?;
+    authorize_access(
+        principal.actor_id,
+        &access,
+        project_id,
+        Action::MembershipView,
+    )?;
     let rows = sqlx::query_as::<_, MemberRow>(member_list_sql())
         .bind(project_id)
         .fetch_all(&state.pool)
@@ -144,9 +149,6 @@ async fn update_member(
 ) -> Result<Json<MemberView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     validate_update(&request)?;
-    if actor_id == principal.actor_id {
-        return Err(AppError::Forbidden);
-    }
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope = format!(
@@ -156,18 +158,6 @@ async fn update_member(
     );
 
     let mut transaction = state.pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("m7-membership:{project_id}"))
-        .execute(&mut *transaction)
-        .await?;
-    let access = load_access_for_update(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_access(&principal, &access, project_id, Action::MembershipManage)?;
-    if access.project_archived {
-        return Err(AppError::ProjectArchived);
-    }
-
     let reservation = match reserve(
         &mut transaction,
         principal.actor_id,
@@ -183,41 +173,119 @@ async fn update_member(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    let change = change_member(
+        &mut transaction,
+        principal.actor_id,
+        project_id,
+        actor_id,
+        request.role.as_deref(),
+        request.enabled,
+        Some(request.expected_version),
+    )
+    .await?;
+    let view = match change.updated {
+        None => member_view(change.before, &principal, &change.access),
+        Some(updated) => {
+            insert_audit_event(
+                &mut transaction,
+                &headers,
+                &principal,
+                project_id,
+                actor_id,
+                &change.before,
+                &updated,
+            )
+            .await?;
+            member_view(updated, &principal, &change.access)
+        }
+    };
+    complete(
+        &mut transaction,
+        &reservation,
+        axum::http::StatusCode::OK,
+        &view,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(view))
+}
 
-    let target = load_member_for_update(&mut transaction, project_id, actor_id)
+/// A membership change: the caller's access, the member before, and after
+/// if anything changed.
+pub(crate) struct MemberChange {
+    access: AccessRow,
+    pub(crate) before: MemberRow,
+    pub(crate) updated: Option<MemberRow>,
+}
+
+/// Change someone's role in a Project or remove them (`enabled: false`), or
+/// bring them back. Shared by the browser API and MCP; callers record their
+/// own audit event.
+///
+/// Only organization owners and admins manage members, never their own
+/// membership, and admins only manage members and viewers. A Project always
+/// keeps an owner. Removing someone revokes their credentials there.
+pub(crate) async fn change_member(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+    actor_id: Uuid,
+    role: Option<&str>,
+    enabled: Option<bool>,
+    expected_version: Option<i64>,
+) -> Result<MemberChange, AppError> {
+    if role.is_none() && enabled.is_none() {
+        return Err(AppError::Validation("project membership update"));
+    }
+    if role.is_some_and(|role| !matches!(role, "admin" | "member" | "viewer")) {
+        return Err(AppError::Validation("project membership role"));
+    }
+    if actor_id == caller_actor_id {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("m7-membership:{project_id}"))
+        .execute(&mut **transaction)
+        .await?;
+    let access = load_access_for_update(transaction, caller_actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_access(
+        caller_actor_id,
+        &access,
+        project_id,
+        Action::MembershipManage,
+    )?;
+    if access.project_archived {
+        return Err(AppError::ProjectArchived);
+    }
+
+    let target = load_member_for_update(transaction, project_id, actor_id)
         .await?
         .ok_or(AppError::NotFound("project_member"))?;
-    let next_role = request.role.as_deref().unwrap_or(&target.role);
+    let next_role = role.unwrap_or(&target.role);
     authorize_target(&access, &target, next_role)?;
-    if target.version != request.expected_version {
+    if let Some(expected_version) = expected_version
+        && target.version != expected_version
+    {
         return Err(AppError::VersionConflict {
             resource: "project_membership",
             current_version: target.version,
         });
     }
 
-    let next_enabled = request.enabled.unwrap_or(target.enabled);
+    let next_enabled = enabled.unwrap_or(target.enabled);
     if target.role == "owner" && (next_role != "owner" || !next_enabled) {
-        lock_and_require_other_owners(
-            &mut transaction,
-            target.organization_id,
-            project_id,
-            actor_id,
-        )
-        .await?;
+        lock_and_require_other_owners(transaction, target.organization_id, project_id, actor_id)
+            .await?;
     }
 
     if next_role == target.role && next_enabled == target.enabled {
-        let view = member_view(target, &principal, &access);
-        complete(
-            &mut transaction,
-            &reservation,
-            axum::http::StatusCode::OK,
-            &view,
-        )
-        .await?;
-        transaction.commit().await?;
-        return Ok(Json(view));
+        return Ok(MemberChange {
+            access,
+            before: target,
+            updated: None,
+        });
     }
 
     let updated = sqlx::query_as::<_, MemberRow>(
@@ -260,9 +328,9 @@ async fn update_member(
     .bind(actor_id)
     .bind(next_role)
     .bind(next_enabled)
-    .bind(principal.actor_id)
-    .bind(request.expected_version)
-    .fetch_optional(&mut *transaction)
+    .bind(caller_actor_id)
+    .bind(target.version)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(map_membership_database_error)?
     .ok_or(AppError::VersionConflict {
@@ -271,23 +339,13 @@ async fn update_member(
     })?;
 
     if target.actor_kind == "human" {
-        sync_organization_role(&mut transaction, target.organization_id, actor_id).await?;
+        sync_organization_role(transaction, target.organization_id, actor_id).await?;
     }
     if target.enabled && !next_enabled {
-        revoke_project_credentials(&mut transaction, project_id, actor_id).await?;
+        revoke_project_credentials(transaction, project_id, actor_id).await?;
     }
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        actor_id,
-        &target,
-        &updated,
-    )
-    .await?;
     enqueue_typed(
-        &mut transaction,
+        transaction,
         project_id,
         OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
             project_id,
@@ -296,16 +354,11 @@ async fn update_member(
         }),
     )
     .await?;
-    let view = member_view(updated, &principal, &access);
-    complete(
-        &mut transaction,
-        &reservation,
-        axum::http::StatusCode::OK,
-        &view,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(view))
+    Ok(MemberChange {
+        access,
+        before: target,
+        updated: Some(updated),
+    })
 }
 
 fn validate_update(request: &UpdateMemberRequest) -> Result<(), AppError> {
@@ -323,7 +376,7 @@ fn validate_update(request: &UpdateMemberRequest) -> Result<(), AppError> {
 }
 
 fn authorize_access(
-    principal: &AuthenticatedActor,
+    actor_id: Uuid,
     access: &AccessRow,
     project_id: Uuid,
     action: Action,
@@ -334,7 +387,7 @@ fn authorize_access(
         return Err(AppError::NotFound("project"));
     }
     let subject = Subject::new(
-        principal.actor_id,
+        actor_id,
         ActorKind::Human,
         true,
         Some(Membership::project(
@@ -762,7 +815,12 @@ async fn member_candidates(
     let access = load_access(&state, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    authorize_access(&principal, &access, project_id, Action::MembershipManage)?;
+    authorize_access(
+        principal.actor_id,
+        &access,
+        project_id,
+        Action::MembershipManage,
+    )?;
     Ok(Json(sqlx::query_as::<_, MemberCandidate>(r#"
         SELECT profile.actor_id, actor.kind AS actor_kind, profile.display_name, profile.handle
         FROM projects project
@@ -793,18 +851,59 @@ async fn add_existing_member(
     ApiJson(request): ApiJson<AddExistingMemberRequest>,
 ) -> Result<Json<MemberView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if !matches!(request.role.as_str(), "member" | "viewer") {
+    let mut tx = state.pool.begin().await?;
+    let added = add_member(
+        &mut tx,
+        principal.actor_id,
+        project_id,
+        request.actor_id,
+        &request.role,
+    )
+    .await?;
+    if added.inserted {
+        sqlx::query(r#"INSERT INTO audit_events (id,actor_id,project_id,session_id,authentication_class,action,target_kind,target_id,outcome)
+            VALUES ($1,$2,$3,$4,'browser_session','project_membership.added','actor',$5,'succeeded')"#)
+            .bind(Uuid::now_v7()).bind(principal.actor_id).bind(project_id).bind(principal.session_id)
+            .bind(request.actor_id).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(Json(member_view(added.member, &principal, &added.access)))
+}
+
+pub(crate) struct AddedMember {
+    access: AccessRow,
+    pub(crate) member: MemberRow,
+    /// False when they were already a member with that role.
+    pub(crate) inserted: bool,
+}
+
+/// Add someone from the organization to a Project as a member or viewer.
+/// Shared by the browser API and MCP; callers record their own audit event.
+/// Someone already in the Project with another role, or removed, is a
+/// conflict: change them with `change_member` instead.
+pub(crate) async fn add_member(
+    tx: &mut Transaction<'_, Postgres>,
+    caller_actor_id: Uuid,
+    project_id: Uuid,
+    actor_id: Uuid,
+    role: &str,
+) -> Result<AddedMember, AppError> {
+    if !matches!(role, "member" | "viewer") {
         return Err(AppError::Validation("membership role"));
     }
-    let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("m7-membership:{project_id}"))
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    let access = load_access_for_update(&mut tx, principal.actor_id, project_id)
+    let access = load_access_for_update(tx, caller_actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
-    authorize_access(&principal, &access, project_id, Action::MembershipManage)?;
+    authorize_access(
+        caller_actor_id,
+        &access,
+        project_id,
+        Action::MembershipManage,
+    )?;
     if access.project_archived {
         return Err(AppError::ProjectArchived);
     }
@@ -816,38 +915,38 @@ async fn add_existing_member(
         JOIN actors a ON a.id = $2 AND a.status = 'active' AND a.kind IN ('human', 'external_agent')
         WHERE p.id = $1 AND (a.kind = 'external_agent' OR EXISTS (SELECT 1 FROM users u WHERE u.actor_id = a.id AND u.status = 'active'))
         FOR SHARE OF om, a
-    "#).bind(project_id).bind(request.actor_id).fetch_optional(&mut *tx).await?
+    "#).bind(project_id).bind(actor_id).fetch_optional(&mut **tx).await?
         .ok_or(AppError::NotFound("workspace member"))?;
     let inserted = sqlx::query(r#"
         INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle, invited_by_actor_id)
         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (project_id, actor_id) DO NOTHING
-    "#).bind(Uuid::now_v7()).bind(project_id).bind(request.actor_id).bind(&request.role)
-        .bind(candidate.1).bind(candidate.2).bind(principal.actor_id).execute(&mut *tx).await?;
-    let row = load_member_for_update(&mut tx, project_id, request.actor_id)
+    "#).bind(Uuid::now_v7()).bind(project_id).bind(actor_id).bind(role)
+        .bind(candidate.1).bind(candidate.2).bind(caller_actor_id).execute(&mut **tx).await?;
+    let member = load_member_for_update(tx, project_id, actor_id)
         .await?
         .ok_or(AppError::NotFound("member"))?;
-    if !row.enabled || row.role != request.role {
+    if !member.enabled || member.role != role {
         return Err(AppError::Conflict(
             "membership",
             "member already exists; use its current version to change access",
         ));
     }
-    if inserted.rows_affected() > 0 {
-        sqlx::query(r#"INSERT INTO audit_events (id,actor_id,project_id,session_id,authentication_class,action,target_kind,target_id,outcome)
-            VALUES ($1,$2,$3,$4,'browser_session','project_membership.added','actor',$5,'succeeded')"#)
-            .bind(Uuid::now_v7()).bind(principal.actor_id).bind(project_id).bind(principal.session_id)
-            .bind(request.actor_id).execute(&mut *tx).await?;
+    let inserted = inserted.rows_affected() > 0;
+    if inserted {
         enqueue_typed(
-            &mut tx,
+            tx,
             project_id,
             OutboxEventPayload::ProjectMembershipUpdated(ProjectMembershipUpdatedPayload {
                 project_id,
-                actor_id: request.actor_id,
-                version: row.version,
+                actor_id,
+                version: member.version,
             }),
         )
         .await?;
     }
-    tx.commit().await?;
-    Ok(Json(member_view(row, &principal, &access)))
+    Ok(AddedMember {
+        access,
+        member,
+        inserted,
+    })
 }

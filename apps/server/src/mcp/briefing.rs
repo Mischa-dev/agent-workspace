@@ -306,6 +306,11 @@ pub(super) struct ProjectLine {
     pub role: String,
     /// True for the Messages space that holds DMs and groups.
     pub messages_space: bool,
+    /// Only listed with includeArchived. Restore one with project_archive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+    /// Pass as expectedVersion to project_update or project_archive.
+    pub version: i64,
     pub open_tasks: i64,
     pub unread_conversations: i64,
     pub url: String,
@@ -317,20 +322,49 @@ pub(super) struct ProjectsValue {
     pub projects: Vec<ProjectLine>,
 }
 
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ProjectsListArguments {
+    /// Also list archived projects you belong to.
+    pub include_archived: Option<bool>,
+}
+
 pub(super) async fn projects_list(
     state: &AppState,
     principal: &McpPrincipal,
+    arguments: ProjectsListArguments,
 ) -> ToolResult<ProjectsValue> {
     if !principal.can_read() {
         return ToolResult::denied("This connection can't read.");
     }
     let result = async {
-        let projects = accessible_project_ids(state, principal).await?;
+        let mut projects = accessible_project_ids(state, principal).await?;
+        if arguments.include_archived.unwrap_or(false) && principal.account_wide {
+            // Archived projects are out of reach for everything except
+            // project_archive, which brings them back.
+            projects.extend(
+                sqlx::query_scalar::<_, Uuid>(
+                    r#"
+                    SELECT project.id
+                    FROM projects project
+                    JOIN project_memberships membership
+                      ON membership.project_id = project.id AND membership.actor_id = $1
+                     AND membership.enabled
+                    WHERE project.archived_at IS NOT NULL
+                    LIMIT 200
+                    "#,
+                )
+                .bind(principal.actor_id)
+                .fetch_all(&state.pool)
+                .await?,
+            );
+        }
         let mut rows = sqlx::query_as::<_, ProjectLine>(
             r#"
             SELECT project.id::text AS id, project.project_key AS key,
                    CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS name,
                    membership.role, project.kind = 'direct' AS messages_space,
+                   project.archived_at IS NOT NULL AS archived, project.version,
                    (SELECT count(*) FROM work_items item
                     JOIN work_item_statuses status
                       ON status.project_id = item.project_id AND status.id = item.status_id
@@ -348,7 +382,8 @@ pub(super) async fn projects_list(
             JOIN project_memberships membership
               ON membership.project_id = project.id AND membership.actor_id = $1
             WHERE project.id = ANY($2)
-            ORDER BY (project.kind = 'direct'), project.name, project.id
+            ORDER BY project.archived_at IS NOT NULL, (project.kind = 'direct'), project.name,
+                     project.id
             "#,
         )
         .bind(principal.actor_id)
@@ -374,7 +409,7 @@ pub(super) async fn projects_list(
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ProjectOpenArguments {
-    /// The project's ID or link. projects_list shows them.
+    /// The project's ID, link or key (such as "AWD"). projects_list shows them.
     pub project_id: String,
 }
 
