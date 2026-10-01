@@ -931,12 +931,21 @@ fn conforms(root: &Value, schema: &Value, value: &Value, path: &str) -> Result<(
     }
     for key in ["oneOf", "anyOf"] {
         if let Some(branches) = schema.get(key).and_then(Value::as_array) {
-            let matches = branches
+            let results = branches
                 .iter()
-                .filter(|branch| conforms(root, branch, value, path).is_ok())
-                .count();
-            if matches == 0 || (key == "oneOf" && matches > 1) {
-                return Err(format!("{path} ({key} matched {matches})"));
+                .map(|branch| conforms(root, branch, value, path))
+                .collect::<Vec<_>>();
+            let matches = results.iter().filter(|result| result.is_ok()).count();
+            if matches == 0 {
+                // The branch that got furthest is the one the value meant.
+                return Err(results
+                    .into_iter()
+                    .filter_map(Result::err)
+                    .max_by_key(String::len)
+                    .unwrap_or_else(|| format!("{path} (no {key} branches)")));
+            }
+            if key == "oneOf" && matches > 1 {
+                return Err(format!("{path} (oneOf matched {matches})"));
             }
         }
     }
