@@ -435,3 +435,9 @@ Differences from the plan:
    and when, is kept.
 3. Agents edit and delete only their own messages, whatever their role.
 4. Agents can leave groups, but they can't add people to them.
+5. Phase 3's migrations are 0047_message_edits, 0048_message_reactions and
+   0049_read_mark_rewind. 0046 is Phase 2's label-description migration and
+   the live database has applied it, so no Phase 3 file may reuse it. Before
+   adding a migration, check `ls apps/server/migrations` for the next free
+   number rather than trusting a plan; `migration_versions_are_unique_and_contiguous`
+   fails on a duplicate or a gap.
