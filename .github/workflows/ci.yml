@@ -12,63 +12,26 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Both jobs run on the self-hosted runner on the Red Hat host. It already has
-# the pinned Rust toolchain (rust-toolchain.toml), Node 24.18.1 and pnpm on its
-# PATH, and a PostgreSQL 18.4 test database; the tests isolate themselves in
-# per-run schemas. The repository is private, so only collaborators can start
-# jobs here.
+# The job itself is light: it runs on the self-hosted runner on the Red Hat
+# host and hands the checks to tools/ci/run.sh, which picks the best machine
+# that's free (Mischa's laptop when it's idle, otherwise the Red Hat host),
+# keeps each machine's build cache warm, and streams the output back here.
+# The repository is private, so only collaborators can start jobs.
 jobs:
-  # Pull requests run only the jobs their files touch; pushes to main run both.
-  changes:
+  ci:
     runs-on: [self-hosted, redhat-aw]
-    outputs:
-      rust: ${{ steps.areas.outputs.rust || 'true' }}
-      web: ${{ steps.areas.outputs.web || 'true' }}
+    timeout-minutes: 75
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - id: areas
+      # Pull requests run only the checks their files touch; pushes to main run all.
+      - id: changes
         if: github.event_name == 'pull_request'
         run: >-
-          ./tools/ci-changed-areas.sh
+          ./tools/ci/changed-areas.sh
           ${{ github.event.pull_request.base.sha }}
           ${{ github.event.pull_request.head.sha }}
           >> "$GITHUB_OUTPUT"
-
-  rust:
-    needs: changes
-    # Runs if the change filter itself failed: a skipped job would count as passing.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
-    runs-on: [self-hosted, redhat-aw]
-    env:
-      AGENT_WORKSPACE_DATABASE_URL: postgres://aw_test:aw_test@127.0.0.1:55433/aw_ci
-      AGENT_WORKSPACE_ENV: test
-    steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - run: cargo fmt --check
-      - run: ./tools/verify-self-hosted-guide.sh
-      - run: python3 tools/hermes-connector/verify-fixtures.py
-      - run: python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo install cargo-deny --version 0.20.2 --locked
-      - run: cargo deny check
-
-  web:
-    needs: changes
-    # Runs if the change filter itself failed: a skipped job would count as passing.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.web == 'true') }}
-    runs-on: [self-hosted, redhat-aw]
-    steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-      - run: pnpm check:assets
-      - run: pnpm check:performance-tools
+      - run: ./tools/ci/run.sh --areas "${{ steps.changes.outputs.areas || 'rust,web' }}"

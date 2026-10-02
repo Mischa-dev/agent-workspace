@@ -1,0 +1,8 @@
+# Used by tools/ci/checks.sh (`cargo nextest run --profile ci`).
+[profile.ci]
+# A test that fails and then passes on retry is reported as FLAKY instead of
+# failing the run; it still shows in the summary so it gets fixed.
+retries = 1
+fail-fast = false
+failure-output = "final"
+slow-timeout = { period = "60s", terminate-after = 5 }
