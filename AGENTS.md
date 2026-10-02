@@ -16,16 +16,20 @@ ordinary changes.
 - Bootstrap the first browser administrator: `cargo run -p agent-workspace-server -- bootstrap-admin --login-name <name> --display-name <name> --organization-name <name> --organization-slug <slug>` (interactive terminal only)
 - Rotate one User password and revoke their sessions: `cargo run -p agent-workspace-server -- user-password-rotate --login-name <name>` (interactive terminal only)
 
-Builds and tests run on the Red Hat host (the Mac is short on disk). Cap build
-memory so a build can never push other services into the OOM killer.
+Builds and tests don't run on the Mac (it's short on disk). `tools/ci/run.sh`
+runs the full CI on the best machine that's free: Mischa's NixOS laptop when it
+is idle (on mains power, no game, GPU and CPU quiet), otherwise the Red Hat
+host. It checks the working tree as it is, so run it before pushing; add
+`--areas rust` or `--areas web` to run one side. Release builds for a deploy
+always happen on the Red Hat host, which serves the app. Cap build memory so a
+build can never push other services into the OOM killer.
 
 ## How much to check
 
 - While building: `cargo check`, plus the tests for the code you changed.
-- Before a deploy: `cargo fmt --check`,
-  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo test --workspace`, and `corepack pnpm lint typecheck test build`.
-  Then try the change once on the live server.
+- Before pushing or deploying: `tools/ci/run.sh` (format, clippy, all tests,
+  web lint/typecheck/test/build; the same checks GitHub runs). Then, for a
+  deploy, try the change once on the live server.
 - Write tests where a bug would be silent and costly: permissions and private
   conversations, claims and leases, reply rules, credentials. Don't write test
   matrices for UI details, and don't produce acceptance-evidence documents.

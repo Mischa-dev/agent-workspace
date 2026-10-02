@@ -23,6 +23,8 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         .await
         .expect("run migrations");
 
+    // A private data root: a fixed /tmp path collides with other users' runs.
+    let data_root = tempfile::tempdir().expect("test data root");
     let config = AppConfig::from_values(&BTreeMap::from([
         (
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
@@ -31,11 +33,15 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         ("AGENT_WORKSPACE_ENV".to_owned(), "development".to_owned()),
         (
             "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
-            "/tmp/agent-workspace-test".to_owned(),
+            data_root.path().display().to_string(),
         ),
         (
             "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
-            "/tmp/agent-workspace-test/codex/profiles".to_owned(),
+            data_root
+                .path()
+                .join("codex/profiles")
+                .display()
+                .to_string(),
         ),
     ]))
     .expect("development config");
