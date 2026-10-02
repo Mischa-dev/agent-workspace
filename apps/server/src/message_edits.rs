@@ -749,7 +749,9 @@ async fn scrub_send_replays(
     sqlx::query(
         r#"
         UPDATE idempotency_keys
-        SET response_body = $3, request_hash = $4
+        SET response_body = $3, request_hash = $4,
+            -- thread_start's opening-message key holds a hash of the text.
+            key = CASE WHEN key LIKE 'thread-start.%' THEN 'removed.' || $2 ELSE key END
         WHERE scope = $1 AND response_body->'message'->>'id' = $2
         "#,
     )

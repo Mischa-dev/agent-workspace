@@ -1047,6 +1047,27 @@ async fn removed_message_text_vanishes_everywhere() {
         "{own_removed}"
     );
     assert!(!own_removed.to_string().contains(&own_secret));
+    // thread_start's opening message is keyed by a hash of its text; removing
+    // it must not leave that hash behind as a guess-checking oracle.
+    let opened = mara(
+        "thread_start",
+        json!({"conversationId": general, "fromMessageId": own_id, "name": "Opening", "text": format!("opening {own_secret}")}),
+    )
+    .await;
+    let opening_id = opened["value"]["message"]["messageId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("opening message: {opened}"))
+        .to_owned();
+    let removed_opening = mara("message_delete", json!({"messageId": opening_id})).await;
+    assert_eq!(removed_opening["outcome"], "ok", "{removed_opening}");
+    let text_keys = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM idempotency_keys WHERE response_body->'message'->>'id' = $1 AND key LIKE 'thread-start.%'",
+    )
+    .bind(&opening_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("idempotency keys");
+    assert_eq!(text_keys, 0, "a key derived from the removed text survived");
     let own_audit = sqlx::query_scalar::<_, Value>(
         "SELECT metadata FROM audit_events WHERE action = 'conversation.mcp_message_removed' AND target_id = $1",
     )
