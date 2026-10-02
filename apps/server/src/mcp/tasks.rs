@@ -16,8 +16,8 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, mark_via, parse_id, parse_since, project_is_chosen, public_url,
-        scope_projects, snippet, string_or_number, version_conflict_message,
+        flag_or_text, mark_via, parse_id, parse_message_id, parse_since, project_is_chosen,
+        public_url, scope_projects, snippet, string_or_number, version_conflict_message,
     },
     history,
     reads::{self, ReadResult, WorkItemProjection},
@@ -2273,7 +2273,7 @@ pub(super) struct TaskLinkArguments {
     pub task_id: String,
     /// A thread or conversation about this task.
     pub conversation_id: Option<String>,
-    /// A message this task came from.
+    /// A message this task came from: its ID, or a link to it.
     pub message_id: Option<String>,
     /// A page in the task's project.
     pub page_id: Option<String>,
@@ -2407,6 +2407,10 @@ pub(super) async fn task_link(
     }
     let record_id = match *kind {
         "repository" | "pull_request" => None,
+        "message" => match parse_message_id(target) {
+            Some(id) => Some(id),
+            None => return ToolResult::invalid(field, "Pass an ID or link."),
+        },
         _ => match parse_id(target) {
             Some(id) => Some(id),
             None => return ToolResult::invalid(field, "Pass an ID or link."),

@@ -36,6 +36,7 @@ use crate::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
     projects::membership_handle,
+    replies::{self, Withdraw},
 };
 
 const DIRECT_PROJECT_KEY: &str = "DMSPACE";
@@ -457,6 +458,19 @@ async fn remove_member(
     if remaining == 0 {
         return Err(AppError::Validation("a group needs at least one member"));
     }
+    // A removed agent can no longer see the group or its threads, so its open
+    // requests there could never be answered or retried. Withdraw them while
+    // the visibility check still sees the group, before the member row goes.
+    replies::withdraw_requests(
+        &mut transaction,
+        Withdraw::AgentsInGroup {
+            group_id: conversation_id,
+            agent_actor_ids: &[actor_id],
+            editor_actor_id: principal.actor_id,
+        },
+        "Removed from the group.",
+    )
+    .await?;
     sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1 AND actor_id = $2")
         .bind(conversation_id)
         .bind(actor_id)

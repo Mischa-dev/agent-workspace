@@ -131,6 +131,44 @@ impl ConversationAccessRow {
             _ => self.id,
         }
     }
+
+    /// Archived itself, or a thread whose parent is archived. Its project
+    /// being archived is checked separately.
+    pub(crate) fn is_archived(&self) -> bool {
+        self.archived_at.is_some() || (self.kind == "thread" && self.parent_archived)
+    }
+
+    /// Whether the actor's role in this conversation's project allows an
+    /// action here (a thread is its own scope). Archived state isn't
+    /// considered, and visibility was settled when the row was loaded: every
+    /// lookup that returns this row goes through `conversation_visible_to`.
+    pub(crate) fn allows(
+        &self,
+        actor_id: Uuid,
+        actor_kind: ActorKind,
+        action: Action,
+    ) -> Result<bool, AppError> {
+        let scope = if self.kind == "thread" {
+            ProjectScope::thread(self.project_id, self.id)
+        } else {
+            ProjectScope::project(self.project_id)
+        };
+        let subject = Subject::new(
+            actor_id,
+            actor_kind,
+            true,
+            Some(Membership::project(
+                self.project_id,
+                parse_membership_role(&self.membership_role)?,
+                self.membership_enabled,
+            )),
+            None,
+        );
+        Ok(matches!(
+            authorize(&subject, action, Resource::Project(scope)),
+            Decision::Allow
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -3117,32 +3155,10 @@ pub(crate) fn authorize_conversation_row_for(
     action: Action,
     include_archived: bool,
 ) -> Result<(), AppError> {
-    if row.project_archived
-        || (!include_archived
-            && (row.archived_at.is_some() || (row.kind == "thread" && row.parent_archived)))
-    {
+    if row.project_archived || (!include_archived && row.is_archived()) {
         return Err(AppError::NotFound("conversation"));
     }
-    let scope = if row.kind == "thread" {
-        ProjectScope::thread(row.project_id, row.id)
-    } else {
-        ProjectScope::project(row.project_id)
-    };
-    let subject = Subject::new(
-        actor_id,
-        actor_kind,
-        true,
-        Some(Membership::project(
-            row.project_id,
-            parse_membership_role(&row.membership_role)?,
-            row.membership_enabled,
-        )),
-        None,
-    );
-    if matches!(
-        authorize(&subject, action, Resource::Project(scope)),
-        Decision::Allow
-    ) {
+    if row.allows(actor_id, actor_kind, action)? {
         Ok(())
     } else {
         Err(AppError::NotFound("conversation"))
@@ -3150,10 +3166,7 @@ pub(crate) fn authorize_conversation_row_for(
 }
 
 pub(crate) fn require_active_conversation(row: &ConversationAccessRow) -> Result<(), AppError> {
-    if row.project_archived
-        || row.archived_at.is_some()
-        || (row.kind == "thread" && row.parent_archived)
-    {
+    if row.project_archived || row.is_archived() {
         Err(AppError::NotFound("conversation"))
     } else {
         Ok(())
@@ -3239,59 +3252,15 @@ fn conversation_capabilities(
     principal: &AuthenticatedActor,
     conversation: &ConversationAccessRow,
 ) -> Result<ConversationCapabilities, AppError> {
-    let active = !conversation.project_archived
-        && conversation.archived_at.is_none()
-        && !(conversation.kind == "thread" && conversation.parent_archived);
-    let scope = if conversation.kind == "thread" {
-        ProjectScope::thread(conversation.project_id, conversation.id)
-    } else {
-        ProjectScope::project(conversation.project_id)
-    };
+    let active = !conversation.project_archived && !conversation.is_archived();
+    let actor_kind = parse_actor_kind(&principal.actor_kind)?;
+    let allows = |action| conversation.allows(principal.actor_id, actor_kind, action);
     Ok(ConversationCapabilities {
-        view: policy_allows(
-            principal,
-            &conversation.membership_role,
-            conversation.membership_enabled,
-            conversation.project_id,
-            Action::ProjectView,
-            scope,
-        )?,
-        send_message: active
-            && policy_allows(
-                principal,
-                &conversation.membership_role,
-                conversation.membership_enabled,
-                conversation.project_id,
-                Action::MessageSend,
-                scope,
-            )?,
-        archive: active
-            && policy_allows(
-                principal,
-                &conversation.membership_role,
-                conversation.membership_enabled,
-                conversation.project_id,
-                Action::ConversationArchive,
-                scope,
-            )?,
-        mark_seen: policy_allows(
-            principal,
-            &conversation.membership_role,
-            conversation.membership_enabled,
-            conversation.project_id,
-            Action::ReadStateUpdate,
-            scope,
-        )?,
-        worker_invoke: active
-            && conversation.kind == "thread"
-            && policy_allows(
-                principal,
-                &conversation.membership_role,
-                conversation.membership_enabled,
-                conversation.project_id,
-                Action::WorkerInvoke,
-                scope,
-            )?,
+        view: allows(Action::ProjectView)?,
+        send_message: active && allows(Action::MessageSend)?,
+        archive: active && allows(Action::ConversationArchive)?,
+        mark_seen: allows(Action::ReadStateUpdate)?,
+        worker_invoke: active && conversation.kind == "thread" && allows(Action::WorkerInvoke)?,
     })
 }
 
@@ -3883,13 +3852,41 @@ fn decode_mention_cursor(value: &str) -> Result<MentionCursor, AppError> {
     Ok(cursor)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Record a browser action on a conversation. Metadata holds IDs and counts,
+/// never message text or names.
 pub(crate) async fn insert_audit_event(
     transaction: &mut Transaction<'_, Postgres>,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
     project_id: Uuid,
     action: &'static str,
+    target_id: Uuid,
+    metadata: serde_json::Value,
+) -> Result<(), AppError> {
+    insert_audit_event_for(
+        transaction,
+        headers,
+        principal,
+        project_id,
+        action,
+        "conversation",
+        target_id,
+        metadata,
+    )
+    .await
+}
+
+/// `insert_audit_event` for something other than a conversation, such as a
+/// message (`target_kind` "message"). Metadata holds IDs and counts, never
+/// message text or names.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn insert_audit_event_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    action: &'static str,
+    target_kind: &'static str,
     target_id: Uuid,
     metadata: serde_json::Value,
 ) -> Result<(), AppError> {
@@ -3905,7 +3902,7 @@ pub(crate) async fn insert_audit_event(
         )
         VALUES (
             $1, $2, $3, $4, 'password_session',
-            $5, 'conversation', $6, 'succeeded', $7, $8
+            $5, $6, $7, 'succeeded', $8, $9
         )
         "#,
     )
@@ -3914,6 +3911,7 @@ pub(crate) async fn insert_audit_event(
     .bind(project_id)
     .bind(principal.session_id)
     .bind(action)
+    .bind(target_kind)
     .bind(target_id)
     .bind(request_id)
     .bind(metadata)

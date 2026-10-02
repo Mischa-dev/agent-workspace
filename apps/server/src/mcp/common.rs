@@ -386,6 +386,25 @@ pub(super) fn parse_id(value: &str) -> Option<Uuid> {
     })
 }
 
+/// Accept a message's UUID, or a link to it. The web app links a message as
+/// its conversation's address plus `#message-<id>` (such as
+/// `/projects/…/channels/<conversation>#message-<id>` or
+/// `/messages/<conversation>#message-<id>`), which `parse_id` alone reads as
+/// the conversation. Anything without that anchor is read by `parse_id`.
+pub(super) fn parse_message_id(value: &str) -> Option<Uuid> {
+    let value = value.trim();
+    if value.len() > 2048 {
+        return None;
+    }
+    match value.rsplit_once("#message-") {
+        Some((_, anchor)) => anchor
+            .split(|character: char| !(character.is_ascii_hexdigit() || character == '-'))
+            .next()
+            .and_then(|id| id.parse::<Uuid>().ok()),
+        None => parse_id(value),
+    }
+}
+
 pub(super) fn snippet(value: &str, max_characters: usize) -> String {
     let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= max_characters {
@@ -532,7 +551,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        flag_or_text, parse_id, parse_since, parse_time, snippet, string_or_number, text_nodes,
+        flag_or_text, parse_id, parse_message_id, parse_since, parse_time, snippet,
+        string_or_number, text_nodes,
     };
 
     #[test]
@@ -557,6 +577,40 @@ mod tests {
             Some(id)
         );
         assert_eq!(parse_id("AW-12"), None);
+    }
+
+    #[test]
+    fn message_links_name_the_message_not_its_conversation() {
+        let conversation = Uuid::now_v7();
+        let message = Uuid::now_v7();
+        assert_eq!(parse_message_id(&message.to_string()), Some(message));
+        assert_eq!(
+            parse_message_id(&format!(" {} ", message.simple())),
+            Some(message)
+        );
+        for link in [
+            format!("https://example.test/projects/x/channels/{conversation}#message-{message}"),
+            format!("/messages/{conversation}#message-{message}"),
+            format!(
+                "https://example.test/projects/x/threads/{conversation}?tab=1#message-{message}"
+            ),
+            format!("/messages/{conversation}#message-{message}/"),
+        ] {
+            assert_eq!(parse_message_id(&link), Some(message), "{link}");
+        }
+        // Without the anchor a link is read as any other: here, the channel,
+        // which then isn't found as a message.
+        assert_eq!(
+            parse_message_id(&format!("/projects/x/channels/{conversation}")),
+            Some(conversation)
+        );
+        // A broken anchor never falls back to the conversation's ID.
+        assert_eq!(
+            parse_message_id(&format!("/messages/{conversation}#message-nope")),
+            None
+        );
+        assert_eq!(parse_message_id("#message-"), None);
+        assert_eq!(parse_message_id(&"x".repeat(3000)), None);
     }
 
     #[test]

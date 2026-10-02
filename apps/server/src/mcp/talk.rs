@@ -12,8 +12,8 @@ use super::{
     McpPrincipal,
     common::{
         MESSAGE_CHARACTERS, SNIPPET_CHARACTERS, ToolResult, content_from_text, conversation_path,
-        insert_audit, parse_id, project_role, public_url, resolve_people, role_allows,
-        scope_projects, snippet, truncate_text,
+        insert_audit, parse_id, parse_message_id, project_role, public_url, resolve_people,
+        role_allows, scope_projects, snippet, truncate_text,
     },
 };
 use crate::{
@@ -86,7 +86,7 @@ pub(super) struct ConversationReadArguments {
     pub before: Option<i64>,
     /// Messages after this sequence number (newer).
     pub after: Option<i64>,
-    /// Messages around this message ID.
+    /// Messages around this message: its ID, or a link to it.
     pub around_message_id: Option<String>,
     /// How many messages (default 50, at most 200).
     pub limit: Option<u16>,
@@ -144,9 +144,9 @@ pub(super) struct PeopleSearchArguments {
 pub(super) struct ThreadStartArguments {
     /// The channel, DM, or group the thread goes in.
     pub conversation_id: String,
-    /// Start the thread from this message (the usual case when a topic starts
-    /// running long). Starting again from the same message returns the same
-    /// thread.
+    /// Start the thread from this message, by ID or link (the usual case
+    /// when a topic starts running long). Starting again from the same
+    /// message returns the same thread.
     pub from_message_id: Option<String>,
     /// The thread's name. Defaults to the start of the message.
     pub name: Option<String>,
@@ -796,8 +796,11 @@ pub(super) async fn conversation_read(
             };
         let highest = conversation.next_entry_sequence - 1;
         let (from, to) = if let Some(around) = arguments.around_message_id.as_deref() {
-            let Some(message_id) = parse_id(around) else {
-                return Ok(ToolResult::invalid("aroundMessageId", "Pass a message ID."));
+            let Some(message_id) = parse_message_id(around) else {
+                return Ok(ToolResult::invalid(
+                    "aroundMessageId",
+                    "Pass a message ID or a link to it.",
+                ));
             };
             let Some(sequence) = sqlx::query_scalar::<_, i64>(
                 "SELECT sequence FROM conversation_entries WHERE conversation_id = $1 AND message_id = $2",
@@ -1531,9 +1534,11 @@ pub(super) async fn thread_start(
         return ToolResult::invalid("conversationId", "Pass the channel, DM, or group ID.");
     };
     let origin_id = match arguments.from_message_id.as_deref() {
-        Some(value) => match parse_id(value) {
+        Some(value) => match parse_message_id(value) {
             Some(id) => Some(id),
-            None => return ToolResult::invalid("fromMessageId", "Pass a message ID."),
+            None => {
+                return ToolResult::invalid("fromMessageId", "Pass a message ID or a link to it.");
+            }
         },
         None => None,
     };

@@ -2244,11 +2244,14 @@ async fn scoped_project(
                 "SELECT project_id FROM project_decisions WHERE id = $1",
             ),
         ] {
-            if let Some(id) = args
-                .get(key)
-                .and_then(|v| v.as_str())
-                .and_then(common::parse_id)
-            {
+            // A message link is its conversation's address plus
+            // #message-<id>; read as any other link it names the conversation.
+            let parse = if matches!(key, "messageId" | "fromMessageId") {
+                common::parse_message_id
+            } else {
+                common::parse_id
+            };
+            if let Some(id) = args.get(key).and_then(|v| v.as_str()).and_then(parse) {
                 let mut lookup = sqlx::query_scalar::<_, Uuid>(query).bind(id);
                 if query.contains("$2") {
                     lookup = lookup.bind(principal.actor_id);

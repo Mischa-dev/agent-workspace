@@ -9,8 +9,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, parse_id, parse_time, project_is_chosen, public_url,
-        scope_projects, truncate_text,
+        ToolResult, insert_audit, parse_id, parse_message_id, parse_time, project_is_chosen,
+        public_url, scope_projects, truncate_text,
     },
     talk::can_write_in,
 };
@@ -542,7 +542,7 @@ pub(super) struct DecisionRecordArguments {
     pub title: String,
     /// Why, the options considered, and anything a newcomer should know.
     pub detail: Option<String>,
-    /// The message where it was decided.
+    /// The message where it was decided: its ID, or a link to it.
     pub from_message_id: Option<String>,
     /// The conversation or thread where it was decided.
     pub conversation_id: Option<String>,
@@ -652,7 +652,12 @@ pub(super) async fn decision_record(
             None => Ok(None),
         }
     };
-    let Ok(source_message_id) = parse(arguments.from_message_id.as_deref()) else {
+    let Ok(source_message_id) = arguments
+        .from_message_id
+        .as_deref()
+        .map(|value| parse_message_id(value).ok_or(()))
+        .transpose()
+    else {
         return ToolResult::invalid("fromMessageId", "Pass a message ID or link.");
     };
     let Ok(source_conversation_id) = parse(arguments.conversation_id.as_deref()) else {

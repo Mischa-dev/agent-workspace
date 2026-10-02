@@ -4,6 +4,9 @@
 //! share. The costly bugs here are silent: a reservation that outlives a
 //! refused write, a claim left on an archived task, or a moved task's
 //! original coming back as a live duplicate.
+//!
+//! Phase 3 groundwork: a copied message link names the message, not the
+//! conversation its address starts with.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -448,4 +451,119 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
     )
     .await;
     assert_ne!(direct["outcome"], "ok", "{direct}");
+}
+
+/// The web app links a message as `<conversation address>#message-<id>`. Every
+/// tool that takes a message reads such a link as the message, and so does
+/// the middleware that picks the project from it: read as an ordinary link it
+/// would name the conversation, and an account-wide app would get "not found"
+/// or be asked which project it meant.
+#[tokio::test]
+async fn message_links_name_the_message_everywhere() {
+    let Some(setup) = setup("mcp_ground_links").await else {
+        return;
+    };
+    let app = &setup.app;
+    let project = create_project(&setup, "WORK", "Work").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let channel = call(
+        "channel_create",
+        json!({"projectId": "WORK", "name": "design"}),
+    )
+    .await;
+    let channel_id = channel["value"]["id"].as_str().expect("channel").to_owned();
+    let sent = call(
+        "message_send",
+        json!({"conversationId": channel_id, "text": "Let's use design tokens."}),
+    )
+    .await;
+    let message_id = sent["value"]["messageId"]
+        .as_str()
+        .expect("message")
+        .to_owned();
+    let link = format!(
+        "https://workspace.example/projects/{project}/channels/{channel_id}#message-{message_id}"
+    );
+
+    // Only the link says where: the project comes from the message.
+    let decided = call(
+        "decision_record",
+        json!({"title": "Use design tokens", "fromMessageId": link}),
+    )
+    .await;
+    assert_eq!(decided["outcome"], "ok", "{decided}");
+    assert_eq!(decided["value"]["projectId"], project.as_str(), "{decided}");
+    let source = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT source_message_id FROM project_decisions WHERE id = $1::uuid",
+    )
+    .bind(decided["value"]["id"].as_str().expect("decision"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("decision source");
+    assert_eq!(source.map(|id| id.to_string()), Some(message_id.clone()));
+
+    let pinned = call(
+        "pin_set",
+        json!({"conversationId": channel_id, "messageId": link}),
+    )
+    .await;
+    assert_eq!(pinned["outcome"], "ok", "{pinned}");
+    assert_eq!(pinned["value"]["id"], message_id.as_str(), "{pinned}");
+
+    let around = call(
+        "conversation_read",
+        json!({"conversationId": channel_id, "aroundMessageId": link}),
+    )
+    .await;
+    assert_eq!(around["outcome"], "ok", "{around}");
+    assert!(
+        around["value"]["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .any(|message| message["messageId"] == message_id.as_str()),
+        "{around}"
+    );
+
+    let thread = call(
+        "thread_start",
+        json!({"conversationId": channel_id, "fromMessageId": link}),
+    )
+    .await;
+    assert_eq!(thread["outcome"], "ok", "{thread}");
+    assert_eq!(thread["value"]["created"], true, "{thread}");
+    let again = call(
+        "thread_start",
+        json!({"conversationId": channel_id, "fromMessageId": message_id}),
+    )
+    .await;
+    assert_eq!(again["value"]["created"], false, "{again}");
+    assert_eq!(again["value"]["id"], thread["value"]["id"], "{again}");
+
+    let created = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Adopt design tokens"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let linked = call("task_link", json!({"taskId": "WORK-1", "messageId": link})).await;
+    assert_eq!(linked["outcome"], "ok", "{linked}");
+    assert_eq!(linked["value"]["kind"], "message", "{linked}");
+    assert_eq!(linked["value"]["targetId"], message_id.as_str(), "{linked}");
+
+    // A link whose message part is broken is refused, never read as the
+    // conversation.
+    let broken = format!("/projects/{project}/channels/{channel_id}#message-nope");
+    let refused = call(
+        "pin_set",
+        json!({"conversationId": channel_id, "messageId": broken}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
 }
