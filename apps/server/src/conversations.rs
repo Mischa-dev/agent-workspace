@@ -104,7 +104,7 @@ pub(crate) struct ConversationAccessRow {
     pub(crate) name: String,
     pub(crate) version: i64,
     archived_at: Option<String>,
-    project_archived: bool,
+    pub(crate) project_archived: bool,
     parent_archived: bool,
     pub(crate) parent_kind: Option<String>,
     pub(crate) thread_status: String,
@@ -299,6 +299,29 @@ pub struct MessageView {
     /// "show via" setting is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// 1 until the message is edited; each edit adds one.
+    #[serde(default = "first_revision")]
+    pub revision: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_at: Option<String>,
+    /// Set once the message is removed. Its content and text are then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<MessageRemovalView>,
+}
+
+fn first_revision() -> i32 {
+    1
+}
+
+/// Who removed a message, when, and through which connected app (when that
+/// app's "show via" setting is on).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageRemovalView {
+    pub removed_at: String,
+    pub removed_by: ActorView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -348,6 +371,12 @@ pub struct ConversationCapabilities {
     pub archive: bool,
     pub mark_seen: bool,
     pub worker_invoke: bool,
+    /// Edit your own messages here (the same right as sending).
+    pub edit_messages: bool,
+    /// Remove your own messages, also once the conversation is archived.
+    pub remove_own_messages: bool,
+    /// Remove anyone's message (project owners and admins; people only).
+    pub remove_any_message: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -510,6 +539,14 @@ struct TimelineEntryRow {
     mentioned_actors: serde_json::Value,
     referenced_work_items: serde_json::Value,
     via: Option<String>,
+    revision: Option<i32>,
+    edited_at: Option<String>,
+    removed_at: Option<String>,
+    remover_actor_id: Option<Uuid>,
+    remover_kind: Option<String>,
+    remover_name: Option<String>,
+    remover_handle: Option<String>,
+    removed_via: Option<String>,
     agent_run_event_id: Option<Uuid>,
     agent_run_id: Option<Uuid>,
     event_kind: Option<String>,
@@ -925,24 +962,24 @@ async fn create_thread(
     };
 
     if let Some(origin_message_id) = command.origin_message_id {
-        let origin_exists = sqlx::query_scalar::<_, bool>(
+        let origin_removed = sqlx::query_scalar::<_, bool>(
             r#"
-            SELECT EXISTS (
-                SELECT 1
-                FROM messages
-                WHERE id = $1
-                  AND project_id = $2
-                  AND conversation_id = $3
-            )
+            SELECT removed_at IS NOT NULL
+            FROM messages
+            WHERE id = $1
+              AND project_id = $2
+              AND conversation_id = $3
             "#,
         )
         .bind(origin_message_id)
         .bind(channel.project_id)
         .bind(channel.id)
-        .fetch_one(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
-        if !origin_exists {
-            return Err(AppError::Validation("Thread origin Message"));
+        match origin_removed {
+            None => return Err(AppError::Validation("Thread origin Message")),
+            Some(true) => return Err(AppError::Conflict("message", "removed")),
+            Some(false) => {}
         }
     }
 
@@ -1489,7 +1526,13 @@ pub(crate) async fn append_message_command(
     let request_hash = RequestHash::for_value(&content)?;
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = state.pool.begin().await?;
-    let conversation = lock_message_conversation(&mut transaction, &actor, conversation_id).await?;
+    let conversation = lock_message_conversation(
+        &mut transaction,
+        &actor,
+        conversation_id,
+        Action::MessageSend,
+    )
+    .await?;
     if let Some(expected_kind) = expected_kind {
         require_conversation_kind(&conversation, expected_kind)?;
     }
@@ -1515,67 +1558,13 @@ pub(crate) async fn append_message_command(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
-    let mention_ids = content.mentioned_actor_ids();
-    let mention_rows = if mention_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, (Uuid, String)>(
-            r#"
-            SELECT membership.actor_id, membership.handle
-            FROM project_memberships membership
-            JOIN actors actor ON actor.id = membership.actor_id
-            WHERE membership.project_id = $1
-              AND membership.actor_id = ANY($2)
-              AND membership.enabled
-              AND actor.status = 'active'
-            FOR SHARE OF membership, actor
-            "#,
-        )
-        .bind(conversation.project_id)
-        .bind(&mention_ids)
-        .fetch_all(&mut *transaction)
-        .await?
-    };
-    let handles = mention_rows.into_iter().collect::<HashMap<_, _>>();
-    let work_item_references = content.work_item_references();
-    let work_item_ids = work_item_references
-        .iter()
-        .map(|(_, work_item_id)| *work_item_id)
-        .collect::<Vec<_>>();
-    let work_item_rows = if work_item_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
-            r#"
-            SELECT item.id, project.project_key || '-' || item.number::text,
-                   item.title, status.semantic_category,
-                   item.archived_at::text AS archived_at
-            FROM work_items item
-            JOIN projects project ON project.id = item.project_id
-            JOIN work_item_statuses status
-              ON status.project_id = item.project_id AND status.id = item.status_id
-            WHERE item.project_id = $1 AND item.id = ANY($2)
-            FOR SHARE OF item
-            "#,
-        )
-        .bind(conversation.project_id)
-        .bind(&work_item_ids)
-        .fetch_all(&mut *transaction)
-        .await?
-    };
-    let work_item_labels = work_item_rows
-        .iter()
-        .map(|row| (row.0, row.1.clone()))
-        .collect::<HashMap<_, _>>();
-    let (content, plain_text, mentioned_actor_ids) = content
-        .validate_with_resources(
-            |actor_id| handles.get(&actor_id).cloned(),
-            |work_item_id| work_item_labels.get(&work_item_id).cloned(),
-        )
-        .map_err(message_content_error)?
-        .into_parts();
-    let content_json = serde_json::to_value(&content)
-        .map_err(|_| AppError::Internal("serialize validated Message content"))?;
+    let ResolvedContent {
+        content_json,
+        plain_text,
+        mentioned_actor_ids,
+        work_item_references,
+        work_item_rows,
+    } = resolve_message_content(&mut transaction, conversation.project_id, content).await?;
 
     let message_id = Uuid::now_v7();
     sqlx::query(
@@ -1596,35 +1585,14 @@ pub(crate) async fn append_message_command(
     .bind(actor.via_grant_id)
     .execute(&mut *transaction)
     .await?;
-    for actor_id in &mentioned_actor_ids {
-        sqlx::query(
-            r#"
-            INSERT INTO message_mentions (project_id, message_id, actor_id)
-            VALUES ($1, $2, $3)
-            "#,
-        )
-        .bind(conversation.project_id)
-        .bind(message_id)
-        .bind(actor_id)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    for (node_index, work_item_id) in &work_item_references {
-        sqlx::query(
-            r#"
-            INSERT INTO message_work_item_references (
-                project_id, message_id, work_item_id, node_index
-            )
-            VALUES ($1, $2, $3, $4)
-            "#,
-        )
-        .bind(conversation.project_id)
-        .bind(message_id)
-        .bind(work_item_id)
-        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("message content"))?)
-        .execute(&mut *transaction)
-        .await?;
-    }
+    insert_message_projections(
+        &mut transaction,
+        conversation.project_id,
+        message_id,
+        &mentioned_actor_ids,
+        &work_item_references,
+    )
+    .await?;
     let sequence = allocate_conversation_sequence(&mut transaction, conversation.id).await?;
     let entry_id = Uuid::now_v7();
     sqlx::query(
@@ -1712,6 +1680,9 @@ pub(crate) async fn append_message_command(
         referenced_work_items,
         created_at: result.message_created_at,
         via: result.via,
+        revision: 1,
+        edited_at: None,
+        removed: None,
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -1792,10 +1763,148 @@ pub(crate) async fn append_message_command(
     })
 }
 
-async fn lock_message_conversation(
+/// Validated message content with what it mentions and references, resolved
+/// against the project. Send and edit share it, so both apply the same limits
+/// and checks.
+pub(crate) struct ResolvedContent {
+    pub(crate) content_json: serde_json::Value,
+    pub(crate) plain_text: String,
+    pub(crate) mentioned_actor_ids: Vec<Uuid>,
+    /// (node index, work item) for each work item reference node.
+    pub(crate) work_item_references: Vec<(usize, Uuid)>,
+    /// id, key, title, status category, archived at.
+    pub(crate) work_item_rows: Vec<(Uuid, String, String, String, Option<String>)>,
+}
+
+/// Resolve and validate message content: mentioned people must be enabled,
+/// active members of the project, and referenced work items must belong to
+/// it. Locks both for share, so they can't change before the message lands.
+pub(crate) async fn resolve_message_content(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    content: MessageContent,
+) -> Result<ResolvedContent, AppError> {
+    let mention_ids = content.mentioned_actor_ids();
+    let mention_rows = if mention_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT membership.actor_id, membership.handle
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1
+              AND membership.actor_id = ANY($2)
+              AND membership.enabled
+              AND actor.status = 'active'
+            FOR SHARE OF membership, actor
+            "#,
+        )
+        .bind(project_id)
+        .bind(&mention_ids)
+        .fetch_all(&mut **transaction)
+        .await?
+    };
+    let handles = mention_rows.into_iter().collect::<HashMap<_, _>>();
+    let work_item_references = content.work_item_references();
+    let work_item_ids = work_item_references
+        .iter()
+        .map(|(_, work_item_id)| *work_item_id)
+        .collect::<Vec<_>>();
+    let work_item_rows = if work_item_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
+            r#"
+            SELECT item.id, project.project_key || '-' || item.number::text,
+                   item.title, status.semantic_category,
+                   item.archived_at::text AS archived_at
+            FROM work_items item
+            JOIN projects project ON project.id = item.project_id
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            WHERE item.project_id = $1 AND item.id = ANY($2)
+            FOR SHARE OF item
+            "#,
+        )
+        .bind(project_id)
+        .bind(&work_item_ids)
+        .fetch_all(&mut **transaction)
+        .await?
+    };
+    let work_item_labels = work_item_rows
+        .iter()
+        .map(|row| (row.0, row.1.clone()))
+        .collect::<HashMap<_, _>>();
+    let (content, plain_text, mentioned_actor_ids) = content
+        .validate_with_resources(
+            |actor_id| handles.get(&actor_id).cloned(),
+            |work_item_id| work_item_labels.get(&work_item_id).cloned(),
+        )
+        .map_err(message_content_error)?
+        .into_parts();
+    let content_json = serde_json::to_value(&content)
+        .map_err(|_| AppError::Internal("serialize validated Message content"))?;
+    Ok(ResolvedContent {
+        content_json,
+        plain_text,
+        mentioned_actor_ids,
+        work_item_references,
+        work_item_rows,
+    })
+}
+
+/// Write a message's mention and work item reference projections, which must
+/// match its current content (the database checks).
+pub(crate) async fn insert_message_projections(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    message_id: Uuid,
+    mentioned_actor_ids: &[Uuid],
+    work_item_references: &[(usize, Uuid)],
+) -> Result<(), AppError> {
+    for actor_id in mentioned_actor_ids {
+        sqlx::query(
+            r#"
+            INSERT INTO message_mentions (project_id, message_id, actor_id)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(project_id)
+        .bind(message_id)
+        .bind(actor_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    for (node_index, work_item_id) in work_item_references {
+        sqlx::query(
+            r#"
+            INSERT INTO message_work_item_references (
+                project_id, message_id, work_item_id, node_index
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(project_id)
+        .bind(message_id)
+        .bind(work_item_id)
+        .bind(i32::try_from(*node_index).map_err(|_| AppError::Validation("message content"))?)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Lock a conversation (FOR UPDATE) for a message command by a person or an
+/// agent: the conversation must pass `conversation_visible_to`, an agent's MCP
+/// credential and connection must still be valid for the project, and the
+/// actor's role must allow `action` (send passes MessageSend; edit and remove
+/// pass ProjectView and check their own rules). Anything else is NotFound.
+pub(crate) async fn lock_message_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &MessageCommandActor,
     conversation_id: Uuid,
+    action: Action,
 ) -> Result<ConversationAccessRow, AppError> {
     let mcp_project_id = if let Some(proof) = actor.mcp_credential {
         Some(
@@ -1898,7 +2007,7 @@ async fn lock_message_conversation(
         None,
     );
     if !matches!(
-        authorize(&subject, Action::MessageSend, Resource::Project(scope)),
+        authorize(&subject, action, Resource::Project(scope)),
         Decision::Allow
     ) {
         return Err(AppError::NotFound("conversation"));
@@ -1906,7 +2015,9 @@ async fn lock_message_conversation(
     Ok(row)
 }
 
-async fn enqueue_external_message_events(
+/// Tell mentioned agents' connections they were mentioned. Only agents who
+/// can see the conversation are told.
+pub(crate) async fn enqueue_external_message_events(
     transaction: &mut Transaction<'_, Postgres>,
     conversation: &ConversationAccessRow,
     author_actor_id: Uuid,
@@ -1941,6 +2052,7 @@ async fn enqueue_external_message_events(
           AND connection.status = 'active'
           AND actor.status = 'active'
           AND membership.enabled
+          AND conversation_visible_to($4, connection.actor_id)
         ORDER BY connection.id
         FOR SHARE OF connection, actor, membership
         "#,
@@ -1948,6 +2060,7 @@ async fn enqueue_external_message_events(
     .bind(conversation.project_id)
     .bind(mentioned_actor_ids)
     .bind(author_actor_id)
+    .bind(conversation.id)
     .fetch_all(&mut **transaction)
     .await?;
     let kind = match conversation.kind.as_str() {
@@ -1978,38 +2091,9 @@ async fn enqueue_external_message_events(
     Ok(())
 }
 
-async fn conversation_timeline(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<TimelineQuery>,
-) -> Result<Json<TimelineResponse>, AppError> {
-    let include_archived = query.include_archived.unwrap_or(false);
-    let conversation = authorized_conversation(
-        &state,
-        &principal,
-        conversation_id,
-        Action::ProjectView,
-        include_archived,
-    )
-    .await?;
-    if !include_archived {
-        require_active_conversation(&conversation)?;
-    }
-    let limit = i64::from(
-        query
-            .limit
-            .unwrap_or(DEFAULT_TIMELINE_PAGE_SIZE)
-            .clamp(1, MAX_TIMELINE_PAGE_SIZE),
-    );
-    let before_sequence = query
-        .cursor
-        .as_deref()
-        .map(|cursor| decode_timeline_cursor(cursor, conversation.id))
-        .transpose()?
-        .unwrap_or(conversation.next_entry_sequence);
-    let mut rows = sqlx::query_as::<_, TimelineEntryRow>(
-        r#"
+/// One timeline entry with its message (and who removed it) or worker event.
+/// Callers append a WHERE clause; `$1` is the conversation and `$2` its project.
+const TIMELINE_ENTRY_SELECT: &str = r#"
         SELECT
             entry.id,
             entry.sequence,
@@ -2026,6 +2110,14 @@ async fn conversation_timeline(
             COALESCE(mentions.actors, '[]'::jsonb) AS mentioned_actors,
             COALESCE(work_item_references.items, '[]'::jsonb) AS referenced_work_items,
             via_client.client_name AS via,
+            message.revision,
+            message.edited_at::text AS edited_at,
+            message.removed_at::text AS removed_at,
+            message.removed_by_actor_id AS remover_actor_id,
+            remover_actor.kind AS remover_kind,
+            remover.display_name AS remover_name,
+            remover.handle AS remover_handle,
+            removed_via_client.client_name AS removed_via,
             event.id AS agent_run_event_id,
             event.agent_run_id,
             event.kind AS event_kind,
@@ -2081,13 +2173,55 @@ async fn conversation_timeline(
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        LEFT JOIN actors remover_actor ON remover_actor.id = message.removed_by_actor_id
+        LEFT JOIN project_memberships remover
+          ON remover.project_id = $2
+         AND remover.actor_id = message.removed_by_actor_id
+        LEFT JOIN mcp_oauth_grants removed_via_grant
+          ON removed_via_grant.id = message.removed_via_oauth_grant_id
+         AND removed_via_grant.show_via
+        LEFT JOIN mcp_oauth_clients removed_via_client
+          ON removed_via_client.id = removed_via_grant.client_id
         LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id
+"#;
+
+async fn conversation_timeline(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<TimelineQuery>,
+) -> Result<Json<TimelineResponse>, AppError> {
+    let include_archived = query.include_archived.unwrap_or(false);
+    let conversation = authorized_conversation(
+        &state,
+        &principal,
+        conversation_id,
+        Action::ProjectView,
+        include_archived,
+    )
+    .await?;
+    if !include_archived {
+        require_active_conversation(&conversation)?;
+    }
+    let limit = i64::from(
+        query
+            .limit
+            .unwrap_or(DEFAULT_TIMELINE_PAGE_SIZE)
+            .clamp(1, MAX_TIMELINE_PAGE_SIZE),
+    );
+    let before_sequence = query
+        .cursor
+        .as_deref()
+        .map(|cursor| decode_timeline_cursor(cursor, conversation.id))
+        .transpose()?
+        .unwrap_or(conversation.next_entry_sequence);
+    let mut rows = sqlx::query_as::<_, TimelineEntryRow>(&format!(
+        "{TIMELINE_ENTRY_SELECT}
         WHERE entry.conversation_id = $1
           AND entry.sequence < $3
         ORDER BY entry.sequence DESC
-        LIMIT $4
-        "#,
-    )
+        LIMIT $4"
+    ))
     .bind(conversation.id)
     .bind(conversation.project_id)
     .bind(before_sequence)
@@ -3261,6 +3395,11 @@ fn conversation_capabilities(
         archive: active && allows(Action::ConversationArchive)?,
         mark_seen: allows(Action::ReadStateUpdate)?,
         worker_invoke: active && conversation.kind == "thread" && allows(Action::WorkerInvoke)?,
+        edit_messages: active && allows(Action::MessageSend)?,
+        remove_own_messages: !conversation.project_archived && allows(Action::MessageSend)?,
+        remove_any_message: !conversation.project_archived
+            && actor_kind == ActorKind::Human
+            && allows(Action::MessageModerate)?,
     })
 }
 
@@ -3292,7 +3431,7 @@ async fn fetch_read_state(
     ))
 }
 
-async fn fetch_actor_views(
+pub(crate) async fn fetch_actor_views(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     actor_ids: &[Uuid],
@@ -3333,6 +3472,31 @@ async fn fetch_actor_views(
         .collect())
 }
 
+/// The timeline entry for one message in `conversation`, as the timeline
+/// shows it. `conversation` was loaded through a lookup that checks
+/// `conversation_visible_to`; a message from any other conversation is None.
+pub(crate) async fn fetch_timeline_entry<'e, E>(
+    executor: E,
+    conversation: &ConversationAccessRow,
+    message_id: Uuid,
+) -> Result<Option<TimelineEntryView>, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let sql = format!(
+        "{TIMELINE_ENTRY_SELECT}
+        WHERE entry.conversation_id = $1 AND entry.message_id = $3"
+    );
+    sqlx::query_as::<_, TimelineEntryRow>(&sql)
+        .bind(conversation.id)
+        .bind(conversation.project_id)
+        .bind(message_id)
+        .fetch_optional(executor)
+        .await?
+        .map(timeline_entry_view)
+        .transpose()
+}
+
 fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppError> {
     let message = match row.message_id {
         Some(id) => {
@@ -3343,6 +3507,28 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 Vec<ConversationWorkItemReferenceView>,
             >(row.referenced_work_items)
             .map_err(|_| AppError::Internal("decode timeline Work Item references"))?;
+            let removed = match row.removed_at {
+                Some(removed_at) => Some(MessageRemovalView {
+                    removed_at,
+                    removed_by: ActorView {
+                        id: row.remover_actor_id.ok_or(AppError::Internal(
+                            "removed timeline Message missing remover",
+                        ))?,
+                        kind: row
+                            .remover_kind
+                            .ok_or(AppError::Internal("removed timeline Message remover kind"))?,
+                        display_name: row
+                            .remover_name
+                            .unwrap_or_else(|| "Former member".to_owned()),
+                        handle: row
+                            .remover_handle
+                            .unwrap_or_else(|| "former-member".to_owned()),
+                        avatar_url: None,
+                    },
+                    via: row.removed_via,
+                }),
+                None => None,
+            };
             Some(MessageView {
                 id,
                 author: ActorView {
@@ -3370,6 +3556,9 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .message_created_at
                     .unwrap_or_else(|| row.created_at.clone()),
                 via: row.via,
+                revision: row.revision.unwrap_or(1),
+                edited_at: row.edited_at,
+                removed,
             })
         }
         None => None,
@@ -3718,7 +3907,7 @@ pub(crate) async fn enqueue_event(
     Ok(())
 }
 
-async fn finish_idempotent_command<T: Serialize>(
+pub(crate) async fn finish_idempotent_command<T: Serialize>(
     transaction: &mut Transaction<'_, Postgres>,
     reservation: &IdempotencyReservation,
     status: StatusCode,
@@ -3780,6 +3969,41 @@ fn database_constraint(error: &sqlx::Error) -> Option<&str> {
     }
 }
 
+/// A thread name from the start of a message's first line, as MCP thread_start
+/// suggests it. Message removal renames threads still carrying it.
+pub(crate) fn suggested_thread_name(text: &str) -> String {
+    let first_line = text.trim().lines().next().unwrap_or_default().trim();
+    let short = first_line.chars().take(60).collect::<String>();
+    if short.chars().count() < first_line.chars().count() {
+        let trimmed = short
+            .rsplit_once(char::is_whitespace)
+            .map_or(short.as_str(), |(head, _)| head);
+        format!("{trimmed}…")
+    } else {
+        short
+    }
+}
+
+/// The name the web thread dialog suggests for a message (ThreadDialog.tsx),
+/// after the server trims it. Message removal renames threads carrying it.
+pub(crate) fn web_suggested_thread_name(text: &str) -> String {
+    let first_line = text.trim().split('\n').next().unwrap_or_default();
+    let short = first_line.chars().take(60).collect::<String>();
+    let name = if short.chars().count() < first_line.chars().count() {
+        // The dialog drops a trailing partial word: /\s+\S*$/.
+        let without_word = short.trim_end_matches(|character: char| !character.is_whitespace());
+        let head = if without_word.is_empty() {
+            short.as_str()
+        } else {
+            without_word.trim_end()
+        };
+        format!("{head}…")
+    } else {
+        short
+    };
+    name.trim().to_owned()
+}
+
 pub(crate) fn normalize_conversation_name(value: &str) -> Result<String, AppError> {
     let name = value.trim();
     if name.is_empty()
@@ -3791,7 +4015,7 @@ pub(crate) fn normalize_conversation_name(value: &str) -> Result<String, AppErro
     Ok(name.to_owned())
 }
 
-fn message_content_error(_error: MessageContentError) -> AppError {
+pub(crate) fn message_content_error(_error: MessageContentError) -> AppError {
     AppError::Validation("Message content")
 }
 

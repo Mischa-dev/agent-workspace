@@ -182,6 +182,7 @@ impl OutboxPublisher for RealtimeHub {
                 | "conversation.reply_requests.updated"
                 | "conversation.archived"
                 | "conversation.message.created"
+                | "conversation.message.updated"
                 | "conversation.read_state.updated"
                 | "conversation.agent_run.updated"
                 | "work_item.updated"
@@ -899,6 +900,43 @@ mod tests {
             assert_eq!(wire["type"], event_type);
             assert_eq!(wire["conversationId"], conversation_id.to_string());
         }
+    }
+
+    #[test]
+    fn message_updates_are_conversation_scoped() {
+        let hub = RealtimeHub::new(2);
+        let mut receiver = hub.subscribe();
+        let conversation_id = Uuid::now_v7();
+        let message_id = Uuid::now_v7();
+        let envelope = OutboxEnvelope {
+            event_id: Uuid::now_v7(),
+            event_cursor: 43,
+            version: OUTBOX_SCHEMA_VERSION,
+            project_id: Uuid::now_v7(),
+            conversation_id: Some(conversation_id),
+            recipient_actor_id: None,
+            event_type: "conversation.message.updated".to_owned(),
+            occurred_at: "2026-10-01T15:00:00Z".to_owned(),
+            payload: serde_json::json!({
+                "conversationId": conversation_id,
+                "messageId": message_id,
+                "revision": 2,
+                "removed": true,
+            }),
+        };
+        OutboxPublisher::publish(&hub, &envelope).expect("publish message update");
+        let delivery = receiver.try_recv().expect("message update delivery");
+        assert_eq!(delivery.conversation_id(), Some(conversation_id));
+
+        let mut unscoped = envelope.clone();
+        unscoped.conversation_id = None;
+        assert!(OutboxPublisher::publish(&hub, &unscoped).is_err());
+        let mut targeted = envelope.clone();
+        targeted.recipient_actor_id = Some(Uuid::now_v7());
+        assert!(OutboxPublisher::publish(&hub, &targeted).is_err());
+        let mut mismatched = envelope;
+        mismatched.payload["conversationId"] = serde_json::json!(Uuid::now_v7());
+        assert!(OutboxPublisher::publish(&hub, &mismatched).is_err());
     }
 
     #[test]

@@ -98,6 +98,18 @@ pub struct MessageCreatedPayload {
     pub author_actor_id: Uuid,
 }
 
+/// A message was edited or removed. IDs and the revision only: never put
+/// message text in an outbox payload, because it is stored in outbox_events
+/// and a removed message's text must vanish everywhere.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MessageUpdatedPayload {
+    pub conversation_id: Uuid,
+    pub message_id: Uuid,
+    pub revision: i32,
+    pub removed: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadStateUpdatedPayload {
@@ -138,6 +150,7 @@ pub enum OutboxEventPayload {
     ReplyRequestsUpdated(ReplyRequestsUpdatedPayload),
     ConversationArchived(ConversationArchivedPayload),
     MessageCreated(MessageCreatedPayload),
+    MessageUpdated(MessageUpdatedPayload),
     ReadStateUpdated(ReadStateUpdatedPayload),
     AgentRunUpdated(AgentRunUpdatedPayload),
     WorkItemUpdated(WorkItemUpdatedPayload),
@@ -152,6 +165,7 @@ impl OutboxEventPayload {
             Self::ReplyRequestsUpdated(_) => "conversation.reply_requests.updated",
             Self::ConversationArchived(_) => "conversation.archived",
             Self::MessageCreated(_) => "conversation.message.created",
+            Self::MessageUpdated(_) => "conversation.message.updated",
             Self::ReadStateUpdated(_) => "conversation.read_state.updated",
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
             Self::WorkItemUpdated(_) => "work_item.updated",
@@ -166,6 +180,7 @@ impl OutboxEventPayload {
             Self::ReplyRequestsUpdated(payload) => Some(payload.conversation_id),
             Self::ConversationArchived(payload) => Some(payload.conversation_id),
             Self::MessageCreated(payload) => Some(payload.conversation_id),
+            Self::MessageUpdated(payload) => Some(payload.conversation_id),
             Self::ReadStateUpdated(payload) => Some(payload.conversation_id),
             Self::AgentRunUpdated(payload) => Some(payload.conversation_id),
             Self::WorkItemUpdated(_) | Self::ProjectMembershipUpdated(_) => None,
@@ -188,7 +203,7 @@ impl OutboxEventPayload {
             | Self::ConversationUpdated(_)
             | Self::ReplyRequestsUpdated(_)
             | Self::ConversationArchived(_) => OutboxResourceKind::Conversation,
-            Self::MessageCreated(_) => OutboxResourceKind::Message,
+            Self::MessageCreated(_) | Self::MessageUpdated(_) => OutboxResourceKind::Message,
             Self::ReadStateUpdated(_) => OutboxResourceKind::ReadState,
             Self::AgentRunUpdated(_) => OutboxResourceKind::AgentRun,
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
@@ -203,6 +218,7 @@ impl OutboxEventPayload {
             Self::ReplyRequestsUpdated(payload) => payload.conversation_id,
             Self::ConversationArchived(payload) => payload.conversation_id,
             Self::MessageCreated(payload) => payload.message_id,
+            Self::MessageUpdated(payload) => payload.message_id,
             // Read state is keyed by Conversation and Actor. The envelope
             // already carries the Conversation, so the Actor is its resource ID.
             Self::ReadStateUpdated(payload) => payload.actor_id,
@@ -229,6 +245,9 @@ impl OutboxEventPayload {
             Self::MessageCreated(payload)
                 if payload.sequence < 1 || payload.author_actor_id.is_nil() =>
             {
+                Err(OutboxEventError::MalformedPayload)
+            }
+            Self::MessageUpdated(payload) if payload.revision < 1 => {
                 Err(OutboxEventError::MalformedPayload)
             }
             Self::ReadStateUpdated(payload)
@@ -261,6 +280,7 @@ impl OutboxEventPayload {
             Self::ReplyRequestsUpdated(payload) => serde_json::to_value(payload),
             Self::ConversationArchived(payload) => serde_json::to_value(payload),
             Self::MessageCreated(payload) => serde_json::to_value(payload),
+            Self::MessageUpdated(payload) => serde_json::to_value(payload),
             Self::ReadStateUpdated(payload) => serde_json::to_value(payload),
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
@@ -287,6 +307,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.message.created" => Self::MessageCreated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "conversation.message.updated" => Self::MessageUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "conversation.read_state.updated" => Self::ReadStateUpdated(
@@ -765,10 +788,10 @@ mod tests {
 
     use super::{
         AgentRunUpdatedPayload, ClaimedOutboxEvent, ConversationCreatedPayload,
-        MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS, MessageCreatedPayload, OUTBOX_SCHEMA_VERSION,
-        OutboxConversationKind, OutboxEventError, OutboxEventPayload, OutboxFailureKind,
-        OutboxResourceKind, ProjectMembershipUpdatedPayload, ReadStateUpdatedPayload,
-        WorkItemUpdatedPayload, retry_delay,
+        MAX_OUTBOX_ERROR_SUMMARY_CHARACTERS, MessageCreatedPayload, MessageUpdatedPayload,
+        OUTBOX_SCHEMA_VERSION, OutboxConversationKind, OutboxEventError, OutboxEventPayload,
+        OutboxFailureKind, OutboxResourceKind, ProjectMembershipUpdatedPayload,
+        ReadStateUpdatedPayload, WorkItemUpdatedPayload, retry_delay,
     };
     use std::time::Duration;
     use uuid::Uuid;
@@ -976,5 +999,51 @@ mod tests {
             invalid_read.to_json(),
             Err(OutboxEventError::MalformedPayload)
         );
+    }
+
+    #[test]
+    fn message_updated_carries_ids_only_and_round_trips() {
+        let updated = OutboxEventPayload::MessageUpdated(MessageUpdatedPayload {
+            conversation_id: id(2),
+            message_id: id(3),
+            revision: 2,
+            removed: true,
+        });
+        assert_eq!(updated.event_type(), "conversation.message.updated");
+        assert_eq!(updated.resource_kind(), OutboxResourceKind::Message);
+        assert_eq!(updated.resource_id(), id(3));
+        assert_eq!(updated.conversation_id(), Some(id(2)));
+        let json = updated.to_json().expect("message updated payload");
+        let mut keys = json
+            .as_object()
+            .expect("payload object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, ["conversationId", "messageId", "removed", "revision"]);
+        assert_eq!(
+            OutboxEventPayload::from_json("conversation.message.updated", json),
+            Ok(updated)
+        );
+
+        let with_text = serde_json::json!({
+            "conversationId": id(2),
+            "messageId": id(3),
+            "revision": 2,
+            "removed": false,
+            "plainText": "secret",
+        });
+        assert_eq!(
+            OutboxEventPayload::from_json("conversation.message.updated", with_text),
+            Err(OutboxEventError::MalformedPayload)
+        );
+        let invalid = OutboxEventPayload::MessageUpdated(MessageUpdatedPayload {
+            conversation_id: id(2),
+            message_id: id(3),
+            revision: 0,
+            removed: false,
+        });
+        assert_eq!(invalid.to_json(), Err(OutboxEventError::MalformedPayload));
     }
 }

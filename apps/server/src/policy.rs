@@ -50,6 +50,9 @@ pub enum Action {
     ApprovalRespond,
     ChannelCreate,
     MessageSend,
+    /// Remove anyone's message (owners and admins; people only, checked by
+    /// the caller).
+    MessageModerate,
     ThreadCreate,
     ConversationArchive,
     ReadStateUpdate,
@@ -66,7 +69,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -87,6 +90,7 @@ impl Action {
         Self::ApprovalRespond,
         Self::ChannelCreate,
         Self::MessageSend,
+        Self::MessageModerate,
         Self::ThreadCreate,
         Self::ConversationArchive,
         Self::ReadStateUpdate,
@@ -382,6 +386,7 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::RunInterrupt
             | Action::ChannelCreate
             | Action::MessageSend
+            | Action::MessageModerate
             | Action::ThreadCreate
             | Action::ConversationArchive
             | Action::ReadStateUpdate
@@ -675,6 +680,27 @@ mod tests {
                     "{role:?} performing {action:?}: {decision:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn only_owners_and_admins_moderate_messages() {
+        let action = Action::MessageModerate;
+        for role in MembershipRole::ALL {
+            let resource = project_resource(action, role);
+            let delegation = (role == MembershipRole::Worker)
+                .then(|| worker_delegation(action, resource))
+                .flatten();
+            let decision = authorize(
+                &subject(ActorKind::Human, action, role, true, true, delegation),
+                action,
+                resource,
+            );
+            assert_eq!(
+                decision.is_allowed(),
+                matches!(role, MembershipRole::Owner | MembershipRole::Admin),
+                "{role:?}: {decision:?}"
+            );
         }
     }
 

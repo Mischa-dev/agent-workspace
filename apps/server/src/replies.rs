@@ -113,6 +113,27 @@ pub(crate) async fn ask_for_replies(
     ask(transaction, &message, required).await
 }
 
+/// Ask agents a person newly @mentioned by editing their message, in a
+/// channel or a thread under one. `message.mentioned_actor_ids` holds only the
+/// newly mentioned (in no earlier revision). Nothing is superseded and turns
+/// don't change. In DMs and groups (and threads under them) every agent member
+/// was already asked when the message was sent, and agents' own edits ask
+/// nobody, matching send.
+pub(crate) async fn ask_after_edit(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: NewMessage<'_>,
+) -> Result<(), AppError> {
+    if !matches!(message.conversation_kind, "channel" | "thread")
+        || message.author_kind != "human"
+        || message.mentioned_actor_ids.is_empty()
+    {
+        return Ok(());
+    }
+    let agents = agents_to_ask(transaction, &message).await?;
+    insert_requests(transaction, &message, &agents, true, false).await?;
+    Ok(())
+}
+
 /// Ask the agents the reply rules pick, superseding their pending requests
 /// about earlier messages here.
 async fn ask(
@@ -253,10 +274,6 @@ async fn insert_requests(
 /// Which open reply requests `withdraw_requests` takes back.
 pub(crate) enum Withdraw<'a> {
     /// Every request about one message, for example because it was removed.
-    #[expect(
-        dead_code,
-        reason = "message removal (Phase 3, edit and delete) withdraws through it"
-    )]
     Message {
         conversation_id: Uuid,
         message_id: Uuid,

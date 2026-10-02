@@ -22,7 +22,8 @@ use crate::{
         ConversationAccessRow, MessageCommandActor, MessageMcpCredential,
         THREAD_STATUS_SUGGESTIONS, ThreadPatch, append_message_command,
         authorize_conversation_row_for, enqueue_event, fetch_conversation_access,
-        lock_conversation_for, normalize_conversation_name, update_thread,
+        lock_conversation_for, normalize_conversation_name,
+        suggested_thread_name as suggested_name, update_thread,
     },
     error::AppError,
     idempotency::IdempotencyKey,
@@ -1738,20 +1739,6 @@ fn thread_path(parent: &ConversationAccessRow, thread_id: Uuid) -> String {
         format!("/messages/{}?thread={thread_id}", parent.id)
     } else {
         format!("/projects/{}/threads/{thread_id}", parent.project_id)
-    }
-}
-
-/// A thread name from the start of a message's first line.
-pub(crate) fn suggested_name(text: &str) -> String {
-    let first_line = text.trim().lines().next().unwrap_or_default().trim();
-    let short = first_line.chars().take(60).collect::<String>();
-    if short.chars().count() < first_line.chars().count() {
-        let trimmed = short
-            .rsplit_once(char::is_whitespace)
-            .map_or(short.as_str(), |(head, _)| head);
-        format!("{trimmed}…")
-    } else {
-        short
     }
 }
 
