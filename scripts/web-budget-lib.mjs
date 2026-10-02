@@ -15,8 +15,11 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // Mobile support (the service worker, one phone drawer, swipes, the keyboard
   // viewport, reconnect on resume) adds 9,350 raw / 5,358 gzip bytes over
   // 607,316 / 193,011, measuring 616,666 / 198,369; sw.js alone is 3,524 / 1,406.
-  javascriptRawBytes: 604 * 1024,
-  javascriptGzipBytes: 195 * 1024,
+  // Editing and removing messages, their history, reactions, live updates of
+  // older pages and mark-unread (MCP Phase 3) measure 642,380 / 206,161, all
+  // in the lazily loaded conversation routes.
+  javascriptRawBytes: 632 * 1024,
+  javascriptGzipBytes: 203 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
   cssRawBytes: 100 * 1024,
