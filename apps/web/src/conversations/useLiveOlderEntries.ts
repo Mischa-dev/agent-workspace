@@ -19,6 +19,7 @@ type Replacements = { conversationId: string; byMessageId: Record<string, Conver
 
 const NO_OLDER: OlderState = { conversationId: '', pages: [], nextCursor: null }
 const NO_REPLACEMENTS: Record<string, ConversationTimelineEntry> = {}
+const NO_REPLACEMENT_STATE: Replacements = { conversationId: '', byMessageId: NO_REPLACEMENTS }
 const NO_PAGES: LoadedPage[] = []
 
 /**
@@ -30,7 +31,10 @@ const NO_PAGES: LoadedPage[] = []
  * - a removal seen live blanks the message during render, before any fetch;
  * - an edit or removal seen live refetches that one message;
  * - each time the socket reconnects (events sent while it was down never
- *   arrive), every older page is refetched, or dropped if that fails.
+ *   arrive), every older page is refetched, or dropped if that fails;
+ * - moving to another conversation drops them. Pages keep the same component
+ *   across conversations, and a reconnect while elsewhere doesn't refetch
+ *   them, so pages kept for a return could show text removed meanwhile.
  */
 export function useLiveOlderEntries({
   conversationId,
@@ -49,17 +53,35 @@ export function useLiveOlderEntries({
   const updates = realtime?.messageUpdates ?? NO_MESSAGE_UPDATES
   const resyncGeneration = realtime?.resyncGeneration ?? 0
   const [older, setOlder] = useState<OlderState>(NO_OLDER)
-  const [replacements, setReplacements] = useState<Replacements>({ conversationId: '', byMessageId: {} })
+  const [replacements, setReplacements] = useState<Replacements>(NO_REPLACEMENT_STATE)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [shownConversationId, setShownConversationId] = useState(conversationId)
   const loadPageRef = useRef(loadPage)
   const olderRef = useRef(older)
   const attempted = useRef(new Set<string>())
   const seenGeneration = useRef(resyncGeneration)
+  // Goes up with each conversation shown, so a page load answered after
+  // leaving is never kept.
+  const visit = useRef(0)
   useEffect(() => {
     loadPageRef.current = loadPage
     olderRef.current = older
   })
+
+  // Another conversation: forget everything loaded for the last one, so a
+  // return starts from the newest page instead of pages that missed a resync.
+  if (shownConversationId !== conversationId) {
+    setShownConversationId(conversationId)
+    setOlder(NO_OLDER)
+    setReplacements(NO_REPLACEMENT_STATE)
+    setLoading(false)
+    setError(null)
+  }
+  useEffect(() => {
+    visit.current += 1
+    attempted.current.clear()
+  }, [conversationId])
 
   const own = older.conversationId === conversationId
   const pages = own ? older.pages : NO_PAGES
@@ -149,19 +171,22 @@ export function useLiveOlderEntries({
 
   const loadOlder = useCallback(async () => {
     if (!cursor || loading) return
+    const started = visit.current
     setLoading(true)
     setError(null)
     try {
       const result = await loadPageRef.current(cursor)
+      if (visit.current !== started) return
       setOlder((current) => ({
         conversationId,
         pages: [...(current.conversationId === conversationId ? current.pages : []), { cursor, entries: result.entries }],
         nextCursor: result.nextCursor,
       }))
     } catch (reason) {
+      if (visit.current !== started) return
       setError(reason instanceof Error ? reason.message : 'Earlier messages didn’t load.')
     } finally {
-      setLoading(false)
+      if (visit.current === started) setLoading(false)
     }
   }, [conversationId, cursor, loading])
 

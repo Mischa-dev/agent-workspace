@@ -2,6 +2,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
 import type { MessageUpdate } from '../realtime/realtimeModel'
 import { REMOVED_MESSAGE_CONTENT } from './api'
+import { threadsQueryKey } from './threadModel'
 import type { ConversationMessage, ConversationTimelineEntry } from './types'
 
 /** How many edited or removed messages the client remembers between refetches. */
@@ -154,13 +155,48 @@ export function withoutMessageItems(data: unknown, field: 'pins' | 'hits', messa
   return kept.length === items.length ? data : { ...root, [field]: kept }
 }
 
+/** What the server renames a thread to when its name came from a removed message. */
+export const NEUTRAL_THREAD_NAME = 'Thread'
+
+function neutralizeThreadList(list: unknown, messageId: string): unknown {
+  if (!Array.isArray(list)) return list
+  let changed = false
+  const next = (list as WireRecord[]).map((thread) => {
+    if (thread?.originMessageId !== messageId || thread.name === NEUTRAL_THREAD_NAME) return thread
+    changed = true
+    return { ...thread, name: NEUTRAL_THREAD_NAME }
+  })
+  return changed ? next : list
+}
+
+/**
+ * Cached threads (a thread board's list, or a sidebar's channels) with every
+ * thread started from a removed message showing the neutral name. Its name may
+ * repeat the message's first line; the refetch that follows brings back names
+ * someone chose themselves.
+ */
+export function neutralizeThreadNames(data: unknown, messageId: string): unknown {
+  if (Array.isArray(data)) return neutralizeThreadList(data, messageId)
+  const root = asRecord(data)
+  if (!root || !Array.isArray(root.channels)) return data
+  let changed = false
+  const channels = (root.channels as WireRecord[]).map((channel) => {
+    const threads = neutralizeThreadList(channel?.threads, messageId)
+    if (threads === channel?.threads) return channel
+    changed = true
+    return { ...channel, threads }
+  })
+  return changed ? { ...root, channels } : data
+}
+
 function isConversationKey(key: QueryKey, conversationId: string, rest: string) {
   return key[0] === 'project' && key[2] === 'conversation' && key[3] === conversationId && key[4] === rest
 }
 
 /**
  * Blank a removed message in every cache that can hold its text, synchronously:
- * timelines, its history, pins and search results. Callers then invalidate.
+ * timelines, its history, pins, search results, and the names of threads
+ * started from it. Callers then invalidate.
  */
 export function dropRemovedMessage(
   queryClient: QueryClient,
@@ -180,15 +216,26 @@ export function dropRemovedMessage(
   )
   queryClient.setQueriesData({ queryKey: ['pins'] }, (data: unknown) => withoutMessageItems(data, 'pins', messageId))
   queryClient.setQueriesData({ queryKey: ['search'] }, (data: unknown) => withoutMessageItems(data, 'hits', messageId))
+  // Thread boards and sidebars list threads with an origin message. Only touch
+  // caches that change, so the rest keep their freshness.
+  const neutralized = (data: unknown) => {
+    const next = neutralizeThreadNames(data, messageId)
+    return next === data ? undefined : next
+  }
+  queryClient.setQueriesData({ queryKey: threadsQueryKey(conversationId) }, neutralized)
+  queryClient.setQueriesData(
+    { predicate: (query) => query.queryKey[0] === 'project' && query.queryKey[2] === 'conversation-sidebar' },
+    neutralized,
+  )
 }
 
 /**
- * Pins, search results and decisions are cached outside a project's queries,
- * so a project refresh misses them. Forget the ones on no screen (they'd show
- * stale text on return) and refetch the rest.
+ * Pins, search results, decisions and thread boards are cached outside a
+ * project's queries, so a project refresh misses them. Forget the ones on no
+ * screen (they'd show stale text on return) and refetch the rest.
  */
 export function refreshMemoryCaches(queryClient: QueryClient) {
-  for (const queryKey of [['pins'], ['search'], ['decisions']]) {
+  for (const queryKey of [['pins'], ['search'], ['decisions'], ['threads']]) {
     queryClient.removeQueries({ queryKey, type: 'inactive' })
     void queryClient.invalidateQueries({ queryKey })
   }

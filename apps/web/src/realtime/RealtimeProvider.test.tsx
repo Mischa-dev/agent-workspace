@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RealtimeProvider } from './RealtimeProvider'
@@ -75,11 +75,13 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(4))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
+    // Thread boards are keyed outside the project; every event refreshes them.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['threads'] })
   })
 
   it('blanks a removed message in cached timelines and pins before refetching', async () => {
@@ -114,6 +116,17 @@ describe('authenticated realtime provider', () => {
     queryClient.setQueryData(['pins', conversationId], {
       pins: [{ kind: 'message', id: removedId, title: 'Bob', text: 'ghp_secret' }],
     })
+    // A thread named from the message's first line, on a board that's open.
+    const threadsKey = ['threads', conversationId]
+    queryClient.setQueryData(threadsKey, [
+      { id: runId, name: 'ghp_secret', status: 'Open', originMessageId: removedId, messageCount: 1 },
+    ])
+    const unsubscribe = new QueryObserver(queryClient, {
+      queryKey: threadsKey,
+      // The refetch never answers here, so what's shown is the synchronous change.
+      queryFn: () => new Promise<unknown>(() => undefined),
+      staleTime: Infinity,
+    }).subscribe(() => undefined)
     render(
       <QueryClientProvider client={queryClient}>
         <RealtimeProvider>
@@ -138,7 +151,11 @@ describe('authenticated realtime provider', () => {
     expect(JSON.stringify(queryClient.getQueryData(['pins', conversationId]) ?? null)).not.toContain('ghp_secret')
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['pins'] })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] })
+    // The open board shows the neutral name at once and refetches the real one.
+    expect(JSON.stringify(queryClient.getQueryData(threadsKey))).not.toContain('ghp_secret')
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['threads'] })
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] }))
+    unsubscribe()
   })
 
   it('coalesces bounded legacy provider deltas without creating another socket', async () => {

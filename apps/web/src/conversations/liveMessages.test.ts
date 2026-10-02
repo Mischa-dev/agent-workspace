@@ -8,9 +8,12 @@ import {
   applyLiveMessages,
   dropRemovedMessage,
   needsRefresh,
+  NEUTRAL_THREAD_NAME,
+  refreshMemoryCaches,
   rememberMessageUpdate,
   type MessageUpdates,
 } from './liveMessages'
+import { threadsQueryKey } from './threadModel'
 import type { ConversationActor, ConversationTimelineEntry } from './types'
 
 const projectId = '019fb600-0000-7000-8000-000000000001'
@@ -173,6 +176,58 @@ describe('removed and edited messages', () => {
     expect(cached).not.toContain('ghp_secret')
     expect(cached).toContain('Keep me')
     expect(cached).toContain('Read me')
+  })
+
+  it('renames threads started from a removed message on boards and sidebars at once', () => {
+    const queryClient = new QueryClient()
+    const thread = (id: number, name: string, originMessageId: string | null) => ({
+      id: messageId(100 + id),
+      name,
+      status: 'Open',
+      outcome: null,
+      originMessageId,
+      messageCount: 1,
+      unread: false,
+      archived: false,
+      lastActivityAt: '2026-10-01T10:00:00Z',
+      statusChangedAt: null,
+    })
+    const boardKey = threadsQueryKey(conversationId)
+    const otherBoardKey = threadsQueryKey(projectId)
+    const sidebarKey = queryKeys.conversationSidebar(projectId, conversationId, `expanded:${conversationId}`)
+    queryClient.setQueryData(boardKey, [thread(1, 'ghp_secret', messageId(1)), thread(2, 'Deploy plan', messageId(2))])
+    const otherBoard = [thread(3, 'Elsewhere', messageId(3))]
+    queryClient.setQueryData(otherBoardKey, otherBoard)
+    queryClient.setQueryData(sidebarKey, {
+      projectId,
+      channels: [
+        {
+          id: conversationId,
+          name: 'general',
+          threads: [
+            { id: messageId(101), parentChannelId: conversationId, originMessageId: messageId(1), name: 'ghp_secret' },
+            { id: messageId(104), parentChannelId: conversationId, originMessageId: null, name: 'Standup' },
+          ],
+        },
+      ],
+      capabilities: { createChannel: true },
+    })
+    const otherUpdatedAt = queryClient.getQueryState(otherBoardKey)?.dataUpdatedAt
+
+    dropRemovedMessage(queryClient, { conversationId, messageId: messageId(1) })
+
+    const board = queryClient.getQueryData<{ name: string }[]>(boardKey)
+    expect(board?.map((item) => item.name)).toEqual([NEUTRAL_THREAD_NAME, 'Deploy plan'])
+    const sidebar = JSON.stringify(queryClient.getQueryData(sidebarKey))
+    expect(sidebar).not.toContain('ghp_secret')
+    expect(sidebar).toContain('Standup')
+    // Caches with nothing to change keep their data and their freshness.
+    expect(queryClient.getQueryData(otherBoardKey)).toBe(otherBoard)
+    expect(queryClient.getQueryState(otherBoardKey)?.dataUpdatedAt).toBe(otherUpdatedAt)
+
+    // Boards on no screen are forgotten, so a return refetches names.
+    refreshMemoryCaches(queryClient)
+    expect(queryClient.getQueryData(boardKey)).toBeUndefined()
   })
 
   it('turns a message back into composer text that rebuilds the same content', () => {

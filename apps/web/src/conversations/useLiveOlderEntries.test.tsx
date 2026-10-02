@@ -118,6 +118,61 @@ describe('live older timeline pages', () => {
     expect(loadPage.mock.calls.map(([cursor]) => cursor).sort()).toEqual(['cursor-a', 'cursor-b'])
   })
 
+  it('drops older pages on leaving, so a reconnect missed elsewhere never shows them on return', async () => {
+    const otherId = '019fb600-0000-7000-8000-000000000009'
+    const loadPage = vi.fn(async () => ({ entries: entries(wireEntry(1, 'ghp_secret')), nextCursor: null }))
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) =>
+        useLiveOlderEntries({
+          conversationId: id,
+          loadPage,
+          newestCursor: id === conversationId ? 'cursor-a' : null,
+          newestEntries: id === conversationId ? newest : [],
+        }),
+      { wrapper, initialProps: { id: conversationId } },
+    )
+    await act(() => result.current.loadOlder())
+    expect(JSON.stringify(result.current.entries)).toContain('ghp_secret')
+
+    // Elsewhere, the socket drops and reconnects; the removal was never seen.
+    rerender({ id: otherId })
+    setRealtime({ resyncGeneration: 2 })
+    rerender({ id: otherId })
+    expect(result.current.entries).toEqual([])
+
+    rerender({ id: conversationId })
+    expect(result.current.entries.map((entry) => entry.sequence)).toEqual([3])
+    expect(JSON.stringify(result.current.entries)).not.toContain('ghp_secret')
+    expect(result.current.cursor).toBe('cursor-a')
+  })
+
+  it('never keeps a page load that answers after leaving, even once back', async () => {
+    const otherId = '019fb600-0000-7000-8000-000000000009'
+    let answer: (page: OlderPage) => void = () => undefined
+    const loadPage = vi.fn(() => new Promise<OlderPage>((resolve) => (answer = resolve)))
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) =>
+        useLiveOlderEntries({ conversationId: id, loadPage, newestCursor: 'cursor-a', newestEntries: newest }),
+      { wrapper, initialProps: { id: conversationId } },
+    )
+    let pending: Promise<void> = Promise.resolve()
+    act(() => {
+      pending = result.current.loadOlder()
+    })
+    expect(result.current.loading).toBe(true)
+    rerender({ id: otherId })
+    expect(result.current.loading).toBe(false)
+    rerender({ id: conversationId })
+
+    await act(async () => {
+      answer({ entries: entries(wireEntry(1, 'ghp_secret')), nextCursor: null })
+      await pending
+    })
+    expect(result.current.entries.map((entry) => entry.sequence)).toEqual([3])
+    expect(result.current.cursor).toBe('cursor-a')
+    expect(result.current.loading).toBe(false)
+  })
+
   it('drops older pages when the reconnect refetch fails', async () => {
     const loadPage = vi.fn(async () => ({ entries: entries(wireEntry(1, 'Older')), nextCursor: null }))
     const { result, rerender } = renderHook(
