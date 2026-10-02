@@ -1904,11 +1904,13 @@ async fn refresh_pull_request(
          AND repository.enabled
          AND repository.archived_at IS NULL
         WHERE pull_request.project_id = $1 AND pull_request.id = $2
+          AND pull_request_visible_to(pull_request.id, $3)
         FOR SHARE OF pull_request, repository
         "#,
     )
     .bind(project_id)
     .bind(pull_request_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("github_pull_request"))?;

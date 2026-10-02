@@ -12,12 +12,13 @@ use agent_workspace_server::{
     runs::{MCP_ACTIVE_RUN_CAP, run_cap},
     seed::dev_seed,
 };
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 use sqlx::{Executor, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::{connect_app, create_agent, initialize, schema_pool, tool},
+    agent_interface::{connect_app, create_agent, initialize, schema_pool, send, tool},
     mcp_admin::{Setup, create_project, setup},
     mcp_task_board::{insert_repository, owner, seed_pull_request},
     mcp_tasks::{add_member, space},
@@ -68,6 +69,22 @@ async fn link_to_thread(setup: &Setup, pull_request: Uuid, thread: &str, source:
     .execute(&setup.pool)
     .await
     .expect("thread link");
+}
+
+/// The task as the owner's browser reads it.
+async fn task_detail(setup: &Setup, project: &str, task: &str) -> Value {
+    let (status, item) = send(
+        &setup.app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{project}/work-items/{task}"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{item}");
+    item
 }
 
 async fn visible_to(setup: &Setup, pull_request: Uuid, viewer: Uuid) -> bool {
@@ -589,4 +606,118 @@ async fn the_run_cap_counts_every_active_run_and_holds_a_lock() {
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
         .await
         .expect("drop schema");
+}
+
+/// The browser's task detail follows the same rule as task_open: a pull
+/// request opened from a private thread, and the thread itself, show only to
+/// people in that conversation, not to every project member.
+#[tokio::test]
+async fn the_web_task_detail_hides_a_pull_request_from_a_private_thread() {
+    let Some(setup) = setup("phase4_web_pr_visibility").await else {
+        return;
+    };
+    let app = &setup.app;
+    let repo = create_project(&setup, "REPO", "Repo").await;
+    let owner_id = owner(&setup, &repo).await;
+    let repository = insert_repository(&setup, &repo, "Mischa-dev/aw", true, true, None).await;
+    let (open, open_url) = seed_pull_request(&setup, &repo, repository, 7).await;
+    let (private, private_url) = another_pull_request(&setup, open, 8).await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    // A thread in a private channel the owner starts out in.
+    let channel = call(
+        "channel_create",
+        json!({"projectId": "REPO", "name": "secret"}),
+    )
+    .await;
+    let channel_id = channel["value"]["id"].as_str().expect("channel").to_owned();
+    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+        .bind(&channel_id)
+        .execute(&setup.pool)
+        .await
+        .expect("make secret private");
+    sqlx::query(
+        "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES ($1::uuid, $2::uuid, $3, $3)",
+    )
+    .bind(&repo)
+    .bind(&channel_id)
+    .bind(owner_id)
+    .execute(&setup.pool)
+    .await
+    .expect("owner in secret");
+    let sent = call(
+        "message_send",
+        json!({"conversationId": channel_id, "text": "About secret"}),
+    )
+    .await;
+    let thread = call(
+        "thread_start",
+        json!({"conversationId": channel_id, "fromMessageId": sent["value"]["messageId"]}),
+    )
+    .await;
+    assert_eq!(thread["outcome"], "ok", "{thread}");
+    let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+    link_to_thread(&setup, private, &thread_id, "run_artifact", owner_id).await;
+
+    let created = call(
+        "task_create",
+        json!({"projectId": "REPO", "title": "Offline mode"}),
+    )
+    .await;
+    let task_id = created["workItemId"].as_str().expect("task").to_owned();
+    for link in [
+        json!({"taskId": "REPO-1", "pullRequestId": open.to_string()}),
+        json!({"taskId": "REPO-1", "pullRequestId": private.to_string()}),
+        json!({"taskId": "REPO-1", "conversationId": thread_id}),
+    ] {
+        let linked = call("task_link", link).await;
+        assert_eq!(linked["outcome"], "ok", "{linked}");
+    }
+
+    let urls = |item: &Value| {
+        item["linkedPullRequests"]
+            .as_array()
+            .expect("pull requests")
+            .iter()
+            .map(|pull_request| pull_request["url"].as_str().expect("url").to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // While the owner is in the conversation, the task shows everything.
+    let member_view = task_detail(&setup, &repo, &task_id).await;
+    assert_eq!(
+        urls(&member_view),
+        vec![open_url.clone(), private_url.clone()]
+    );
+    assert_eq!(
+        member_view["linkedThreads"].as_array().map(Vec::len),
+        Some(1),
+        "{member_view}"
+    );
+
+    // Out of it, the owner is any other project member: the private PR and
+    // its thread are gone; the public PR stays.
+    sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1::uuid")
+        .bind(&channel_id)
+        .execute(&setup.pool)
+        .await
+        .expect("owner leaves secret");
+    assert!(!visible_to(&setup, private, owner_id).await);
+    let outsider_view = task_detail(&setup, &repo, &task_id).await;
+    assert_eq!(urls(&outsider_view), vec![open_url.clone()]);
+    assert_eq!(
+        outsider_view["linkedThreads"].as_array().map(Vec::len),
+        Some(0),
+        "{outsider_view}"
+    );
+    let text = outsider_view.to_string();
+    assert!(!text.contains(&private_url), "{outsider_view}");
+    assert!(!text.contains(&private.to_string()), "{outsider_view}");
+    assert!(!text.contains(&thread_id), "{outsider_view}");
 }
