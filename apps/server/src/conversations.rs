@@ -31,6 +31,7 @@ use crate::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
         MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    reactions::{self, ReactionView},
     replies::{self, ReplyRequestView},
 };
 
@@ -307,6 +308,11 @@ pub struct MessageView {
     /// Set once the message is removed. Its content and text are then empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<MessageRemovalView>,
+    /// Emoji reactions in the order first added, as the viewer sees them.
+    /// Always empty for a removed message. `default` because stored
+    /// idempotent replays from before reactions have no such field.
+    #[serde(default)]
+    pub reactions: Vec<ReactionView>,
 }
 
 fn first_revision() -> i32 {
@@ -1684,6 +1690,7 @@ pub(crate) async fn append_message_command(
         revision: 1,
         edited_at: None,
         removed: None,
+        reactions: Vec::new(),
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -2241,10 +2248,17 @@ async fn conversation_timeline(
     } else {
         None
     };
-    let entries = rows
+    let mut entries = rows
         .into_iter()
         .map(timeline_entry_view)
         .collect::<Result<Vec<_>, _>>()?;
+    reactions::attach_reactions(
+        &state.pool,
+        conversation.id,
+        &mut entries,
+        principal.actor_id,
+    )
+    .await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
     let linked_work_items = if conversation.kind == "thread" {
         let value = sqlx::query_scalar::<_, serde_json::Value>(
@@ -3560,6 +3574,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 revision: row.revision.unwrap_or(1),
                 edited_at: row.edited_at,
                 removed,
+                reactions: Vec::new(),
             })
         }
         None => None,

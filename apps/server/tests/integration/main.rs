@@ -39,5 +39,6 @@ mod mcp_task_board;
 mod mcp_task_criteria;
 mod mcp_tasks;
 mod message_edits;
+mod message_reactions;
 mod oauth_agent;
 mod reply_requests;

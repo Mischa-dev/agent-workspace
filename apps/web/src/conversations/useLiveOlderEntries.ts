@@ -8,8 +8,11 @@ import {
   mergeTimelineEntries,
   needsRefresh,
   NO_MESSAGE_UPDATES,
+  NO_REACTION_UPDATES,
+  withMessageReactions,
+  type ReactionUpdates,
 } from './liveMessages'
-import type { ConversationTimelineEntry } from './types'
+import type { ConversationTimelineEntry, MessageReaction } from './types'
 
 export type OlderPage = { entries: ConversationTimelineEntry[]; nextCursor: string | null }
 
@@ -29,7 +32,8 @@ const NO_PAGES: LoadedPage[] = []
  * Older pages live in component state, so a project refresh never refetches
  * them. Instead:
  * - a removal seen live blanks the message during render, before any fetch;
- * - an edit or removal seen live refetches that one message;
+ * - an edit or removal seen live refetches that one message, and so does a
+ *   reaction change (only its reactions are taken from the answer);
  * - each time the socket reconnects (events sent while it was down never
  *   arrive), every older page is refetched, or dropped if that fails;
  * - moving to another conversation drops them. Pages keep the same component
@@ -51,6 +55,7 @@ export function useLiveOlderEntries({
 }) {
   const realtime = useOptionalRealtime()
   const updates = realtime?.messageUpdates ?? NO_MESSAGE_UPDATES
+  const reactionUpdates = realtime?.reactionUpdates ?? NO_REACTION_UPDATES
   const resyncGeneration = realtime?.resyncGeneration ?? 0
   const [older, setOlder] = useState<OlderState>(NO_OLDER)
   const [replacements, setReplacements] = useState<Replacements>(NO_REPLACEMENT_STATE)
@@ -60,6 +65,9 @@ export function useLiveOlderEntries({
   const loadPageRef = useRef(loadPage)
   const olderRef = useRef(older)
   const attempted = useRef(new Set<string>())
+  const reactionUpdatesRef = useRef<ReactionUpdates>(reactionUpdates)
+  // The latest reaction fetch per message, so a late answer never wins.
+  const reactionFetches = useRef(new Map<string, number>())
   const seenGeneration = useRef(resyncGeneration)
   // Goes up with each conversation shown, so a page load answered after
   // leaving is never kept.
@@ -67,6 +75,7 @@ export function useLiveOlderEntries({
   useEffect(() => {
     loadPageRef.current = loadPage
     olderRef.current = older
+    reactionUpdatesRef.current = reactionUpdates
   })
 
   // Another conversation: forget everything loaded for the last one, so a
@@ -108,6 +117,67 @@ export function useLiveOlderEntries({
     [conversationId],
   )
 
+  // Reactions change without a new revision, so they're patched into the
+  // older pages (and any fetched replacement) in place.
+  const patchReactions = useCallback(
+    (messageId: string, reactions: MessageReaction[]) => {
+      setOlder((current) => {
+        if (current.conversationId !== conversationId) return current
+        let changed = false
+        const pages = current.pages.map((page) => {
+          const entries = withMessageReactions(page.entries, messageId, reactions)
+          if (entries === page.entries) return page
+          changed = true
+          return { ...page, entries }
+        })
+        return changed ? { ...current, pages } : current
+      })
+      setReplacements((current) => {
+        const entry = current.byMessageId[messageId]
+        if (current.conversationId !== conversationId || !entry) return current
+        const [patched] = withMessageReactions([entry], messageId, reactions)
+        return patched === entry ? current : { conversationId, byMessageId: { ...current.byMessageId, [messageId]: patched } }
+      })
+    },
+    [conversationId],
+  )
+
+  // A page fetched now already has the reactions of every change seen so far.
+  const markReactionsFresh = useCallback(
+    (entries: ConversationTimelineEntry[]) => {
+      for (const entry of entries) {
+        const id = entry.message?.id
+        const update = id ? reactionUpdatesRef.current[id] : undefined
+        if (update?.conversationId === conversationId) attempted.current.add(`reactions:${id}:${update.seen}`)
+      }
+    },
+    [conversationId],
+  )
+
+  // Refetch older messages whose reactions changed live, taking only their
+  // reactions from the answer.
+  useEffect(() => {
+    const newestIds = new Set(newestEntries.map((entry) => entry.message?.id))
+    for (const entry of olderEntries) {
+      const message = entry.message
+      if (!message || message.removed || newestIds.has(message.id)) continue
+      const update = reactionUpdates[message.id]
+      if (!update || update.conversationId !== conversationId) continue
+      const key = `reactions:${message.id}:${update.seen}`
+      if (attempted.current.has(key)) continue
+      attempted.current.add(key)
+      const request = (reactionFetches.current.get(message.id) ?? 0) + 1
+      reactionFetches.current.set(message.id, request)
+      void getConversationMessage(conversationId, message.id)
+        .then((fresh) => {
+          if (reactionFetches.current.get(message.id) !== request) return
+          patchReactions(message.id, fresh.message?.removed ? [] : fresh.message?.reactions ?? [])
+        })
+        // Missed reaction changes come back with the next reconnect's refetch.
+        .catch(() => undefined)
+    }
+  }, [conversationId, newestEntries, olderEntries, patchReactions, reactionUpdates])
+
   // Refetch older messages that live updates say changed. The newest page is
   // refetched by the project refresh, so only older ones need this.
   useEffect(() => {
@@ -147,6 +217,7 @@ export function useLiveOlderEntries({
         if (cancelled) return
         const fresh = new Map(results.map((result) => [result.cursor, result]))
         attempted.current.clear()
+        for (const result of results) markReactionsFresh(result.entries)
         setOlder((current) => {
           if (current.conversationId !== conversationId) return current
           const last = current.pages.at(-1)
@@ -167,7 +238,7 @@ export function useLiveOlderEntries({
     return () => {
       cancelled = true
     }
-  }, [conversationId, resyncGeneration])
+  }, [conversationId, markReactionsFresh, resyncGeneration])
 
   const loadOlder = useCallback(async () => {
     if (!cursor || loading) return
@@ -177,6 +248,7 @@ export function useLiveOlderEntries({
     try {
       const result = await loadPageRef.current(cursor)
       if (visit.current !== started) return
+      markReactionsFresh(result.entries)
       setOlder((current) => ({
         conversationId,
         pages: [...(current.conversationId === conversationId ? current.pages : []), { cursor, entries: result.entries }],
@@ -188,7 +260,7 @@ export function useLiveOlderEntries({
     } finally {
       if (visit.current === started) setLoading(false)
     }
-  }, [conversationId, cursor, loading])
+  }, [conversationId, cursor, loading, markReactionsFresh])
 
   return {
     /** Every loaded entry, oldest first, with live edits and removals applied. */
@@ -200,6 +272,8 @@ export function useLiveOlderEntries({
     loadOlder,
     /** Show a changed message right away, for example after your own edit. */
     replaceEntry,
+    /** Show a message's reactions right away, for example after your own reaction. */
+    patchReactions,
     olderCount: olderEntries.length,
   }
 }

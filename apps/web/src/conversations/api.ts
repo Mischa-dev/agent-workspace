@@ -15,6 +15,7 @@ import type {
   ConversationWorkItemReference,
   MentionSearchPage,
   MessageContentV1,
+  MessageReaction,
   MessageRemoval,
   MessageRevision,
   MessageRevisions,
@@ -135,6 +136,7 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
       mentionedActors: [],
       referencedWorkItems: [],
       removed,
+      reactions: [],
     }
   }
   const content = parseMessageContent(message.content)
@@ -162,7 +164,45 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
             (item): item is ConversationWorkItemReference => item !== null,
           )
       : [],
+    reactions: normalizeReactions(message.reactions),
   }
+}
+
+const REACTION_NAME = /^[a-z0-9_]{1,32}$/
+const MAX_REACTION_ACTORS = 20
+
+function normalizeReaction(value: unknown): MessageReaction | null {
+  const reaction = asRecord(value)
+  if (
+    typeof reaction.emoji !== 'string' ||
+    reaction.emoji.length === 0 ||
+    reaction.emoji.length > 16 ||
+    typeof reaction.name !== 'string' ||
+    !REACTION_NAME.test(reaction.name) ||
+    !Number.isSafeInteger(reaction.count) ||
+    (reaction.count as number) < 1 ||
+    typeof reaction.byViewer !== 'boolean'
+  ) {
+    return null
+  }
+  return {
+    emoji: reaction.emoji,
+    name: reaction.name,
+    count: reaction.count as number,
+    byViewer: reaction.byViewer,
+    actors: Array.isArray(reaction.actors)
+      ? reaction.actors
+          .slice(0, MAX_REACTION_ACTORS)
+          .map(normalizeConversationActor)
+          .filter((actor): actor is ConversationActor => actor !== null)
+      : [],
+  }
+}
+
+/** Reactions from the wire; malformed ones are dropped rather than failing the message. */
+export function normalizeReactions(value: unknown): MessageReaction[] {
+  if (!Array.isArray(value)) return []
+  return value.map(normalizeReaction).filter((reaction): reaction is MessageReaction => reaction !== null)
 }
 
 export function normalizeTimelineEntry(
@@ -414,6 +454,30 @@ export async function removeConversationMessage(input: { conversationId: string;
     entry: changedEntry(root, input.conversationId, input.messageId),
     alreadyRemoved: root.alreadyRemoved === true,
   }
+}
+
+/**
+ * Put your reaction on a message, or take it away. It states the result
+ * rather than toggling, so a retry is safe. Returns every reaction on the
+ * message now.
+ */
+export async function setMessageReaction(input: {
+  conversationId: string
+  messageId: string
+  name: string
+  reacted: boolean
+}) {
+  if (!REACTION_NAME.test(input.name)) throw new Error('That reaction isn’t one of the choices.')
+  const root = asRecord(
+    await requestJson<unknown>(
+      `${messagePath(input.conversationId, input.messageId)}/reactions/${encodeURIComponent(input.name)}`,
+      { method: input.reacted ? 'PUT' : 'DELETE' },
+    ),
+  )
+  if (root.conversationId !== input.conversationId || root.messageId !== input.messageId) {
+    throw new Error('The reaction came back for a different message. Refresh to see it.')
+  }
+  return { changed: root.changed !== false, reactions: normalizeReactions(root.reactions) }
 }
 
 /** One timeline entry as it is now, for refreshing a message on an older page. */

@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 
-import type { MessageUpdates } from '../conversations/liveMessages'
+import type { MessageUpdates, ReactionUpdates } from '../conversations/liveMessages'
 
 export type ConnectionStatus = 'connecting' | 'live' | 'retrying'
 
@@ -9,6 +9,8 @@ export type RealtimeContextValue = {
   streams: Record<string, Record<string, string>>
   /** Messages edited or removed while connected, by message id (the latest 200). */
   messageUpdates: MessageUpdates
+  /** Messages whose reactions changed while connected, by message id (the latest 200). */
+  reactionUpdates: ReactionUpdates
   /**
    * Goes up each time the socket (re)connects. Anything kept outside the query
    * cache, such as older timeline pages, refetches then: events sent while the

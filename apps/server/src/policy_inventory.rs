@@ -261,6 +261,19 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages/{message_id}",
         MessageSend
     ),
+    // Anyone who can post in a conversation can react there.
+    policy_route!(
+        "reactions",
+        Put,
+        "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
+        MessageSend
+    ),
+    policy_route!(
+        "reactions",
+        Delete,
+        "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
+        MessageSend
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -524,6 +537,7 @@ mod tests {
         ("direct", include_str!("direct.rs")),
         ("replies", include_str!("replies.rs")),
         ("message_edits", include_str!("message_edits.rs")),
+        ("reactions", include_str!("reactions.rs")),
         ("github", include_str!("github.rs")),
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),

@@ -208,6 +208,18 @@ export function messageUpdate(
   return { conversationId, messageId, revision: revision as number, removed }
 }
 
+/** A message whose reactions changed, from a conversation.message.reactions.updated event. */
+export function reactionChange(
+  event: Pick<RealtimeEnvelope, 'type' | 'payload' | 'conversationId'>,
+): { conversationId: string; messageId: string } | null {
+  if (event.type !== 'conversation.message.reactions.updated') return null
+  const conversationId = event.conversationId
+  const messageId = uuid(field(event.payload, 'messageId', 'message_id'))
+  const payloadConversationId = uuid(field(event.payload, 'conversationId', 'conversation_id'))
+  if (!conversationId || !messageId || payloadConversationId !== conversationId) return null
+  return { conversationId, messageId }
+}
+
 export function terminalAgentRunId(
   event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
 ): string | null {

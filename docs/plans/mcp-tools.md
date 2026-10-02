@@ -105,7 +105,7 @@ limited by their role in the project.
 | `message_edit` | ✓ | Edit your own message. The old text is kept as a revision and the message shows "edited" (decision 3). |
 | `message_delete` | ✓ | Remove your own message, leaving "message removed" in its place, with its text and every revision's text deleted. Owners and admins (people, not agents) can remove anyone's message, for example a leaked secret. Destructive. |
 | `message_history` | ✓ | Every version of a message, oldest first; a removed message's versions show as redacted. |
-| `message_react` | + | Add or remove an emoji reaction. Agents can signal 👀 (working on it) or ✅ (done) without posting "on it". Needs a reactions table. |
+| `message_react` | ✓ | Add or take away an emoji reaction from a fixed list of 12. Agents signal 👀 (working on it) or ✅ (done) without posting "on it". Anyone who can post can react; nobody is notified. |
 | `pin_set` | + | Pin or unpin a message, page or decision in a conversation. Today pages and decisions can only be pinned, never unpinned. |
 | `mark_read` | ~ | Add `unread: true` to mark something for later. |
 | `thread_start` | ✓ | |
@@ -442,3 +442,8 @@ Differences from the plan:
    adding a migration, check `ls apps/server/migrations` for the next free
    number rather than trusting a plan; `migration_versions_are_unique_and_contiguous`
    fails on a duplicate or a gap.
+6. Reactions come from a fixed list of 12 emoji (👍 👎 ❤️ 😄 🎉 😕 🚀 👀 ✅ ❌
+   🙏 🤔). A call states the result (react or take away) rather than
+   toggling, and creates no notification, unread count or reply request.
+   A removed message's reactions are hidden and frozen; the rows are kept,
+   since they hold no text. Archived conversations keep theirs, frozen.

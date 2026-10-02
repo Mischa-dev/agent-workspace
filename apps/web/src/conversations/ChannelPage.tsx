@@ -155,6 +155,7 @@ export function ChannelPage() {
     capabilities: validBoundary ? page?.capabilities : null,
     searchActors,
     searchWorkItems,
+    onReactionsChanged: older.patchReactions,
     onChanged: (entry) => {
       older.replaceEntry(entry)
       void timeline.refetch()
@@ -332,6 +333,7 @@ export function ChannelPage() {
           }}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
+          renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
           viewerId={session.user.actorId}
         />

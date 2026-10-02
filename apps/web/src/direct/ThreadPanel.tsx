@@ -59,6 +59,7 @@ export function ThreadPanel({
     viewerId: viewer.actorId,
     capabilities: valid ? page?.capabilities : null,
     searchActors: searchMembers,
+    onReactionsChanged: live.patchReactions,
     onChanged: (entry) => {
       live.replaceEntry(entry)
       void timeline.refetch()
@@ -140,6 +141,7 @@ export function ThreadPanel({
               />
             ) : null
           }
+          renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
           viewerId={viewer.actorId}
         />

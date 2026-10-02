@@ -3,7 +3,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import type { MessageUpdate } from '../realtime/realtimeModel'
 import { REMOVED_MESSAGE_CONTENT } from './api'
 import { threadsQueryKey } from './threadModel'
-import type { ConversationMessage, ConversationTimelineEntry } from './types'
+import type { ConversationMessage, ConversationTimelineEntry, MessageReaction } from './types'
 
 /** How many edited or removed messages the client remembers between refetches. */
 export const MAX_MESSAGE_UPDATES = 200
@@ -51,11 +51,55 @@ export function tombstoneMessage(message: ConversationMessage): ConversationMess
     mentionedActors: [],
     referencedWorkItems: [],
     removed: message.removed ?? { removedAt: '', removedBy: null, via: null },
+    reactions: [],
   }
 }
 
 export function tombstoneEntry(entry: ConversationTimelineEntry): ConversationTimelineEntry {
   return entry.message ? { ...entry, message: tombstoneMessage(entry.message) } : entry
+}
+
+/** A message whose reactions changed live, and how many changes were seen. */
+export type ReactionUpdate = { conversationId: string; messageId: string; seen: number }
+
+/** Reaction changes seen live, by message id (the latest MAX_MESSAGE_UPDATES messages). */
+export type ReactionUpdates = Readonly<Record<string, ReactionUpdate>>
+
+export const NO_REACTION_UPDATES: ReactionUpdates = Object.freeze({})
+
+/** Count one more live reaction change on a message, keeping the most recent `limit` messages. */
+export function rememberReactionUpdate(
+  current: ReactionUpdates,
+  change: { conversationId: string; messageId: string },
+  limit = MAX_MESSAGE_UPDATES,
+): ReactionUpdates {
+  const seen = (current[change.messageId]?.seen ?? 0) + 1
+  const next: Record<string, ReactionUpdate> = { ...current }
+  delete next[change.messageId]
+  next[change.messageId] = { conversationId: change.conversationId, messageId: change.messageId, seen }
+  const keys = Object.keys(next)
+  for (const key of keys.slice(0, Math.max(0, keys.length - limit))) delete next[key]
+  return next
+}
+
+/**
+ * Entries with one message's reactions replaced. Only reactions change, so a
+ * stale copy can never bring back removed text or undo an edit, and a removed
+ * message keeps none.
+ */
+export function withMessageReactions(
+  entries: ConversationTimelineEntry[],
+  messageId: string,
+  reactions: MessageReaction[],
+): ConversationTimelineEntry[] {
+  let changed = false
+  const next = entries.map((entry) => {
+    const message = entry.message
+    if (message?.id !== messageId || message.removed) return entry
+    changed = true
+    return { ...entry, message: { ...message, reactions } }
+  })
+  return changed ? next : entries
 }
 
 /** True when `candidate` is a later state of the same message than `current`. */
@@ -191,6 +235,34 @@ export function neutralizeThreadNames(data: unknown, messageId: string): unknown
 
 function isConversationKey(key: QueryKey, conversationId: string, rest: string) {
   return key[0] === 'project' && key[2] === 'conversation' && key[3] === conversationId && key[4] === rest
+}
+
+/** Show one message's reactions in every cached timeline page of its conversation. */
+export function setCachedReactions(
+  queryClient: QueryClient,
+  change: { conversationId: string; messageId: string; reactions: MessageReaction[] },
+) {
+  queryClient.setQueriesData(
+    { predicate: (query) => isConversationKey(query.queryKey, change.conversationId, 'timeline') },
+    (data: unknown) => {
+      const page = asRecord(data)
+      if (!page || !Array.isArray(page.entries)) return data
+      const entries = page.entries as ConversationTimelineEntry[]
+      const next = withMessageReactions(entries, change.messageId, change.reactions)
+      return next === entries ? data : { ...page, entries: next }
+    },
+  )
+}
+
+/** Refetch a conversation's cached queries (its timelines), and nothing else. */
+export function invalidateConversation(queryClient: QueryClient, projectId: string, conversationId: string) {
+  void queryClient.invalidateQueries({
+    predicate: (query) =>
+      query.queryKey[0] === 'project' &&
+      query.queryKey[1] === projectId &&
+      query.queryKey[2] === 'conversation' &&
+      query.queryKey[3] === conversationId,
+  })
 }
 
 /**

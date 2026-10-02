@@ -76,7 +76,7 @@ Workspace OAuth and bearer endpoints; WorkOS Agent Auth is not required.
 ## Tools
 
 The full list, grouped by job, is in
-[docs/plans/agent-interface.md](../plans/agent-interface.md). There are 58.
+[docs/plans/agent-interface.md](../plans/agent-interface.md). There are 59.
 Read-only tools: `briefing`, `projects_list`, `project_open`,
 `workflow_get`, `project_members`, `conversation_list`, `conversation_open`,
 `conversation_read`, `message_history`, `people_search`, `inbox_list`, `task_list`,
@@ -189,7 +189,7 @@ Behavior changes:
 
 ## MCP Phase 3 changes (October 2026)
 
-New tools, taking the count from 55 to 58:
+New tools, taking the count from 55 to 59:
 
 - `message_edit`: the author only. Takes `expectedRevision` (optional) and
   `clientRequestId`; it shares the web edit's idempotency scope and stored
@@ -202,10 +202,16 @@ New tools, taking the count from 55 to 58:
   server made of it; a send replayed with the original `clientRequestId`
   after removal is refused as a different payload.
 - `message_history`: read-only, archived conversations included.
+- `message_react`: idempotent by state. `emoji` takes one of 👍 👎 ❤️ 😄 🎉
+  😕 🚀 👀 ✅ ❌ 🙏 🤔 or its name (`eyes`, `check`, ...); `reacted: false`
+  takes your reaction away, and repeating a call returns `changed: false`.
+  Anyone who can post in the conversation can react. Archived conversations
+  and removed messages refuse changes with `conflict`. Reactions notify
+  nobody and don't answer reply requests.
 
 `conversation_read` and `conversation_open` items gain `revision` (once
-edited), `editedAt`, `removed` and `removedBy`; a removed message's `text` is
-empty. `conversation_list` shows a removed last message as "Message removed".
+edited), `editedAt`, `removed`, `removedBy` and `reactions` (when there are
+any); a removed message's `text` is empty and it shows no reactions. `conversation_list` shows a removed last message as "Message removed".
 Messages you can't see are `not_found` for every tool, never
 `permission_denied`.
 

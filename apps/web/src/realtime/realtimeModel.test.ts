@@ -5,6 +5,7 @@ import {
   messageUpdate,
   parseLegacyRealtimeEvent,
   parseRealtimeEnvelope,
+  reactionChange,
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
@@ -173,6 +174,21 @@ describe('realtime wire validation', () => {
     expect(messageUpdate({ ...updated({ messageId: eventId, revision: 1, removed: false }), conversationId: null })).toBeNull()
     expect(
       messageUpdate({ type: 'conversation.message.created', conversationId, payload: { messageId: eventId, revision: 1, removed: false } }),
+    ).toBeNull()
+  })
+
+  it('reads reaction changes, IDs only, scoped to one conversation', () => {
+    const changed = (payload: Record<string, unknown>, id: string | null = conversationId) => ({
+      type: 'conversation.message.reactions.updated',
+      conversationId: id,
+      payload,
+    })
+    expect(reactionChange(changed({ conversationId, messageId: eventId }))).toEqual({ conversationId, messageId: eventId })
+    expect(reactionChange(changed({ conversationId, messageId: 'nope' }))).toBeNull()
+    expect(reactionChange(changed({ conversationId: projectId, messageId: eventId }))).toBeNull()
+    expect(reactionChange(changed({ conversationId, messageId: eventId }, null))).toBeNull()
+    expect(
+      reactionChange({ type: 'conversation.message.updated', conversationId, payload: { conversationId, messageId: eventId } }),
     ).toBeNull()
   })
 })

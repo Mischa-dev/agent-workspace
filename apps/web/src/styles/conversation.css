@@ -348,6 +348,12 @@ button.aw-convhead__title[aria-expanded="true"] {
   display: flex;
 }
 
+/* The reaction picker opens in a portal, outside the message: keep its
+   anchor (the toolbar) showing while it's open. */
+.aw-msg:has(.aw-msg__toolbar [aria-expanded="true"]) .aw-msg__toolbar {
+  display: flex;
+}
+
 /* Touch screens show the toolbar when a message is tapped (it takes focus). */
 .aw-msg:focus {
   outline: none;
@@ -1345,4 +1351,56 @@ button.aw-msg__edited:focus-visible {
   font: var(--t-small);
   font-style: italic;
   color: var(--content-fg-muted);
+}
+
+/* Reactions under a message. */
+.aw-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 2px;
+}
+
+.aw-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 26px;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+button.aw-reaction {
+  cursor: pointer;
+}
+
+button.aw-reaction:hover {
+  border-color: var(--control-border);
+}
+
+button.aw-reaction:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.aw-reaction.is-mine {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--content-fg);
+}
+
+.aw-reaction__emoji {
+  font-size: calc(15px * var(--text-scale));
+  line-height: 1;
+}
+
+@media (pointer: coarse) {
+  .aw-reaction {
+    min-height: 32px;
+    padding: 2px var(--space-3);
+  }
 }

@@ -42,6 +42,7 @@ use crate::{
     message_content::MessageContent,
     outbox::{ConversationUpdatedPayload, MessageUpdatedPayload, OutboxEventPayload},
     policy::{Action, ActorKind},
+    reactions,
     replies::{self, Withdraw},
 };
 
@@ -379,13 +380,24 @@ pub(crate) async fn lock_message_for_change(
     })
 }
 
+/// The locked message's timeline entry, with its reactions as `viewer` sees
+/// them (none once it is removed).
 async fn locked_entry(
     transaction: &mut Transaction<'_, Postgres>,
     locked: &LockedMessage,
+    viewer: Uuid,
 ) -> Result<TimelineEntryView, AppError> {
-    fetch_timeline_entry(&mut **transaction, &locked.conversation, locked.id)
+    let mut entry = fetch_timeline_entry(&mut **transaction, &locked.conversation, locked.id)
         .await?
-        .ok_or(AppError::Internal("locked message has no timeline entry"))
+        .ok_or(AppError::Internal("locked message has no timeline entry"))?;
+    reactions::attach_reactions(
+        &mut **transaction,
+        locked.conversation.id,
+        std::slice::from_mut(&mut entry),
+        viewer,
+    )
+    .await?;
+    Ok(entry)
 }
 
 /// Replace the text of a locked message. The earlier versions stay in
@@ -419,7 +431,7 @@ pub(crate) async fn apply_edit(
     } = resolve_message_content(transaction, locked.project_id, content).await?;
     if content_json == locked.content {
         return Ok(MessageEdit {
-            entry: locked_entry(transaction, locked).await?,
+            entry: locked_entry(transaction, locked, actor.actor_id).await?,
             changed: false,
             from_revision: locked.revision,
             newly_mentioned: Vec::new(),
@@ -575,7 +587,7 @@ pub(crate) async fn apply_edit(
     )
     .await?;
     Ok(MessageEdit {
-        entry: locked_entry(transaction, locked).await?,
+        entry: locked_entry(transaction, locked, actor.actor_id).await?,
         changed: true,
         from_revision: locked.revision,
         newly_mentioned,
@@ -595,7 +607,7 @@ pub(crate) async fn apply_removal(
 ) -> Result<MessageRemoval, ChangeError> {
     if locked.removed {
         return Ok(MessageRemoval {
-            entry: locked_entry(transaction, locked).await?,
+            entry: locked_entry(transaction, locked, actor.actor_id).await?,
             already_removed: true,
             as_moderator: locked.as_moderator,
             cancelled_reply_requests: 0,
@@ -673,7 +685,7 @@ pub(crate) async fn apply_removal(
     let renamed_threads = neutralize_thread_names(transaction, locked, &texts).await?;
     scrub_thread_audit_names(transaction, locked).await?;
 
-    let entry = locked_entry(transaction, locked).await?;
+    let entry = locked_entry(transaction, locked, actor.actor_id).await?;
     scrub_send_replays(transaction, locked, &entry).await?;
     // A retried edit then finds nothing to replay and is refused as removed.
     sqlx::query("DELETE FROM idempotency_keys WHERE scope = $1")
@@ -1070,9 +1082,16 @@ async fn get_message(
     ApiPath((conversation_id, message_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<MessageEntryResponse>, AppError> {
     let conversation = readable_conversation(&state, &principal, conversation_id).await?;
-    let entry = fetch_timeline_entry(&state.pool, &conversation, message_id)
+    let mut entry = fetch_timeline_entry(&state.pool, &conversation, message_id)
         .await?
         .ok_or(AppError::NotFound("message"))?;
+    reactions::attach_reactions(
+        &state.pool,
+        conversation.id,
+        std::slice::from_mut(&mut entry),
+        principal.actor_id,
+    )
+    .await?;
     Ok(Json(MessageEntryResponse { entry }))
 }
 

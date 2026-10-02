@@ -46,6 +46,18 @@ export type ConversationMessage = {
   editedAt: string | null
   /** Set once the message is removed. Its content and text are then empty. */
   removed: MessageRemoval | null
+  /** Emoji reactions in the order first added. Always empty once removed. */
+  reactions?: MessageReaction[]
+}
+
+/** One emoji on a message: how many reacted, whether you did, and the first 20 who did. */
+export type MessageReaction = {
+  emoji: string
+  /** The name the server uses for it, such as `eyes`. */
+  name: string
+  count: number
+  byViewer: boolean
+  actors: ConversationActor[]
 }
 
 export type MessageRemoval = {

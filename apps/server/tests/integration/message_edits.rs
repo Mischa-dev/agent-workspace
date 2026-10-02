@@ -19,18 +19,18 @@ use super::{
     mcp_admin::{Setup, create_project, setup},
 };
 
-fn text(value: &str) -> Value {
+pub(super) fn text(value: &str) -> Value {
     json!({ "version": 1, "nodes": [{ "type": "text", "text": value }] })
 }
 
-async fn owner_id(pool: &PgPool) -> Uuid {
+pub(super) async fn owner_id(pool: &PgPool) -> Uuid {
     sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
         .fetch_one(pool)
         .await
         .expect("owner actor")
 }
 
-async fn direct_space(setup: &Setup) -> String {
+pub(super) async fn direct_space(setup: &Setup) -> String {
     send(
         &setup.app,
         setup
@@ -44,7 +44,7 @@ async fn direct_space(setup: &Setup) -> String {
         .to_owned()
 }
 
-async fn create_channel(setup: &Setup, project: &str, name: &str) -> String {
+pub(super) async fn create_channel(setup: &Setup, project: &str, name: &str) -> String {
     let (status, channel) = send(
         &setup.app,
         setup.browser.request(
@@ -64,7 +64,7 @@ async fn create_channel(setup: &Setup, project: &str, name: &str) -> String {
 }
 
 /// Send through the web as `browser` and return the message ID.
-async fn say(
+pub(super) async fn say(
     setup: &Setup,
     browser: &Browser,
     conversation: &str,
@@ -85,7 +85,7 @@ async fn say(
     sent["message"]["id"].as_str().expect("message").to_owned()
 }
 
-async fn edit(
+pub(super) async fn edit(
     setup: &Setup,
     browser: &Browser,
     conversation: &str,
@@ -105,7 +105,7 @@ async fn edit(
     .await
 }
 
-async fn remove(
+pub(super) async fn remove(
     setup: &Setup,
     browser: &Browser,
     conversation: &str,
@@ -123,11 +123,11 @@ async fn remove(
     .await
 }
 
-async fn get(setup: &Setup, browser: &Browser, uri: &str) -> (StatusCode, Value) {
+pub(super) async fn get(setup: &Setup, browser: &Browser, uri: &str) -> (StatusCode, Value) {
     send(&setup.app, browser.request("GET", uri, None, Value::Null)).await
 }
 
-async fn count(pool: &PgPool, sql: &str, id: &str) -> i64 {
+pub(super) async fn count(pool: &PgPool, sql: &str, id: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(sql)
         .bind(id.parse::<Uuid>().expect("UUID"))
         .fetch_one(pool)
@@ -136,7 +136,7 @@ async fn count(pool: &PgPool, sql: &str, id: &str) -> i64 {
 }
 
 /// A person who can sign in, a member of each of `projects`.
-async fn add_person(setup: &Setup, projects: &[&str], login: &str) -> (Uuid, Browser) {
+pub(super) async fn add_person(setup: &Setup, projects: &[&str], login: &str) -> (Uuid, Browser) {
     let actor_id = Uuid::now_v7();
     sqlx::query("INSERT INTO actors (id, kind, status) VALUES ($1, 'human', 'active')")
         .bind(actor_id)
@@ -219,7 +219,7 @@ async fn add_person(setup: &Setup, projects: &[&str], login: &str) -> (Uuid, Bro
     )
 }
 
-async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &str) {
+pub(super) async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &str) {
     sqlx::query("UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2")
         .bind(project.parse::<Uuid>().expect("project"))
         .bind(actor)

@@ -46,6 +46,7 @@ let realtime: RealtimeContextValue = {
   connection: 'live',
   streams: {},
   messageUpdates: {},
+  reactionUpdates: {},
   resyncGeneration: 1,
 }
 
@@ -63,7 +64,7 @@ describe('live older timeline pages', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
-    realtime = { connection: 'live', streams: {}, messageUpdates: {}, resyncGeneration: 1 }
+    realtime = { connection: 'live', streams: {}, messageUpdates: {}, reactionUpdates: {}, resyncGeneration: 1 }
   })
 
   it('blanks a removal at once, refetches that message, and refetches every page on reconnect', async () => {
@@ -171,6 +172,46 @@ describe('live older timeline pages', () => {
     expect(result.current.entries.map((entry) => entry.sequence)).toEqual([3])
     expect(result.current.cursor).toBe('cursor-a')
     expect(result.current.loading).toBe(false)
+  })
+
+  it('takes only the reactions from a message refetched after a live reaction', async () => {
+    const loadPage = vi.fn(async () => ({ entries: entries(wireEntry(1, 'Kept text')), nextCursor: null }))
+    const eyes = {
+      emoji: '👀',
+      name: 'eyes',
+      count: 1,
+      byViewer: false,
+      actors: [{ id: conversationId, kind: 'external_agent', displayName: 'Mara', handle: 'mara', avatarUrl: null }],
+    }
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ entry: wireEntry(1, 'Some other text', { reactions: [eyes] }) }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { result, rerender } = renderHook(
+      () => useLiveOlderEntries({ conversationId, loadPage, newestCursor: 'cursor-a', newestEntries: newest }),
+      { wrapper },
+    )
+    await act(() => result.current.loadOlder())
+    expect(result.current.entries[0].message?.reactions).toEqual([])
+
+    setRealtime({ reactionUpdates: { [messageId(1)]: { conversationId, messageId: messageId(1), seen: 1 } } })
+    rerender()
+    await waitFor(() => expect(result.current.entries[0].message?.reactions).toHaveLength(1))
+    expect(result.current.entries[0].message?.reactions?.[0].name).toBe('eyes')
+    expect(result.current.entries[0].message?.plainText).toBe('Kept text')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // Your own reaction shows at once on an older page too.
+    act(() => result.current.patchReactions(messageId(1), []))
+    expect(result.current.entries[0].message?.reactions).toEqual([])
+    // A page loaded again after the change already has it: no second fetch.
+    setRealtime({ resyncGeneration: 2 })
+    rerender()
+    await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(2))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('drops older pages when the reconnect refetch fails', async () => {

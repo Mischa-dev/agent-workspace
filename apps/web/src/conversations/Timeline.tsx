@@ -148,6 +148,7 @@ export function MessageRow({
   extras,
   highlighted = false,
   onOpenHistory,
+  reactions,
   toolbar,
   viewerId,
 }: {
@@ -159,6 +160,8 @@ export function MessageRow({
   highlighted?: boolean
   /** Opens the message's earlier versions from its "(edited)" mark. */
   onOpenHistory?: (message: ConversationMessage) => void
+  /** The reaction chips, shown under the body (never for a removed message). */
+  reactions?: ReactNode
   toolbar?: ReactNode
   viewerId?: string
 }) {
@@ -230,6 +233,7 @@ export function MessageRow({
             ) : null}
           </div>
         )}
+        {removed || editor ? null : reactions}
         {extras}
       </div>
       {editor ? null : (
@@ -321,6 +325,7 @@ export function TimelineEntries({
   onOpenHistory,
   renderEditor,
   renderExtras,
+  renderReactions,
   renderToolbar,
   viewerId,
 }: {
@@ -331,6 +336,8 @@ export function TimelineEntries({
   /** The inline editor for the message being edited, if any. */
   renderEditor?: (entry: ConversationTimelineEntry) => ReactNode
   renderExtras?: (entry: ConversationTimelineEntry) => ReactNode
+  /** The reaction chips for a message. */
+  renderReactions?: (entry: ConversationTimelineEntry) => ReactNode
   renderToolbar?: (entry: ConversationTimelineEntry) => ReactNode
   viewerId?: string
 }) {
@@ -366,6 +373,7 @@ export function TimelineEntries({
           extras={renderExtras?.(entry)}
           highlighted={highlighted}
           onOpenHistory={onOpenHistory}
+          reactions={renderReactions?.(entry)}
           toolbar={renderToolbar?.(entry)}
           viewerId={viewerId}
         />

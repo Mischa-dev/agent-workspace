@@ -734,6 +734,7 @@ export function ThreadPage() {
     capabilities: verifiedTimeline?.capabilities,
     searchActors,
     searchWorkItems,
+    onReactionsChanged: older.patchReactions,
     onChanged: (entry) => {
       older.replaceEntry(entry)
       void thread.timeline.refetch()
@@ -999,6 +1000,7 @@ export function ThreadPage() {
           entries={entries}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
+          renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
           viewerId={session.user.actorId}
         />

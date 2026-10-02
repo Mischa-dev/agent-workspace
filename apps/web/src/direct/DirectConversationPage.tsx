@@ -145,6 +145,7 @@ export function DirectConversationPage() {
     viewerId,
     capabilities: valid ? page?.capabilities : null,
     searchActors: searchMembers,
+    onReactionsChanged: older.patchReactions,
     onChanged: (entry) => {
       older.replaceEntry(entry)
       void timeline.refetch()
@@ -340,6 +341,7 @@ export function DirectConversationPage() {
               </>
             ) : null
           }
+          renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
           viewerId={viewerId}
         />

@@ -290,7 +290,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .and_then(Value::as_array)
             .map(Vec::len),
         // See docs/plans/mcp-tools.md for the tool list.
-        Some(58)
+        Some(59)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),

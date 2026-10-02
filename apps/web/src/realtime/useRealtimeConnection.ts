@@ -5,16 +5,21 @@ import { queryKeys } from '../api/queryKeys'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
   dropRemovedMessage,
+  invalidateConversation,
   NO_MESSAGE_UPDATES,
+  NO_REACTION_UPDATES,
   refreshMemoryCaches,
   rememberMessageUpdate,
+  rememberReactionUpdate,
   type MessageUpdates,
+  type ReactionUpdates,
 } from '../conversations/liveMessages'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
   messageUpdate,
   parseLegacyRealtimeEvent,
+  reactionChange,
   parseRealtimeEnvelope,
   streamDelta,
   terminalAgentRunId,
@@ -45,6 +50,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
   >({})
   const [messageUpdates, setMessageUpdates] =
     useState<MessageUpdates>(NO_MESSAGE_UPDATES)
+  const [reactionUpdates, setReactionUpdates] =
+    useState<ReactionUpdates>(NO_REACTION_UPDATES)
   const [resyncGeneration, setResyncGeneration] = useState(0)
   const reconnectAttempt = useRef(0)
 
@@ -88,6 +95,18 @@ export function useRealtimeConnection(): RealtimeContextValue {
         })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(projectId, timer)
+    }
+
+    // Reactions change one conversation's timelines and nothing else, so
+    // they refetch only those (including a DM thread shown in a side panel).
+    const invalidateReactions = (projectId: string, conversationId: string) => {
+      const key = `${projectId}:${conversationId}`
+      if (invalidationTimers.has(key)) return
+      const timer = window.setTimeout(() => {
+        invalidationTimers.delete(key)
+        invalidateConversation(queryClient, projectId, conversationId)
+      }, INVALIDATION_DELAY_MS)
+      invalidationTimers.set(key, timer)
     }
 
     const refetchAuthenticatedState = () => {
@@ -224,6 +243,12 @@ export function useRealtimeConnection(): RealtimeContextValue {
           // caches synchronously, so removed text is gone before any fetch,
           // (3) invalidate so everything converges over HTTP.
           if (!remember(envelope.eventId)) return
+          const reactions = reactionChange(envelope)
+          if (reactions) {
+            setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
+            invalidateReactions(envelope.projectId, reactions.conversationId)
+            return
+          }
           const update = messageUpdate(envelope)
           if (update) {
             setMessageUpdates((current) => rememberMessageUpdate(current, update))
@@ -312,7 +337,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
   }, [queryClient])
 
   return useMemo(
-    () => ({ connection, streams, messageUpdates, resyncGeneration }),
-    [connection, streams, messageUpdates, resyncGeneration],
+    () => ({ connection, streams, messageUpdates, reactionUpdates, resyncGeneration }),
+    [connection, streams, messageUpdates, reactionUpdates, resyncGeneration],
   )
 }

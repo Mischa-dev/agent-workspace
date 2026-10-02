@@ -15,6 +15,7 @@ use super::{
         insert_audit, parse_id, parse_message_id, project_role, public_url, resolve_people,
         role_allows, scope_projects, snippet, truncate_text,
     },
+    reactions::{ReactionSummary, reaction_summaries},
 };
 use crate::{
     AppState,
@@ -33,6 +34,7 @@ use crate::{
         ReadStateUpdatedPayload,
     },
     policy::{Action, ActorKind},
+    reactions::reaction_rows,
 };
 
 const DEFAULT_MESSAGES: i64 = 50;
@@ -272,6 +274,9 @@ pub(super) struct MessageItem {
     /// Threads started from this message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<ThreadRef>,
+    /// Emoji reactions, in the order first added. None on a removed message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionSummary>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -777,7 +782,8 @@ pub(super) async fn conversation_open(
         let highest = conversation.next_entry_sequence - 1;
         let last_read = read_sequence(state, conversation.id, principal.actor_id).await?;
         let from = (highest - limit + 1).max(1);
-        let messages = message_items(state, conversation.id, from, highest).await?;
+        let messages =
+            message_items(state, conversation.id, principal.actor_id, from, highest).await?;
         let detail = conversation_detail(state, principal, &conversation).await?;
         let pinned = pinned_items(state, conversation.id, principal.actor_id).await?;
         let (open_threads, recently_settled_threads) = if conversation.kind == "thread" {
@@ -847,7 +853,7 @@ pub(super) async fn conversation_read(
             ((highest - limit + 1).max(1), highest)
         };
         let messages = if from <= to {
-            message_items(state, conversation.id, from, to).await?
+            message_items(state, conversation.id, principal.actor_id, from, to).await?
         } else {
             Vec::new()
         };
@@ -868,9 +874,12 @@ pub(super) async fn conversation_read(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "conversation_read"))
 }
 
+/// Entries `from..=to` of a conversation the viewer can see, with each
+/// message's reactions as `viewer` sees them.
 pub(super) async fn message_items(
     state: &AppState,
     conversation_id: Uuid,
+    viewer: Uuid,
     from: i64,
     to: i64,
 ) -> Result<Vec<MessageItem>, AppError> {
@@ -913,18 +922,38 @@ pub(super) async fn message_items(
     .bind(to)
     .fetch_all(&state.pool)
     .await?;
-    Ok(rows.into_iter().map(message_item).collect())
+    let live = rows
+        .iter()
+        .filter(|row| !row.removed.unwrap_or(false))
+        .filter_map(|row| row.message_id)
+        .collect::<Vec<_>>();
+    let mut reactions = reaction_rows(&state.pool, conversation_id, &live, viewer).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let summaries = row
+                .message_id
+                .and_then(|id| reactions.remove(&id))
+                .unwrap_or_default();
+            let mut item = message_item(row);
+            item.reactions = reaction_summaries(summaries);
+            item
+        })
+        .collect())
+}
+
+/// "Name (@handle)", with ", agent" for agents.
+pub(super) fn person_label(name: &str, handle: &str, kind: Option<&str>) -> String {
+    if kind == Some("external_agent") {
+        format!("{name} (@{handle}, agent)")
+    } else {
+        format!("{name} (@{handle})")
+    }
 }
 
 fn message_item(row: MessageRow) -> MessageItem {
     let author = match (&row.author_name, &row.author_handle) {
-        (Some(name), Some(handle)) => {
-            if row.author_kind.as_deref() == Some("external_agent") {
-                format!("{name} (@{handle}, agent)")
-            } else {
-                format!("{name} (@{handle})")
-            }
-        }
+        (Some(name), Some(handle)) => person_label(name, handle, row.author_kind.as_deref()),
         _ if row.event_summary.is_some() => "Codex run".to_owned(),
         _ => "Former member".to_owned(),
     };
@@ -959,6 +988,7 @@ fn message_item(row: MessageRow) -> MessageItem {
             .threads
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default(),
+        reactions: Vec::new(),
     }
 }
 
