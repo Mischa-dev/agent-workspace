@@ -236,13 +236,7 @@ pub(super) async fn mark_via(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
 ) -> Result<(), AppError> {
-    if let Some(grant_id) = principal.via_grant_id() {
-        sqlx::query("SELECT set_config('aw.via_grant', $1, true)")
-            .bind(grant_id.to_string())
-            .execute(&mut **transaction)
-            .await?;
-    }
-    Ok(())
+    crate::domain::set_via_grant(transaction, principal.via_grant_id()).await
 }
 
 pub(super) async fn insert_audit(

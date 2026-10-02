@@ -1642,11 +1642,13 @@ async fn work_with_worker(
             SELECT EXISTS (
                 SELECT 1 FROM conversations
                 WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND archived_at IS NULL
+                  AND conversation_visible_to(id, $3)
             )
             "#,
         )
         .bind(project_id)
         .bind(request.channel_id)
+        .bind(principal.actor_id)
         .fetch_one(&mut *transaction)
         .await?;
         if !channel_exists {

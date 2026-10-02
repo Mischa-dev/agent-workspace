@@ -367,7 +367,8 @@ pub(super) async fn task_move(
 
             carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
                 .await?;
-            let links = links_left_behind(&mut transaction, source_project_id, task.id).await?;
+            let links = links_left_behind(&mut transaction, source_project_id, task.id, principal.actor_id)
+                .await?;
             let mut provenance = format!(
                 "Moved from {} by {}. The original is archived with its full history.",
                 task.key,
@@ -575,11 +576,13 @@ async fn carry_criteria(
 }
 
 /// Threads, repositories and pull requests linked to the original. They stay
-/// in its project, so the new task lists them.
+/// in its project, so the new task lists them: only the ones the mover can
+/// see, since the list is written where others read it.
 async fn links_left_behind(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Vec<LinkLine>, AppError> {
     Ok(sqlx::query_as::<_, LinkLine>(
         r#"
@@ -587,6 +590,7 @@ async fn links_left_behind(
         FROM work_item_conversation_links link
         JOIN conversations conversation ON conversation.id = link.conversation_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
+          AND conversation_visible_to(conversation.id, $3)
         UNION ALL
         SELECT 'Repository', repository.owner || '/' || repository.name
         FROM work_item_repository_links link
@@ -597,10 +601,12 @@ async fn links_left_behind(
         FROM github_pull_request_work_item_links link
         JOIN github_pull_requests pull_request ON pull_request.id = link.github_pull_request_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
+          AND pull_request_visible_to(pull_request.id, $3)
         "#,
     )
     .bind(project_id)
     .bind(work_item_id)
+    .bind(viewer)
     .fetch_all(&mut **transaction)
     .await?)
 }

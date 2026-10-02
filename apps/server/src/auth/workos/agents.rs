@@ -271,6 +271,13 @@ async fn grant(
     .bind(&claims.org_id)
     .fetch_optional(&state.pool)
     .await?;
+    if let Some(row) = &row {
+        // The agent's last check-in, throttled as for OAuth-connected agents.
+        sqlx::query("UPDATE external_agent_connections SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')")
+            .bind(row.connection_id)
+            .execute(&state.pool)
+            .await?;
+    }
     Ok(row
         .map(|row| {
             let granted: Vec<&str> = if kind == "blueprint" {

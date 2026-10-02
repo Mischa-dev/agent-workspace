@@ -2110,9 +2110,11 @@ const MAX_PROJECT_IDS: usize = 50;
 /// as "AWD" in `projectId`, `toProjectId` or the `projectIds` list, and a
 /// task key such as "AWD-12" in `taskId`, `workItemId`, `parentId`,
 /// `parentWorkItemId`, `beforeTaskId` or `afterTaskId` (and `identifier` for
-/// task_open). A key resolves only among projects the caller can reach, and
-/// a moved task's old key resolves to where it went. Returns whether
-/// anything changed; an unknown key is left for the tool to reject.
+/// task_open), and a repository written "owner/name" in `repositoryId`. A
+/// key resolves only among projects the caller can reach, and a moved
+/// task's old key resolves to where it went; a repository resolves inside
+/// the project of the resource the call acts on. Returns whether anything
+/// changed; an unknown key is left for the tool to reject.
 ///
 /// Lists of tasks (such as `taskIds`) are resolved by the tools, with
 /// `tasks::resolve_tasks`, so they can answer for each entry as written.
@@ -2178,7 +2180,90 @@ async fn keys_to_ids(
             changed = true;
         }
     }
+    if let Some(full_name) = unresolved(arguments, "repositoryId")
+        && is_repository_name(&full_name)
+        && let Some(within) = repository_scope(state, principal, arguments).await?
+        && let Some(repository_id) =
+            repository_by_name(state, principal, &full_name, within).await?
+    {
+        arguments["repositoryId"] = serde_json::Value::String(repository_id.to_string());
+        changed = true;
+    }
     Ok(changed)
+}
+
+/// "owner/name", as GitHub writes a repository.
+fn is_repository_name(value: &str) -> bool {
+    let mut parts = value.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(owner), Some(name), None) if !owner.is_empty() && !name.is_empty()
+    ) && value.len() <= 201
+}
+
+/// Where a repository named "owner/name" is looked for: the project the call
+/// names, or else the project of the task, run, thread or approval it acts
+/// on, or else (`Some(None)`) any project the caller can reach. `None`: the
+/// call named a project or resource that doesn't resolve, so the name is
+/// left for the tool to explain.
+async fn repository_scope(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: &serde_json::Value,
+) -> Result<Option<Option<Uuid>>, AppError> {
+    if let Some(project) = arguments
+        .get("projectId")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Ok(common::parse_id(project).map(Some));
+    }
+    Ok(
+        match first_scope(state, principal, arguments, PRIMARY_SCOPES).await? {
+            Some(Some(project_id)) => Some(Some(project_id)),
+            Some(None) => None,
+            None => Some(None),
+        },
+    )
+}
+
+/// The one repository called `full_name` (any case) in an active project the
+/// caller belongs to and can access, within `within` when given. Several
+/// matches (the same repository in two projects) resolve to none, so the
+/// tool can ask which project.
+async fn repository_by_name(
+    state: &AppState,
+    principal: &McpPrincipal,
+    full_name: &str,
+    within: Option<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    let matches = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT repository.id
+        FROM repositories repository
+        JOIN projects project ON project.id = repository.project_id
+        JOIN project_memberships membership
+          ON membership.project_id = repository.project_id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE lower(repository.owner || '/' || repository.name) = lower($3)
+          AND project.archived_at IS NULL
+          AND actor_can_access_project($1, $2, repository.project_id)
+          AND ($4::uuid IS NULL OR repository.project_id = $4)
+          AND ($5::uuid IS NULL OR repository.project_id = $5)
+        LIMIT 2
+        "#,
+    )
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(full_name)
+    .bind(within)
+    .bind(common::confined_project(principal))
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(match matches.as_slice() {
+        [repository_id] => Some(*repository_id),
+        _ => None,
+    })
 }
 
 /// Splits a task key such as "AWD-12" into its project key and number.
@@ -2293,6 +2378,118 @@ pub(super) async fn task_by_key(
     .await?)
 }
 
+/// The arguments that name the resource a tool acts on, and the project each
+/// one is in. Primary resources come first, so a secondary argument (a
+/// repository or channel to use) never picks the project a task, run,
+/// thread or approval is looked up in; the first one present decides. Every
+/// lookup that involves a conversation goes through conversation_visible_to,
+/// so a hidden one names no project, exactly like a missing one. Tools still
+/// re-check each resource against the project they end up in.
+const PRIMARY_SCOPES: &[(&str, &str)] = &[
+    // taskId must stay ahead of parentId: task_update acts in the task's own
+    // project, never in a parent it was given. Task anchors (beforeTaskId,
+    // afterTaskId) are left out on purpose: an anchor must never pick the
+    // project a task is created in.
+    ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
+    (
+        "runId",
+        "SELECT run.project_id FROM agent_runs run WHERE run.id = $1 AND conversation_visible_to(run.conversation_id, $2)",
+    ),
+    (
+        "threadId",
+        "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+    ),
+    // An approval belongs to a run, or to an agent's run request (which has
+    // no run yet); either way its thread decides who can see it.
+    (
+        "approvalId",
+        r#"SELECT conversation.project_id
+           FROM agent_approvals approval
+           LEFT JOIN agent_runs run ON run.id = approval.agent_run_id
+           LEFT JOIN external_execution_requests request
+             ON request.id = approval.external_execution_request_id
+           JOIN conversations conversation
+             ON conversation.id = COALESCE(run.conversation_id, request.conversation_id)
+           WHERE approval.id = $1 AND conversation_visible_to(conversation.id, $2)"#,
+    ),
+    (
+        "conversationId",
+        "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+    ),
+];
+
+const OTHER_SCOPES: &[(&str, &str)] = &[
+    (
+        "requestId",
+        "SELECT project_id FROM reply_requests WHERE id = $1",
+    ),
+    (
+        "workItemId",
+        "SELECT project_id FROM work_items WHERE id = $1",
+    ),
+    (
+        "parentWorkItemId",
+        "SELECT project_id FROM work_items WHERE id = $1",
+    ),
+    (
+        "parentId",
+        "SELECT project_id FROM work_items WHERE id = $1",
+    ),
+    (
+        "messageId",
+        "SELECT project_id FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+    ),
+    (
+        "fromMessageId",
+        "SELECT project_id FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
+    ),
+    (
+        "pageId",
+        "SELECT project_id FROM project_pages WHERE id = $1",
+    ),
+    (
+        "decisionId",
+        "SELECT project_id FROM project_decisions WHERE id = $1",
+    ),
+    // Secondary: what to use, not what to act on.
+    (
+        "repositoryId",
+        "SELECT project_id FROM repositories WHERE id = $1",
+    ),
+    (
+        "channelId",
+        "SELECT project_id FROM conversations WHERE id = $1 AND kind = 'channel' AND conversation_visible_to(id, $2)",
+    ),
+];
+
+/// The project the first of `scopes` present in `args` is in. The outer
+/// `None` means none was given; `Some(None)` that the one given is missing or
+/// hidden from the caller.
+async fn first_scope(
+    state: &AppState,
+    principal: &McpPrincipal,
+    args: &serde_json::Value,
+    scopes: &[(&str, &str)],
+) -> Result<Option<Option<Uuid>>, AppError> {
+    for (key, query) in scopes {
+        // A message link is its conversation's address plus
+        // #message-<id>; read as any other link it names the conversation.
+        let parse = if matches!(*key, "messageId" | "fromMessageId") {
+            common::parse_message_id
+        } else {
+            common::parse_id
+        };
+        if let Some(id) = args.get(*key).and_then(|v| v.as_str()).and_then(parse) {
+            let mut lookup = sqlx::query_scalar::<_, Uuid>(query).bind(id);
+            if query.contains("$2") {
+                lookup = lookup.bind(principal.actor_id);
+            }
+            return Ok(Some(lookup.fetch_optional(&state.pool).await?));
+        }
+    }
+    Ok(None)
+}
+
 async fn scoped_project(
     state: &AppState,
     principal: &McpPrincipal,
@@ -2306,77 +2503,12 @@ async fn scoped_project(
         .map(|value| common::parse_id(value).ok_or(AppError::Validation("projectId")))
         .transpose()?;
     if target.is_none() {
-        for (key, query) in [
-            (
-                "requestId",
-                "SELECT project_id FROM reply_requests WHERE id = $1",
-            ),
-            (
-                "conversationId",
-                "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
-            ),
-            (
-                "threadId",
-                "SELECT project_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
-            ),
-            (
-                "workItemId",
-                "SELECT project_id FROM work_items WHERE id = $1",
-            ),
-            (
-                "parentWorkItemId",
-                "SELECT project_id FROM work_items WHERE id = $1",
-            ),
-            (
-                "repositoryId",
-                "SELECT project_id FROM repositories WHERE id = $1",
-            ),
-            (
-                "approvalId",
-                "SELECT conversation.project_id FROM agent_approvals approval JOIN agent_runs run ON run.id = approval.agent_run_id JOIN conversations conversation ON conversation.id = run.conversation_id WHERE approval.id = $1",
-            ),
-            // taskId must stay ahead of parentId: task_update acts in the
-            // task's own project, never in a parent it was given. Task
-            // anchors (beforeTaskId, afterTaskId) are left out on purpose:
-            // an anchor must never pick the project a task is created in.
-            ("taskId", "SELECT project_id FROM work_items WHERE id = $1"),
-            (
-                "parentId",
-                "SELECT project_id FROM work_items WHERE id = $1",
-            ),
-            (
-                "messageId",
-                "SELECT project_id FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
-            ),
-            (
-                "fromMessageId",
-                "SELECT project_id FROM messages WHERE id = $1 AND conversation_visible_to(conversation_id, $2)",
-            ),
-            (
-                "pageId",
-                "SELECT project_id FROM project_pages WHERE id = $1",
-            ),
-            (
-                "decisionId",
-                "SELECT project_id FROM project_decisions WHERE id = $1",
-            ),
-        ] {
-            // A message link is its conversation's address plus
-            // #message-<id>; read as any other link it names the conversation.
-            let parse = if matches!(key, "messageId" | "fromMessageId") {
-                common::parse_message_id
-            } else {
-                common::parse_id
-            };
-            if let Some(id) = args.get(key).and_then(|v| v.as_str()).and_then(parse) {
-                let mut lookup = sqlx::query_scalar::<_, Uuid>(query).bind(id);
-                if query.contains("$2") {
-                    lookup = lookup.bind(principal.actor_id);
-                }
-                target = lookup.fetch_optional(&state.pool).await?;
-                break;
-            }
-        }
+        target = match first_scope(state, principal, args, PRIMARY_SCOPES).await? {
+            Some(found) => found,
+            None => first_scope(state, principal, args, OTHER_SCOPES)
+                .await?
+                .flatten(),
+        };
     }
     if target.is_none()
         && let Some(identifier) = args.get("identifier").and_then(|v| v.as_str())
@@ -2425,9 +2557,10 @@ async fn identifier_project(
         "pull_request_get" => {
             if let Ok(id) = identifier.parse::<Uuid>() {
                 return Ok(sqlx::query_scalar::<_, Uuid>(
-                    "SELECT project_id FROM github_pull_requests WHERE id = $1",
+                    "SELECT project_id FROM github_pull_requests WHERE id = $1 AND pull_request_visible_to(id, $2)",
                 )
                 .bind(id)
+                .bind(principal.actor_id)
                 .fetch_optional(&state.pool)
                 .await?);
             }
@@ -2436,6 +2569,7 @@ async fn identifier_project(
                 SELECT project_id FROM github_pull_requests
                 WHERE html_url = $1
                   AND (project_id = $2 OR actor_can_access_project($3, $4, project_id))
+                  AND pull_request_visible_to(id, $3)
                 ORDER BY project_id = $2 DESC, project_id
                 LIMIT 1
                 "#,

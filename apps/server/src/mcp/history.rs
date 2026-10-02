@@ -331,10 +331,12 @@ async fn look_up(
             r#"
             SELECT id, pull_request_number, title FROM github_pull_requests
             WHERE project_id = $1 AND id = ANY($2)
+              AND pull_request_visible_to(id, $3)
             "#,
         )
         .bind(project_id)
         .bind(ids(&found.pull_requests))
+        .bind(viewer)
         .fetch_all(pool)
         .await?
         .into_iter()
