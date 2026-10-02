@@ -217,6 +217,126 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
     );
 }
 
+/// A moved task's "still linked" comment is read by everyone in the target
+/// project, so it names only links every source-project member can see; the
+/// private ones the mover can see are only counted.
+#[tokio::test]
+async fn a_moved_task_does_not_name_private_links_in_the_target_project() {
+    let Some(setup) = setup("phase4_move_private_links").await else {
+        return;
+    };
+    let app = &setup.app;
+    let source = create_project(&setup, "SRC", "Source").await;
+    let target = create_project(&setup, "DST", "Target").await;
+    let owner_id = owner(&setup, &source).await;
+    let repository = insert_repository(&setup, &source, "Mischa-dev/aw", true, true, None).await;
+    let (open, open_url) = seed_pull_request(&setup, &source, repository, 7).await;
+    let (private, private_url) = another_pull_request(&setup, open, 8).await;
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &target, mara, "member").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+
+    let mut threads = Vec::new();
+    for name in ["secret", "design"] {
+        let channel = call("channel_create", json!({"projectId": "SRC", "name": name})).await;
+        let channel_id = channel["value"]["id"].as_str().expect("channel").to_owned();
+        let sent = call(
+            "message_send",
+            json!({"conversationId": channel_id, "text": format!("About {name} plans")}),
+        )
+        .await;
+        let thread = call(
+            "thread_start",
+            json!({"conversationId": channel_id, "fromMessageId": sent["value"]["messageId"]}),
+        )
+        .await;
+        assert_eq!(thread["outcome"], "ok", "{thread}");
+        let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+        let thread_name =
+            sqlx::query_scalar::<_, String>("SELECT name FROM conversations WHERE id = $1::uuid")
+                .bind(&thread_id)
+                .fetch_one(&setup.pool)
+                .await
+                .expect("thread name");
+        threads.push((channel_id, thread_id, thread_name));
+    }
+    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1::uuid")
+        .bind(&threads[0].0)
+        .execute(&setup.pool)
+        .await
+        .expect("make secret private");
+    sqlx::query(
+        "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES ($1::uuid, $2::uuid, $3, $3)",
+    )
+    .bind(&source)
+    .bind(&threads[0].0)
+    .bind(owner_id)
+    .execute(&setup.pool)
+    .await
+    .expect("owner stays in secret");
+    link_to_thread(&setup, private, &threads[0].1, "run_artifact", owner_id).await;
+    link_to_thread(&setup, open, &threads[1].1, "run_artifact", owner_id).await;
+
+    let created = call(
+        "task_create",
+        json!({"projectId": "SRC", "title": "Offline mode"}),
+    )
+    .await;
+    assert!(created["workItemId"].is_string(), "{created}");
+    for link in [
+        json!({"taskId": "SRC-1", "conversationId": threads[0].1}),
+        json!({"taskId": "SRC-1", "conversationId": threads[1].1}),
+        json!({"taskId": "SRC-1", "pullRequestId": private.to_string()}),
+        json!({"taskId": "SRC-1", "pullRequestId": open.to_string()}),
+    ] {
+        let linked = call("task_link", link).await;
+        assert_eq!(linked["outcome"], "ok", "{linked}");
+    }
+
+    let moved = call(
+        "task_move",
+        json!({"taskId": "SRC-1", "toProjectId": "DST"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let new_key = moved["value"]["moved"][0]["to"]
+        .as_str()
+        .expect("new key")
+        .to_owned();
+
+    let mara_opens = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "task_open",
+        json!({"taskId": new_key}),
+    )
+    .await;
+    assert_eq!(mara_opens["outcome"], "ok", "{mara_opens}");
+    let comments = mara_opens["value"]["comments"].to_string();
+    assert!(comments.contains("Still linked on SRC-1"), "{comments}");
+    assert!(comments.contains(&threads[1].2), "{comments}");
+    assert!(comments.contains(&open_url), "{comments}");
+    assert!(!comments.contains(&threads[0].2), "{comments}");
+    assert!(!comments.contains(&private_url), "{comments}");
+    assert!(
+        comments.contains("and 1 private conversation"),
+        "{comments}"
+    );
+    assert!(
+        comments.contains("and 1 private pull request"),
+        "{comments}"
+    );
+}
+
 #[tokio::test]
 async fn the_resource_a_call_acts_on_picks_its_project() {
     let Some(setup) = setup("phase4_scoping").await else {

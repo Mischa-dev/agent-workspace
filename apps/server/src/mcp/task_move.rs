@@ -109,6 +109,10 @@ struct SourceCriterion {
 struct LinkLine {
     kind: String,
     label: String,
+    /// Whether every member of the source project can see it. Private ones
+    /// are only counted, never named, because the list is written into a
+    /// comment that everyone in the target project reads.
+    shared: bool,
 }
 
 pub(super) async fn task_move(
@@ -379,9 +383,7 @@ pub(super) async fn task_move(
             }
             if !links.is_empty() {
                 provenance.push_str(&format!("\n\nStill linked on {}:", task.key));
-                for link in &links {
-                    provenance.push_str(&format!("\n- {}: {}", link.kind, link.label));
-                }
+                provenance.push_str(&links_left_behind_text(&links));
             }
             add_comment(&mut transaction, &target_actor, new_id, &provenance).await?;
             let comments = sqlx::query_as::<_, SourceComment>(
@@ -575,9 +577,48 @@ async fn carry_criteria(
     .await
 }
 
+/// The lines listing what stays linked on the original. Shared links are
+/// named; private conversations and pull requests from private threads are
+/// only counted, since readers of the new task may not be able to see them.
+fn links_left_behind_text(links: &[LinkLine]) -> String {
+    let mut text = String::new();
+    for link in links.iter().filter(|link| link.shared) {
+        text.push_str(&format!("\n- {}: {}", link.kind, link.label));
+    }
+    let private_conversations = links
+        .iter()
+        .filter(|link| !link.shared && link.kind == "Conversation")
+        .count();
+    let private_pull_requests = links
+        .iter()
+        .filter(|link| !link.shared && link.kind == "Pull request")
+        .count();
+    for (count, singular, plural) in [
+        (
+            private_conversations,
+            "private conversation",
+            "private conversations",
+        ),
+        (
+            private_pull_requests,
+            "private pull request",
+            "private pull requests",
+        ),
+    ] {
+        match count {
+            0 => {}
+            1 => text.push_str(&format!("\n- and 1 {singular}")),
+            n => text.push_str(&format!("\n- and {n} {plural}")),
+        }
+    }
+    text
+}
+
 /// Threads, repositories and pull requests linked to the original. They stay
-/// in its project, so the new task lists them: only the ones the mover can
-/// see, since the list is written where others read it.
+/// in its project, so the new task lists them. The list is a comment every
+/// target-project member reads, so only links every source-project member
+/// can see are marked shared (and named); the rest are counted, and only if
+/// the mover can see them.
 async fn links_left_behind(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -586,18 +627,34 @@ async fn links_left_behind(
 ) -> Result<Vec<LinkLine>, AppError> {
     Ok(sqlx::query_as::<_, LinkLine>(
         r#"
-        SELECT 'Conversation' AS kind, conversation.name AS label
+        SELECT 'Conversation' AS kind, conversation.name AS label,
+               COALESCE(parent.visibility, conversation.visibility) = 'project' AS shared
         FROM work_item_conversation_links link
         JOIN conversations conversation ON conversation.id = link.conversation_id
+        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
           AND conversation_visible_to(conversation.id, $3)
         UNION ALL
-        SELECT 'Repository', repository.owner || '/' || repository.name
+        SELECT 'Repository', repository.owner || '/' || repository.name, TRUE
         FROM work_item_repository_links link
         JOIN repositories repository ON repository.id = link.repository_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
         UNION ALL
-        SELECT 'Pull request', pull_request.html_url
+        -- Same rule as pull_request_visible_to, for a reader who belongs to
+        -- no private conversation: no run_artifact link, or one whose
+        -- thread is project-visible.
+        SELECT 'Pull request', pull_request.html_url,
+               NOT EXISTS (
+                   SELECT 1 FROM github_pull_request_conversation_links artifact
+                   WHERE artifact.github_pull_request_id = pull_request.id
+                     AND artifact.source = 'run_artifact')
+               OR EXISTS (
+                   SELECT 1 FROM github_pull_request_conversation_links artifact
+                   JOIN conversations thread ON thread.id = artifact.conversation_id
+                   LEFT JOIN conversations parent ON parent.id = thread.parent_channel_id
+                   WHERE artifact.github_pull_request_id = pull_request.id
+                     AND artifact.source = 'run_artifact'
+                     AND COALESCE(parent.visibility, thread.visibility) = 'project')
         FROM github_pull_request_work_item_links link
         JOIN github_pull_requests pull_request ON pull_request.id = link.github_pull_request_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
