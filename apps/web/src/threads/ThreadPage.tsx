@@ -1,8 +1,7 @@
 import {
   FormEvent,
-  useEffect,
+  useCallback,
   useMemo,
-  useRef,
   useState,
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -37,10 +36,10 @@ import { ThreadStatusButton } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
+import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import {
   archiveConversation,
-  markConversationSeen,
   normalizeTimelinePage,
   searchMentionableActors,
   sendConversationMessage,
@@ -441,7 +440,6 @@ export function ThreadPage() {
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [composerMode, setComposerMode] = useState<'message' | 'run'>('message')
   const parentSidebar = useProjectConversationSidebar(projectId, verifiedTimeline?.conversation.parentChannelId ?? '')
-  const markedSeen = useRef({ threadId: '', sequence: 0 })
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'thread', conversationId: threadId },
@@ -499,37 +497,26 @@ export function ThreadPage() {
   )
   const olderCursor = older.cursor
 
-  useEffect(() => {
-    if (
-      !verifiedTimeline?.capabilities.markSeen ||
-      verifiedTimeline.highestSequence <=
-        verifiedTimeline.readState.highestSeenSequence ||
-      (markedSeen.current.threadId === threadId &&
-        verifiedTimeline.highestSequence <= markedSeen.current.sequence) ||
-      entries.at(-1)?.sequence !== verifiedTimeline.highestSequence
-    ) {
-      return
-    }
-    markedSeen.current = {
-      threadId,
-      sequence: verifiedTimeline.highestSequence,
-    }
-    void markConversationSeen({
+  const onSeen = useCallback(
+    () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationSidebarRoot(projectId),
+      }),
+    [projectId, queryClient],
+  )
+  useAutoMarkSeen(
+    {
       conversationId: threadId,
-      highestSeenSequence: verifiedTimeline.highestSequence,
-    })
-      .then(() =>
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.conversationSidebarRoot(projectId),
-        }),
-      )
-      .catch(() => {
-        markedSeen.current = {
-          threadId,
-          sequence: verifiedTimeline.readState.highestSeenSequence,
-        }
-      })
-  }, [entries, projectId, queryClient, threadId, verifiedTimeline])
+      highestSequence: verifiedTimeline?.highestSequence ?? 0,
+      highestSeenSequence: verifiedTimeline?.readState.highestSeenSequence ?? 0,
+      // Only once the newest entry is on screen.
+      ready: Boolean(
+        verifiedTimeline?.capabilities.markSeen &&
+          entries.at(-1)?.sequence === verifiedTimeline.highestSequence,
+      ),
+    },
+    onSeen,
+  )
 
   const perform = async (key: string, action: () => Promise<unknown>) => {
     setBusyAction(key)

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { getConversationTimeline, markConversationSeen, retryReplyRequest, sendConversationMessage } from '../conversations/api'
+import { getConversationTimeline, retryReplyRequest, sendConversationMessage } from '../conversations/api'
+import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { useConversationTimeline } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
@@ -35,7 +36,6 @@ export function ThreadPanel({
   const refreshThreads = useRefreshThreads()
   const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const scroller = useRef<HTMLDivElement>(null)
-  const marked = useRef(0)
   const page = timeline.data
   const valid = page?.conversation.id === threadId && page.conversation.kind === 'thread'
   // The panel shows the newest page only; this keeps it current between refetches.
@@ -80,16 +80,16 @@ export function ThreadPanel({
     if (element) element.scrollTop = element.scrollHeight
   }, [page?.highestSequence, pending.length])
 
-  useEffect(() => {
-    if (!valid || !page || !page.capabilities.markSeen) return
-    if (page.highestSequence <= page.readState.highestSeenSequence || page.highestSequence <= marked.current) return
-    marked.current = page.highestSequence
-    void markConversationSeen({ conversationId: threadId, highestSeenSequence: page.highestSequence })
-      .then(() => refreshThreads(parentId))
-      .catch(() => {
-        marked.current = 0
-      })
-  }, [page, parentId, refreshThreads, threadId, valid])
+  const onSeen = useCallback(() => refreshThreads(parentId), [parentId, refreshThreads])
+  useAutoMarkSeen(
+    {
+      conversationId: threadId,
+      highestSequence: valid && page ? page.highestSequence : 0,
+      highestSeenSequence: valid && page ? page.readState.highestSeenSequence : 0,
+      ready: Boolean(valid && page?.capabilities.markSeen),
+    },
+    onSeen,
+  )
 
   const send = async (submission: ComposerSubmission) => {
     setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])

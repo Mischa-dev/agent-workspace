@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -15,10 +15,10 @@ import { searchWorkItemReferences } from '../work-items/api'
 import {
   archiveConversation,
   getConversationTimeline,
-  markConversationSeen,
   searchMentionableActors,
   sendConversationMessage,
 } from './api'
+import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ConversationHeader } from './ConversationHeader'
 import type { ComposerSubmission } from './composerModel'
 import { useConversationTimeline, useProjectConversationSidebar } from './hooks'
@@ -67,7 +67,6 @@ export function ChannelPage() {
   const [threadDialog, setThreadDialog] = useState<{ origin: ThreadOrigin | null } | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
-  const markedSeenRef = useRef({ conversationId: '', sequence: 0 })
   const [firstUnread, setFirstUnread] = useState<{ channelId: string; sequence: number | null }>({ channelId: '', sequence: null })
   const page = timeline.data
   const validBoundary =
@@ -111,24 +110,22 @@ export function ChannelPage() {
     return linked
   }, [channelId, linkedThreadSidebar.data])
 
-  useEffect(() => {
-    if (
-      !validBoundary ||
-      !page ||
-      !page.capabilities.markSeen ||
-      page.highestSequence <= page.readState.highestSeenSequence ||
-      (markedSeenRef.current.conversationId === channelId && page.highestSequence <= markedSeenRef.current.sequence) ||
-      entries.at(-1)?.sequence !== page.highestSequence
-    ) {
-      return
-    }
-    markedSeenRef.current = { conversationId: channelId, sequence: page.highestSequence }
-    void markConversationSeen({ conversationId: channelId, highestSeenSequence: page.highestSequence })
-      .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) }))
-      .catch(() => {
-        markedSeenRef.current = { conversationId: channelId, sequence: page.readState.highestSeenSequence }
-      })
-  }, [channelId, entries, page, projectId, queryClient, validBoundary])
+  const onSeen = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) }),
+    [projectId, queryClient],
+  )
+  useAutoMarkSeen(
+    {
+      conversationId: channelId,
+      highestSequence: page?.highestSequence ?? 0,
+      highestSeenSequence: page?.readState.highestSeenSequence ?? 0,
+      // Only once the newest entry is on screen.
+      ready: Boolean(
+        validBoundary && page?.capabilities.markSeen && entries.at(-1)?.sequence === page.highestSequence,
+      ),
+    },
+    onSeen,
+  )
 
   const navigationSync = useRememberProjectLocation(
     projectId,

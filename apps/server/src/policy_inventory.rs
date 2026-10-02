@@ -179,6 +179,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "conversations",
         Post,
+        "/api/v1/conversations/{id}/mark-unread",
+        ReadStateUpdate
+    ),
+    policy_route!(
+        "conversations",
+        Post,
         "/api/v1/conversations/{id}/messages",
         MessageSend
     ),

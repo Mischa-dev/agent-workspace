@@ -306,6 +306,25 @@ export function dropRemovedMessage(
  * project's queries, so a project refresh misses them. Forget the ones on no
  * screen (they'd show stale text on return) and refetch the rest.
  */
+/**
+ * The viewer was removed from a group (or left it): nothing they hold of it
+ * may stay on screen. Every query in its space is reset, because the group's
+ * threads have timelines keyed by their own IDs; active ones refetch, and an
+ * open page for the group gets a 404 and leaves. Queries naming the group
+ * outside the space, and pins, search and decisions, go too.
+ */
+export function dropRemovedConversation(
+  queryClient: QueryClient,
+  projectId: string,
+  conversationId: string,
+) {
+  queryClient.removeQueries({ predicate: (query) => query.queryKey.includes(conversationId) })
+  void queryClient.resetQueries({
+    predicate: (query) => query.queryKey[0] === 'project' && query.queryKey[1] === projectId,
+  })
+  refreshMemoryCaches(queryClient)
+}
+
 export function refreshMemoryCaches(queryClient: QueryClient) {
   for (const queryKey of [['pins'], ['search'], ['decisions'], ['threads']]) {
     queryClient.removeQueries({ queryKey, type: 'inactive' })

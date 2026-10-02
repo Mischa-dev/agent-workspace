@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -7,7 +7,6 @@ import { useAuthenticatedSession } from '../auth/session'
 import {
   continueConversation,
   getConversationTimeline,
-  markConversationSeen,
   retryReplyRequest,
   sendConversationMessage,
 } from '../conversations/api'
@@ -22,6 +21,7 @@ import { useRefreshThreads, useThreads } from '../conversations/threadModel'
 import { ThreadDialog } from '../conversations/ThreadDialog'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import type { ConversationActor, ConversationTimelineEntry, ReplyRequest, ThreadSummary } from '../conversations/types'
+import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
 import { AppShell } from '../shell/AppShell'
@@ -64,7 +64,6 @@ export function DirectConversationPage() {
   const openThreadId = searchParams.get('thread')
   const threads = useThreads(conversationId)
   const refreshThreads = useRefreshThreads()
-  const markedSeen = useRef({ conversationId: '', sequence: 0 })
   const page = timeline.data
   const viewerId = session.user.actorId
   const summary = overview.data?.conversations.find((conversation) => conversation.id === conversationId)
@@ -112,23 +111,16 @@ export function DirectConversationPage() {
   const lastEntry = entries.at(-1)
   const waitingForContinue = page?.agentTurnsRemaining === 0 && lastEntry?.message?.author.kind === 'external_agent'
 
-  useEffect(() => {
-    if (
-      !valid ||
-      !page ||
-      !page.capabilities.markSeen ||
-      page.highestSequence <= page.readState.highestSeenSequence ||
-      (markedSeen.current.conversationId === conversationId && page.highestSequence <= markedSeen.current.sequence)
-    ) {
-      return
-    }
-    markedSeen.current = { conversationId, sequence: page.highestSequence }
-    void markConversationSeen({ conversationId, highestSeenSequence: page.highestSequence })
-      .then(() => queryClient.invalidateQueries({ queryKey: directQueryKey }))
-      .catch(() => {
-        markedSeen.current = { conversationId: '', sequence: 0 }
-      })
-  }, [conversationId, page, queryClient, valid])
+  const onSeen = useCallback(() => queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
+  useAutoMarkSeen(
+    {
+      conversationId,
+      highestSequence: valid && page ? page.highestSequence : 0,
+      highestSeenSequence: valid && page ? page.readState.highestSeenSequence : 0,
+      ready: Boolean(valid && page?.capabilities.markSeen),
+    },
+    onSeen,
+  )
 
   const searchMembers = async (query: string) => {
     const needle = query.trim().toLowerCase()
@@ -459,7 +451,11 @@ function GroupMembers({
             if (adding) run(addGroupMember(conversationId, adding), () => setAdding(''))
           }}
         >
-          <SelectField id="group-add-member" label="Add someone" onChange={(event) => setAdding(event.target.value)} value={adding}>
+          <SelectField
+            hint="They'll see everything said here so far."
+            id="group-add-member"
+            label="Add someone"
+            onChange={(event) => setAdding(event.target.value)} value={adding}>
             <option value="">Choose a person or agent…</option>
             {candidates.map((person) => (
               <option key={person.id} value={person.id}>

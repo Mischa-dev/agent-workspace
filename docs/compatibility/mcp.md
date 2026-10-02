@@ -189,7 +189,7 @@ Behavior changes:
 
 ## MCP Phase 3 changes (October 2026)
 
-New tools, taking the count from 55 to 59:
+New tools, taking the count from 55 to 61:
 
 - `message_edit`: the author only. Takes `expectedRevision` (optional) and
   `clientRequestId`; it shares the web edit's idempotency scope and stored
@@ -208,6 +208,22 @@ New tools, taking the count from 55 to 59:
   Anyone who can post in the conversation can react. Archived conversations
   and removed messages refuse changes with `conflict`. Reactions notify
   nobody and don't answer reply requests.
+- `conversation_members`: destructive and idempotent by state; takes a
+  group or a thread in one (the result names the group), `add` and `remove`
+  as actor IDs or @handles, `expectedVersion` and `clientRequestId`. People
+  add and remove anyone; agents can only remove themselves (`left: true`).
+  A group holds at most 20 members. DMs and channels are `invalid_request`.
+  A retried leave returns `not_found`, since the caller can no longer see the
+  group.
+- `conversation_continue`: people only. Resets a group's (or a group
+  thread's) agent turns to 6 and asks the other agents about the newest
+  message if an agent wrote it; a removed message is skipped. A replayed
+  `clientRequestId` returns the first result without another round.
+
+`mark_read` gains `unread: true` with an optional `fromMessageId` (an ID or
+link): the conversation is unread again from that message (default: the
+newest) onward. It never marks anything read. Its result gains
+`unreadCount`.
 
 `conversation_read` and `conversation_open` items gain `revision` (once
 edited), `editedAt`, `removed`, `removedBy` and `reactions` (when there are

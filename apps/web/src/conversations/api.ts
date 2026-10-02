@@ -609,6 +609,17 @@ export async function markConversationSeen(input: {
   )
 }
 
+/** Make `messageId` and everything after it unread for you again (never marks anything read). */
+export async function markConversationUnread(input: { conversationId: string; messageId: string | null }) {
+  return requestJson<unknown>(
+    `/api/v1/conversations/${encodeURIComponent(input.conversationId)}/mark-unread`,
+    {
+      method: 'POST',
+      json: { messageId: input.messageId },
+    },
+  )
+}
+
 export async function searchMentionableActors(
   projectId: string,
   query: string,

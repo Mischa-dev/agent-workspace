@@ -33,6 +33,7 @@ mod m7_memberships;
 mod m9_external_agents;
 mod mcp_admin;
 mod mcp_groundwork;
+mod mcp_groups;
 mod mcp_labels;
 mod mcp_task_batches;
 mod mcp_task_board;

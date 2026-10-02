@@ -2,7 +2,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { IconButton } from '../ui'
-import { setMessageReaction } from './api'
+import { markConversationUnread, setMessageReaction } from './api'
 import { dropRemovedMessage, invalidateConversation, refreshMemoryCaches, setCachedReactions } from './liveMessages'
 import { MessageEditor, RemoveMessageDialog } from './MessageEditing'
 import { MessageHistoryDialog } from './MessageHistoryDialog'
@@ -19,12 +19,13 @@ import type {
 
 type MessageCapabilities = Pick<
   ConversationCapabilities,
-  'editMessages' | 'removeOwnMessages' | 'removeAnyMessage' | 'sendMessage'
+  'editMessages' | 'removeOwnMessages' | 'removeAnyMessage' | 'sendMessage' | 'markSeen'
 >
 
 /**
  * The one place a message's toolbar is put together: the reaction picker, the
- * page's own actions (threads, pins, decisions) and edit and remove. Removed
+ * page's own actions (threads, pins, decisions), Mark unread from here, and
+ * edit and remove. Removed
  * messages get none of them; the row keeps only its copy-link button.
  *
  * Pages pass `toolbarFor` as renderToolbar, `reactionsFor` as renderReactions,
@@ -84,6 +85,19 @@ export function useMessageActions({
 
   const canReact = (message: ConversationMessage) => Boolean(capabilities?.sendMessage) && !message.removed
 
+  // Your read mark moves back to just before this message. The page doesn't
+  // mark it read again until something new arrives (useAutoMarkSeen).
+  const markUnread = (message: ConversationMessage) => {
+    void markConversationUnread({ conversationId, messageId: message.id })
+      .catch(() => undefined)
+      .finally(() => {
+        void queryClient.invalidateQueries({ queryKey: ['direct'] })
+        void queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey[0] === 'project' && query.queryKey[1] === projectId,
+        })
+      })
+  }
+
   const showReactions = (messageId: string, reactions: MessageReaction[]) => {
     setCachedReactions(queryClient, { conversationId, messageId, reactions })
     onReactionsChanged?.(messageId, reactions)
@@ -133,6 +147,9 @@ export function useMessageActions({
           />
         ) : null}
         {actionsFor?.(message, entry)}
+        {capabilities?.markSeen ? (
+          <IconButton icon="inbox" label="Mark unread from here" onClick={() => markUnread(message)} size="sm" />
+        ) : null}
         {canEdit(message) ? (
           <IconButton
             icon="pencil"

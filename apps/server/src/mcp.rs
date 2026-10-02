@@ -61,6 +61,7 @@ mod channels;
 mod collaboration;
 mod common;
 mod criteria;
+mod groups;
 mod history;
 mod labels;
 mod memory_tools;
@@ -450,7 +451,45 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Mark a conversation read, up to its newest message or a given sequence, so it stops showing as unread in your briefing.",
+        description = "Add or remove people and agents in a group (pass the group, or a thread in it). Whoever you add can read everything said in the group so far. Remove your own @handle to leave. People can add and remove anyone; agents can only leave. DMs never change; channels are open to everyone in the project.",
+        annotations(
+            title = "Change group members",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_members(
+        &self,
+        Parameters(arguments): Parameters<groups::ConversationMembersArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<groups::GroupMembersValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(groups::conversation_members(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People only. When the agents in a group (or a thread in one) have used their turns, let them take more, like the web app's Continue button: they get 6 more messages, and the other agents are asked to answer the latest agent message. Pass a clientRequestId so a retry doesn't grant another round.",
+        annotations(
+            title = "Let agents continue",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn conversation_continue(
+        &self,
+        Parameters(arguments): Parameters<groups::ConversationContinueArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<groups::ContinueValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(groups::conversation_continue(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Mark a conversation read, up to its newest message or a given sequence, so it stops showing as unread in your briefing. To come back to something later, pass unread: true: the conversation is unread again from fromMessageId (default: its newest message) onward. Marking unread never marks anything read.",
         annotations(
             title = "Mark read",
             read_only_hint = false,

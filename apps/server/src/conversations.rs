@@ -84,6 +84,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/conversations/{id}/mark-seen",
             post(mark_conversation_seen),
         )
+        .route(
+            "/api/v1/conversations/{id}/mark-unread",
+            post(mark_conversation_unread),
+        )
         .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
 }
 
@@ -202,6 +206,13 @@ struct ArchiveConversationRequest {
 struct MarkSeenRequest {
     highest_seen_sequence: i64,
     expected_version: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MarkUnreadRequest {
+    /// The first message to show as unread; the newest when absent.
+    message_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2414,6 +2425,157 @@ async fn mark_conversation_seen(
         highest_seen_sequence: row.highest_seen_sequence,
         version: row.version,
     }))
+}
+
+async fn mark_conversation_unread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<MarkUnreadRequest>,
+) -> Result<Json<ReadStateView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let change = mark_unread_from(
+        &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        conversation_id,
+        request
+            .message_id
+            .map_or(UnreadFrom::Newest, UnreadFrom::Message),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(ReadStateView {
+        highest_seen_sequence: change.highest_seen_sequence,
+        version: change.version,
+    }))
+}
+
+/// Where `mark_unread_from` makes a conversation unread from.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum UnreadFrom {
+    Newest,
+    Message(Uuid),
+}
+
+/// The actor's read mark after `mark_unread_from`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReadMarkChange {
+    pub highest_seen_sequence: i64,
+    pub version: i64,
+    /// The conversation's newest entry.
+    pub highest_sequence: i64,
+}
+
+/// Make `from` and everything after it unread for this actor, to come back to
+/// later. Never marks anything read: when the mark is already at or before
+/// that point, nothing changes. Only this actor's mark moves. Shared by the
+/// browser API and MCP.
+///
+/// The read-state trigger refuses a backwards move unless `aw.read_rewind`
+/// names exactly this conversation and actor for this transaction (migration
+/// 0049). A message in a thread must be passed with the thread itself;
+/// one from any other conversation is `NotFound("message")`.
+pub(crate) async fn mark_unread_from(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    conversation_id: Uuid,
+    from: UnreadFrom,
+) -> Result<ReadMarkChange, AppError> {
+    let conversation = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
+        conversation_id,
+        Action::ReadStateUpdate,
+        true,
+    )
+    .await?;
+    let highest_sequence = conversation.next_entry_sequence - 1;
+    let first_unread = match from {
+        UnreadFrom::Newest => highest_sequence,
+        UnreadFrom::Message(message_id) => sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT sequence
+            FROM conversation_entries
+            WHERE conversation_id = $1 AND message_id = $2
+            "#,
+        )
+        .bind(conversation.id)
+        .bind(message_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("message"))?,
+    };
+    let current = sqlx::query_as::<_, ReadStateRow>(
+        r#"
+        SELECT highest_seen_sequence, version
+        FROM conversation_read_states
+        WHERE project_id = $1 AND conversation_id = $2 AND actor_id = $3
+        FOR UPDATE
+        "#,
+    )
+    .bind(conversation.project_id)
+    .bind(conversation.id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let target = first_unread - 1;
+    let current = match current {
+        Some(row) if first_unread >= 1 && row.highest_seen_sequence > target => row,
+        // Never read, an empty conversation, or already unread from there.
+        unchanged => {
+            return Ok(ReadMarkChange {
+                highest_seen_sequence: unchanged
+                    .as_ref()
+                    .map_or(0, |row| row.highest_seen_sequence),
+                version: unchanged.as_ref().map_or(0, |row| row.version),
+                highest_sequence,
+            });
+        }
+    };
+    sqlx::query("SELECT set_config('aw.read_rewind', $1, true)")
+        .bind(format!("{}:{actor_id}", conversation.id))
+        .execute(&mut **transaction)
+        .await?;
+    let row = sqlx::query_as::<_, ReadStateRow>(
+        r#"
+        UPDATE conversation_read_states
+        SET highest_seen_sequence = $4, version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND conversation_id = $2 AND actor_id = $3
+          AND version = $5
+        RETURNING highest_seen_sequence, version
+        "#,
+    )
+    .bind(conversation.project_id)
+    .bind(conversation.id)
+    .bind(actor_id)
+    .bind(target)
+    .bind(current.version)
+    .fetch_one(&mut **transaction)
+    .await?;
+    sqlx::query("SELECT set_config('aw.read_rewind', '', true)")
+        .execute(&mut **transaction)
+        .await?;
+    enqueue_event(
+        transaction,
+        conversation.project_id,
+        OutboxEventPayload::ReadStateUpdated(ReadStateUpdatedPayload {
+            conversation_id: conversation.id,
+            actor_id,
+            highest_seen_sequence: row.highest_seen_sequence,
+            version: row.version,
+        }),
+    )
+    .await?;
+    Ok(ReadMarkChange {
+        highest_seen_sequence: row.highest_seen_sequence,
+        version: row.version,
+        highest_sequence,
+    })
 }
 
 async fn archive_channel(

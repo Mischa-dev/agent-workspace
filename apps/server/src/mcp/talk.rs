@@ -12,8 +12,8 @@ use super::{
     McpPrincipal,
     common::{
         MESSAGE_CHARACTERS, SNIPPET_CHARACTERS, ToolResult, content_from_text, conversation_path,
-        insert_audit, parse_id, parse_message_id, project_role, public_url, resolve_people,
-        role_allows, scope_projects, snippet, truncate_text,
+        insert_audit, mark_via, parse_id, parse_message_id, project_role, public_url,
+        resolve_people, role_allows, scope_projects, snippet, truncate_text,
     },
     reactions::{ReactionSummary, reaction_summaries},
 };
@@ -21,9 +21,9 @@ use crate::{
     AppState,
     conversations::{
         ConversationAccessRow, MessageCommandActor, MessageMcpCredential,
-        THREAD_STATUS_SUGGESTIONS, ThreadPatch, append_message_command,
+        THREAD_STATUS_SUGGESTIONS, ThreadPatch, UnreadFrom, append_message_command,
         authorize_conversation_row_for, enqueue_event, fetch_conversation_access,
-        lock_conversation_for, normalize_conversation_name,
+        lock_conversation_for, mark_unread_from, normalize_conversation_name,
         suggested_thread_name as suggested_name, update_thread,
     },
     error::AppError,
@@ -128,6 +128,12 @@ pub(super) struct MarkReadArguments {
     pub conversation_id: String,
     /// Mark read up to this sequence number. Defaults to the newest message.
     pub up_to_sequence: Option<i64>,
+    /// true: make the conversation unread again from fromMessageId (default:
+    /// its newest message) onward, to come back to it later. Nothing gets
+    /// marked read.
+    pub unread: Option<bool>,
+    /// With unread: the first message to show as unread. An ID or link.
+    pub from_message_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -414,6 +420,8 @@ pub(super) struct StartedConversation {
 pub(super) struct ReadMark {
     pub conversation_id: String,
     pub last_read_sequence: i64,
+    /// Messages after lastReadSequence.
+    pub unread_count: i64,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -1244,6 +1252,15 @@ pub(super) async fn mark_read(
                 Err(result) => return Ok(retype(result)),
             };
         let highest = conversation.next_entry_sequence - 1;
+        if arguments.unread == Some(true) {
+            return mark_unread(state, principal, &conversation, &arguments).await;
+        }
+        if arguments.from_message_id.is_some() {
+            return Ok(ToolResult::invalid(
+                "fromMessageId",
+                "fromMessageId goes with unread: true. To mark read up to a point, use upToSequence.",
+            ));
+        }
         let up_to = arguments.up_to_sequence.unwrap_or(highest);
         if up_to < 0 || up_to > highest {
             return Ok(ToolResult::invalid(
@@ -1255,10 +1272,65 @@ pub(super) async fn mark_read(
         Ok::<_, AppError>(ToolResult::ok(ReadMark {
             conversation_id: conversation.id.to_string(),
             last_read_sequence: last_read,
+            unread_count: (highest - last_read).max(0),
         }))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "mark_read"))
+}
+
+/// mark_read with unread: true, through the web's `mark_unread_from`.
+async fn mark_unread(
+    state: &AppState,
+    principal: &McpPrincipal,
+    conversation: &ConversationAccessRow,
+    arguments: &MarkReadArguments,
+) -> Result<ToolResult<ReadMark>, AppError> {
+    if arguments.up_to_sequence.is_some() {
+        return Ok(ToolResult::invalid(
+            "upToSequence",
+            "With unread: true, say where unread starts with fromMessageId, not upToSequence.",
+        ));
+    }
+    let from = match arguments.from_message_id.as_deref() {
+        None => UnreadFrom::Newest,
+        Some(value) => match parse_message_id(value) {
+            Some(message_id) => UnreadFrom::Message(message_id),
+            None => {
+                return Ok(ToolResult::invalid(
+                    "fromMessageId",
+                    "Pass a message ID or link.",
+                ));
+            }
+        },
+    };
+    let mut transaction = state.pool.begin().await?;
+    mark_via(&mut transaction, principal).await?;
+    let change = match mark_unread_from(
+        &mut transaction,
+        principal.actor_id,
+        principal.actor_kind,
+        conversation.id,
+        from,
+    )
+    .await
+    {
+        Ok(change) => change,
+        Err(AppError::NotFound("message")) => {
+            return Ok(ToolResult::invalid(
+                "fromMessageId",
+                "That message isn't in this conversation. If it's in a thread, pass the thread as conversationId.",
+            ));
+        }
+        Err(AppError::NotFound(_)) => return Ok(ToolResult::not_found("That conversation")),
+        Err(error) => return Err(error),
+    };
+    transaction.commit().await?;
+    Ok(ToolResult::ok(ReadMark {
+        conversation_id: conversation.id.to_string(),
+        last_read_sequence: change.highest_seen_sequence,
+        unread_count: (change.highest_sequence - change.highest_seen_sequence).max(0),
+    }))
 }
 
 // ---------------------------------------------------------------------------

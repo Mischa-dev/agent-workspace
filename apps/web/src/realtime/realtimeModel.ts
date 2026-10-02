@@ -220,6 +220,17 @@ export function reactionChange(
   return { conversationId, messageId }
 }
 
+/**
+ * The group the viewer was removed from (or left), from a
+ * conversation.member.removed event. Only the removed person receives it.
+ */
+export function removedConversationId(
+  event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
+): string | null {
+  if (event.type !== 'conversation.member.removed') return null
+  return uuid(field(event.payload, 'conversationId', 'conversation_id'))
+}
+
 export function terminalAgentRunId(
   event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
 ): string | null {

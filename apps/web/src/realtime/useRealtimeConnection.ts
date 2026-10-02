@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../api/queryKeys'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
+  dropRemovedConversation,
   dropRemovedMessage,
   invalidateConversation,
   NO_MESSAGE_UPDATES,
@@ -21,6 +22,7 @@ import {
   parseLegacyRealtimeEvent,
   reactionChange,
   parseRealtimeEnvelope,
+  removedConversationId,
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
@@ -249,6 +251,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
             invalidateReactions(envelope.projectId, reactions.conversationId)
             return
           }
+          const removedFrom = removedConversationId(envelope)
+          if (removedFrom) dropRemovedConversation(queryClient, envelope.projectId, removedFrom)
           const update = messageUpdate(envelope)
           if (update) {
             setMessageUpdates((current) => rememberMessageUpdate(current, update))

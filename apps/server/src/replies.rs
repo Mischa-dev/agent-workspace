@@ -26,11 +26,14 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::{ActorView, enqueue_event, lock_conversation_access},
+    conversations::{
+        ActorView, enqueue_event, insert_audit_event, lock_conversation_access,
+        lock_conversation_for, parse_actor_kind,
+    },
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
     outbox::{OutboxEventPayload, ReplyRequestsUpdatedPayload},
-    policy::Action,
+    policy::{Action, ActorKind},
 };
 
 /// Agent messages allowed in a group before a person has to say Continue.
@@ -570,9 +573,63 @@ async fn continue_conversation(
 ) -> Result<Json<ContinueResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
-    let conversation = lock_conversation_access(
+    let outcome = continue_conversation_in(
         &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        conversation_id,
+    )
+    .await?;
+    insert_audit_event(
+        &mut transaction,
+        &headers,
         &principal,
+        outcome.project_id,
+        "conversation.continued",
+        conversation_id,
+        serde_json::json!({ "asked": outcome.asked.len() }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(ContinueResponse {
+        agent_turns_remaining: outcome.agent_turns_remaining,
+    }))
+}
+
+/// What `continue_conversation_in` did.
+pub(crate) struct ContinueOutcome {
+    pub project_id: Uuid,
+    pub conversation_id: Uuid,
+    pub agent_turns_remaining: i32,
+    /// The newest message that wasn't removed, if any.
+    pub latest_message_id: Option<Uuid>,
+    /// Agents with an open request about that message, after continuing.
+    pub asked: Vec<ActorView>,
+}
+
+/// Let the agents in a group (or a thread under one) take another round:
+/// reset its turn allowance and, when the newest message is an agent's, ask
+/// the group's other agents to answer it. People only, so agents can't keep a
+/// conversation going on their own. Shared by the browser API and MCP;
+/// callers record their own audit rows.
+///
+/// A removed message is never asked about: the newest message that wasn't
+/// removed counts. Asking about the same message again leaves each agent
+/// exactly one open request (`insert_requests` never supersedes the request
+/// about the message being asked about).
+pub(crate) async fn continue_conversation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    conversation_id: Uuid,
+) -> Result<ContinueOutcome, AppError> {
+    if actor_kind != ActorKind::Human {
+        return Err(AppError::Forbidden);
+    }
+    let conversation = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -584,7 +641,7 @@ async fn continue_conversation(
     sqlx::query("UPDATE conversations SET agent_turns_remaining = $2 WHERE id = $1")
         .bind(conversation_id)
         .bind(TURN_ALLOWANCE)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     let latest = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
@@ -593,37 +650,72 @@ async fn continue_conversation(
         JOIN messages message ON message.id = entry.message_id
         JOIN actors actor ON actor.id = message.author_actor_id
         WHERE entry.conversation_id = $1
+          AND message.removed_at IS NULL
         ORDER BY entry.sequence DESC
         LIMIT 1
         "#,
     )
     .bind(conversation_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
-    if let Some((message_id, author_actor_id, author_kind)) = latest
+    if let Some((message_id, author_actor_id, author_kind)) = &latest
         && author_kind == "external_agent"
     {
         ask(
-            &mut transaction,
+            transaction,
             &NewMessage {
                 project_id: conversation.project_id,
                 conversation_id,
                 members_conversation_id: conversation.membership_conversation_id(),
                 conversation_kind: "group",
-                message_id,
-                author_actor_id,
-                author_kind: &author_kind,
+                message_id: *message_id,
+                author_actor_id: *author_actor_id,
+                author_kind,
                 mentioned_actor_ids: &[],
             },
             false,
         )
         .await?;
     }
-    notify(&mut transaction, conversation.project_id, conversation_id).await?;
-    transaction.commit().await?;
-    Ok(Json(ContinueResponse {
+    notify(transaction, conversation.project_id, conversation_id).await?;
+    let latest_message_id = latest.map(|(message_id, _, _)| message_id);
+    let asked = match latest_message_id {
+        Some(message_id) => sqlx::query_as::<_, (Uuid, String, String, String)>(
+            r#"
+            SELECT actor.id, actor.kind, membership.display_name, membership.handle
+            FROM reply_requests request
+            JOIN actors actor ON actor.id = request.agent_actor_id
+            JOIN project_memberships membership
+              ON membership.project_id = request.project_id
+             AND membership.actor_id = request.agent_actor_id
+            WHERE request.conversation_id = $1
+              AND request.message_id = $2
+              AND request.status IN ('pending', 'claimed')
+            ORDER BY lower(membership.display_name), actor.id
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(message_id)
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .map(|(id, kind, display_name, handle)| ActorView {
+            id,
+            kind,
+            display_name,
+            handle,
+            avatar_url: None,
+        })
+        .collect(),
+        None => Vec::new(),
+    };
+    Ok(ContinueOutcome {
+        project_id: conversation.project_id,
+        conversation_id,
         agent_turns_remaining: TURN_ALLOWANCE,
-    }))
+        latest_message_id,
+        asked,
+    })
 }
 
 #[derive(Debug, Serialize)]
