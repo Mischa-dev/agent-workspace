@@ -3,9 +3,17 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { coalesceDeltaBatch } from '../app/streaming'
+import {
+  dropRemovedMessage,
+  NO_MESSAGE_UPDATES,
+  refreshMemoryCaches,
+  rememberMessageUpdate,
+  type MessageUpdates,
+} from '../conversations/liveMessages'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
+  messageUpdate,
   parseLegacyRealtimeEvent,
   parseRealtimeEnvelope,
   streamDelta,
@@ -35,6 +43,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
   const [streams, setStreams] = useState<
     Record<string, Record<string, string>>
   >({})
+  const [messageUpdates, setMessageUpdates] =
+    useState<MessageUpdates>(NO_MESSAGE_UPDATES)
+  const [resyncGeneration, setResyncGeneration] = useState(0)
   const reconnectAttempt = useRef(0)
 
   useEffect(() => {
@@ -188,6 +199,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
         setConnection('live')
         resetStreams()
         refetchAuthenticatedState()
+        // Removals sent while the socket was down never arrive: refresh the
+        // caches that live outside a project, and older timeline pages.
+        refreshMemoryCaches(queryClient)
+        setResyncGeneration((generation) => generation + 1)
       })
       current.addEventListener('message', (event) => {
         if (socket !== current) return
@@ -201,7 +216,15 @@ export function useRealtimeConnection(): RealtimeContextValue {
 
         const envelope = parseRealtimeEnvelope(wire)
         if (envelope) {
+          // One dispatch order for durable events: (1) drop repeats, (2) change
+          // caches synchronously, so removed text is gone before any fetch,
+          // (3) invalidate so everything converges over HTTP.
           if (!remember(envelope.eventId)) return
+          const update = messageUpdate(envelope)
+          if (update) {
+            setMessageUpdates((current) => rememberMessageUpdate(current, update))
+            if (update.removed) dropRemovedMessage(queryClient, update)
+          }
           const messageId = durableMessageId(envelope)
           const terminalRunId = terminalAgentRunId(envelope)
           if (envelope.conversationId && messageId) {
@@ -210,6 +233,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             clearRunStreams(envelope.conversationId, terminalRunId)
           }
           invalidateProject(envelope.projectId)
+          if (update?.removed) refreshMemoryCaches(queryClient)
           return
         }
 
@@ -283,5 +307,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
     }
   }, [queryClient])
 
-  return useMemo(() => ({ connection, streams }), [connection, streams])
+  return useMemo(
+    () => ({ connection, streams, messageUpdates, resyncGeneration }),
+    [connection, streams, messageUpdates, resyncGeneration],
+  )
 }

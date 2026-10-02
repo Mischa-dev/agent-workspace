@@ -1,10 +1,20 @@
 import { createContext, useContext } from 'react'
 
+import type { MessageUpdates } from '../conversations/liveMessages'
+
 export type ConnectionStatus = 'connecting' | 'live' | 'retrying'
 
 export type RealtimeContextValue = {
   connection: ConnectionStatus
   streams: Record<string, Record<string, string>>
+  /** Messages edited or removed while connected, by message id (the latest 200). */
+  messageUpdates: MessageUpdates
+  /**
+   * Goes up each time the socket (re)connects. Anything kept outside the query
+   * cache, such as older timeline pages, refetches then: events sent while the
+   * socket was down never arrive.
+   */
+  resyncGeneration: number
 }
 
 export const RealtimeContext = createContext<RealtimeContextValue | null>(null)

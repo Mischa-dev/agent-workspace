@@ -23,12 +23,16 @@ import { ConversationHeader } from './ConversationHeader'
 import type { ComposerSubmission } from './composerModel'
 import { useConversationTimeline, useProjectConversationSidebar } from './hooks'
 import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
+import { useMessageActions } from './MessageActions'
 import { StructuredComposer } from './StructuredComposer'
 import { ThreadBoard, ThreadStatusChip } from './threadBoard'
 import { useThreads } from './threadModel'
 import { ThreadDialog } from './ThreadDialog'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from './Timeline'
 import type { ConversationTimelineEntry, SidebarThread } from './types'
+import { useLiveOlderEntries } from './useLiveOlderEntries'
+
+const NO_ENTRIES: ConversationTimelineEntry[] = []
 
 type ThreadOrigin = { messageId: string; text: string; author: string }
 
@@ -59,13 +63,6 @@ export function ChannelPage() {
   const project = useProject(projectId)
   const timeline = useConversationTimeline(projectId, channelId, includeArchived)
   const linkedThreadSidebar = useProjectConversationSidebar(projectId, channelId, { expandedChannelId: channelId })
-  const [olderState, setOlderState] = useState<{
-    channelId: string
-    entries: ConversationTimelineEntry[]
-    nextCursor: string | null
-  }>({ channelId: '', entries: [], nextCursor: null })
-  const [loadingOlder, setLoadingOlder] = useState(false)
-  const [olderError, setOlderError] = useState<string | null>(null)
   const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const [threadDialog, setThreadDialog] = useState<{ origin: ThreadOrigin | null } | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
@@ -84,16 +81,20 @@ export function ChannelPage() {
     })
   }
 
-  const olderCursor = olderState.channelId === channelId ? olderState.nextCursor : page?.nextCursor ?? null
-
-  const entries = useMemo(() => {
-    const bySequence = new Map<number, ConversationTimelineEntry>()
-    const historical = olderState.channelId === channelId ? olderState.entries : []
-    for (const entry of [...historical, ...(validBoundary ? page?.entries ?? [] : [])]) {
-      bySequence.set(entry.sequence, entry)
-    }
-    return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
-  }, [channelId, olderState, page?.entries, validBoundary])
+  const older = useLiveOlderEntries({
+    conversationId: channelId,
+    newestEntries: validBoundary && page ? page.entries : NO_ENTRIES,
+    newestCursor: validBoundary ? page?.nextCursor ?? null : null,
+    loadPage: async (cursor) => {
+      const result = await getConversationTimeline(channelId, cursor, 50, includeArchived)
+      if (result.conversation.id !== channelId || result.conversation.projectId !== projectId || result.conversation.kind !== 'channel') {
+        throw new Error('Older timeline page crossed its Project boundary.')
+      }
+      return result
+    },
+  })
+  const entries = older.entries
+  const olderCursor = older.cursor
 
   const statusByThread = useMemo(
     () => new Map((threadStatuses.data ?? []).map((thread) => [thread.id, thread])),
@@ -140,26 +141,49 @@ export function ChannelPage() {
     project.data?.navigation,
   )
 
-  const loadOlder = async () => {
-    if (!olderCursor || loadingOlder) return
-    setLoadingOlder(true)
-    setOlderError(null)
-    try {
-      const older = await getConversationTimeline(channelId, olderCursor, 50, includeArchived)
-      if (older.conversation.id !== channelId || older.conversation.projectId !== projectId || older.conversation.kind !== 'channel') {
-        throw new Error('Older timeline page crossed its Project boundary.')
+  const name = validBoundary ? page?.conversation.name ?? 'Channel' : 'Channel'
+  const archived = Boolean(page?.conversation.archivedAt)
+  const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
+  const threadRoute = (threadId: string) => `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
+  const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
+  const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
+
+  const messageActions = useMessageActions({
+    projectId,
+    conversationId: channelId,
+    viewerId: session.user.actorId,
+    capabilities: validBoundary ? page?.capabilities : null,
+    searchActors,
+    searchWorkItems,
+    onChanged: (entry) => {
+      older.replaceEntry(entry)
+      void timeline.refetch()
+    },
+    actionsFor: (message) => {
+      const threads = linkedThreadsByMessage.get(message.id) ?? []
+      const memory = canPost ? <MessageMemoryActions conversationId={channelId} message={message} projectId={projectId} /> : null
+      if (threads.length) {
+        return (
+          <>
+            <IconButton icon="messages" label="Open thread" onClick={() => navigate(threadRoute(threads[0].id))} size="sm" />
+            {memory}
+          </>
+        )
       }
-      setOlderState((current) => ({
-        channelId,
-        entries: [...older.entries, ...(current.channelId === channelId ? current.entries : [])],
-        nextCursor: older.nextCursor,
-      }))
-    } catch (reason) {
-      setOlderError(reason instanceof Error ? reason.message : 'Earlier messages didn’t load.')
-    } finally {
-      setLoadingOlder(false)
-    }
-  }
+      if (!canPost) return null
+      return (
+        <>
+          <IconButton
+            icon="messages"
+            label="Start a thread"
+            onClick={() => setThreadDialog({ origin: { messageId: message.id, text: message.plainText, author: message.author.displayName } })}
+            size="sm"
+          />
+          {memory}
+        </>
+      )
+    },
+  })
 
   const sendMessage = async (submission: ComposerSubmission) => {
     setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
@@ -204,11 +228,6 @@ export function ChannelPage() {
       </AppShell>
     )
   }
-
-  const name = validBoundary ? page?.conversation.name ?? 'Channel' : 'Channel'
-  const archived = Boolean(page?.conversation.archivedAt)
-  const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
-  const threadRoute = (threadId: string) => `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
 
   return (
     <AppShell
@@ -263,9 +282,9 @@ export function ChannelPage() {
         </Banner>
       ) : null}
 
-      <ConversationTimeline busy={timeline.isPending} label={`Messages in ${name}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${olderState.entries.length}`}>
-        {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
-        {olderError ? <Banner tone="danger">{olderError}</Banner> : null}
+      <ConversationTimeline busy={timeline.isPending} label={`Messages in ${name}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${older.olderCount}`}>
+        {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
+        {older.error ? <Banner tone="danger">{older.error}</Banner> : null}
         {timeline.isPending ? <MessageSkeleton /> : null}
         {timeline.isError ? (
           <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="This channel didn’t load">
@@ -311,34 +330,9 @@ export function ChannelPage() {
               </Link>
             ))
           }}
-          renderToolbar={(entry) => {
-            if (!entry.message) return null
-            const message = entry.message
-            const threads = linkedThreadsByMessage.get(message.id) ?? []
-            const memory = canPost ? <MessageMemoryActions conversationId={channelId} message={message} projectId={projectId} /> : null
-            if (threads.length) {
-              return (
-                <>
-                  <IconButton icon="messages" label="Open thread" onClick={() => navigate(threadRoute(threads[0].id))} size="sm" />
-                  {memory}
-                </>
-              )
-            }
-            if (!canPost) return null
-            return (
-              <>
-                <IconButton
-                  icon="messages"
-                  label="Start a thread"
-                  onClick={() =>
-                    setThreadDialog({ origin: { messageId: message.id, text: message.plainText, author: message.author.displayName } })
-                  }
-                  size="sm"
-                />
-                {memory}
-              </>
-            )
-          }}
+          onOpenHistory={messageActions.openHistory}
+          renderEditor={messageActions.editorFor}
+          renderToolbar={messageActions.toolbarFor}
           viewerId={session.user.actorId}
         />
         {pending.map((item, index) => (
@@ -357,8 +351,8 @@ export function ChannelPage() {
           label={`Message #${name}`}
           onSubmit={sendMessage}
           placeholder={`Message #${name}`}
-          searchActors={async (query) => (await searchMentionableActors(projectId, query)).actors}
-          searchWorkItems={(query) => searchWorkItemReferences(projectId, query)}
+          searchActors={searchActors}
+          searchWorkItems={searchWorkItems}
         />
       ) : validBoundary && archived ? (
         <StructuredComposer
@@ -380,6 +374,7 @@ export function ChannelPage() {
           origin={threadDialog.origin}
         />
       ) : null}
+      {messageActions.dialogs}
       <Dialog
         description="People can still read it from Archived conversations, but no one can post."
         footer={

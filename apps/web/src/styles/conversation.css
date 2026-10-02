@@ -1246,3 +1246,103 @@ h2.aw-card__title {
   grid-column: 2;
   grid-row: 1 / span 2;
 }
+
+/* Edited and removed messages */
+.aw-msg__edited {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+button.aw-msg__edited {
+  cursor: pointer;
+}
+
+button.aw-msg__edited:hover,
+button.aw-msg__edited:focus-visible {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.aw-msg__removed {
+  margin: 0;
+  font: var(--t-body);
+  font-style: italic;
+  color: var(--content-fg-muted);
+}
+
+/* Inline editor: the composer inside a message row */
+.aw-msg.is-editing,
+.aw-msg.is-editing:hover {
+  background: var(--content-hover);
+}
+
+.aw-composer-wrap.aw-msg__editor {
+  max-width: var(--size-measure);
+  padding: var(--space-1) 0 0;
+}
+
+.aw-composer__note {
+  margin: 0;
+  padding-top: var(--space-1);
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+/* Edit history dialog */
+.aw-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-history__item {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-history__item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.aw-history__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-1);
+  margin: 0 0 var(--space-1);
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-history__meta strong {
+  color: var(--content-fg);
+}
+
+.aw-history__current {
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+.aw-history__body {
+  font: var(--t-body);
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aw-history__redacted {
+  margin: 0;
+  font: var(--t-small);
+  font-style: italic;
+  color: var(--content-fg-muted);
+}

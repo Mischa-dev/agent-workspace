@@ -46,6 +46,16 @@ export const queryKeys = {
       'timeline',
       includeArchived ? 'archived' : 'active',
     ] as const,
+  messageRevisions: (projectId: string, conversationId: string, messageId: string) =>
+    [
+      'project',
+      projectId,
+      'conversation',
+      conversationId,
+      'message',
+      messageId,
+      'revisions',
+    ] as const,
   conversationSidebar: (
     projectId: string,
     selectedChannelId = '',

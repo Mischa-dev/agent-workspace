@@ -82,6 +82,65 @@ describe('authenticated realtime provider', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
   })
 
+  it('blanks a removed message in cached timelines and pins before refetching', async () => {
+    const queryClient = new QueryClient()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const removedId = '019fb600-0000-7000-8000-000000000020'
+    const timelineKey = ['project', projectId, 'conversation', conversationId, 'timeline', 'active']
+    queryClient.setQueryData(timelineKey, {
+      entries: [
+        {
+          id: '019fb600-0000-7000-8000-000000000021',
+          sequence: 1,
+          kind: 'message',
+          createdAt: '2026-10-01T10:00:00Z',
+          message: {
+            id: removedId,
+            author: { id: eventId, kind: 'human', displayName: 'Bob', handle: 'bob', avatarUrl: null },
+            content: { version: 1, nodes: [{ type: 'text', text: 'ghp_secret' }] },
+            plainText: 'ghp_secret',
+            mentionedActors: [],
+            referencedWorkItems: [],
+            createdAt: '2026-10-01T10:00:00Z',
+            via: null,
+            revision: 1,
+            editedAt: null,
+            removed: null,
+          },
+          workerEvent: null,
+        },
+      ],
+    })
+    queryClient.setQueryData(['pins', conversationId], {
+      pins: [{ kind: 'message', id: removedId, title: 'Bob', text: 'ghp_secret' }],
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeProvider>
+          <Probe />
+        </RealtimeProvider>
+      </QueryClientProvider>,
+    )
+    WebSocketStub.instances[0].message({
+      eventId,
+      eventCursor: 4,
+      version: 1,
+      projectId,
+      conversationId,
+      type: 'conversation.message.updated',
+      occurredAt: '2026-10-01T10:01:00Z',
+      payload: { conversationId, messageId: removedId, revision: 1, removed: true },
+    })
+
+    // Synchronous: no refetch has run yet.
+    expect(JSON.stringify(queryClient.getQueryData(timelineKey))).not.toContain('ghp_secret')
+    // Pins on no screen are forgotten outright; shown ones lose the message.
+    expect(JSON.stringify(queryClient.getQueryData(['pins', conversationId]) ?? null)).not.toContain('ghp_secret')
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['pins'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] })
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] }))
+  })
+
   it('coalesces bounded legacy provider deltas without creating another socket', async () => {
     const queryClient = new QueryClient()
     render(
