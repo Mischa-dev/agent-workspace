@@ -273,6 +273,11 @@ async fn removed_message_text_vanishes_everywhere() {
         let session = mara_session.clone();
         async move { tool(app, &token, &session, name, arguments).await }
     };
+    let nova = |name: &'static str, arguments: Value| {
+        let token = nova_token.clone();
+        let session = nova_session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
     let general = create_channel(&setup, &work, "general").await;
 
     // Mara answers a question; removing her answer leaves its request
@@ -339,6 +344,22 @@ async fn removed_message_text_vanishes_everywhere() {
     let request = inbox["value"]["requests"][0]["requestId"].clone();
     let claim = mara("reply_claim", json!({"requestId": request})).await;
     assert_eq!(claim["outcome"], "ok", "{claim}");
+    // Nova gives hers back; a released request can be retried, so removal
+    // withdraws it too.
+    let nova_inbox = nova("inbox_list", json!({})).await;
+    let nova_request = nova_inbox["value"]["requests"][0]["requestId"].clone();
+    let nova_claim = nova("reply_claim", json!({"requestId": nova_request})).await;
+    assert_eq!(nova_claim["outcome"], "ok", "{nova_claim}");
+    let released = nova(
+        "reply_release",
+        json!({
+            "requestId": nova_request,
+            "generation": nova_claim["value"]["request"]["generation"],
+            "reason": "Not mine."
+        }),
+    )
+    .await;
+    assert_eq!(released["outcome"], "ok", "{released}");
     let pinned = call(
         "pin_set",
         json!({"conversationId": general, "messageId": message}),
@@ -449,16 +470,53 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(edited["message"]["revision"], 2, "{edited}");
     assert_eq!(edited["changed"], true);
 
-    let (status, removed) = remove(&setup, &setup.browser, &general, &message).await;
-    assert_eq!(status, StatusCode::OK, "{removed}");
-    assert_eq!(removed["alreadyRemoved"], false);
-    assert_eq!(removed["message"]["plainText"], "");
-    assert_eq!(removed["message"]["content"]["nodes"], json!([]));
+    // Agents never remove or edit someone else's message.
+    let refused = mara("message_delete", json!({"messageId": message})).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(
-        removed["message"]["removed"]["removedBy"]["id"],
-        owner.to_string()
+        refused["message"],
+        "Agents can only remove their own messages. Ask a project owner or admin to remove this one."
     );
-    assert_eq!(removed["message"]["revision"], 2, "removing doesn't edit");
+    let refused = mara(
+        "message_edit",
+        json!({"messageId": message, "text": "Nothing to see"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(refused["message"], "You can only edit your own messages.");
+
+    // Codex, connected as the owner, removes it by its link.
+    let link =
+        format!("http://127.0.0.1:3100/projects/{work}/channels/{general}#message-{message}");
+    let removed = call("message_delete", json!({"messageId": link})).await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let removed = removed["value"].clone();
+    assert_eq!(removed["messageId"], message.as_str());
+    assert_eq!(removed["conversationId"], general.as_str());
+    assert_eq!(removed["alreadyRemoved"], false);
+    assert_eq!(removed["cancelledReplyRequests"], 2, "{removed}");
+    assert!(
+        removed["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("rotate the secret")),
+        "{removed}"
+    );
+    let removed_by = removed["removedBy"].as_str().expect("remover").to_owned();
+    assert!(removed_by.ends_with("(@owner)"), "{removed}");
+    let listed = removed["threads"]
+        .as_array()
+        .expect("threads")
+        .iter()
+        .map(|thread| (thread["id"].clone(), thread["name"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        listed,
+        [
+            (json!(threads[0]), json!("Thread")),
+            (json!(threads[1]), json!("Rotation plan")),
+        ],
+        "the remover sees the threads, after renaming"
+    );
 
     // Mara's claim and Nova's pending request are both withdrawn.
     let withdrawn = sqlx::query_as::<_, (String, Option<String>)>(
@@ -477,7 +535,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "{withdrawn:?}"
     );
     let audit = sqlx::query_scalar::<_, Value>(
-        "SELECT metadata FROM audit_events WHERE action = 'conversation.message_removed' AND target_id = $1",
+        "SELECT metadata FROM audit_events WHERE action = 'conversation.mcp_message_removed' AND target_kind = 'message' AND target_id = $1",
     )
     .bind(message.parse::<Uuid>().expect("message"))
     .fetch_one(&setup.pool)
@@ -536,7 +594,17 @@ async fn removed_message_text_vanishes_everywhere() {
         }),
     )
     .await;
-    assert_ne!(mara_reply["outcome"], "ok", "{mara_reply}");
+    assert_eq!(mara_reply["outcome"], "conflict", "{mara_reply}");
+    assert_eq!(
+        mara_reply["message"],
+        "The message you were answering was removed, so no reply is needed. Your reply wasn't sent."
+    );
+    let nova_again = nova("reply_claim", json!({"requestId": nova_request})).await;
+    assert_eq!(nova_again["outcome"], "conflict", "{nova_again}");
+    assert_eq!(
+        nova_again["message"],
+        "The message you were asked about was removed, so no reply is needed."
+    );
     for (token, session) in [
         (codex.as_str(), session.as_str()),
         (mara_token.as_str(), mara_session.as_str()),
@@ -554,8 +622,102 @@ async fn removed_message_text_vanishes_everywhere() {
         .await;
         assert_eq!(read["outcome"], "ok", "{read}");
         assert!(!read.to_string().contains(&secret), "{read}");
+        let item = read["value"]["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|item| item["messageId"] == message.as_str())
+            .expect("tombstone item")
+            .clone();
+        assert_eq!(item["removed"], true, "{item}");
+        assert_eq!(item["text"], "", "{item}");
+        assert_eq!(item["removedBy"], removed_by.as_str(), "{item}");
+        assert_eq!(item["revision"], 2, "{item}");
+        let around = tool(
+            app,
+            token,
+            session,
+            "conversation_read",
+            json!({"conversationId": general, "aroundMessageId": link}),
+        )
+        .await;
+        assert_eq!(around["outcome"], "ok", "{around}");
+        assert!(!around.to_string().contains(&secret), "{around}");
+        let opened = tool(
+            app,
+            token,
+            session,
+            "conversation_open",
+            json!({"conversationId": general}),
+        )
+        .await;
+        assert_eq!(opened["outcome"], "ok", "{opened}");
+        assert!(!opened.to_string().contains(&secret), "{opened}");
+        assert_eq!(opened["value"]["pinned"], json!([]), "{opened}");
+        let listed = tool(
+            app,
+            token,
+            session,
+            "conversation_list",
+            json!({"projectId": work}),
+        )
+        .await;
+        assert_eq!(listed["outcome"], "ok", "{listed}");
+        assert!(!listed.to_string().contains(&secret), "{listed}");
+        let channel = listed["value"]["conversations"]
+            .as_array()
+            .expect("conversations")
+            .iter()
+            .find(|conversation| conversation["id"] == general.as_str())
+            .expect("#general")
+            .clone();
+        assert_eq!(
+            channel["lastMessage"]["text"], "Message removed",
+            "{channel}"
+        );
+        assert_eq!(channel["lastMessage"]["removed"], true, "{channel}");
+        let history = tool(
+            app,
+            token,
+            session,
+            "message_history",
+            json!({"messageId": message}),
+        )
+        .await;
+        assert_eq!(history["outcome"], "ok", "{history}");
+        assert_eq!(history["value"]["removed"], true, "{history}");
+        let versions = history["value"]["revisions"].as_array().expect("revisions");
+        assert_eq!(versions.len(), 2, "{history}");
+        for (index, version) in versions.iter().enumerate() {
+            assert_eq!(version["revision"], index + 1);
+            assert_eq!(version["redacted"], true);
+            assert_eq!(version["text"], "");
+        }
+        assert_eq!(versions[0]["via"], "Codex", "{history}");
         let briefing = tool(app, token, session, "briefing", json!({})).await;
         assert!(!briefing.to_string().contains(&secret), "{briefing}");
+        assert!(
+            !briefing.to_string().contains(&message),
+            "no mention of it is left: {briefing}"
+        );
+        let task = tool(
+            app,
+            token,
+            session,
+            "task_open",
+            json!({"taskId": "WORK-1"}),
+        )
+        .await;
+        assert_eq!(task["outcome"], "ok", "{task}");
+        assert!(!task.to_string().contains(&secret), "{task}");
+        let task_link = task["value"]["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .find(|link| link["id"] == message.as_str())
+            .expect("message link")
+            .clone();
+        assert_eq!(task_link["text"], "Message removed", "{task_link}");
     }
     for (token, session) in [
         (mara_token.as_str(), mara_session.as_str()),
@@ -633,6 +795,84 @@ async fn removed_message_text_vanishes_everywhere() {
         1,
         "task links stay"
     );
+    let (status, pins) = get(
+        &setup,
+        &setup.browser,
+        &format!("/api/v1/conversations/{general}/pins"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pins}");
+    assert!(!pins.to_string().contains(&message), "{pins}");
+    let (status, hits) = get(
+        &setup,
+        &setup.browser,
+        &format!("/api/v1/search?q={secret}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hits}");
+    assert_eq!(hits["hits"], json!([]), "{hits}");
+
+    // Nothing new can be made from it.
+    let pin_again = call(
+        "pin_set",
+        json!({"conversationId": general, "messageId": message}),
+    )
+    .await;
+    assert_eq!(pin_again["outcome"], "not_found", "{pin_again}");
+    let second_task = call(
+        "task_create",
+        json!({"projectId": "WORK", "title": "Audit the logs"}),
+    )
+    .await;
+    assert_eq!(second_task["outcome"], "applied", "{second_task}");
+    let link_again = call(
+        "task_link",
+        json!({"taskId": "WORK-2", "messageId": message}),
+    )
+    .await;
+    assert_eq!(link_again["outcome"], "not_found", "{link_again}");
+    let decision = call(
+        "decision_record",
+        json!({"title": "Rotate keys monthly", "fromMessageId": message}),
+    )
+    .await;
+    assert_eq!(decision["outcome"], "not_found", "{decision}");
+    let (status, web_pin) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{general}/pins"),
+            None,
+            json!({"kind": "message", "targetId": message}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{web_pin}");
+    // Its existing thread is still found; no new one starts from it.
+    let thread_again = call(
+        "thread_start",
+        json!({"conversationId": general, "fromMessageId": message}),
+    )
+    .await;
+    assert_eq!(thread_again["outcome"], "ok", "{thread_again}");
+    assert_eq!(thread_again["value"]["created"], false, "{thread_again}");
+    assert_eq!(thread_again["value"]["id"], threads[0].as_str());
+    assert_eq!(thread_again["value"]["name"], "Thread");
+    // A withdrawn request can't be retried into asking about it again.
+    let (status, retried) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!(
+                "/api/v1/reply-requests/{}/retry",
+                nova_request.as_str().expect("Nova's request")
+            ),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{retried}");
 
     // Retries never bring it back.
     let messages_before = count(
@@ -726,6 +966,22 @@ async fn removed_message_text_vanishes_everywhere() {
     let (status, again) = remove(&setup, &setup.browser, &general, &message).await;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["alreadyRemoved"], true);
+    let again = call("message_delete", json!({"messageId": message})).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["value"]["alreadyRemoved"], true, "{again}");
+    assert_eq!(again["value"]["cancelledReplyRequests"], 0, "{again}");
+    assert_eq!(again["value"]["removedBy"], removed_by.as_str());
+    let edit_again = call(
+        "message_edit",
+        json!({"messageId": message, "text": format!("key {secret}"), "clientRequestId": "secret-edit"}),
+    )
+    .await;
+    assert_eq!(edit_again["outcome"], "conflict", "{edit_again}");
+    assert_eq!(
+        edit_again["message"],
+        "That message was removed, so it can't be edited."
+    );
+    assert!(!edit_again.to_string().contains(&secret));
     assert_eq!(
         count(
             &setup.pool,
@@ -735,6 +991,111 @@ async fn removed_message_text_vanishes_everywhere() {
         .await,
         audits_before
     );
+
+    // An agent's own message, edited through MCP, with a thread named after
+    // it by thread_start: the agent removes it, and every copy goes.
+    let own_secret = format!("SECRET-{}", Uuid::now_v7().simple());
+    let own = mara(
+        "message_send",
+        json!({"conversationId": general, "text": format!("token {own_secret}")}),
+    )
+    .await;
+    assert_eq!(own["outcome"], "ok", "{own}");
+    let own_id = own["value"]["messageId"].as_str().expect("own").to_owned();
+    let own_edit = json!({
+        "messageId": own_id,
+        "text": format!("token {own_secret} (staging)"),
+        "expectedRevision": 1,
+        "clientRequestId": "own-edit"
+    });
+    let edited_own = mara("message_edit", own_edit.clone()).await;
+    assert_eq!(edited_own["outcome"], "ok", "{edited_own}");
+    assert_eq!(edited_own["value"]["revision"], 2, "{edited_own}");
+    assert_eq!(edited_own["value"]["changed"], true);
+    assert_eq!(edited_own["value"]["idempotentReplay"], false);
+    assert!(
+        edited_own["value"]["url"]
+            .as_str()
+            .is_some_and(|url| url.ends_with(&format!("#message-{own_id}"))),
+        "{edited_own}"
+    );
+    let replayed = mara("message_edit", own_edit).await;
+    assert_eq!(replayed["outcome"], "ok", "{replayed}");
+    assert_eq!(replayed["value"]["idempotentReplay"], true, "{replayed}");
+    assert_eq!(replayed["value"]["revision"], 2);
+    let own_thread = mara(
+        "thread_start",
+        json!({"conversationId": general, "fromMessageId": own_id}),
+    )
+    .await;
+    assert_eq!(own_thread["outcome"], "ok", "{own_thread}");
+    assert_eq!(own_thread["value"]["created"], true);
+    assert!(
+        own_thread["value"]["name"]
+            .as_str()
+            .is_some_and(|name| name.contains(&own_secret)),
+        "named after the message: {own_thread}"
+    );
+    let own_removed = mara("message_delete", json!({"messageId": own_id})).await;
+    assert_eq!(own_removed["outcome"], "ok", "{own_removed}");
+    assert_eq!(
+        own_removed["value"]["threads"][0]["id"],
+        own_thread["value"]["id"]
+    );
+    assert_eq!(
+        own_removed["value"]["threads"][0]["name"], "Thread (2)",
+        "{own_removed}"
+    );
+    assert!(!own_removed.to_string().contains(&own_secret));
+    let own_audit = sqlx::query_scalar::<_, Value>(
+        "SELECT metadata FROM audit_events WHERE action = 'conversation.mcp_message_removed' AND target_id = $1",
+    )
+    .bind(own_id.parse::<Uuid>().expect("own"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("own removal audit");
+    assert_eq!(own_audit["as"], "author", "{own_audit}");
+    assert_eq!(own_audit["renamed_threads"], 1, "{own_audit}");
+    let own_history = mara("message_history", json!({"messageId": own_id})).await;
+    assert_eq!(own_history["outcome"], "ok", "{own_history}");
+    assert!(!own_history.to_string().contains(&own_secret));
+    assert_eq!(
+        own_history["value"]["revisions"]
+            .as_array()
+            .map(|revisions| revisions
+                .iter()
+                .all(|revision| revision["redacted"] == true && revision["text"] == "")),
+        Some(true),
+        "{own_history}"
+    );
+    let replayed = mara(
+        "message_edit",
+        json!({
+            "messageId": own_id,
+            "text": format!("token {own_secret} (staging)"),
+            "expectedRevision": 1,
+            "clientRequestId": "own-edit"
+        }),
+    )
+    .await;
+    assert_eq!(replayed["outcome"], "conflict", "{replayed}");
+    assert!(!replayed.to_string().contains(&own_secret));
+    for (token, session) in [
+        (codex.as_str(), session.as_str()),
+        (nova_token.as_str(), nova_session.as_str()),
+    ] {
+        let found = tool(app, token, session, "search", json!({"query": own_secret})).await;
+        assert_eq!(found["value"]["results"], json!([]), "{found}");
+        let listed = tool(
+            app,
+            token,
+            session,
+            "conversation_list",
+            json!({"projectId": work, "query": own_secret}),
+        )
+        .await;
+        assert_eq!(listed["value"]["conversations"], json!([]), "{listed}");
+    }
 
     // Events say what changed, never the text.
     let events = sqlx::query_scalar::<_, Value>(
@@ -756,7 +1117,9 @@ async fn removed_message_text_vanishes_everywhere() {
         ]
     );
 
-    // No copy of the text is left in any table that held one.
+    // No copy of the text is left in any table that held one, or that
+    // could: decisions, Codex runs and sponsored runs keep copies only when
+    // someone wrote one there (a run's prompt is the documented exception).
     for table in [
         "messages",
         "message_revisions",
@@ -769,12 +1132,17 @@ async fn removed_message_text_vanishes_everywhere() {
         "work_item_links",
         "conversations",
         "message_mentions",
+        "project_decisions",
+        "agent_runs",
+        "external_execution_requests",
     ] {
-        assert_eq!(
-            copies(&setup.pool, table, &secret).await,
-            0,
-            "{table} keeps a copy"
-        );
+        for needle in [&secret, &own_secret] {
+            assert_eq!(
+                copies(&setup.pool, table, needle).await,
+                0,
+                "{table} keeps a copy"
+            );
+        }
     }
 }
 
@@ -956,7 +1324,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
 
     // An agent's message: nobody else edits it; an owner removes it.
     let space = direct_space(&setup).await;
-    let (_, mara_token) = create_agent(app, owner_browser, &space, "Mara", "mara").await;
+    let (mara, mara_token) = create_agent(app, owner_browser, &space, "Mara", "mara").await;
     let codex = connect_app(app, owner_browser, "Codex", "full").await;
     let codex_session = initialize(app, &codex).await.expect("Codex MCP");
     let added = tool(
@@ -981,6 +1349,168 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         .as_str()
         .expect("Mara's message")
         .to_owned();
+
+    // The same rules through MCP, in plain words.
+    let mara_call = |name: &'static str, arguments: Value| {
+        let token = mara_token.clone();
+        let session = mara_session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let codex_call = |name: &'static str, arguments: Value| {
+        let token = codex.clone();
+        let session = codex_session.clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let refused = codex_call(
+        "message_edit",
+        json!({"messageId": from_mara, "text": "Owner's words"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(refused["message"], "You can only edit your own messages.");
+    let edited = mara_call(
+        "message_edit",
+        json!({"messageId": from_mara, "text": "Mara here, fixed", "expectedRevision": 1}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    assert_eq!(edited["value"]["revision"], 2);
+    let stale = mara_call(
+        "message_edit",
+        json!({"messageId": from_mara, "text": "Mara here, again", "expectedRevision": 1}),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    assert_eq!(
+        stale["message"],
+        "This message was edited since you read it (now revision 2). Read it again with conversation_read, then retry."
+    );
+    let same = mara_call(
+        "message_edit",
+        json!({"messageId": from_mara, "text": "Mara here, fixed"}),
+    )
+    .await;
+    assert_eq!(same["outcome"], "ok", "{same}");
+    assert_eq!(same["value"]["changed"], false);
+    assert_eq!(same["value"]["revision"], 2);
+    let reused = mara_call(
+        "message_edit",
+        json!({"messageId": from_mara, "text": "Mara here, once", "clientRequestId": "mara-1"}),
+    )
+    .await;
+    assert_eq!(reused["outcome"], "ok", "{reused}");
+    let reused = mara_call(
+        "message_edit",
+        json!({"messageId": from_mara, "text": "Mara here, twice", "clientRequestId": "mara-1"}),
+    )
+    .await;
+    assert_eq!(reused["outcome"], "conflict", "{reused}");
+    assert_eq!(
+        reused["message"],
+        "That clientRequestId was already used for a different edit. Use a new one."
+    );
+    let owners_second = say(
+        &setup,
+        owner_browser,
+        &general,
+        "owner-2",
+        text("Owner's second"),
+    )
+    .await;
+    set_role(&setup.pool, &work, mara, "admin").await;
+    let refused = mara_call("message_delete", json!({"messageId": owners_second})).await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "Agents can only remove their own messages. Ask a project owner or admin to remove this one."
+    );
+    set_role(&setup.pool, &work, mara, "member").await;
+    let pat_app = connect_app(app, &pat_browser, "Codex", "full").await;
+    let pat_session = initialize(app, &pat_app).await.expect("Pat's MCP");
+    let refused = tool(
+        app,
+        &pat_app,
+        &pat_session,
+        "message_delete",
+        json!({"messageId": owners_second}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "You can only remove your own messages. Project owners and admins can remove anyone's."
+    );
+    let reader = connect_app(app, owner_browser, "Reader", "read").await;
+    let reader_session = initialize(app, &reader).await.expect("Reader MCP");
+    for (name, arguments) in [
+        (
+            "message_edit",
+            json!({"messageId": owners_second, "text": "Read only"}),
+        ),
+        ("message_delete", json!({"messageId": owners_second})),
+    ] {
+        let refused = tool(app, &reader, &reader_session, name, arguments).await;
+        assert_eq!(refused["outcome"], "permission_denied", "{name}: {refused}");
+    }
+    let history = tool(
+        app,
+        &reader,
+        &reader_session,
+        "message_history",
+        json!({"messageId": from_mara}),
+    )
+    .await;
+    assert_eq!(history["outcome"], "ok", "{history}");
+    let texts = history["value"]["revisions"]
+        .as_array()
+        .expect("revisions")
+        .iter()
+        .map(|revision| revision["text"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        [
+            json!("Mara here"),
+            json!("Mara here, fixed"),
+            json!("Mara here, once")
+        ]
+    );
+    assert!(
+        history["value"]["revisions"][0]["writtenBy"]
+            .as_str()
+            .is_some_and(|by| by.ends_with("(@mara, agent)")),
+        "{history}"
+    );
+    let by_owner = codex_call("message_delete", json!({"messageId": owners_second})).await;
+    assert_eq!(by_owner["outcome"], "ok", "{by_owner}");
+    assert_eq!(by_owner["value"]["alreadyRemoved"], false);
+    // An edit retried on the other surface replays: both store the same body.
+    let owners_third = say(
+        &setup,
+        owner_browser,
+        &general,
+        "owner-3",
+        text("Owner's third"),
+    )
+    .await;
+    let (status, on_web) = edit(
+        &setup,
+        owner_browser,
+        &general,
+        &owners_third,
+        "shared-edit",
+        json!({"content": text("Owner's third, fixed")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{on_web}");
+    let on_mcp = codex_call(
+        "message_edit",
+        json!({"messageId": owners_third, "text": "Owner's third, fixed", "clientRequestId": "shared-edit"}),
+    )
+    .await;
+    assert_eq!(on_mcp["outcome"], "ok", "{on_mcp}");
+    assert_eq!(on_mcp["value"]["idempotentReplay"], true, "{on_mcp}");
+    assert_eq!(on_mcp["value"]["revision"], 2);
     let (status, _) = edit(
         &setup,
         owner_browser,
@@ -1036,6 +1566,25 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         "archived history stays readable: {history}"
     );
     assert_eq!(history["revisions"][0]["redacted"], true, "{history}");
+    let history = codex_call("message_history", json!({"messageId": owners_third})).await;
+    assert_eq!(
+        history["outcome"], "ok",
+        "archived history stays readable through MCP too: {history}"
+    );
+    assert_eq!(
+        history["value"]["revisions"][1]["text"],
+        "Owner's third, fixed"
+    );
+    let refused = codex_call(
+        "message_edit",
+        json!({"messageId": owners_third, "text": "Too late"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "That conversation is archived. Restore it before editing messages."
+    );
 }
 
 #[tokio::test]
@@ -1319,7 +1868,7 @@ async fn edits_and_removals_never_widen_visibility() {
     let app = &setup.app;
     let space = direct_space(&setup).await;
     let (mara, _) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
-    let (bob, _) = create_agent(app, &setup.browser, &space, "Bob", "bob").await;
+    let (bob, bob_token) = create_agent(app, &setup.browser, &space, "Bob", "bob").await;
     let (_, pat_browser) = add_person(&setup, &[&space], "pat").await;
     let (status, group) = send(
         app,
@@ -1378,6 +1927,33 @@ async fn edits_and_removals_never_widen_visibility() {
         0,
         "Bob is never told about a group he can't see"
     );
+    // Through MCP the message doesn't exist for Bob: not found, never denied.
+    let bob_session = initialize(app, &bob_token).await.expect("Bob MCP");
+    let link = format!("http://127.0.0.1:3100/messages/{group}#message-{message}");
+    for (name, arguments) in [
+        ("conversation_read", json!({"conversationId": group})),
+        ("message_history", json!({"messageId": message})),
+        ("message_history", json!({"messageId": link})),
+        (
+            "message_edit",
+            json!({"messageId": message, "text": "Mine now"}),
+        ),
+        ("message_delete", json!({"messageId": link})),
+    ] {
+        let refused = tool(app, &bob_token, &bob_session, name, arguments).await;
+        assert_eq!(refused["outcome"], "not_found", "{name}: {refused}");
+    }
+    let found = tool(
+        app,
+        &bob_token,
+        &bob_session,
+        "search",
+        json!({"query": "Plans"}),
+    )
+    .await;
+    assert_eq!(found["value"]["results"], json!([]), "{found}");
+    let briefing = tool(app, &bob_token, &bob_session, "briefing", json!({})).await;
+    assert!(!briefing.to_string().contains(&message), "{briefing}");
 
     // A group the owner isn't in: its messages don't exist for the owner, by
     // any route, even paired with a conversation the owner can see.
@@ -1426,6 +2002,19 @@ async fn edits_and_removals_never_widen_visibility() {
             .await;
             assert_eq!(status, StatusCode::NOT_FOUND);
         }
+    }
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let codex_session = initialize(app, &codex).await.expect("Codex MCP");
+    for (name, arguments) in [
+        ("message_history", json!({"messageId": hidden})),
+        (
+            "message_edit",
+            json!({"messageId": hidden, "text": "Mine now"}),
+        ),
+        ("message_delete", json!({"messageId": hidden})),
+    ] {
+        let refused = tool(app, &codex, &codex_session, name, arguments).await;
+        assert_eq!(refused["outcome"], "not_found", "{name}: {refused}");
     }
     // Pat can't reach the owner's group message through Pat's own group either.
     let (status, _) = get(

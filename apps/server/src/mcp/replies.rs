@@ -167,8 +167,15 @@ pub(super) struct ContextMessage {
     message_id: String,
     author: String,
     author_kind: String,
+    /// Empty when the message was removed.
     text: String,
     created_at: String,
+    /// Removed for everyone; its text is gone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    removed: bool,
+    /// Changed since it was sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    edited: bool,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -208,7 +215,8 @@ const INBOX_ITEM_SELECT: &str = r#"
            ), '') AS other_members,
            request.message_id::text AS message_id,
            author_membership.display_name AS message_author,
-           left(message.plain_text, 500) AS message_excerpt,
+           CASE WHEN message.removed_at IS NULL THEN left(message.plain_text, 500) ELSE '' END
+               AS message_excerpt,
            request.required,
            request.mentioned,
            request.status,
@@ -333,13 +341,16 @@ pub(super) async fn reply_claim(
             .await;
     let recent = sqlx::query_as::<_, ContextMessage>(
         r#"
-        SELECT message_id, author, author_kind, text, created_at
+        SELECT message_id, author, author_kind, text, created_at, removed, edited
         FROM (
             SELECT message.id::text AS message_id,
                    membership.display_name AS author,
                    actor.kind AS author_kind,
-                   message.plain_text AS text,
+                   CASE WHEN message.removed_at IS NULL THEN message.plain_text ELSE '' END
+                       AS text,
                    message.created_at::text AS created_at,
+                   message.removed_at IS NOT NULL AS removed,
+                   message.edited_at IS NOT NULL AS edited,
                    entry.sequence
             FROM conversation_entries entry
             JOIN messages message ON message.id = entry.message_id
@@ -454,7 +465,12 @@ pub(super) async fn reply_send(
             },
         },
         Err(AppError::Conflict(_, _)) => ReplyToolResult::Conflict {
-            message: "This request is no longer claimed by you (it expired, was answered, or a newer message replaced it). Check inbox_list for current requests.".to_owned(),
+            message: if answering_removed(&state.pool, request_id, principal).await {
+                ANSWERING_REMOVED
+            } else {
+                "This request is no longer claimed by you (it expired, was answered, or a newer message replaced it). Check inbox_list for current requests."
+            }
+            .to_owned(),
         },
         Err(AppError::NotFound(_)) => ReplyToolResult::from_failure(ReadFailure::NotFound),
         Err(AppError::Validation(_) | AppError::Invalid(_)) => ReplyToolResult::invalid("text"),
@@ -562,14 +578,46 @@ async fn resolve(
     }
 }
 
+const ANSWERING_REMOVED: &str =
+    "The message you were answering was removed, so no reply is needed. Your reply wasn't sent.";
+
+/// Whether the request was withdrawn because its message was removed.
+async fn answering_removed(
+    executor: impl sqlx::PgExecutor<'_>,
+    request_id: Uuid,
+    principal: &McpPrincipal,
+) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT request.status = 'superseded' AND message.removed_at IS NOT NULL
+        FROM reply_requests request
+        JOIN messages message ON message.id = request.message_id
+        WHERE request.id = $1 AND request.project_id = $2 AND request.agent_actor_id = $3
+        "#,
+    )
+    .bind(request_id)
+    .bind(principal.project_id)
+    .bind(principal.actor_id)
+    .fetch_optional(executor)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
 /// Explain why a request could not be claimed or resolved.
 async fn unusable<T>(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     request_id: Uuid,
     principal: &McpPrincipal,
 ) -> ReplyToolResult<T> {
-    let current = sqlx::query_as::<_, (String, bool)>(
-        "SELECT status, required FROM reply_requests WHERE id = $1 AND project_id = $2 AND agent_actor_id = $3",
+    let current = sqlx::query_as::<_, (String, bool, bool)>(
+        r#"
+        SELECT request.status, request.required, message.removed_at IS NOT NULL
+        FROM reply_requests request
+        JOIN messages message ON message.id = request.message_id
+        WHERE request.id = $1 AND request.project_id = $2 AND request.agent_actor_id = $3
+        "#,
     )
     .bind(request_id)
     .bind(principal.project_id)
@@ -577,12 +625,15 @@ async fn unusable<T>(
     .fetch_optional(&mut **transaction)
     .await;
     let message = match current {
-        Ok(Some((status, required))) => match status.as_str() {
+        Ok(Some((status, required, removed))) => match status.as_str() {
             "pending" | "claimed" if required => {
                 "This request needs a reply; use reply_send, or reply_release if you can't answer."
             }
             "pending" | "claimed" => {
                 "The generation does not match your current claim; claim again."
+            }
+            "superseded" if removed => {
+                "The message you were asked about was removed, so no reply is needed."
             }
             "superseded" => "A newer message replaced this request. Check inbox_list.",
             "expired" => "Your claim expired before you replied. A person can retry it.",

@@ -41,7 +41,7 @@ const DEFAULT_LIST: i64 = 50;
 const MAX_LIST: i64 = 200;
 /// A thread this long with no outcome gets a nudge to record one.
 const LONG_THREAD_MESSAGES: i64 = 40;
-const MAX_TEXT_CHARACTERS: usize = 20_000;
+pub(super) const MAX_TEXT_CHARACTERS: usize = 20_000;
 
 // ---------------------------------------------------------------------------
 // Arguments
@@ -202,7 +202,10 @@ pub(super) struct ConversationSummary {
 #[serde(rename_all = "camelCase")]
 pub(super) struct LastMessage {
     pub author: String,
+    /// "Message removed" when it was removed.
     pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
     pub at: String,
 }
 
@@ -224,6 +227,7 @@ pub(super) struct ConversationRow {
     last_activity_at: String,
     last_author: Option<String>,
     last_text: Option<String>,
+    last_removed: Option<bool>,
     member_names: Option<String>,
 }
 
@@ -246,12 +250,25 @@ pub(super) struct MessageItem {
     pub author: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author_id: Option<String>,
+    /// Empty when the message was removed.
     pub text: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
     pub sent_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Present once the message was edited: pass it as expectedRevision to
+    /// message_edit. A message never edited is revision 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_at: Option<String>,
+    /// Removed for everyone; its text is gone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+    /// "Name (@handle)" of whoever removed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_by: Option<String>,
     /// Threads started from this message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<ThreadRef>,
@@ -278,6 +295,11 @@ struct MessageRow {
     via: Option<String>,
     event_summary: Option<String>,
     threads: Option<serde_json::Value>,
+    revision: Option<i32>,
+    edited_at: Option<String>,
+    removed: Option<bool>,
+    remover_name: Option<String>,
+    remover_handle: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -527,7 +549,9 @@ pub(super) async fn list_rows(
                COALESCE(read_state.highest_seen_sequence, 0) AS last_read_sequence,
                COALESCE(last_entry.created_at, conversation.created_at)::text AS last_activity_at,
                last_author.display_name AS last_author,
-               last_message.plain_text AS last_text,
+               CASE WHEN last_message.removed_at IS NOT NULL THEN 'Message removed'
+                    ELSE last_message.plain_text END AS last_text,
+               last_message.removed_at IS NOT NULL AS last_removed,
                members.names AS member_names
         FROM conversations conversation
         JOIN projects project ON project.id = conversation.project_id
@@ -646,6 +670,7 @@ pub(super) fn summary(
             (Some(author), Some(text)) => Some(LastMessage {
                 author,
                 text: snippet(&text, SNIPPET_CHARACTERS),
+                removed: row.last_removed.unwrap_or(false),
                 at: row.last_activity_at.clone(),
             }),
             _ => None,
@@ -854,8 +879,12 @@ pub(super) async fn message_items(
         SELECT entry.sequence, entry.created_at::text AS at,
                message.id AS message_id, message.author_actor_id AS author_id,
                author.kind AS author_kind, membership.display_name AS author_name,
-               membership.handle AS author_handle, message.plain_text AS text,
+               membership.handle AS author_handle,
+               CASE WHEN message.removed_at IS NULL THEN message.plain_text END AS text,
                via_client.client_name AS via, event.summary AS event_summary,
+               message.revision, message.edited_at::text AS edited_at,
+               message.removed_at IS NOT NULL AS removed,
+               remover.display_name AS remover_name, remover.handle AS remover_handle,
                (SELECT jsonb_agg(jsonb_build_object(
                         'id', thread.id, 'name', thread.name, 'status', thread.thread_status)
                         ORDER BY thread.created_at)
@@ -871,6 +900,9 @@ pub(super) async fn message_items(
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        LEFT JOIN project_memberships remover
+          ON remover.project_id = message.project_id
+         AND remover.actor_id = message.removed_by_actor_id
         LEFT JOIN agent_run_events event ON event.id = entry.agent_run_event_id
         WHERE entry.conversation_id = $1 AND entry.sequence BETWEEN $2 AND $3
         ORDER BY entry.sequence
@@ -896,7 +928,12 @@ fn message_item(row: MessageRow) -> MessageItem {
         _ if row.event_summary.is_some() => "Codex run".to_owned(),
         _ => "Former member".to_owned(),
     };
-    let raw = row.text.or(row.event_summary).unwrap_or_default();
+    let removed = row.removed.unwrap_or(false);
+    let raw = if removed {
+        String::new()
+    } else {
+        row.text.or(row.event_summary).unwrap_or_default()
+    };
     let (text, truncated) = truncate_text(&raw, MESSAGE_CHARACTERS);
     MessageItem {
         sequence: row.sequence,
@@ -907,6 +944,17 @@ fn message_item(row: MessageRow) -> MessageItem {
         truncated,
         sent_at: row.at,
         via: row.via,
+        revision: row.revision.filter(|revision| *revision > 1),
+        edited_at: row.edited_at,
+        removed,
+        removed_by: if removed {
+            Some(match (row.remover_name, row.remover_handle) {
+                (Some(name), Some(handle)) => format!("{name} (@{handle})"),
+                _ => "Former member".to_owned(),
+            })
+        } else {
+            None
+        },
         threads: row
             .threads
             .and_then(|value| serde_json::from_value(value).ok())
@@ -1028,6 +1076,7 @@ pub(super) async fn pinned_items(
               OR conversation_visible_to(decision.source_conversation_id, $2))
         LEFT JOIN messages message
           ON pin.target_kind = 'message' AND message.id = pin.target_id
+         AND message.removed_at IS NULL
          AND conversation_visible_to(message.conversation_id, $2)
         LEFT JOIN project_memberships author
           ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
@@ -1196,22 +1245,17 @@ pub(super) async fn message_send(
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
     };
-    let content = match (arguments.text.as_deref(), arguments.content) {
-        (Some(text), None) => {
-            let text = text.trim();
-            if text.is_empty() || text.chars().count() > MAX_TEXT_CHARACTERS {
-                return ToolResult::invalid("text", "Send between 1 and 20,000 characters.");
-            }
-            match content_from_text(state, principal.project_id, text).await {
-                Ok(content) => content,
-                Err(error) => return ToolResult::from_error(error, "message_send"),
-            }
-        }
-        (None, Some(content)) => match serde_json::to_value(content) {
-            Ok(content) => content,
-            Err(_) => return ToolResult::invalid("content", "The content isn't valid."),
-        },
-        _ => return ToolResult::invalid("text", "Pass either text or content."),
+    let content = match message_content(
+        state,
+        principal,
+        arguments.text.as_deref(),
+        arguments.content,
+        "message_send",
+    )
+    .await
+    {
+        Ok(content) => content,
+        Err(refused) => return refused,
     };
     send(
         state,
@@ -1221,6 +1265,64 @@ pub(super) async fn message_send(
         arguments.client_request_id,
     )
     .await
+}
+
+/// Message content from a tool's `text` or `content` argument (exactly one):
+/// @handles of people in the project in text become mentions. The content is
+/// validated when the message is written.
+pub(super) async fn message_content<T>(
+    state: &AppState,
+    principal: &McpPrincipal,
+    text: Option<&str>,
+    content: Option<MessageContent>,
+    operation: &'static str,
+) -> Result<serde_json::Value, ToolResult<T>> {
+    match (text, content) {
+        (Some(text), None) => {
+            let text = text.trim();
+            if text.is_empty() || text.chars().count() > MAX_TEXT_CHARACTERS {
+                return Err(ToolResult::invalid(
+                    "text",
+                    "Send between 1 and 20,000 characters.",
+                ));
+            }
+            content_from_text(state, principal.project_id, text)
+                .await
+                .map_err(|error| ToolResult::from_error(error, operation))
+        }
+        (None, Some(content)) => serde_json::to_value(content)
+            .map_err(|_| ToolResult::invalid("content", "The content isn't valid.")),
+        _ => Err(ToolResult::invalid("text", "Pass either text or content.")),
+    }
+}
+
+/// Who a message command acts as: an agent as itself (its credential is
+/// checked against the conversation), a person as themselves, through the
+/// app they connected. Anything else is refused with this message.
+pub(super) fn message_actor(principal: &McpPrincipal) -> Result<MessageCommandActor, &'static str> {
+    match principal.actor_kind {
+        ActorKind::ExternalAgent => {
+            let Some(connection_id) = principal.external_agent_connection_id else {
+                return Err("This agent connection can't send messages.");
+            };
+            Ok(MessageCommandActor {
+                actor_id: principal.actor_id,
+                actor_kind: "external_agent".to_owned(),
+                mcp_credential: Some(MessageMcpCredential {
+                    credential_id: principal.credential_id,
+                    connection_id,
+                }),
+                via_grant_id: None,
+            })
+        }
+        ActorKind::Human => Ok(MessageCommandActor {
+            actor_id: principal.actor_id,
+            actor_kind: "human".to_owned(),
+            mcp_credential: None,
+            via_grant_id: principal.via_grant_id(),
+        }),
+        _ => Err("This connection can't send messages."),
+    }
 }
 
 async fn send(
@@ -1237,28 +1339,9 @@ async fn send(
             "Use letters, numbers, dashes or dots, up to 128 characters.",
         );
     };
-    let actor = match principal.actor_kind {
-        ActorKind::ExternalAgent => {
-            let Some(connection_id) = principal.external_agent_connection_id else {
-                return ToolResult::denied("This agent connection can't send messages.");
-            };
-            MessageCommandActor {
-                actor_id: principal.actor_id,
-                actor_kind: "external_agent".to_owned(),
-                mcp_credential: Some(MessageMcpCredential {
-                    credential_id: principal.credential_id,
-                    connection_id,
-                }),
-                via_grant_id: None,
-            }
-        }
-        ActorKind::Human => MessageCommandActor {
-            actor_id: principal.actor_id,
-            actor_kind: "human".to_owned(),
-            mcp_credential: None,
-            via_grant_id: principal.via_grant_id(),
-        },
-        _ => return ToolResult::denied("This connection can't send messages."),
+    let actor = match message_actor(principal) {
+        Ok(actor) => actor,
+        Err(message) => return ToolResult::denied(message),
     };
     match append_message_command(
         state,
@@ -1572,8 +1655,15 @@ pub(super) async fn thread_start(
         }
         let origin_text = match origin_id {
             Some(origin_id) => {
-                let Some(text) = sqlx::query_scalar::<_, String>(
-                    "SELECT plain_text FROM messages WHERE id = $1 AND conversation_id = $2",
+                // Whether it was removed comes first: a removed message's
+                // text is never read, and no new thread starts from it.
+                let Some((removed, text)) = sqlx::query_as::<_, (bool, String)>(
+                    r#"
+                    SELECT removed_at IS NOT NULL,
+                           CASE WHEN removed_at IS NULL THEN plain_text ELSE '' END
+                    FROM messages
+                    WHERE id = $1 AND conversation_id = $2
+                    "#,
                 )
                 .bind(origin_id)
                 .bind(parent.id)
@@ -1613,6 +1703,12 @@ pub(super) async fn thread_start(
                         created: Some(false),
                         message,
                     }));
+                }
+                if removed {
+                    return Ok(ToolResult::invalid(
+                        "fromMessageId",
+                        "That message was removed. Start the thread without fromMessageId.",
+                    ));
                 }
                 Some(text)
             }

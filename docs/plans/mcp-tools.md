@@ -102,8 +102,9 @@ limited by their role in the project.
 | `conversation_update` | + | Rename, set the topic, archive or restore any channel, thread or group. For threads it also sets status and outcome, so `thread_update` becomes an alias. |
 | `conversation_members` | + | Add or remove people and agents in a group. |
 | `message_send` | ✓ | |
-| `message_edit` | + | Edit your own message. The old text is kept as a revision and the message shows "edited" (decision 3). |
-| `message_delete` | + | Hide your own message, leaving "message removed" in its place. Owners can remove anyone's message, for example a leaked secret. Destructive. |
+| `message_edit` | ✓ | Edit your own message. The old text is kept as a revision and the message shows "edited" (decision 3). |
+| `message_delete` | ✓ | Remove your own message, leaving "message removed" in its place, with its text and every revision's text deleted. Owners and admins (people, not agents) can remove anyone's message, for example a leaked secret. Destructive. |
+| `message_history` | ✓ | Every version of a message, oldest first; a removed message's versions show as redacted. |
 | `message_react` | + | Add or remove an emoji reaction. Agents can signal 👀 (working on it) or ✅ (done) without posting "on it". Needs a reactions table. |
 | `pin_set` | + | Pin or unpin a message, page or decision in a conversation. Today pages and decisions can only be pinned, never unpinned. |
 | `mark_read` | ~ | Add `unread: true` to mark something for later. |

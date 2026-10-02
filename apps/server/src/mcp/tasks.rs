@@ -1204,7 +1204,9 @@ pub(super) async fn task_open(
                    COALESCE(page.title, decision.title,
                             'Message from ' || COALESCE(author.display_name, 'someone')) AS title,
                    decision.status AS status,
-                   left(COALESCE(page.body, decision.detail, message.plain_text, ''), 400) AS text
+                   CASE WHEN message.removed_at IS NOT NULL THEN 'Message removed'
+                        ELSE left(COALESCE(page.body, decision.detail, message.plain_text, ''), 400)
+                   END AS text
             FROM work_item_links link
             LEFT JOIN project_pages page
               ON link.target_kind = 'page' AND page.id = link.target_id AND page.archived_at IS NULL
@@ -2453,7 +2455,16 @@ async fn task_link_inner(
     let key = task_key_by_id(state, task_id).await?;
     let target = match request.record_id {
         Some(id) => {
-            if !record_visible(state, principal, project_id, request.kind, id).await? {
+            if !record_visible(
+                state,
+                principal,
+                project_id,
+                request.kind,
+                id,
+                request.remove,
+            )
+            .await?
+            {
                 return Ok(ToolResult::not_found(&format!("That {}", request.kind)));
             }
             LinkTarget::Record {
@@ -2700,20 +2711,27 @@ async fn task_link_inner(
 /// Whether a conversation, message, page or decision is in the task's
 /// project and the caller can see it, so a link never shows another
 /// project's (or a private conversation's) content to the task's readers.
+/// A removed message can be unlinked but not linked.
 async fn record_visible(
     state: &AppState,
     principal: &McpPrincipal,
     project_id: Uuid,
     kind: &str,
     id: Uuid,
+    unlinking: bool,
 ) -> Result<bool, AppError> {
     Ok(match kind {
         "conversation" => sqlx::query_scalar::<_, bool>(
             r#"SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 AND project_id = $3
                AND conversation_visible_to(id, $2) AND actor_can_access_project($2, $4, $3))"#,
         ),
+        "message" if unlinking => sqlx::query_scalar::<_, bool>(
+            r#"SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND project_id = $3
+               AND conversation_visible_to(conversation_id, $2) AND actor_can_access_project($2, $4, $3))"#,
+        ),
         "message" => sqlx::query_scalar::<_, bool>(
             r#"SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND project_id = $3
+               AND removed_at IS NULL
                AND conversation_visible_to(conversation_id, $2) AND actor_can_access_project($2, $4, $3))"#,
         ),
         "page" => sqlx::query_scalar::<_, bool>(

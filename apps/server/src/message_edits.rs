@@ -73,11 +73,6 @@ pub(crate) struct LockedMessage {
     pub(crate) conversation: ConversationAccessRow,
     pub(crate) id: Uuid,
     pub(crate) project_id: Uuid,
-    #[expect(
-        dead_code,
-        reason = "the MCP message tools (Phase 3, slice 2b) read it"
-    )]
-    pub(crate) author_actor_id: Uuid,
     pub(crate) content: serde_json::Value,
     pub(crate) plain_text: String,
     pub(crate) revision: i32,
@@ -166,10 +161,6 @@ pub(crate) struct MessageEdit {
 
 /// A thread started from a removed message, after any renaming.
 #[derive(Clone, Debug)]
-#[expect(
-    dead_code,
-    reason = "MCP message_delete (Phase 3, slice 2b) lists them"
-)]
 pub(crate) struct RemovedMessageThread {
     pub(crate) id: Uuid,
     pub(crate) name: String,
@@ -187,10 +178,7 @@ pub(crate) struct MessageRemoval {
     /// Threads started from the message whose name repeated its text and was
     /// replaced with a neutral one.
     pub(crate) renamed_threads: i64,
-    #[expect(
-        dead_code,
-        reason = "MCP message_delete (Phase 3, slice 2b) lists them"
-    )]
+    /// Threads started from the message, after any renaming.
     pub(crate) threads: Vec<RemovedMessageThread>,
 }
 
@@ -383,7 +371,6 @@ pub(crate) async fn lock_message_for_change(
         conversation,
         id: message.id,
         project_id: message.project_id,
-        author_actor_id: message.author_actor_id,
         content: message.content,
         plain_text: message.plain_text,
         revision: message.revision,

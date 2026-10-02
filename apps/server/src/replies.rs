@@ -660,8 +660,8 @@ async fn retry_request(
     // Retrying asks the agent again, so it has to be able to answer: still
     // active, still in the project, and able to see the conversation. An
     // agent removed from a group would otherwise hold a pending request it
-    // can never see. (Requests about a removed message were withdrawn, so
-    // the status check below refuses them.)
+    // can never see. Requests about a removed message were withdrawn when it
+    // was removed; the update below refuses them anyway.
     let answerable = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT actor.status = 'active' AND membership.enabled
@@ -685,9 +685,11 @@ async fn retry_request(
     }
     let updated = sqlx::query(
         r#"
-        UPDATE reply_requests
+        UPDATE reply_requests request
         SET status = 'pending', reason = NULL, updated_at = now()
-        WHERE id = $1 AND status IN ('expired', 'released')
+        FROM messages message
+        WHERE request.id = $1 AND request.status IN ('expired', 'released')
+          AND message.id = request.message_id AND message.removed_at IS NULL
         "#,
     )
     .bind(request_id)
