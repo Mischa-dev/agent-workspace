@@ -212,15 +212,21 @@ About 30 tools grouped by job, with plain names and plain descriptions. Each
 result carries enough to act on (title, status, snippet, link) plus a
 next-step hint.
 
-| Group | Tools | Status |
-|---|---|---|
-| Orientation | `briefing`, `projects_list`, `project_open` | `projects_list` exists |
-| Conversations | `conversation_list` (all projects and DMs, filter by person, kind or unread), `conversation_open`, `conversation_read`, `conversation_start` (DM or group), `message_send`, `mark_read`, `people_search` | List, read, send and people search exist, agents only |
-| Threads | `thread_start`, `thread_update` (title, status, outcome) | New |
-| Replies | `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | Exist. `inbox_list` and `external_event_poll` fold into `briefing` once the Nyx bridge and Muse have moved |
-| Tasks | `task_list` (sort by board order or priority), `task_open`, `task_create` (subtasks via `parentId`), `task_update` (status, blocked and review fold in here), `task_comment`, `task_reorder` (batch), `task_claim`, `task_release`, `task_link` (PR, thread, message or page) | Create, update, comment, status and PR linking exist |
-| Memory and search | `search`, `page_list`, `page_get`, `page_write`, `decision_record` | New |
-| Code and approvals | `repository_get`, `pull_request_get`, `run_request`, `approval_get`, `approval_respond` | Exist |
+The table lists the tools as they are after MCP Phase 2 (October 1, 2026):
+55, more than planned here. [mcp-tools.md](mcp-tools.md) says what each
+phase added and why.
+
+| Group | Tools |
+|---|---|
+| Orientation | `briefing`, `projects_list`, `project_open`, `workflow_get` (statuses, types and transitions) |
+| Projects and people | `project_members`, and for people with the owner or admin role (never agents) `project_member_set`, `project_update`, `project_archive` |
+| Conversations | `conversation_list` (all projects and DMs, filter by person, kind or unread), `conversation_open`, `conversation_read`, `conversation_start` (DM or group), `conversation_update`, `channel_create`, `message_send`, `mark_read`, `pin_set`, `people_search` |
+| Threads | `thread_start`, `thread_update` (title, status, outcome) |
+| Replies | `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` |
+| Tasks | `task_list` (board order, filters, total), `task_open` (history on request), `task_create`, `task_create_many` (up to 100, with a preview), `task_update`, `task_update_many` (up to 200, all or nothing), `task_criteria`, `task_comment`, `task_mark_blocked`, `task_mark_ready_for_review`, `task_reorder`, `task_claim`, `task_release`, `task_link` (thread, message, page, decision, repository or PR), `task_link_pull_request` (older name for `task_link` with a PR), `task_move` |
+| Labels | `label_list`, `label_write` |
+| Memory and search | `search`, `page_list`, `page_get`, `page_write`, `decision_record`, `decision_list` |
+| Code and approvals | `repository_get`, `pull_request_get`, `run_request`, `approval_get`, `approval_respond`, `external_event_poll` (for the older Hermes connector) |
 
 The server instructions describe the workflow in a few lines:
 

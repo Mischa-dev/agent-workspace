@@ -346,3 +346,92 @@ task's old key opens the new one for anyone who can see it; anyone else gets
 the archived original, which they could always see. This also means
 `taskId`, `workItemId` and `parentId` take task keys in every tool now. Moving
 a task again returns where it went. That brings the count to 50 tools.
+
+## Built in Phase 2 (October 1, 2026)
+
+On `claude/mcp-phase-2`, tasks at full strength. Five new tools bring the
+count to 55, which `tests/integration/m6_mcp_foundation.rs` checks:
+
+- `label_list` and `label_write`: project labels with a name, color and
+  description. Labels are archived and restored, never deleted. Migration
+  0044 adds them. A project has at most 200 active labels, and a task at
+  most 20.
+- `task_criteria`: add, edit, check, uncheck, remove and move acceptance
+  criteria in one call, all or nothing. A criterion is named by its ID or
+  by its position in the version you read.
+- `task_create_many`: up to 100 tasks in one project, with subtasks through
+  `parentRef` (an earlier task in the list) or `parentId` (an existing
+  task). `preview: true` runs the same code and rolls back, so the keys it
+  shows are the ones the tasks would get.
+- `task_update_many`: one change to up to 200 tasks, all or nothing: status,
+  priority, assignee, type, labels, or archived. It has a preview too.
+
+Changed tools:
+
+- `task_create` takes status, type, labels, acceptance criteria and a place
+  in its column. Subtasks now keep their priority and assignee; they were
+  dropped before.
+- `task_update` takes type, parent (`parentId`, or `clearParent` for
+  top-level), labels to add and remove, a place in its column, and
+  `archived`. Any mix of changes is one new version.
+- `task_list` filters by several projects at once, labels, type, priority,
+  who created it, updated since, blocked and claimed. It can list archived
+  tasks and returns a total.
+- `task_open` shows labels, and the task's timeline with
+  `include: ["history"]`.
+- `task_reorder` places tasks just above or below another task.
+- `task_link` links repositories and pull requests too.
+  `task_link_pull_request` stays as its older name (decision 4).
+- `project_open` lists the project's labels, and `task_move` carries labels
+  across by name.
+
+This phase's check passes as a test: an agent imports a plan with a preview,
+then reorganizes the board without the web app
+(`an_agent_imports_a_plan_and_reorganizes_the_board` in
+`tests/integration/mcp_task_batches.rs`).
+
+Differences from the plan:
+
+- **Labels can only be managed through MCP for now.** The web app shows them
+  as read-only chips on the board, the list and the task page. There's no
+  labels screen yet.
+- **Only `task_create_many` creates labels,** and only with
+  `createMissingLabels: true`. `task_create` and `task_update` refuse a label
+  the project doesn't have and list the ones it does; `label_write` creates
+  one.
+- **A bulk status change is one step.** `task_update_many` moves every task
+  straight to the new status. If any task can't go there directly, nothing
+  changes, and the refusal lists the steps that task needs.
+- **`archived` goes on its own.** `task_update` and `task_update_many` don't
+  mix archiving or restoring with other changes. Make those with the new
+  version.
+- **Linking changes a task's version.** Every `task_link` change is now a
+  version, an activity, an audit row and an outbox event, like other task
+  writes. Its `expectedVersion` is optional, and a link that's already there
+  answers `changed: false`.
+- **The history comes in pages:** the latest 30 entries by default, up to
+  100, with a cursor for older ones.
+- **The MCP request limit is 1 MiB,** up from 256 KiB, so a 100-task plan
+  with real descriptions fits in one call.
+- **The web app changed too,** because it shares the task commands:
+  - a task whose status changes goes to the bottom of its new column, where
+    new tasks go;
+  - archiving a task releases its claim;
+  - restoring the archived original of a moved task is refused (409);
+  - linking a thread or repository to an archived task is refused (409), but
+    a thread can still be unlinked from one;
+  - a thread you can't see can't be linked (404);
+  - the task timeline shows "via Claude Code" the way messages do.
+- **Two migrations weren't planned.** 0045 makes the database refuse a
+  parent cycle from any writer. 0046 keeps control characters and line
+  separators out of label descriptions.
+
+## Decided for Phase 3 (October 1, 2026)
+
+1. Admins as well as owners can remove anyone's message. This widens
+   decision 3 of September 30.
+2. Removing a message also removes the text of its earlier revisions, so a
+   leaked secret doesn't live on in the history. Who wrote each revision,
+   and when, is kept.
+3. Agents edit and delete only their own messages, whatever their role.
+4. Agents can leave groups, but they can't add people to them.

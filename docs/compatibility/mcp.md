@@ -6,7 +6,7 @@
 - Verified client: `codex-cli 0.146.0`
 - Negotiated protocol: MCP `2025-06-18`
 - Transport: Streamable HTTP at `http://127.0.0.1:3100/api/v1/mcp`
-- Request ceiling: 256 KiB
+- Request ceiling: 1 MiB (a 100-task task_create_many plan fits)
 - Session mode: legacy session compatibility with JSON request/response enabled
 - Network boundary: the ordinary loopback application listener, reached from
   the Mac only through SSH forwarding
@@ -76,17 +76,19 @@ Workspace OAuth and bearer endpoints; WorkOS Agent Auth is not required.
 ## Tools
 
 The full list, grouped by job, is in
-[docs/plans/agent-interface.md](../plans/agent-interface.md). Read-only tools:
-`briefing`, `projects_list`, `project_open`, `conversation_list`,
-`conversation_open`, `conversation_read`, `people_search`, `inbox_list`,
-`task_list`, `task_open`, `search`, `page_list`, `page_get`,
-`repository_get`, `pull_request_get`, `approval_get` and
+[docs/plans/agent-interface.md](../plans/agent-interface.md). There are 55.
+Read-only tools: `briefing`, `projects_list`, `project_open`,
+`workflow_get`, `project_members`, `conversation_list`, `conversation_open`,
+`conversation_read`, `people_search`, `inbox_list`, `task_list`,
+`task_open`, `label_list`, `search`, `page_list`, `page_get`,
+`decision_list`, `repository_get`, `pull_request_get`, `approval_get` and
 `external_event_poll`.
 
 Task writes keep the canonical command contract below: `task_create`,
 `task_update` (including status), `task_comment`, `task_mark_blocked`,
 `task_mark_ready_for_review` and `task_link_pull_request`. They accept the
-older `workItemId` argument name as well as `taskId`.
+older `workItemId` argument name as well as `taskId`, as `task_criteria` and
+`task_link` do.
 
 Every non-commutative command requires `expectedVersion`; every command
 requires a stable `clientRequestId`. Exact completed-request replay succeeds
@@ -94,8 +96,96 @@ without duplicate activity, audit success, relation, outbox event, or version
 advance. A stale version returns the current version, provable changed fields,
 and a stable retry category. Invalid transitions, permission changes, archive,
 missing external links, idempotency payload mismatch, and transient failure
-remain distinct outcomes. Tool annotations mark only append, subtask creation,
-and explicit PR linking as non-destructive; only PR linking is open-world.
+remain distinct outcomes.
+
+Among the task tools, `task_create`, `task_create_many`, `task_comment`,
+`task_reorder`, `task_claim`, `task_release` and `task_link_pull_request` are
+marked non-destructive; `task_update`, `task_update_many`, `task_criteria`,
+`task_mark_blocked`, `task_mark_ready_for_review`, `task_link`, `task_move`
+and `label_write` are destructive. Only `task_link` and
+`task_link_pull_request` are open-world.
+
+## MCP Phase 2 changes (October 1, 2026)
+
+New tools, taking the count from 50 to 55:
+
+- `label_list` and `label_write`. `label_write` is idempotent by state, so it
+  takes no `clientRequestId`; creating a name that already exists returns
+  that label with `created: false`. Its `expectedVersion` is optional.
+  Owners, admins and members (people and agents) write labels; viewers and
+  read-only apps only read them.
+- `task_criteria`: requires `expectedVersion` and takes `clientRequestId`.
+- `task_create_many` and `task_update_many`. `task_create_many` requires
+  `clientRequestId` unless `preview: true`; `task_update_many` takes one, and
+  `expectedVersions` keyed as the tasks were named. A retry within 24 hours
+  returns the first result with `idempotentReplay: true`. Their results add
+  one outcome to the shared shape: `rejected`, meaning nothing changed, with
+  a `message` and a `problems` list (index, ref or task key, field, message,
+  and `currentVersion` when a task changed since it was read).
+
+`WriteResult` gained only optional fields. Stored replays and older clients
+still decode, and `retryCategory` values are unchanged:
+
+- `applied`: `key`, `url`, `message`, and `labels` (the task's labels after
+  the change, when the call touched them).
+- `conflict`, `not_found`, `permission_denied` and `invalid_request`:
+  `message`, in plain words.
+- `invalid_transition`: `currentStatus` and `requestedStatus` by name,
+  `allowedStatuses` (id, name, category), `path` (the shortest way to the
+  requested status, one status per update; empty when it can't be reached)
+  and `message`.
+
+New arguments, all optional:
+
+- `task_create`: `status`, `type`, `labels`, `acceptanceCriteria`,
+  `position` (top, bottom, or a number where 1 is the top; `3` and `"3"`
+  both work), `beforeTaskId` and `afterTaskId`.
+- `task_update`: `type`, `parentId`, `clearParent`, `addLabels`,
+  `removeLabels`, `position`, `beforeTaskId`, `afterTaskId` and `archived`.
+  `assignee` takes `"none"` to unassign.
+- `task_list`: `projectIds`, `labels`, `type`, `priority`, `createdBy`,
+  `updatedSince`, `blocked`, `claimed` (yes, no, me, an @handle, or true and
+  false) and `includeArchived`.
+- `task_open`: `include: ["history"]`, `historyLimit` and `historyBefore`.
+- `task_reorder`: `beforeTaskId` and `afterTaskId`.
+- `task_link`: `repositoryId`, `pullRequestId`, `role` (primary or related)
+  and `expectedVersion`.
+
+New result fields: `total` on `task_list`, and `type`, `labels` and
+`archived` (only on archived tasks, at `boardPosition` 0) on its task lines;
+`labels` on `task_open`'s task and on `project_open`; `history` on
+`task_open` when asked for; `changed` and `tasks` on `task_reorder`; and
+`key`, `changed`, `version`, `role` and `notes` on `task_link`.
+
+Behavior changes:
+
+- A task whose status changes goes to the bottom of its new column unless
+  the call gives a place. Before, it kept its old rank. `task_update_many`
+  puts tasks there in the order given. This applies in the web app too.
+- Archiving a task releases its claim, through MCP and in the web app.
+- Restoring the archived original of a moved task is refused. `task_update`
+  answers `conflict` with `retryCategory: do_not_retry`, naming the new key
+  only to someone who can reach its project; the web API answers 409.
+- `archived` must be passed on its own in `task_update` and
+  `task_update_many`.
+- An exact status name wins over a status group spelled the same way.
+- Every `task_link` change bumps the task's version, as other task writes
+  do. Before, linking a thread, message, page or decision left the version
+  alone, so a version read before a link is now stale after it. Archived
+  tasks, new links to archived repositories, and threads the caller can't
+  see are refused.
+- `clientRequestId` is at most 128 characters, the audit log's limit. A
+  longer one is now refused as `invalid_request` instead of failing every
+  write.
+- A subtask create sent before this release with `priority` or `assignee`
+  hashes differently now, because those fields are no longer dropped. Retried
+  within the 24-hour window, it answers `conflict` with
+  `retryCategory: use_new_request_id`.
+- `task_list` cursors read `{offset}.{fingerprint}`, and a cursor from a
+  different search is refused. A bare number still works as an offset.
+- In the web API, linking a thread or repository to an archived task, or
+  changing an archived task's repository links, is 409; unlinking a thread
+  from one still works. Linking a thread the caller can't see is 404.
 
 ## Verification history
 

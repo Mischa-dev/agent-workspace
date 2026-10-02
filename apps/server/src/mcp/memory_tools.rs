@@ -2,7 +2,6 @@
 //! project's pages and decisions. Pages keep every version, so edits can be
 //! undone; decisions from private conversations stay private.
 
-use chrono::{DateTime, NaiveDate, Utc};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -10,8 +9,8 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{
-        ToolResult, insert_audit, parse_id, project_is_chosen, public_url, scope_projects,
-        truncate_text,
+        ToolResult, insert_audit, parse_id, parse_time, project_is_chosen, public_url,
+        scope_projects, truncate_text,
     },
     talk::can_write_in,
 };
@@ -82,20 +81,6 @@ pub(super) struct SearchResult {
 pub(super) struct SearchValue {
     pub results: Vec<SearchResult>,
     pub hint: &'static str,
-}
-
-fn parse_time(value: &str, end_of_day: bool) -> Option<DateTime<Utc>> {
-    let value = value.trim();
-    if let Ok(time) = DateTime::parse_from_rfc3339(value) {
-        return Some(time.with_timezone(&Utc));
-    }
-    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
-    let time = if end_of_day {
-        date.and_hms_opt(23, 59, 59)?
-    } else {
-        date.and_hms_opt(0, 0, 0)?
-    };
-    Some(time.and_utc())
 }
 
 pub(super) async fn search_tool(

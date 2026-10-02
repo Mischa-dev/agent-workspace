@@ -75,6 +75,8 @@ pub struct WorkItemProjection {
     pub archived: bool,
     pub parent_work_item_id: Option<String>,
     pub blocked: Option<BlockedProjection>,
+    /// Its labels, by name; label_list has their colors.
+    pub labels: Vec<String>,
     pub acceptance_criteria: Vec<AcceptanceCriterionProjection>,
     pub linked_repositories: Vec<LinkedRepositoryProjection>,
     pub linked_pull_requests: Vec<PullRequestProjection>,
@@ -464,7 +466,8 @@ async fn load_work_item(
     let Some(row) = row else {
         return Ok(None);
     };
-    let (criteria, repositories, pull_requests) = tokio::try_join!(
+    let (labels, criteria, repositories, pull_requests) = tokio::try_join!(
+        crate::work_item_labels::active_names(&state.pool, project_id, work_item_id),
         load_acceptance_criteria(&state.pool, project_id, work_item_id),
         load_linked_repositories(&state.pool, project_id, work_item_id),
         load_linked_pull_requests(&state.pool, project_id, work_item_id),
@@ -472,6 +475,7 @@ async fn load_work_item(
     Ok(Some(work_item_projection(
         state,
         row,
+        labels,
         criteria,
         repositories,
         pull_requests,
@@ -595,6 +599,7 @@ async fn load_linked_pull_requests(
 fn work_item_projection(
     state: &crate::AppState,
     row: WorkItemRow,
+    labels: Vec<String>,
     acceptance_criteria: Vec<AcceptanceCriterionProjection>,
     linked_repositories: Vec<LinkedRepositoryRow>,
     linked_pull_requests: Vec<PullRequestRow>,
@@ -633,6 +638,7 @@ fn work_item_projection(
             }
             _ => None,
         },
+        labels,
         acceptance_criteria,
         linked_repositories: linked_repositories
             .into_iter()

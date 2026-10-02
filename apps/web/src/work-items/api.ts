@@ -6,6 +6,7 @@ import type {
   AssignableActor,
   WorkItem,
   WorkItemCard,
+  WorkItemLabel,
   WorkItemFilters,
   WorkItemListResponse,
   WorkItemBoardResponse,
@@ -49,6 +50,22 @@ function priority(value: unknown): WorkItemPriority {
     : 'no_priority'
 }
 
+const LABEL_COLOR = /^#[0-9a-f]{6}$/
+const FALLBACK_LABEL_COLOR = '#8b8d98'
+
+function labels(value: unknown): WorkItemLabel[] {
+  return (Array.isArray(value) ? value : []).map((entry) => {
+    const label = record(entry)
+    const color = string(label.color)
+    return {
+      id: string(label.id),
+      name: string(label.name),
+      // The color goes into an inline style, so only a plain hex color is used.
+      color: LABEL_COLOR.test(color) ? color : FALLBACK_LABEL_COLOR,
+    }
+  })
+}
+
 export function normalizeWorkItem(value: unknown): WorkItem {
   const item = record(value)
   const itemType = record(item.itemType)
@@ -83,6 +100,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
     archivedAt: nullableString(item.archivedAt),
     createdAt: string(item.createdAt),
     updatedAt: string(item.updatedAt),
+    labels: labels(item.labels),
     acceptanceCriteria: (Array.isArray(item.acceptanceCriteria)
       ? item.acceptanceCriteria
       : []
@@ -188,6 +206,7 @@ function normalizeCard(value: unknown): WorkItemCard {
     version: item.version,
     archivedAt: item.archivedAt,
     updatedAt: item.updatedAt,
+    labels: item.labels,
     capabilities: item.capabilities,
   }
 }
@@ -592,6 +611,7 @@ export async function getWorkItemTimeline(
               },
               kind: string(activity.kind),
               summary: string(activity.summary),
+              via: typeof activity.via === 'string' ? activity.via.slice(0, 80) : null,
             }
           : null,
       comment:
@@ -617,6 +637,7 @@ export async function getWorkItemTimeline(
                 return [{ id: string(item.id), key: string(item.key), title: string(item.title), statusCategory: string(item.statusCategory), archivedAt: nullableString(item.archivedAt), href }]
               }),
               createdAt: string(comment.createdAt),
+              via: typeof comment.via === 'string' ? comment.via.slice(0, 80) : null,
             }
           : null,
     }

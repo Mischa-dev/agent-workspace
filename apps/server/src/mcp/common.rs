@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, NaiveDate, Utc};
 use rmcp::schemars;
 use serde::Serialize;
 use sqlx::{FromRow, Postgres, Transaction};
@@ -15,6 +16,24 @@ use crate::{AppState, error::AppError, policy::ActorKind};
 pub(super) const SNIPPET_CHARACTERS: usize = 280;
 /// Longest message text returned when reading a conversation.
 pub(super) const MESSAGE_CHARACTERS: usize = 8_000;
+
+/// Shared wording, so every tool says the same thing about the same problem.
+pub(super) const READ_ONLY_MESSAGE: &str =
+    "This connection is read-only. Reconnect it with full access to make changes.";
+pub(super) const ARCHIVED_PROJECT_MESSAGE: &str =
+    "This project is archived. Restore it with project_archive (archived: false) first.";
+
+/// Someone else changed a task between the caller's read and write.
+pub(super) fn version_conflict_message(task: &str, version: i64) -> String {
+    format!(
+        "Someone changed {task} first (now version {version}). Open it again with task_open, then retry with expectedVersion {version}."
+    )
+}
+
+/// An archived task refuses every change but a restore.
+pub(super) fn archived_task_message(task: &str) -> String {
+    format!("{task} is archived. Restore it before changing it.")
+}
 
 /// The result shape every newer tool uses. `message` is written for the agent
 /// reading it: it says what happened and what to try next.
@@ -58,7 +77,7 @@ impl<T> ToolResult<T> {
     }
 
     pub(super) fn read_only() -> Self {
-        Self::denied("This connection is read-only. Reconnect it with full access to make changes.")
+        Self::denied(READ_ONLY_MESSAGE)
     }
 
     pub(super) fn conflict(message: impl Into<String>) -> Self {
@@ -104,6 +123,14 @@ impl<T> ToolResult<T> {
     }
 }
 
+/// The one Project an older Project-scoped credential stays in, whatever
+/// else the person belongs to. None when the caller's reach is every Project
+/// `actor_can_access_project` allows.
+pub(super) fn confined_project(principal: &McpPrincipal) -> Option<Uuid> {
+    (principal.actor_kind == ActorKind::Human && !principal.account_wide)
+        .then_some(principal.project_id)
+}
+
 /// Projects this caller can act in right now.
 ///
 /// People connected through an app reach every Project they belong to. Agents
@@ -113,8 +140,18 @@ pub(super) async fn accessible_project_ids(
     state: &AppState,
     principal: &McpPrincipal,
 ) -> Result<Vec<Uuid>, AppError> {
-    if principal.actor_kind == ActorKind::Human && !principal.account_wide {
-        return Ok(vec![principal.project_id]);
+    accessible_project_ids_in(&state.pool, principal).await
+}
+
+/// `accessible_project_ids` on a connection the caller already has. A write
+/// transaction that holds locks reads it here rather than waiting for a
+/// second pool connection.
+pub(super) async fn accessible_project_ids_in(
+    executor: impl sqlx::PgExecutor<'_>,
+    principal: &McpPrincipal,
+) -> Result<Vec<Uuid>, AppError> {
+    if let Some(project_id) = confined_project(principal) {
+        return Ok(vec![project_id]);
     }
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -132,7 +169,7 @@ pub(super) async fn accessible_project_ids(
     )
     .bind(principal.actor_id)
     .bind(principal.external_agent_connection_id)
-    .fetch_all(&state.pool)
+    .fetch_all(executor)
     .await?)
 }
 
@@ -241,6 +278,96 @@ pub(super) async fn insert_audit(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// Reads an argument agents send either as a string or as a number (such as
+/// a board position, `3` or `"3"`) as the string, so the tool can answer a
+/// bad value in plain words instead of failing to parse the call. Pair it
+/// with `#[schemars(with = "Option<String>")]`: the input schema stays a
+/// plain string, without an anyOf.
+pub(super) fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Text(String),
+        Number(serde_json::Number),
+    }
+    Ok(
+        Option::<Raw>::deserialize(deserializer)?.map(|raw| match raw {
+            Raw::Text(text) => text,
+            Raw::Number(number) => number.to_string(),
+        }),
+    )
+}
+
+/// Reads a yes/no argument agents send either as a boolean or as a word (such
+/// as `claimed: true` or `claimed: "me"`), with true as "yes" and false as
+/// "no". Pair it with `#[schemars(with = "Option<String>")]`, so the input
+/// schema stays a plain string.
+pub(super) fn flag_or_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Flag(bool),
+        Text(String),
+    }
+    Ok(
+        Option::<Raw>::deserialize(deserializer)?.map(|raw| match raw {
+            Raw::Flag(true) => "yes".to_owned(),
+            Raw::Flag(false) => "no".to_owned(),
+            Raw::Text(text) => text,
+        }),
+    )
+}
+
+/// A date (YYYY-MM-DD, as the start or the end of that day in UTC) or an
+/// RFC 3339 timestamp.
+pub(super) fn parse_time(value: &str, end_of_day: bool) -> Option<DateTime<Utc>> {
+    let value = value.trim();
+    if let Ok(time) = DateTime::parse_from_rfc3339(value) {
+        return Some(time.with_timezone(&Utc));
+    }
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    let time = if end_of_day {
+        date.and_hms_opt(23, 59, 59)?
+    } else {
+        date.and_hms_opt(0, 0, 0)?
+    };
+    Some(time.and_utc())
+}
+
+/// A moment to look back to: a span such as `24h` or `7d` (at most ten
+/// years) before now, or anything `parse_time` reads.
+pub(super) fn parse_since(value: &str) -> Option<DateTime<Utc>> {
+    let value = value.trim();
+    let span = |digits: &str, unit: char| {
+        if digits.is_empty() || digits.len() > 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let amount = digits.parse::<i64>().ok()?;
+        let span = match unit {
+            'h' => chrono::Duration::try_hours(amount)?,
+            _ => chrono::Duration::try_days(amount)?,
+        };
+        (span <= chrono::Duration::try_days(3650)?).then_some(span)
+    };
+    let lower = value.to_ascii_lowercase();
+    for unit in ['h', 'd'] {
+        if let Some(digits) = lower.strip_suffix(unit) {
+            return span(digits, unit).map(|span| Utc::now() - span);
+        }
+    }
+    parse_time(value, false)
 }
 
 /// Accept a UUID, or an Agent Workspace URL that ends in one.
@@ -404,7 +531,9 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{parse_id, snippet, text_nodes};
+    use super::{
+        flag_or_text, parse_id, parse_since, parse_time, snippet, string_or_number, text_nodes,
+    };
 
     #[test]
     fn handles_become_mentions_only_for_known_people() {
@@ -428,6 +557,94 @@ mod tests {
             Some(id)
         );
         assert_eq!(parse_id("AW-12"), None);
+    }
+
+    #[test]
+    fn numbers_and_strings_both_read_as_strings() {
+        #[derive(serde::Deserialize)]
+        struct Arguments {
+            #[serde(default, deserialize_with = "string_or_number")]
+            position: Option<String>,
+        }
+        let read = |value: serde_json::Value| {
+            serde_json::from_value::<Arguments>(value).map(|arguments| arguments.position)
+        };
+        assert_eq!(
+            read(serde_json::json!({"position": 3})).expect("number"),
+            Some("3".to_owned())
+        );
+        assert_eq!(
+            read(serde_json::json!({"position": "top"})).expect("string"),
+            Some("top".to_owned())
+        );
+        assert_eq!(read(serde_json::json!({})).expect("absent"), None);
+        assert_eq!(
+            read(serde_json::json!({"position": null})).expect("null"),
+            None
+        );
+        assert!(read(serde_json::json!({"position": true})).is_err());
+    }
+
+    #[test]
+    fn flags_and_words_both_read_as_words() {
+        #[derive(serde::Deserialize)]
+        struct Arguments {
+            #[serde(default, deserialize_with = "flag_or_text")]
+            claimed: Option<String>,
+        }
+        let read = |value: serde_json::Value| {
+            serde_json::from_value::<Arguments>(value).map(|arguments| arguments.claimed)
+        };
+        assert_eq!(
+            read(serde_json::json!({"claimed": true})).expect("true"),
+            Some("yes".to_owned())
+        );
+        assert_eq!(
+            read(serde_json::json!({"claimed": false})).expect("false"),
+            Some("no".to_owned())
+        );
+        assert_eq!(
+            read(serde_json::json!({"claimed": "@mara"})).expect("handle"),
+            Some("@mara".to_owned())
+        );
+        assert_eq!(read(serde_json::json!({})).expect("absent"), None);
+        assert!(read(serde_json::json!({"claimed": 3})).is_err());
+    }
+
+    #[test]
+    fn since_takes_dates_timestamps_and_spans() {
+        let now = chrono::Utc::now();
+        let day = parse_since("24h").expect("hours");
+        let hours = (now - day).num_hours();
+        assert!((23..=24).contains(&hours), "{hours}");
+        let week = parse_since(" 7D ").expect("days");
+        assert!((now - week).num_days() >= 6, "{week}");
+        assert_eq!(
+            parse_since("2026-09-30").expect("date").to_rfc3339(),
+            "2026-09-30T00:00:00+00:00"
+        );
+        assert_eq!(
+            parse_since("2026-09-30T14:00:00Z")
+                .expect("timestamp")
+                .to_rfc3339(),
+            "2026-09-30T14:00:00+00:00"
+        );
+        for refused in [
+            "soon",
+            "",
+            "h",
+            "12345h",
+            "3651d",
+            "-2d",
+            "7w",
+            "2026-13-01",
+        ] {
+            assert_eq!(parse_since(refused), None, "{refused}");
+        }
+        assert_eq!(
+            parse_time("2026-09-30", true).expect("end").to_rfc3339(),
+            "2026-09-30T23:59:59+00:00"
+        );
     }
 
     #[test]

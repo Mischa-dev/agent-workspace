@@ -4,7 +4,7 @@
 //! its links and authors belong to its project. So a move carries the task
 //! over into the target project (title, description, priority, status and
 //! type by name, the assignee if they're there, acceptance criteria,
-//! subtasks, and every comment quoted with its author and date), then
+//! subtasks, labels, and every comment quoted with its author and date), then
 //! archives the original. The original keeps its history and links, and its
 //! key keeps opening the new task (migration 0043).
 
@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, mark_via, parse_id, public_url},
+    common::{ToolResult, insert_audit, mark_via, parse_id, public_url},
+    tasks::command_actor,
 };
 use crate::{
     AppState,
@@ -23,10 +24,11 @@ use crate::{
     message_content::MessageContent,
     policy::{Action, Decision},
     work_item_commands::{
-        AllocatedNumberMetadata, AuditAttribution, ChangeFinalization, CommandActor,
-        CreateWorkItemCommand, CreateWorkItemOutcome, authorize_mutation, create_work_item,
-        finalize_change, finalize_comment, lock_membership,
+        AllocatedNumberMetadata, ChangeFinalization, CommandActor, CreateWorkItemCommand,
+        CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, authorize_mutation, create_work_item,
+        finalize_change, finalize_comment, insert_criteria, lock_membership,
     },
+    work_item_labels::{self, LabelLimit, MAX_LABELS_PER_TASK, SkipReason},
 };
 
 /// The most tasks (a task and its subtasks) one move carries.
@@ -143,8 +145,8 @@ pub(super) async fn task_move(
 
         let mut transaction = state.pool.begin().await?;
         mark_via(&mut transaction, principal).await?;
-        let source_actor = actor(principal, source_project_id);
-        let target_actor = actor(principal, target_project_id);
+        let source_actor = command_actor(principal, source_project_id);
+        let target_actor = command_actor(principal, target_project_id);
         for (actor, project, what) in [
             (&source_actor, source_project_id, "this task's project"),
             (&target_actor, target_project_id, "the target project"),
@@ -201,7 +203,7 @@ pub(super) async fn task_move(
                 SELECT child.id, tree.depth + 1
                 FROM work_items child
                 JOIN tree ON child.parent_work_item_id = tree.id
-                WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < 20
+                WHERE child.project_id = $1 AND child.archived_at IS NULL AND tree.depth < $3
             )
             SELECT item.id,
                    CASE WHEN item.id = $2 THEN NULL ELSE item.parent_work_item_id END AS parent_id,
@@ -227,6 +229,8 @@ pub(super) async fn task_move(
         )
         .bind(source_project_id)
         .bind(task_id)
+        // Depth 0 is the task itself, so this walks every level a tree can have.
+        .bind(i32::try_from(MAX_SUBTASK_LEVELS - 1).unwrap_or(i32::MAX))
         .fetch_all(&mut *transaction)
         .await?;
         if tasks.len() > MAX_TASKS {
@@ -272,6 +276,38 @@ pub(super) async fn task_move(
                 None => None,
             };
             let parent = task.parent_id.and_then(|parent| new_ids.get(&parent).copied());
+            // Labels go by name: one the target already has keeps its color
+            // there, and a missing one is created with the source's color.
+            let mut wanted = work_item_labels::active_labels_with_colors(
+                &mut *transaction,
+                source_project_id,
+                task.id,
+            )
+            .await?;
+            let over_limit = wanted.split_off(wanted.len().min(MAX_LABELS_PER_TASK));
+            let labels = work_item_labels::ensure_by_name(
+                &mut transaction,
+                target_project_id,
+                principal.actor_id,
+                &wanted,
+            )
+            .await?;
+            for label in &labels.created {
+                insert_audit(
+                    &mut transaction,
+                    principal,
+                    target_project_id,
+                    "work_item_label.mcp_created",
+                    "work_item_label",
+                    label.id,
+                    serde_json::json!({
+                        "changedFields": ["label"],
+                        "name": label.name,
+                        "movedWith": task.key,
+                    }),
+                )
+                .await?;
+            }
             let summary = format!("Work Item moved from {}", task.key);
             let outcome = create_work_item(
                 &mut transaction,
@@ -284,6 +320,9 @@ pub(super) async fn task_move(
                     priority: &task.priority,
                     assignee_actor_id: assignee,
                     parent_work_item_id: parent,
+                    label_ids: &labels.ids,
+                    acceptance_criteria: &[],
+                    board_placement: None,
                     activity_summary: &summary,
                     activity_metadata: serde_json::json!({ "movedFrom": task.key }),
                     activity_number_metadata: AllocatedNumberMetadata::Include,
@@ -305,6 +344,26 @@ pub(super) async fn task_move(
             };
             let new_key = format!("{target_key}-{number}");
             new_ids.insert(task.id, new_id);
+            for (name, reason) in &labels.skipped {
+                notes.push(match reason {
+                    SkipReason::Archived => format!(
+                        "\"{name}\" is archived in {target_key}, so it wasn't put on {new_key}."
+                    ),
+                    SkipReason::ProjectFull(LabelLimit::Active) => format!(
+                        "{target_key} already has {} labels, so \"{name}\" wasn't carried to {new_key}.",
+                        work_item_labels::MAX_ACTIVE_LABELS_PER_PROJECT
+                    ),
+                    SkipReason::ProjectFull(LabelLimit::Total) => format!(
+                        "{target_key} has no room for more labels, so \"{name}\" wasn't carried to {new_key}."
+                    ),
+                });
+            }
+            for (name, _) in &over_limit {
+                notes.push(format!(
+                    "{} had more than {MAX_LABELS_PER_TASK} labels, so \"{name}\" wasn't carried to {new_key}.",
+                    task.key
+                ));
+            }
 
             carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
                 .await?;
@@ -418,22 +477,6 @@ pub(super) async fn task_move(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "task_move"))
 }
 
-fn actor(principal: &McpPrincipal, project_id: Uuid) -> CommandActor {
-    CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind,
-        project_id,
-        audit: AuditAttribution::Mcp {
-            authentication_class: principal.authentication_class,
-            request_id: Uuid::now_v7().to_string(),
-            client_name: principal.client_name.clone(),
-            mcp_credential_id: principal.mcp_credential_id,
-            oauth_grant_id: principal.oauth_grant_id,
-            external_agent_connection_id: principal.external_agent_connection_id,
-        },
-    }
-}
-
 /// The status with the same name in the target project, or else its first
 /// status in the same category, or else its default.
 async fn matching_status(
@@ -516,29 +559,19 @@ async fn carry_criteria(
     .bind(source_id)
     .fetch_all(&mut **transaction)
     .await?;
-    for (position, criterion) in criteria.iter().enumerate() {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_acceptance_criteria (
-                id, project_id, work_item_id, text, position, completed,
-                completed_by_actor_id, completed_at, created_by_actor_id
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6,
-                CASE WHEN $6 THEN $7 END, CASE WHEN $6 THEN now() END, $7
-            )
-            "#,
-        )
-        .bind(Uuid::now_v7())
-        .bind(target_project_id)
-        .bind(target_id)
-        .bind(&criterion.text)
-        .bind(i32::try_from(position + 1).unwrap_or(i32::MAX))
-        .bind(criterion.completed)
-        .bind(principal.actor_id)
-        .execute(&mut **transaction)
-        .await?;
-    }
-    Ok(())
+    let criteria = criteria
+        .into_iter()
+        .map(|criterion| (criterion.text, criterion.completed))
+        .collect::<Vec<_>>();
+    insert_criteria(
+        transaction,
+        target_project_id,
+        target_id,
+        principal.actor_id,
+        1,
+        &criteria,
+    )
+    .await
 }
 
 /// Threads, repositories and pull requests linked to the original. They stay

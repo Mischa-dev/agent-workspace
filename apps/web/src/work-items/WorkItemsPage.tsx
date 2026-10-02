@@ -30,6 +30,7 @@ import { workItemHref } from './links'
 import type { WorkItemFilters, WorkItemPriority } from './types'
 import { WorkItemBoard as WorkItemBoardProjection } from './WorkItemBoard'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
+import { WorkItemLabels } from './WorkItemLabels'
 
 function filtersFromParameters(parameters: URLSearchParams): WorkItemFilters {
   const priority = parameters.get('priority')
@@ -212,6 +213,7 @@ export function WorkItemsPage() {
                   <span className="aw-worklist__key">{item.key}</span>
                   <StatusIcon category={item.status.semanticCategory} label={item.status.name} />
                   <span className="aw-worklist__title">{item.title}</span>
+                  <WorkItemLabels labels={item.labels} max={3} />
                   {item.archivedAt ? <span className="aw-worklist__tag">Archived</span> : null}
                   <span className="aw-worklist__type">{item.itemType.name}</span>
                   {item.assignee ? (

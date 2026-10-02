@@ -5,7 +5,7 @@
 use agent_workspace_server::bootstrap::{BootstrapCommand, bootstrap_admin};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
-use sqlx::{Executor, postgres::PgPoolOptions};
+use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::agent_interface::{
@@ -13,13 +13,15 @@ use super::agent_interface::{
     tool,
 };
 
-struct Setup {
-    app: axum::Router,
-    browser: Browser,
-    organization_id: Uuid,
+pub(super) struct Setup {
+    pub(super) app: axum::Router,
+    pub(super) browser: Browser,
+    pub(super) organization_id: Uuid,
+    /// The test's own schema, for checking rows directly.
+    pub(super) pool: PgPool,
 }
 
-async fn setup(prefix: &str) -> Option<Setup> {
+pub(super) async fn setup(prefix: &str) -> Option<Setup> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return None;
@@ -53,16 +55,17 @@ async fn setup(prefix: &str) -> Option<Setup> {
     )
     .await
     .expect("bootstrap owner");
-    let app = test_app(pool, &database_url);
+    let app = test_app(pool.clone(), &database_url);
     let browser = login(&app).await;
     Some(Setup {
         app,
         browser,
         organization_id: owner.organization_id,
+        pool,
     })
 }
 
-async fn create_project(setup: &Setup, key: &str, name: &str) -> String {
+pub(super) async fn create_project(setup: &Setup, key: &str, name: &str) -> String {
     let (status, project) = send(
         &setup.app,
         setup.browser.request(
