@@ -100,14 +100,14 @@ limited by their role in the project.
 | `conversation_list`, `conversation_open`, `conversation_read`, `conversation_start` | ✓ | |
 | `channel_create` | + | Name and topic. |
 | `conversation_update` | + | Rename, set the topic, archive or restore any channel, thread or group. For threads it also sets status and outcome, so `thread_update` becomes an alias. |
-| `conversation_members` | + | Add or remove people and agents in a group. |
+| `conversation_members` | ✓ | Add or remove people and agents in a group, or leave one. People add and remove anyone; agents can only leave, whatever their role. At most 20 members. Destructive. |
 | `message_send` | ✓ | |
 | `message_edit` | ✓ | Edit your own message. The old text is kept as a revision and the message shows "edited" (decision 3). |
-| `message_delete` | ✓ | Remove your own message, leaving "message removed" in its place, with its text and every revision's text deleted. Owners and admins (people, not agents) can remove anyone's message, for example a leaked secret. Destructive. |
+| `message_delete` | ✓ | Remove your own message, leaving "message removed" in its place, with its text and every revision's text deleted; who wrote each version and when is kept. Owners and admins (people, not agents) can remove anyone's message, for example a leaked secret. Agents remove only their own, whatever their role. Destructive. |
 | `message_history` | ✓ | Every version of a message, oldest first; a removed message's versions show as redacted. |
 | `message_react` | ✓ | Add or take away an emoji reaction from a fixed list of 12. Agents signal 👀 (working on it) or ✅ (done) without posting "on it". Anyone who can post can react; nobody is notified. |
 | `pin_set` | + | Pin or unpin a message, page or decision in a conversation. Today pages and decisions can only be pinned, never unpinned. |
-| `mark_read` | ~ | Add `unread: true` to mark something for later. |
+| `mark_read` | ✓ | Mark read, or `unread: true` to mark it unread again from a message, to come back to later. |
 | `thread_start` | ✓ | |
 | `thread_update` | ~ | Becomes an alias of `conversation_update`, and gains idempotency and via attribution. |
 | `people_search` | ✓ | |
@@ -117,7 +117,7 @@ limited by their role in the project.
 | Tool | | What it does |
 |---|---|---|
 | `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | |
-| `conversation_continue` | + | Let the agents in a conversation take more turns, as the web app's Continue button does. People only. |
+| `conversation_continue` | ✓ | Let the agents in a group take more turns, as the web app's Continue button does. People only. |
 
 ### Memory and search
 
@@ -451,12 +451,13 @@ Differences from the plan:
 ## Built in Phase 3 (October 2, 2026)
 
 On `claude/mcp-phase-3`, conversations at full strength. Six new tools bring
-the count to 61, which `tests/integration/m6_mcp_foundation.rs` checks:
+the count from 55 to 61, which `tests/integration/m6_mcp_foundation.rs`
+checks:
 
 - `message_edit`: authors change their own messages, with
   `expectedRevision` and a `clientRequestId`. Every version is kept in
-  `message_revisions` (0047) and shown by `message_history`, so editing
-  never hides anything; the web editor says so too.
+  `message_revisions` and shown by `message_history`, so editing never
+  hides anything; the web editor says so too.
 - `message_delete`: authors remove their own messages, and people with the
   owner or admin role remove anyone's. Agents never remove someone else's,
   whatever their role. Removal leaves a tombstone (who and when) and takes
@@ -468,17 +469,28 @@ the count to 61, which `tests/integration/m6_mcp_foundation.rs` checks:
 - `message_history`: every revision of a message, readable wherever the
   conversation is, archived ones included.
 - `message_react`: one of the 12 fixed emoji, stated rather than toggled
-  (`reacted: true|false`). Reactions (0048) notify nobody and change no
-  unread count; a removed message's are hidden and frozen.
+  (`reacted: true|false`). Reactions notify nobody and change no unread
+  count; a removed message's are hidden and frozen.
 - `conversation_members`: people add and remove anyone in a group (20 at
   most); agents can only leave.
-- `conversation_continue` (people only): asks the group's agents to keep
-  going from the newest message that wasn't removed.
+- `conversation_continue` (people only): gives the group's agents 6 more
+  turns and asks them about the newest message that wasn't removed.
 
 `mark_read` takes `unread: true` (from `fromMessageId`, default the newest
-message) to come back to something later; 0049 lets only that command move
-a read mark backwards. Message IDs everywhere accept a UUID or a
-`#message-<id>` link.
+message) to come back to something later. Message IDs everywhere accept a
+UUID or a `#message-<id>` link.
+
+Migrations:
+
+- 0047_message_edits: revision, edited and removed columns on messages, and
+  `message_revisions`. A message changes only through the edit and remove
+  commands, an edit must record both versions, a removal must redact every
+  revision first, and no message or revision row is ever deleted.
+- 0048_message_reactions: one row per message, person and emoji, with the
+  12 emoji enforced by the database. The trigger re-checks membership,
+  `conversation_visible_to`, and refuses removed messages.
+- 0049_read_mark_rewind: only the mark-unread command can move a read mark
+  backwards.
 
 The server instructions now say to fix your own messages with
 `message_edit`, to take a secret down with `message_delete` and ask for it
@@ -490,6 +502,48 @@ she tries to remove it and asks for it to be taken down, Codex connected as
 the owner removes it and reacts ✅ to her request, and the token is gone
 from every tool, web view and table.
 
-A run's prompt is still copied into the run (`agent_runs`, sponsored
-execution requests) when someone starts a run from a message; removing the
-message doesn't reach that copy.
+Differences from the plan:
+
+- **Admins remove messages too, not just owners** (decision 1 of October
+  1), and only people. So the "done when" is met by an app connected as a
+  person, not by an agent account: the agent asks and is refused if it
+  tries itself.
+- **Removing a message removes its old versions' text** (decision 2).
+  Decision 3 of September 30 said revisions would stay in the audit log;
+  they don't. Audit rows hold IDs and counts only, and older thread audit
+  rows that carried a name taken from the message lose it.
+- **`conversation_members` lets agents leave, nothing more** (decision 4).
+  The catalog said "add or remove people and agents". It takes a group or a
+  thread in one; DMs and channels are refused.
+- **Reactions are a fixed list, set rather than toggled** (decision 6), and
+  create no notification or reply request.
+- **Editing never hides anything.** Every version is visible to everyone who
+  can see the conversation, including people added later. Both the tool and
+  the web editor say to remove a secret rather than edit it out.
+- **Removal reaches further than "search, briefings and
+  `conversation_read`".** It also renames threads named after the message,
+  replaces stored replays of the send and the thread creation with the
+  tombstone (a replay of the original send is now refused as a different
+  payload, and no hash of the text is kept), withdraws reply requests in
+  every open state, and refuses new pins, task links, decisions and threads
+  from the message. `thread_start` still returns a thread already started
+  from it.
+- **Edits notify newly @mentioned people and agents.** In channels and
+  channel threads, a newly mentioned agent gets a reply request, as a send
+  would; mentions taken out aren't un-notified.
+- **The web app has all of it:** edit, remove, history, reactions, "Mark
+  unread from here", and group members. Its routes sit under
+  `/api/v1/conversations/{id}/messages/{message_id}`, so a message is
+  always checked against its conversation. Pages now mark a conversation
+  seen only when they show something new, so a mark moved back elsewhere
+  stays.
+- **Fixes along the way:** removing an agent from a group (web or MCP)
+  withdraws its reply requests there and in the group's threads; a second
+  Continue no longer cancels the first one's requests; retrying a request
+  is refused when its message was removed or the agent can no longer see
+  the conversation; and `migration_versions_are_unique_and_contiguous`
+  fails on a reused or skipped migration number.
+
+Still open: a run's prompt is copied into the run (`agent_runs`, sponsored
+execution requests) when someone starts a run from a message, and removing
+the message doesn't reach that copy.
