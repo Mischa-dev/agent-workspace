@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, conversation_path, insert_audit, mark_via, parse_id, public_url},
+    common::{
+        ToolResult, conversation_path, insert_audit, mark_via, parse_id, parse_message_id,
+        public_url,
+    },
     memory_tools::writer,
 };
 use crate::{
@@ -408,7 +411,8 @@ pub(super) struct PinSetArguments {
     /// The conversation to pin to. Its pins are its brief: conversation_open
     /// shows them first.
     pub conversation_id: String,
-    /// What to pin: a messageId, pageId, or decisionId. Pass exactly one.
+    /// What to pin: a messageId (an ID or a link to the message), pageId, or
+    /// decisionId. Pass exactly one.
     pub message_id: Option<String>,
     pub page_id: Option<String>,
     pub decision_id: Option<String>,
@@ -452,7 +456,12 @@ pub(super) async fn pin_set(
             "Pass exactly one of messageId, pageId, or decisionId.",
         );
     };
-    let Some(target_id) = parse_id(target) else {
+    let parsed = if *kind == "message" {
+        parse_message_id(target)
+    } else {
+        parse_id(target)
+    };
+    let Some(target_id) = parsed else {
         return ToolResult::invalid(&format!("{kind}Id"), "Pass an ID or link.");
     };
     let pinned = arguments.pinned.unwrap_or(true);

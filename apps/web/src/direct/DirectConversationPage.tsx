@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
@@ -7,13 +7,13 @@ import { useAuthenticatedSession } from '../auth/session'
 import {
   continueConversation,
   getConversationTimeline,
-  markConversationSeen,
   retryReplyRequest,
   sendConversationMessage,
 } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { useConversationTimeline } from '../conversations/hooks'
+import { useMessageActions } from '../conversations/MessageActions'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { ThreadBoard, ThreadStatusChip } from '../conversations/threadBoard'
@@ -21,6 +21,8 @@ import { useRefreshThreads, useThreads } from '../conversations/threadModel'
 import { ThreadDialog } from '../conversations/ThreadDialog'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import type { ConversationActor, ConversationTimelineEntry, ReplyRequest, ThreadSummary } from '../conversations/types'
+import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
+import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
 import { AppShell } from '../shell/AppShell'
 import {
@@ -40,6 +42,8 @@ import {
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
 import { ThreadPanel } from './ThreadPanel'
 
+const NO_ENTRIES: ConversationTimelineEntry[] = []
+
 function listNames(names: string[]) {
   if (names.length <= 1) return names.join('')
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
@@ -52,12 +56,6 @@ export function DirectConversationPage() {
   const overview = useDirectOverview()
   const projectId = overview.data?.projectId ?? ''
   const timeline = useConversationTimeline(projectId, conversationId)
-  const [older, setOlder] = useState<{ conversationId: string; entries: ConversationTimelineEntry[]; nextCursor: string | null }>({
-    conversationId: '',
-    entries: [],
-    nextCursor: null,
-  })
-  const [loadingOlder, setLoadingOlder] = useState(false)
   const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const [membersOpen, setMembersOpen] = useState(false)
   const [boardOpen, setBoardOpen] = useState(false)
@@ -66,22 +64,28 @@ export function DirectConversationPage() {
   const openThreadId = searchParams.get('thread')
   const threads = useThreads(conversationId)
   const refreshThreads = useRefreshThreads()
-  const markedSeen = useRef({ conversationId: '', sequence: 0 })
   const page = timeline.data
   const viewerId = session.user.actorId
   const summary = overview.data?.conversations.find((conversation) => conversation.id === conversationId)
   const members = summary?.members ?? []
   const valid = page?.conversation.id === conversationId && (page.conversation.kind === 'dm' || page.conversation.kind === 'group')
-  const olderCursor = older.conversationId === conversationId ? older.nextCursor : page?.nextCursor ?? null
   const isGroup = (summary?.kind ?? page?.conversation.kind) === 'group'
   const other = members.find((member) => member.id !== viewerId)
 
-  const entries = useMemo(() => {
-    const bySequence = new Map<number, ConversationTimelineEntry>()
-    const historical = older.conversationId === conversationId ? older.entries : []
-    for (const entry of [...historical, ...(valid ? page?.entries ?? [] : [])]) bySequence.set(entry.sequence, entry)
-    return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence)
-  }, [conversationId, older, page?.entries, valid])
+  const older = useLiveOlderEntries({
+    conversationId,
+    newestEntries: valid && page ? page.entries : NO_ENTRIES,
+    newestCursor: valid ? page?.nextCursor ?? null : null,
+    loadPage: async (cursor) => {
+      const result = await getConversationTimeline(conversationId, cursor)
+      if (result.conversation.id !== conversationId || (result.conversation.kind !== 'dm' && result.conversation.kind !== 'group')) {
+        throw new Error('Older messages came back for a different conversation.')
+      }
+      return result
+    },
+  })
+  const entries = older.entries
+  const olderCursor = older.cursor
 
   const requestsByMessage = useMemo(() => {
     const byMessage = new Map<string, ReplyRequest[]>()
@@ -107,38 +111,57 @@ export function DirectConversationPage() {
   const lastEntry = entries.at(-1)
   const waitingForContinue = page?.agentTurnsRemaining === 0 && lastEntry?.message?.author.kind === 'external_agent'
 
-  useEffect(() => {
-    if (
-      !valid ||
-      !page ||
-      !page.capabilities.markSeen ||
-      page.highestSequence <= page.readState.highestSeenSequence ||
-      (markedSeen.current.conversationId === conversationId && page.highestSequence <= markedSeen.current.sequence)
-    ) {
-      return
-    }
-    markedSeen.current = { conversationId, sequence: page.highestSequence }
-    void markConversationSeen({ conversationId, highestSeenSequence: page.highestSequence })
-      .then(() => queryClient.invalidateQueries({ queryKey: directQueryKey }))
-      .catch(() => {
-        markedSeen.current = { conversationId: '', sequence: 0 }
-      })
-  }, [conversationId, page, queryClient, valid])
+  const onSeen = useCallback(() => queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])
+  useAutoMarkSeen(
+    {
+      conversationId,
+      highestSequence: valid && page ? page.highestSequence : 0,
+      highestSeenSequence: valid && page ? page.readState.highestSeenSequence : 0,
+      ready: Boolean(valid && page?.capabilities.markSeen),
+    },
+    onSeen,
+  )
 
-  const loadOlder = async () => {
-    if (!olderCursor || loadingOlder) return
-    setLoadingOlder(true)
-    try {
-      const result = await getConversationTimeline(conversationId, olderCursor)
-      setOlder((current) => ({
-        conversationId,
-        entries: [...result.entries, ...(current.conversationId === conversationId ? current.entries : [])],
-        nextCursor: result.nextCursor,
-      }))
-    } finally {
-      setLoadingOlder(false)
-    }
+  const searchMembers = async (query: string) => {
+    const needle = query.trim().toLowerCase()
+    return members.filter(
+      (member) =>
+        member.id !== viewerId &&
+        (!needle || member.handle.toLowerCase().includes(needle) || member.displayName.toLowerCase().includes(needle)),
+    )
   }
+
+  const messageActions = useMessageActions({
+    projectId,
+    conversationId,
+    viewerId,
+    capabilities: valid ? page?.capabilities : null,
+    searchActors: searchMembers,
+    onReactionsChanged: older.patchReactions,
+    onChanged: (entry) => {
+      older.replaceEntry(entry)
+      void timeline.refetch()
+    },
+    actionsFor: (message) => {
+      if (!valid || !page?.capabilities.sendMessage) return null
+      const existing = threadsByMessage.get(message.id)?.[0]
+      return (
+        <>
+          {existing ? (
+            <IconButton icon="messages" label="Open thread" onClick={() => openThread(existing.id)} size="sm" />
+          ) : (
+            <IconButton
+              icon="messages"
+              label="Start a thread"
+              onClick={() => setThreadDialog({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
+              size="sm"
+            />
+          )}
+          <MessageMemoryActions conversationId={conversationId} message={message} projectId={projectId} />
+        </>
+      )
+    },
+  })
 
   const send = async (submission: ComposerSubmission) => {
     if (!page) return
@@ -276,7 +299,8 @@ export function DirectConversationPage() {
       {header}
       {valid && projectId ? <PinnedBar canEdit={Boolean(page?.capabilities.sendMessage)} conversationId={conversationId} direct projectId={projectId} /> : null}
       <ConversationTimeline busy={timeline.isPending} label={`Messages with ${title}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${page?.replyRequests.map((request) => request.status).join(',') ?? ''}`}>
-        {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
+        {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
+        {older.error ? <Banner tone="danger">{older.error}</Banner> : null}
         {overview.isPending || timeline.isPending ? <MessageSkeleton /> : null}
         {timeline.isError && !isApiError(timeline.error) ? (
           <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="This conversation didn’t load">
@@ -286,13 +310,17 @@ export function DirectConversationPage() {
         {valid && !olderCursor ? intro : null}
         <TimelineEntries
           entries={entries}
+          onOpenHistory={messageActions.openHistory}
+          renderEditor={messageActions.editorFor}
           renderExtras={(entry) =>
             entry.message ? (
               <>
-                <ReplyStatusList
-                  onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
-                  requests={requestsByMessage.get(entry.message.id) ?? []}
-                />
+                {entry.message.removed ? null : (
+                  <ReplyStatusList
+                    onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                    requests={requestsByMessage.get(entry.message.id) ?? []}
+                  />
+                )}
                 {(threadsByMessage.get(entry.message.id) ?? []).map((thread) => (
                   <button className="aw-threadlink" key={thread.id} onClick={() => openThread(thread.id)} type="button">
                     <Icon name="messages" size={14} />
@@ -305,26 +333,8 @@ export function DirectConversationPage() {
               </>
             ) : null
           }
-          renderToolbar={(entry) => {
-            const message = entry.message
-            if (!message || !valid || !page?.capabilities.sendMessage) return null
-            const existing = threadsByMessage.get(message.id)?.[0]
-            return (
-              <>
-                {existing ? (
-                  <IconButton icon="messages" label="Open thread" onClick={() => openThread(existing.id)} size="sm" />
-                ) : (
-                  <IconButton
-                    icon="messages"
-                    label="Start a thread"
-                    onClick={() => setThreadDialog({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
-                    size="sm"
-                  />
-                )}
-                <MessageMemoryActions conversationId={conversationId} message={message} projectId={projectId} />
-              </>
-            )
-          }}
+          renderReactions={messageActions.reactionsFor}
+          renderToolbar={messageActions.toolbarFor}
           viewerId={viewerId}
         />
         {pending.map((item, index) => (
@@ -356,16 +366,10 @@ export function DirectConversationPage() {
           label={`Message ${title}`}
           onSubmit={send}
           placeholder={`Message ${title}`}
-          searchActors={async (query) => {
-            const needle = query.trim().toLowerCase()
-            return members.filter(
-              (member) =>
-                member.id !== viewerId &&
-                (!needle || member.handle.toLowerCase().includes(needle) || member.displayName.toLowerCase().includes(needle)),
-            )
-          }}
+          searchActors={searchMembers}
         />
       ) : null}
+      {messageActions.dialogs}
       {threadDialog ? (
         <ThreadDialog
           channelId={conversationId}
@@ -447,7 +451,11 @@ function GroupMembers({
             if (adding) run(addGroupMember(conversationId, adding), () => setAdding(''))
           }}
         >
-          <SelectField id="group-add-member" label="Add someone" onChange={(event) => setAdding(event.target.value)} value={adding}>
+          <SelectField
+            hint="They'll see everything said here so far."
+            id="group-add-member"
+            label="Add someone"
+            onChange={(event) => setAdding(event.target.value)} value={adding}>
             <option value="">Choose a person or agent…</option>
             {candidates.map((person) => (
               <option key={person.id} value={person.id}>

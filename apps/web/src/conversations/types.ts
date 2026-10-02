@@ -41,6 +41,49 @@ export type ConversationMessage = {
   createdAt: string
   /** The connected app a person sent this through, such as Claude Code. */
   via: string | null
+  /** 1 until the message is edited; each edit adds one. */
+  revision: number
+  editedAt: string | null
+  /** Set once the message is removed. Its content and text are then empty. */
+  removed: MessageRemoval | null
+  /** Emoji reactions in the order first added. Always empty once removed. */
+  reactions?: MessageReaction[]
+}
+
+/** One emoji on a message: how many reacted, whether you did, and the first 20 who did. */
+export type MessageReaction = {
+  emoji: string
+  /** The name the server uses for it, such as `eyes`. */
+  name: string
+  count: number
+  byViewer: boolean
+  actors: ConversationActor[]
+}
+
+export type MessageRemoval = {
+  removedAt: string
+  /** Null until the server confirms who removed it (a live removal seen before the refetch). */
+  removedBy: ConversationActor | null
+  via: string | null
+}
+
+/** One version of a message, as the history shows it. */
+export type MessageRevision = {
+  revision: number
+  /** Null once the message was removed: every version's text is deleted. */
+  content: MessageContentV1 | null
+  plainText: string | null
+  writtenBy: ConversationActor
+  writtenAt: string
+  via: string | null
+  redacted: boolean
+}
+
+export type MessageRevisions = {
+  messageId: string
+  revision: number
+  removed: boolean
+  revisions: MessageRevision[]
 }
 
 export type ConversationWorkItemReference = {
@@ -95,16 +138,24 @@ export type ConversationTimelinePage = {
     highestSeenSequence: number
     version: number
   }
-  capabilities: {
-    view: boolean
-    sendMessage: boolean
-    archive: boolean
-    markSeen: boolean
-  }
+  capabilities: ConversationCapabilities
   /** DMs and groups: who has been asked to answer, and how it's going. */
   replyRequests: ReplyRequest[]
   /** Groups: agent messages left before a person has to say Continue. */
   agentTurnsRemaining: number | null
+}
+
+export type ConversationCapabilities = {
+  view: boolean
+  sendMessage: boolean
+  archive: boolean
+  markSeen: boolean
+  /** Edit your own messages here (the same right as sending). */
+  editMessages: boolean
+  /** Remove your own messages, also once the conversation is archived. */
+  removeOwnMessages: boolean
+  /** Remove anyone's message (project owners and admins). */
+  removeAnyMessage: boolean
 }
 
 export type ReplyRequestStatus =

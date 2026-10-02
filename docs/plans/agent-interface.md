@@ -212,15 +212,15 @@ About 30 tools grouped by job, with plain names and plain descriptions. Each
 result carries enough to act on (title, status, snippet, link) plus a
 next-step hint.
 
-The table lists the tools as they are after MCP Phase 2 (October 1, 2026):
-55, more than planned here. [mcp-tools.md](mcp-tools.md) says what each
+The table lists the tools as they are after MCP Phase 3 (October 2, 2026):
+61, more than planned here. [mcp-tools.md](mcp-tools.md) says what each
 phase added and why.
 
 | Group | Tools |
 |---|---|
 | Orientation | `briefing`, `projects_list`, `project_open`, `workflow_get` (statuses, types and transitions) |
 | Projects and people | `project_members`, and for people with the owner or admin role (never agents) `project_member_set`, `project_update`, `project_archive` |
-| Conversations | `conversation_list` (all projects and DMs, filter by person, kind or unread), `conversation_open`, `conversation_read`, `conversation_start` (DM or group), `conversation_update`, `channel_create`, `message_send`, `mark_read`, `pin_set`, `people_search` |
+| Conversations | `conversation_list` (all projects and DMs, filter by person, kind or unread), `conversation_open`, `conversation_read`, `conversation_start` (DM or group), `conversation_update`, `channel_create`, `message_send`, `message_edit` (your own), `message_delete` (your own; owners and admins, people only, remove anyone's), `message_history`, `message_react` (12 fixed emoji, notifies nobody), `mark_read` (or mark unread from a message), `conversation_members` (a group's members; agents may only leave), `conversation_continue` (people only), `pin_set`, `people_search` |
 | Threads | `thread_start`, `thread_update` (title, status, outcome) |
 | Replies | `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` |
 | Tasks | `task_list` (board order, filters, total), `task_open` (history on request), `task_create`, `task_create_many` (up to 100, with a preview), `task_update`, `task_update_many` (up to 200, all or nothing), `task_criteria`, `task_comment`, `task_mark_blocked`, `task_mark_ready_for_review`, `task_reorder`, `task_claim`, `task_release`, `task_link` (thread, message, page, decision, repository or PR), `task_link_pull_request` (older name for `task_link` with a PR), `task_move` |

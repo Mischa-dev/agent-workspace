@@ -7,6 +7,25 @@ use agent_workspace_server::{
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
+/// sqlx accepts two files with the same version at compile time, and the live
+/// server runs unmerged branches: a second 0046 would only show up as a
+/// startup failure there ("previously applied but has been modified"). Every
+/// migration takes the next number, with no duplicates and no gaps.
+#[test]
+fn migration_versions_are_unique_and_contiguous() {
+    let versions: Vec<i64> = sqlx::migrate!("./migrations")
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration())
+        .map(|migration| migration.version)
+        .collect();
+    let expected: Vec<i64> =
+        (1..=i64::try_from(versions.len()).expect("migration count")).collect();
+    assert_eq!(
+        versions, expected,
+        "migration versions must run 1, 2, 3, ... with no duplicates or gaps; check `ls apps/server/migrations` for the next free number"
+    );
+}
+
 #[tokio::test]
 async fn walking_skeleton_schema_enforces_core_invariants() {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {

@@ -15,6 +15,10 @@ import type {
   ConversationWorkItemReference,
   MentionSearchPage,
   MessageContentV1,
+  MessageReaction,
+  MessageRemoval,
+  MessageRevision,
+  MessageRevisions,
   ProjectConversationSidebar,
   SidebarChannel,
   SidebarThread,
@@ -96,13 +100,47 @@ function normalizeWorkItemReference(
   }
 }
 
-function normalizeMessage(value: unknown): ConversationMessage | null {
+/** The empty content a removed message carries. */
+export const REMOVED_MESSAGE_CONTENT: MessageContentV1 = { version: 1, nodes: [] }
+
+function normalizeRemoval(value: unknown): MessageRemoval | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const removal = asRecord(value)
+  return {
+    removedAt: string(removal.removedAt),
+    removedBy: normalizeConversationActor(removal.removedBy),
+    via: typeof removal.via === 'string' ? removal.via.slice(0, 80) : null,
+  }
+}
+
+export function normalizeMessage(value: unknown): ConversationMessage | null {
   const message = asRecord(value)
   const author = normalizeConversationActor(message.author)
+  const removed = normalizeRemoval(message.removed)
+  if (typeof message.id !== 'string' || !author) return null
+  const common = {
+    id: message.id,
+    author,
+    createdAt: string(message.createdAt),
+    via: typeof message.via === 'string' ? message.via.slice(0, 80) : null,
+    revision: Math.max(1, integer(message.revision, 1)),
+    editedAt: nullableString(message.editedAt),
+  }
+  // A removed message has no nodes, which parseMessageContent rejects. Keep it
+  // as a tombstone, and never keep any text that came with it.
+  if (removed) {
+    return {
+      ...common,
+      content: REMOVED_MESSAGE_CONTENT,
+      plainText: '',
+      mentionedActors: [],
+      referencedWorkItems: [],
+      removed,
+      reactions: [],
+    }
+  }
   const content = parseMessageContent(message.content)
   if (
-    typeof message.id !== 'string' ||
-    !author ||
     !content ||
     typeof message.plainText !== 'string' ||
     !isSafeMessageText(message.plainText)
@@ -110,8 +148,8 @@ function normalizeMessage(value: unknown): ConversationMessage | null {
     return null
   }
   return {
-    id: message.id,
-    author,
+    ...common,
+    removed: null,
     content,
     plainText: message.plainText,
     mentionedActors: Array.isArray(message.mentionedActors)
@@ -126,12 +164,48 @@ function normalizeMessage(value: unknown): ConversationMessage | null {
             (item): item is ConversationWorkItemReference => item !== null,
           )
       : [],
-    createdAt: string(message.createdAt),
-    via: typeof message.via === 'string' ? message.via.slice(0, 80) : null,
+    reactions: normalizeReactions(message.reactions),
   }
 }
 
-function normalizeTimelineEntry(
+const REACTION_NAME = /^[a-z0-9_]{1,32}$/
+const MAX_REACTION_ACTORS = 20
+
+function normalizeReaction(value: unknown): MessageReaction | null {
+  const reaction = asRecord(value)
+  if (
+    typeof reaction.emoji !== 'string' ||
+    reaction.emoji.length === 0 ||
+    reaction.emoji.length > 16 ||
+    typeof reaction.name !== 'string' ||
+    !REACTION_NAME.test(reaction.name) ||
+    !Number.isSafeInteger(reaction.count) ||
+    (reaction.count as number) < 1 ||
+    typeof reaction.byViewer !== 'boolean'
+  ) {
+    return null
+  }
+  return {
+    emoji: reaction.emoji,
+    name: reaction.name,
+    count: reaction.count as number,
+    byViewer: reaction.byViewer,
+    actors: Array.isArray(reaction.actors)
+      ? reaction.actors
+          .slice(0, MAX_REACTION_ACTORS)
+          .map(normalizeConversationActor)
+          .filter((actor): actor is ConversationActor => actor !== null)
+      : [],
+  }
+}
+
+/** Reactions from the wire; malformed ones are dropped rather than failing the message. */
+export function normalizeReactions(value: unknown): MessageReaction[] {
+  if (!Array.isArray(value)) return []
+  return value.map(normalizeReaction).filter((reaction): reaction is MessageReaction => reaction !== null)
+}
+
+export function normalizeTimelineEntry(
   value: unknown,
 ): ConversationTimelineEntry | null {
   const entry = asRecord(value)
@@ -233,6 +307,9 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       sendMessage: capability(root.capabilities, 'sendMessage'),
       archive: capability(root.capabilities, 'archive'),
       markSeen: capability(root.capabilities, 'markSeen'),
+      editMessages: capability(root.capabilities, 'editMessages'),
+      removeOwnMessages: capability(root.capabilities, 'removeOwnMessages'),
+      removeAnyMessage: capability(root.capabilities, 'removeAnyMessage'),
     },
     replyRequests: Array.isArray(root.replyRequests)
       ? root.replyRequests
@@ -329,6 +406,136 @@ export async function sendConversationMessage(input: {
   )
 }
 
+function messagePath(conversationId: string, messageId: string) {
+  return `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`
+}
+
+/** The entry a message edit or removal returns, checked against the conversation and message asked for. */
+function changedEntry(value: unknown, conversationId: string, messageId: string) {
+  const root = asRecord(value)
+  const entry = normalizeTimelineEntry(root.entry)
+  if (
+    (typeof root.conversationId === 'string' && root.conversationId !== conversationId) ||
+    !entry?.message ||
+    entry.message.id !== messageId
+  ) {
+    throw new Error('The changed message came back malformed. Refresh to see it.')
+  }
+  return entry
+}
+
+/** Edit your own message. The old text stays in its history. */
+export async function editConversationMessage(input: {
+  conversationId: string
+  messageId: string
+  content: MessageContentV1
+  expectedRevision: number
+  idempotencyKey: string
+}) {
+  const root = asRecord(
+    await requestJson<unknown>(messagePath(input.conversationId, input.messageId), {
+      method: 'PATCH',
+      idempotencyKey: input.idempotencyKey,
+      json: { content: input.content, expectedRevision: input.expectedRevision },
+    }),
+  )
+  return {
+    entry: changedEntry(root, input.conversationId, input.messageId),
+    changed: root.changed !== false,
+  }
+}
+
+/** Remove a message for everyone. Its text and earlier versions are deleted. */
+export async function removeConversationMessage(input: { conversationId: string; messageId: string }) {
+  const root = asRecord(
+    await requestJson<unknown>(messagePath(input.conversationId, input.messageId), { method: 'DELETE' }),
+  )
+  return {
+    entry: changedEntry(root, input.conversationId, input.messageId),
+    alreadyRemoved: root.alreadyRemoved === true,
+  }
+}
+
+/**
+ * Put your reaction on a message, or take it away. It states the result
+ * rather than toggling, so a retry is safe. Returns every reaction on the
+ * message now.
+ */
+export async function setMessageReaction(input: {
+  conversationId: string
+  messageId: string
+  name: string
+  reacted: boolean
+}) {
+  if (!REACTION_NAME.test(input.name)) throw new Error('That reaction isn’t one of the choices.')
+  const root = asRecord(
+    await requestJson<unknown>(
+      `${messagePath(input.conversationId, input.messageId)}/reactions/${encodeURIComponent(input.name)}`,
+      { method: input.reacted ? 'PUT' : 'DELETE' },
+    ),
+  )
+  if (root.conversationId !== input.conversationId || root.messageId !== input.messageId) {
+    throw new Error('The reaction came back for a different message. Refresh to see it.')
+  }
+  return { changed: root.changed !== false, reactions: normalizeReactions(root.reactions) }
+}
+
+/** One timeline entry as it is now, for refreshing a message on an older page. */
+export async function getConversationMessage(conversationId: string, messageId: string) {
+  return changedEntry(
+    await requestJson<unknown>(messagePath(conversationId, messageId)),
+    conversationId,
+    messageId,
+  )
+}
+
+function normalizeRevision(value: unknown): MessageRevision | null {
+  const record = asRecord(value)
+  const writtenBy = normalizeConversationActor(record.writtenBy)
+  if (!Number.isSafeInteger(record.revision) || !writtenBy) return null
+  const redacted = record.redacted === true
+  const content = redacted ? null : parseMessageContent(record.content)
+  const plainText =
+    !redacted && typeof record.plainText === 'string' && isSafeMessageText(record.plainText)
+      ? record.plainText
+      : null
+  return {
+    revision: record.revision as number,
+    // A version whose text didn't parse shows as redacted rather than as raw data.
+    content,
+    plainText: content ? plainText : null,
+    writtenBy,
+    writtenAt: string(record.writtenAt),
+    via: typeof record.via === 'string' ? record.via.slice(0, 80) : null,
+    redacted: redacted || !content,
+  }
+}
+
+/** Every version of a message, oldest first. */
+export async function getMessageRevisions(
+  conversationId: string,
+  messageId: string,
+): Promise<MessageRevisions> {
+  const root = asRecord(await requestJson<unknown>(`${messagePath(conversationId, messageId)}/revisions`))
+  if (typeof root.messageId === 'string' && root.messageId !== messageId) {
+    throw new Error('The message history came back for a different message.')
+  }
+  const removed = root.removed === true
+  return {
+    messageId,
+    revision: Math.max(1, integer(root.revision, 1)),
+    removed,
+    revisions: Array.isArray(root.revisions)
+      ? root.revisions
+          .map(normalizeRevision)
+          .filter((revision): revision is MessageRevision => revision !== null)
+          // A removed message's versions never show text, whatever came back.
+          .map((revision) => (removed ? { ...revision, content: null, plainText: null, redacted: true } : revision))
+          .sort((left, right) => left.revision - right.revision)
+      : [],
+  }
+}
+
 export async function createChannel(input: {
   projectId: string
   name: string
@@ -398,6 +605,17 @@ export async function markConversationSeen(input: {
     {
       method: 'POST',
       json: { highestSeenSequence: input.highestSeenSequence },
+    },
+  )
+}
+
+/** Make `messageId` and everything after it unread for you again (never marks anything read). */
+export async function markConversationUnread(input: { conversationId: string; messageId: string | null }) {
+  return requestJson<unknown>(
+    `/api/v1/conversations/${encodeURIComponent(input.conversationId)}/mark-unread`,
+    {
+      method: 'POST',
+      json: { messageId: input.messageId },
     },
   )
 }

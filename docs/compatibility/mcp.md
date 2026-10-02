@@ -76,10 +76,10 @@ Workspace OAuth and bearer endpoints; WorkOS Agent Auth is not required.
 ## Tools
 
 The full list, grouped by job, is in
-[docs/plans/agent-interface.md](../plans/agent-interface.md). There are 55.
+[docs/plans/agent-interface.md](../plans/agent-interface.md). There are 61.
 Read-only tools: `briefing`, `projects_list`, `project_open`,
 `workflow_get`, `project_members`, `conversation_list`, `conversation_open`,
-`conversation_read`, `people_search`, `inbox_list`, `task_list`,
+`conversation_read`, `message_history`, `people_search`, `inbox_list`, `task_list`,
 `task_open`, `label_list`, `search`, `page_list`, `page_get`,
 `decision_list`, `repository_get`, `pull_request_get`, `approval_get` and
 `external_event_poll`.
@@ -186,6 +186,110 @@ Behavior changes:
 - In the web API, linking a thread or repository to an archived task, or
   changing an archived task's repository links, is 409; unlinking a thread
   from one still works. Linking a thread the caller can't see is 404.
+
+## MCP Phase 3 changes (October 2, 2026)
+
+New tools, taking the count from 55 to 61:
+
+- `message_edit`: the author only. Takes `expectedRevision` (optional) and
+  `clientRequestId`; it shares the web edit's idempotency scope and stored
+  result, so a key retried on either surface replays. Editing to the same
+  content returns `changed: false` and changes nothing.
+- `message_delete`: destructive and idempotent by state (removing twice
+  returns `alreadyRemoved: true`). Authors remove their own messages;
+  project owners and admins, people only, remove anyone's. The text of the
+  message and of every earlier version is deleted, along with every copy the
+  server made of it; a send replayed with the original `clientRequestId`
+  after removal is refused as a different payload.
+- `message_history`: read-only, archived conversations included.
+- `message_react`: idempotent by state. `emoji` takes one of 👍 👎 ❤️ 😄 🎉
+  😕 🚀 👀 ✅ ❌ 🙏 🤔 or its name (`eyes`, `check`, ...); `reacted: false`
+  takes your reaction away, and repeating a call returns `changed: false`.
+  Anyone who can post in the conversation can react. Archived conversations
+  and removed messages refuse changes with `conflict`. Reactions notify
+  nobody and don't answer reply requests.
+- `conversation_members`: destructive and idempotent by state; takes a
+  group or a thread in one (the result names the group), `add` and `remove`
+  as actor IDs or @handles, `expectedVersion` and `clientRequestId`. People
+  add and remove anyone; agents can only remove themselves (`left: true`).
+  A group holds at most 20 members. DMs and channels are `invalid_request`.
+  A retried leave returns `not_found`, since the caller can no longer see the
+  group.
+- `conversation_continue`: people only. Resets a group's (or a group
+  thread's) agent turns to 6 and asks the other agents about the newest
+  message if an agent wrote it; a removed message is skipped. A replayed
+  `clientRequestId` returns the first result without another round.
+
+`mark_read` gains `unread: true` with an optional `fromMessageId` (an ID or
+link): the conversation is unread again from that message (default: the
+newest) onward. It never marks anything read. Its result gains
+`unreadCount`.
+
+Results of the new tools:
+
+- `message_edit`: `conversationId`, `messageId`, `revision`, `text`,
+  `editedAt`, `changed`, `newlyMentioned` (when the edit mentions someone
+  new; they're notified), `idempotentReplay` and `url`.
+- `message_delete`: `conversationId`, `messageId`, `removedAt`,
+  `removedBy`, `alreadyRemoved`, `cancelledReplyRequests`, `threads` (those
+  started from the message, after any rename) and `note`.
+- `message_history`: `revision` (the current one), `removed`, and
+  `revisions` oldest first, each with `revision`, `text` (empty when
+  redacted), `truncated`, `redacted`, `writtenBy`, `writtenAt` and `via`.
+- `message_react`: `emoji`, `name`, `reacted`, `changed`, and every
+  `reactions` entry on the message now (`emoji`, `name`, `count`, `byYou`,
+  and up to 10 `people`).
+- `conversation_members`: the group's `conversationId`, `name`, `version`,
+  `members`, `added`, `removed`, `left`, `url` and `idempotentReplay`.
+- `conversation_continue`: `agentTurnsRemaining`, `asked`,
+  `latestMessageId` and `idempotentReplay`.
+
+Changed shapes (all additions):
+
+- `conversation_read` and `conversation_open` items gain `revision` (once
+  edited), `editedAt`, `removed`, `removedBy` and `reactions` (when there
+  are any); a removed message's `text` is empty and it shows no reactions.
+- `conversation_list` shows a removed last message as "Message removed",
+  with `removed: true`.
+- `reply_claim` context items gain `removed` and `edited`; a removed
+  message's text is empty there and in `inbox_list` excerpts.
+- `task_open` shows a linked removed message as "Message removed".
+- Every `messageId`, `fromMessageId` and `aroundMessageId` takes a UUID or
+  a web link ending in `#message-<id>`. Before, a link was read as the
+  conversation. This covers `conversation_read`, `pin_set`, `thread_start`,
+  `task_link` and `decision_record` too.
+
+Behavior changes:
+
+- Messages can change. A message read before an edit may have newer text;
+  `message_history` has every version. A removed message's text, and the
+  text of its earlier versions, is gone for everyone and can't be restored.
+- `search` and `briefing` mentions skip removed messages.
+- Pinning, linking a task to, recording a decision from, or starting a
+  thread from a removed message is `not_found`. `thread_start` still returns
+  a thread already started from it. Unlinking still works.
+- Threads whose name was suggested from a removed message get a neutral
+  name.
+- Reply requests about a removed message are withdrawn, whatever their
+  state. `reply_send`, `reply_claim`, `reply_pass` and `reply_release` on
+  one say the message was removed and no reply is needed, and it can't be
+  retried.
+- Removing an agent from a group, in the web app or with
+  `conversation_members`, withdraws its reply requests in the group and its
+  threads.
+- Editing a message to @mention someone new notifies them. In a channel or
+  channel thread, a newly mentioned agent gets a reply request, as it would
+  for a new message.
+- A second Continue in a group no longer cancels the reply requests from
+  the first.
+- `message_send` replayed with its original `clientRequestId` after the
+  message was removed answers `conflict` (the key was used for a different
+  message) instead of returning the text.
+- Group reply requests now suggest acknowledging with `message_react` and
+  then `reply_pass`. The server instructions mention `message_edit`,
+  `message_delete` and `message_react`.
+- Messages you can't see are `not_found` for every tool, never
+  `permission_denied`.
 
 ## Verification history
 

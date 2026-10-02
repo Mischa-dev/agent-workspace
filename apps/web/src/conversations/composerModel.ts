@@ -72,6 +72,50 @@ export function buildMessageContent(
   return nodes.length > 0 ? { version: 1, nodes } : null
 }
 
+/** Said wherever someone edits or reads a message's history: editing never hides old text. */
+export const EDIT_HISTORY_HINT =
+  'Earlier versions stay visible to everyone here. To take down a secret, remove the message.'
+
+export type ComposerDraft = {
+  text: string
+  mentions: ConversationActor[]
+  workItems: ConversationWorkItemReference[]
+}
+
+/**
+ * Turn a sent message back into composer text, so editing it starts from what
+ * it says now. Mentions become "@handle" and references their key, and the
+ * lists come back too, so buildMessageContent rebuilds the same nodes. A
+ * mention or reference the message no longer resolves is left out.
+ */
+export function draftFromContent(message: {
+  content: MessageContentV1
+  mentionedActors: ConversationActor[]
+  referencedWorkItems: ConversationWorkItemReference[]
+}): ComposerDraft {
+  const actors = new Map(message.mentionedActors.map((actor) => [actor.id, actor]))
+  const items = new Map(message.referencedWorkItems.map((item) => [item.id, item]))
+  const mentions = new Map<string, ConversationActor>()
+  const workItems = new Map<string, ConversationWorkItemReference>()
+  let text = ''
+  for (const node of message.content.nodes) {
+    if (node.type === 'text') {
+      text += node.text
+    } else if (node.type === 'mention') {
+      const actor = actors.get(node.actorId)
+      if (!actor) continue
+      mentions.set(actor.id, actor)
+      text += `@${actor.handle}`
+    } else {
+      const item = items.get(node.workItemId)
+      if (!item) continue
+      workItems.set(item.id, item)
+      text += item.key
+    }
+  }
+  return { text, mentions: [...mentions.values()], workItems: [...workItems.values()] }
+}
+
 export type Trigger = { kind: 'mention' | 'work'; query: string; start: number }
 
 /** The @ or # token the caret is in, if any. */

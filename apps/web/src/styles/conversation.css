@@ -348,6 +348,12 @@ button.aw-convhead__title[aria-expanded="true"] {
   display: flex;
 }
 
+/* The reaction picker opens in a portal, outside the message: keep its
+   anchor (the toolbar) showing while it's open. */
+.aw-msg:has(.aw-msg__toolbar [aria-expanded="true"]) .aw-msg__toolbar {
+  display: flex;
+}
+
 /* Touch screens show the toolbar when a message is tapped (it takes focus). */
 .aw-msg:focus {
   outline: none;
@@ -1245,4 +1251,156 @@ h2.aw-card__title {
 .aw-pins__item .aw-iconbtn {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+/* Edited and removed messages */
+.aw-msg__edited {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+button.aw-msg__edited {
+  cursor: pointer;
+}
+
+button.aw-msg__edited:hover,
+button.aw-msg__edited:focus-visible {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.aw-msg__removed {
+  margin: 0;
+  font: var(--t-body);
+  font-style: italic;
+  color: var(--content-fg-muted);
+}
+
+/* Inline editor: the composer inside a message row */
+.aw-msg.is-editing,
+.aw-msg.is-editing:hover {
+  background: var(--content-hover);
+}
+
+.aw-composer-wrap.aw-msg__editor {
+  max-width: var(--size-measure);
+  padding: var(--space-1) 0 0;
+}
+
+.aw-composer__note {
+  margin: 0;
+  padding-top: var(--space-1);
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+/* Edit history dialog */
+.aw-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-history__item {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-history__item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.aw-history__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-1);
+  margin: 0 0 var(--space-1);
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-history__meta strong {
+  color: var(--content-fg);
+}
+
+.aw-history__current {
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+.aw-history__body {
+  font: var(--t-body);
+  color: var(--content-fg);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aw-history__redacted {
+  margin: 0;
+  font: var(--t-small);
+  font-style: italic;
+  color: var(--content-fg-muted);
+}
+
+/* Reactions under a message. */
+.aw-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 2px;
+}
+
+.aw-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 26px;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
+button.aw-reaction {
+  cursor: pointer;
+}
+
+button.aw-reaction:hover {
+  border-color: var(--control-border);
+}
+
+button.aw-reaction:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.aw-reaction.is-mine {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--content-fg);
+}
+
+.aw-reaction__emoji {
+  font-size: calc(15px * var(--text-scale));
+  line-height: 1;
+}
+
+@media (pointer: coarse) {
+  .aw-reaction {
+    min-height: 32px;
+    padding: 2px var(--space-3);
+  }
 }

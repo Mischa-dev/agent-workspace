@@ -12,7 +12,7 @@
 //! - Claiming starts a lease. A lapsed lease becomes "expired" and waits for a
 //!   person to retry it, rather than being handed out again silently.
 
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -26,11 +26,14 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::{ActorView, enqueue_event, lock_conversation_access},
+    conversations::{
+        ActorView, enqueue_event, insert_audit_event, lock_conversation_access,
+        lock_conversation_for, parse_actor_kind,
+    },
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
     outbox::{OutboxEventPayload, ReplyRequestsUpdatedPayload},
-    policy::Action,
+    policy::{Action, ActorKind},
 };
 
 /// Agent messages allowed in a group before a person has to say Continue.
@@ -113,18 +116,69 @@ pub(crate) async fn ask_for_replies(
     ask(transaction, &message, required).await
 }
 
+/// Ask agents a person newly @mentioned by editing their message, in a
+/// channel or a thread under one. `message.mentioned_actor_ids` holds only the
+/// newly mentioned (in no earlier revision). Nothing is superseded and turns
+/// don't change. In DMs and groups (and threads under them) every agent member
+/// was already asked when the message was sent, and agents' own edits ask
+/// nobody, matching send.
+pub(crate) async fn ask_after_edit(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: NewMessage<'_>,
+) -> Result<(), AppError> {
+    if !matches!(message.conversation_kind, "channel" | "thread")
+        || message.author_kind != "human"
+        || message.mentioned_actor_ids.is_empty()
+    {
+        return Ok(());
+    }
+    let agents = agents_to_ask(transaction, &message).await?;
+    insert_requests(transaction, &message, &agents, true, false).await?;
+    Ok(())
+}
+
+/// Ask the agents the reply rules pick, superseding their pending requests
+/// about earlier messages here.
 async fn ask(
     transaction: &mut Transaction<'_, Postgres>,
     message: &NewMessage<'_>,
     required: bool,
 ) -> Result<(), AppError> {
-    let agents = if matches!(message.conversation_kind, "channel" | "thread") {
-        sqlx::query_scalar::<_, Uuid>(
-            "SELECT membership.actor_id FROM project_memberships membership JOIN actors actor ON actor.id=membership.actor_id WHERE membership.project_id=$1 AND membership.enabled AND actor.kind='external_agent' AND actor.status='active' AND actor.id=ANY($2) AND conversation_visible_to($3,actor.id) ORDER BY actor.id"
-        ).bind(message.project_id).bind(message.mentioned_actor_ids).bind(message.conversation_id).fetch_all(&mut **transaction).await?
-    } else {
-        sqlx::query_scalar::<_, Uuid>(
+    let agents = agents_to_ask(transaction, message).await?;
+    insert_requests(transaction, message, &agents, required, true).await?;
+    Ok(())
+}
+
+/// The agents the reply rules ask about a message. In a channel or thread
+/// under one: the active agents a person mentioned who can see it. In a DM or
+/// group (or a thread under one): every other active agent member.
+async fn agents_to_ask(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: &NewMessage<'_>,
+) -> Result<Vec<Uuid>, AppError> {
+    if matches!(message.conversation_kind, "channel" | "thread") {
+        return Ok(sqlx::query_scalar::<_, Uuid>(
             r#"
+            SELECT membership.actor_id
+            FROM project_memberships membership
+            JOIN actors actor ON actor.id = membership.actor_id
+            WHERE membership.project_id = $1
+              AND membership.enabled
+              AND actor.kind = 'external_agent'
+              AND actor.status = 'active'
+              AND actor.id = ANY($2)
+              AND conversation_visible_to($3, actor.id)
+            ORDER BY actor.id
+            "#,
+        )
+        .bind(message.project_id)
+        .bind(message.mentioned_actor_ids)
+        .bind(message.conversation_id)
+        .fetch_all(&mut **transaction)
+        .await?);
+    }
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
         SELECT member.actor_id
         FROM conversation_members member
         JOIN actors actor ON actor.id = member.actor_id
@@ -138,31 +192,52 @@ async fn ask(
           AND membership.enabled
         ORDER BY member.actor_id
         "#,
-        )
-        .bind(message.members_conversation_id)
-        .bind(message.author_actor_id)
-        .fetch_all(&mut **transaction)
-        .await?
-    };
-    if agents.is_empty() {
-        return Ok(());
-    }
-    sqlx::query(
-        r#"
-        UPDATE reply_requests
-        SET status = 'superseded', updated_at = now()
-        WHERE conversation_id = $1
-          AND status = 'pending'
-          AND agent_actor_id = ANY($2)
-        "#,
     )
-    .bind(message.conversation_id)
-    .bind(&agents)
-    .execute(&mut **transaction)
-    .await?;
-    for agent in agents {
-        // An agent already asked about this message (possible after Continue)
-        // keeps its existing request.
+    .bind(message.members_conversation_id)
+    .bind(message.author_actor_id)
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+/// Ask each of `agents` about `message`, waking the ones newly asked, and
+/// return how many were. An agent already asked about this message keeps the
+/// request it has, whatever its status.
+///
+/// With `supersede_others`, the agents' still-pending requests about other
+/// messages in this conversation are superseded first, so nobody answers a
+/// stale question. The request about this message itself is never
+/// superseded: asking about the same message twice (a second Continue, or a
+/// retried one) leaves each agent exactly one open request, rather than
+/// superseding the first and inserting nothing.
+async fn insert_requests(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: &NewMessage<'_>,
+    agents: &[Uuid],
+    required: bool,
+    supersede_others: bool,
+) -> Result<usize, AppError> {
+    if agents.is_empty() {
+        return Ok(0);
+    }
+    if supersede_others {
+        sqlx::query(
+            r#"
+            UPDATE reply_requests
+            SET status = 'superseded', updated_at = now()
+            WHERE conversation_id = $1
+              AND status = 'pending'
+              AND agent_actor_id = ANY($2)
+              AND message_id <> $3
+            "#,
+        )
+        .bind(message.conversation_id)
+        .bind(agents)
+        .bind(message.message_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    let mut asked = 0;
+    for &agent in agents {
         let inserted = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO reply_requests (
@@ -184,6 +259,7 @@ async fn ask(
         .fetch_optional(&mut **transaction)
         .await?;
         if let Some(request_id) = inserted {
+            asked += 1;
             wake(
                 transaction,
                 message.project_id,
@@ -194,7 +270,98 @@ async fn ask(
             .await?;
         }
     }
-    notify(transaction, message.project_id, message.conversation_id).await
+    notify(transaction, message.project_id, message.conversation_id).await?;
+    Ok(asked)
+}
+
+/// Which open reply requests `withdraw_requests` takes back.
+pub(crate) enum Withdraw<'a> {
+    /// Every request about one message, for example because it was removed.
+    Message {
+        conversation_id: Uuid,
+        message_id: Uuid,
+    },
+    /// These agents' requests in a group and the threads under it that
+    /// `editor_actor_id` can see, for example because they left the group.
+    AgentsInGroup {
+        group_id: Uuid,
+        agent_actor_ids: &'a [Uuid],
+        editor_actor_id: Uuid,
+    },
+}
+
+/// The only way reply requests are withdrawn. Every open request the filter
+/// matches (pending, claimed, expired or released) becomes superseded, with
+/// `reason` in plain words, so it can't be answered (`complete_with_reply`
+/// needs a claim), handed out, or retried (`retry_request` takes only
+/// expired or released ones). Answered requests keep 'replied'. Browsers
+/// watching each affected conversation are told once. Returns how many were
+/// withdrawn.
+///
+/// The caller holds the conversation's lock, taken through a helper that
+/// checks `conversation_visible_to` (the lock order is the conversation, then
+/// these rows).
+pub(crate) async fn withdraw_requests(
+    transaction: &mut Transaction<'_, Postgres>,
+    filter: Withdraw<'_>,
+    reason: &str,
+) -> Result<i64, AppError> {
+    let withdrawn = match filter {
+        Withdraw::Message {
+            conversation_id,
+            message_id,
+        } => {
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                r#"
+                UPDATE reply_requests
+                SET status = 'superseded', lease_expires_at = NULL, reason = $3,
+                    updated_at = now()
+                WHERE conversation_id = $1
+                  AND message_id = $2
+                  AND status IN ('pending', 'claimed', 'expired', 'released')
+                RETURNING project_id, conversation_id
+                "#,
+            )
+            .bind(conversation_id)
+            .bind(message_id)
+            .bind(reason)
+            .fetch_all(&mut **transaction)
+            .await?
+        }
+        Withdraw::AgentsInGroup {
+            group_id,
+            agent_actor_ids,
+            editor_actor_id,
+        } => {
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                r#"
+                UPDATE reply_requests request
+                SET status = 'superseded', lease_expires_at = NULL, reason = $4,
+                    updated_at = now()
+                FROM conversations conversation
+                WHERE conversation.id = request.conversation_id
+                  AND (conversation.id = $1
+                       OR (conversation.parent_channel_id = $1 AND conversation.kind = 'thread'))
+                  AND conversation_visible_to(conversation.id, $3)
+                  AND request.agent_actor_id = ANY($2)
+                  AND request.status IN ('pending', 'claimed', 'expired', 'released')
+                RETURNING request.project_id, request.conversation_id
+                "#,
+            )
+            .bind(group_id)
+            .bind(agent_actor_ids)
+            .bind(editor_actor_id)
+            .bind(reason)
+            .fetch_all(&mut **transaction)
+            .await?
+        }
+    };
+    let count = i64::try_from(withdrawn.len()).unwrap_or(i64::MAX);
+    let conversations = withdrawn.into_iter().collect::<BTreeSet<_>>();
+    for (project_id, conversation_id) in conversations {
+        notify(transaction, project_id, conversation_id).await?;
+    }
+    Ok(count)
 }
 
 /// Tell each of the agent's active connections that work is waiting: an inbox
@@ -406,9 +573,63 @@ async fn continue_conversation(
 ) -> Result<Json<ContinueResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
-    let conversation = lock_conversation_access(
+    let outcome = continue_conversation_in(
         &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        conversation_id,
+    )
+    .await?;
+    insert_audit_event(
+        &mut transaction,
+        &headers,
         &principal,
+        outcome.project_id,
+        "conversation.continued",
+        conversation_id,
+        serde_json::json!({ "asked": outcome.asked.len() }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(ContinueResponse {
+        agent_turns_remaining: outcome.agent_turns_remaining,
+    }))
+}
+
+/// What `continue_conversation_in` did.
+pub(crate) struct ContinueOutcome {
+    pub project_id: Uuid,
+    pub conversation_id: Uuid,
+    pub agent_turns_remaining: i32,
+    /// The newest message that wasn't removed, if any.
+    pub latest_message_id: Option<Uuid>,
+    /// Agents with an open request about that message, after continuing.
+    pub asked: Vec<ActorView>,
+}
+
+/// Let the agents in a group (or a thread under one) take another round:
+/// reset its turn allowance and, when the newest message is an agent's, ask
+/// the group's other agents to answer it. People only, so agents can't keep a
+/// conversation going on their own. Shared by the browser API and MCP;
+/// callers record their own audit rows.
+///
+/// A removed message is never asked about: the newest message that wasn't
+/// removed counts. Asking about the same message again leaves each agent
+/// exactly one open request (`insert_requests` never supersedes the request
+/// about the message being asked about).
+pub(crate) async fn continue_conversation_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    conversation_id: Uuid,
+) -> Result<ContinueOutcome, AppError> {
+    if actor_kind != ActorKind::Human {
+        return Err(AppError::Forbidden);
+    }
+    let conversation = lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
         conversation_id,
         Action::MessageSend,
         false,
@@ -420,7 +641,7 @@ async fn continue_conversation(
     sqlx::query("UPDATE conversations SET agent_turns_remaining = $2 WHERE id = $1")
         .bind(conversation_id)
         .bind(TURN_ALLOWANCE)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     let latest = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
@@ -429,37 +650,72 @@ async fn continue_conversation(
         JOIN messages message ON message.id = entry.message_id
         JOIN actors actor ON actor.id = message.author_actor_id
         WHERE entry.conversation_id = $1
+          AND message.removed_at IS NULL
         ORDER BY entry.sequence DESC
         LIMIT 1
         "#,
     )
     .bind(conversation_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
-    if let Some((message_id, author_actor_id, author_kind)) = latest
+    if let Some((message_id, author_actor_id, author_kind)) = &latest
         && author_kind == "external_agent"
     {
         ask(
-            &mut transaction,
+            transaction,
             &NewMessage {
                 project_id: conversation.project_id,
                 conversation_id,
                 members_conversation_id: conversation.membership_conversation_id(),
                 conversation_kind: "group",
-                message_id,
-                author_actor_id,
-                author_kind: &author_kind,
+                message_id: *message_id,
+                author_actor_id: *author_actor_id,
+                author_kind,
                 mentioned_actor_ids: &[],
             },
             false,
         )
         .await?;
     }
-    notify(&mut transaction, conversation.project_id, conversation_id).await?;
-    transaction.commit().await?;
-    Ok(Json(ContinueResponse {
+    notify(transaction, conversation.project_id, conversation_id).await?;
+    let latest_message_id = latest.map(|(message_id, _, _)| message_id);
+    let asked = match latest_message_id {
+        Some(message_id) => sqlx::query_as::<_, (Uuid, String, String, String)>(
+            r#"
+            SELECT actor.id, actor.kind, membership.display_name, membership.handle
+            FROM reply_requests request
+            JOIN actors actor ON actor.id = request.agent_actor_id
+            JOIN project_memberships membership
+              ON membership.project_id = request.project_id
+             AND membership.actor_id = request.agent_actor_id
+            WHERE request.conversation_id = $1
+              AND request.message_id = $2
+              AND request.status IN ('pending', 'claimed')
+            ORDER BY lower(membership.display_name), actor.id
+            "#,
+        )
+        .bind(conversation_id)
+        .bind(message_id)
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .map(|(id, kind, display_name, handle)| ActorView {
+            id,
+            kind,
+            display_name,
+            handle,
+            avatar_url: None,
+        })
+        .collect(),
+        None => Vec::new(),
+    };
+    Ok(ContinueOutcome {
+        project_id: conversation.project_id,
+        conversation_id,
         agent_turns_remaining: TURN_ALLOWANCE,
-    }))
+        latest_message_id,
+        asked,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -493,11 +749,39 @@ async fn retry_request(
         false,
     )
     .await?;
+    // Retrying asks the agent again, so it has to be able to answer: still
+    // active, still in the project, and able to see the conversation. An
+    // agent removed from a group would otherwise hold a pending request it
+    // can never see. Requests about a removed message were withdrawn when it
+    // was removed; the update below refuses them anyway.
+    let answerable = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT actor.status = 'active' AND membership.enabled
+               AND conversation_visible_to(request.conversation_id, request.agent_actor_id)
+        FROM reply_requests request
+        JOIN actors actor ON actor.id = request.agent_actor_id
+        JOIN project_memberships membership
+          ON membership.project_id = request.project_id
+         AND membership.actor_id = request.agent_actor_id
+        WHERE request.id = $1
+        "#,
+    )
+    .bind(request_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !answerable {
+        return Err(AppError::Conflict(
+            "reply request",
+            "the agent can no longer answer in this conversation",
+        ));
+    }
     let updated = sqlx::query(
         r#"
-        UPDATE reply_requests
+        UPDATE reply_requests request
         SET status = 'pending', reason = NULL, updated_at = now()
-        WHERE id = $1 AND status IN ('expired', 'released')
+        FROM messages message
+        WHERE request.id = $1 AND request.status IN ('expired', 'released')
+          AND message.id = request.message_id AND message.removed_at IS NULL
         "#,
     )
     .bind(request_id)

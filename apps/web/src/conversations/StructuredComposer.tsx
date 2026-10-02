@@ -9,13 +9,14 @@ import {
   type ReactNode,
 } from 'react'
 
-import { ActorTag, Avatar, Icon, IconButton, Kbd, actorKind } from '../ui'
+import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, actorKind, type IconName } from '../ui'
 import {
   activeTrigger,
   buildMessageContent,
   composerScalarValues,
   createIdempotencyKey,
   MAX_MESSAGE_SCALAR_VALUES,
+  type ComposerDraft,
   type ComposerSubmission,
   type Trigger,
 } from './composerModel'
@@ -33,6 +34,17 @@ type StructuredComposerProps = {
   submitLabel?: string
   /** Controls above the text box, such as the thread's Message/Run switch. */
   toolbar?: ReactNode
+  /** Start from this text, for example the message being edited. */
+  initialDraft?: ComposerDraft
+  /** Shows a Cancel button, and Escape cancels too. */
+  onCancel?: () => void
+  /** A line under the box that is always shown, in place of the keyboard hint. */
+  note?: ReactNode
+  /** Editing: keep the text in the box while it saves; the editor closes on success. */
+  keepDraftWhileSaving?: boolean
+  autoFocus?: boolean
+  className?: string
+  submitIcon?: IconName
 }
 
 type Suggestion =
@@ -50,14 +62,21 @@ export function StructuredComposer({
   searchWorkItems,
   submitLabel = 'Send message',
   toolbar,
+  initialDraft,
+  onCancel,
+  note,
+  keepDraftWhileSaving = false,
+  autoFocus = false,
+  className,
+  submitIcon = 'send',
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const idempotencyKeyRef = useRef(createIdempotencyKey())
   const searchGeneration = useRef(0)
   const id = useId()
-  const [text, setText] = useState('')
-  const [mentions, setMentions] = useState<ConversationActor[]>([])
-  const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>([])
+  const [text, setText] = useState(initialDraft?.text ?? '')
+  const [mentions, setMentions] = useState<ConversationActor[]>(initialDraft?.mentions ?? [])
+  const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>(initialDraft?.workItems ?? [])
   const [trigger, setTrigger] = useState<Trigger | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [active, setActive] = useState(0)
@@ -82,6 +101,17 @@ export function StructuredComposer({
     element.style.height = 'auto'
     element.style.height = `${Math.min(element.scrollHeight, 280)}px`
   }, [text])
+
+  // An editor opens with the caret after the text.
+  useEffect(() => {
+    if (!autoFocus) return
+    const element = textareaRef.current
+    if (!element) return
+    element.focus()
+    element.setSelectionRange(element.value.length, element.value.length)
+    // Only when it opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Search as the @ or # query changes, keeping only the latest answer.
   useEffect(() => {
@@ -172,7 +202,7 @@ export function StructuredComposer({
 
   const submit = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
-    if (!content || !canSend) return
+    if (!content || !canSend || (keepDraftWhileSaving && busy)) return
     // Clear right away so it feels instant. A failed send puts the draft back and keeps its
     // idempotency key, so retrying can't post it twice; the next message gets a fresh key.
     const draft = { text, mentions, workItems }
@@ -180,9 +210,11 @@ export function StructuredComposer({
     idempotencyKeyRef.current = createIdempotencyKey()
     setBusy(true)
     setError(null)
-    setText('')
-    setMentions([])
-    setWorkItems([])
+    if (!keepDraftWhileSaving) {
+      setText('')
+      setMentions([])
+      setWorkItems([])
+    }
     void onSubmit({ content, idempotencyKey: key, text: draft.text.trim() })
       .catch((reason: unknown) => {
         idempotencyKeyRef.current = key
@@ -221,6 +253,12 @@ export function StructuredComposer({
       closeSuggestions()
       return
     }
+    if (onCancel && event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      onCancel()
+      return
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
       submit()
@@ -242,7 +280,7 @@ export function StructuredComposer({
   const remaining = MAX_MESSAGE_SCALAR_VALUES - scalarValues
 
   return (
-    <form className="aw-composer-wrap" onSubmit={submit}>
+    <form className={className ? `aw-composer-wrap ${className}` : 'aw-composer-wrap'} onSubmit={submit}>
       {toolbar ? <div className="aw-composer__toolbar">{toolbar}</div> : null}
       <div className={`aw-composer${busy ? ' is-busy' : ''}`}>
         {trigger ? (
@@ -326,8 +364,13 @@ export function StructuredComposer({
                 <span className="visually-hidden"> characters left</span>
               </span>
             ) : null}
-            <button aria-label={submitLabel} className="aw-composer__send" disabled={!canSend} type="submit">
-              <Icon className={busy ? 'aw-spin' : undefined} name={busy ? 'loader' : 'send'} />
+            {onCancel ? (
+              <Button onClick={onCancel} size="sm" variant="ghost">
+                Cancel
+              </Button>
+            ) : null}
+            <button aria-label={submitLabel} className="aw-composer__send" disabled={!canSend || (keepDraftWhileSaving && busy)} type="submit">
+              <Icon className={busy ? 'aw-spin' : undefined} name={busy ? 'loader' : submitIcon} />
             </button>
           </div>
         </div>
@@ -340,8 +383,10 @@ export function StructuredComposer({
       ) : error ? (
         <p className="aw-composer__error" role="alert">
           <Icon name="circle-alert" size={14} />
-          {error} Your draft is still here. Press Enter to try again.
+          {error} {keepDraftWhileSaving ? 'Your text is still here.' : 'Your draft is still here. Press Enter to try again.'}
         </p>
+      ) : note ? (
+        <p className="aw-composer__note">{note}</p>
       ) : (
         <p aria-hidden={!text} className={text ? 'aw-composer__hint is-visible' : 'aw-composer__hint'}>
           <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> for a new line

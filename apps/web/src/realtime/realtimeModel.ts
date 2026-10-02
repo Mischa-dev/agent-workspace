@@ -180,6 +180,57 @@ export function durableMessageId(
   return uuid(field(event.payload, 'messageId', 'message_id'))
 }
 
+/** A message that was edited or removed, from a conversation.message.updated event. */
+export type MessageUpdate = {
+  conversationId: string
+  messageId: string
+  revision: number
+  removed: boolean
+}
+
+export function messageUpdate(
+  event: Pick<RealtimeEnvelope, 'type' | 'payload' | 'conversationId'>,
+): MessageUpdate | null {
+  if (event.type !== 'conversation.message.updated') return null
+  const conversationId = event.conversationId
+  const messageId = uuid(field(event.payload, 'messageId', 'message_id'))
+  const revision = event.payload.revision
+  const removed = event.payload.removed
+  if (
+    !conversationId ||
+    !messageId ||
+    !Number.isSafeInteger(revision) ||
+    (revision as number) < 1 ||
+    typeof removed !== 'boolean'
+  ) {
+    return null
+  }
+  return { conversationId, messageId, revision: revision as number, removed }
+}
+
+/** A message whose reactions changed, from a conversation.message.reactions.updated event. */
+export function reactionChange(
+  event: Pick<RealtimeEnvelope, 'type' | 'payload' | 'conversationId'>,
+): { conversationId: string; messageId: string } | null {
+  if (event.type !== 'conversation.message.reactions.updated') return null
+  const conversationId = event.conversationId
+  const messageId = uuid(field(event.payload, 'messageId', 'message_id'))
+  const payloadConversationId = uuid(field(event.payload, 'conversationId', 'conversation_id'))
+  if (!conversationId || !messageId || payloadConversationId !== conversationId) return null
+  return { conversationId, messageId }
+}
+
+/**
+ * The group the viewer was removed from (or left), from a
+ * conversation.member.removed event. Only the removed person receives it.
+ */
+export function removedConversationId(
+  event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
+): string | null {
+  if (event.type !== 'conversation.member.removed') return null
+  return uuid(field(event.payload, 'conversationId', 'conversation_id'))
+}
+
 export function terminalAgentRunId(
   event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
 ): string | null {

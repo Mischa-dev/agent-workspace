@@ -1,8 +1,7 @@
 import {
   FormEvent,
-  useEffect,
+  useCallback,
   useMemo,
-  useRef,
   useState,
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -35,15 +34,18 @@ import type { ComposerSubmission } from '../conversations/composerModel'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import { ThreadStatusButton } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
+import { useMessageActions } from '../conversations/MessageActions'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
+import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
+import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import {
   archiveConversation,
-  markConversationSeen,
   normalizeTimelinePage,
   searchMentionableActors,
   sendConversationMessage,
 } from '../conversations/api'
 import type {
+  ConversationCapabilities,
   ConversationTimelineEntry,
   ConversationTimelinePage,
   ConversationWorkItemReference,
@@ -146,14 +148,10 @@ type Timeline = {
   activeRun: Run | null
   latestTerminalRun: Run | null
   approvals: Approval[]
-  capabilities: {
-    workerInvoke: boolean
-    view: boolean
-    sendMessage: boolean
-    archive: boolean
-    markSeen: boolean
-  }
+  capabilities: ConversationCapabilities & { workerInvoke: boolean }
 }
+
+const NO_ENTRIES: ConversationTimelineEntry[] = []
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object'
@@ -437,18 +435,11 @@ export function ThreadPage() {
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [acknowledgedRunId, setAcknowledgedRunId] = useState<string | null>(null)
-  const [olderEntries, setOlderEntries] = useState<{
-    threadId: string
-    entries: ConversationTimelineEntry[]
-    nextCursor: string | null
-  }>({ threadId: '', entries: [], nextCursor: null })
-  const [loadingOlder, setLoadingOlder] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [pendingSends, setPendingSends] = useState<{ key: string; text?: string }[]>([])
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [composerMode, setComposerMode] = useState<'message' | 'run'>('message')
   const parentSidebar = useProjectConversationSidebar(projectId, verifiedTimeline?.conversation.parentChannelId ?? '')
-  const markedSeen = useRef({ threadId: '', sequence: 0 })
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'thread', conversationId: threadId },
@@ -468,17 +459,29 @@ export function ThreadPage() {
       ),
     [verifiedTimeline],
   )
-  const entries = useMemo(() => {
-    const bySequence = new Map<number, ConversationTimelineEntry>()
-    const historical =
-      olderEntries.threadId === threadId ? olderEntries.entries : []
-    for (const entry of [...historical, ...(verifiedTimeline?.entries ?? [])]) {
-      bySequence.set(entry.sequence, entry)
-    }
-    return [...bySequence.values()].sort(
-      (left, right) => left.sequence - right.sequence,
-    )
-  }, [olderEntries, threadId, verifiedTimeline?.entries])
+  const older = useLiveOlderEntries({
+    conversationId: threadId,
+    newestEntries: verifiedTimeline?.entries ?? NO_ENTRIES,
+    newestCursor: verifiedTimeline?.nextCursor ?? null,
+    loadPage: async (cursor) => {
+      const parameters = new URLSearchParams({ limit: '50', cursor })
+      if (includeArchived) parameters.set('includeArchived', 'true')
+      const result = normalizeTimeline(
+        await requestJson<unknown>(
+          `/api/v1/conversations/${encodeURIComponent(threadId)}/timeline?${parameters}`,
+        ),
+      )
+      if (
+        result.conversation.id !== threadId ||
+        result.conversation.projectId !== projectId ||
+        result.conversation.kind !== 'thread'
+      ) {
+        throw new Error('Older timeline page crossed its Project boundary.')
+      }
+      return result
+    },
+  })
+  const entries = older.entries
   const latestFailureEvent = useMemo(
     () =>
       latestTerminalRun?.state === 'failed'
@@ -492,42 +495,28 @@ export function ThreadPage() {
         : null,
     [entries, latestTerminalRun],
   )
-  const olderCursor =
-    olderEntries.threadId === threadId
-      ? olderEntries.nextCursor
-      : verifiedTimeline?.nextCursor ?? null
+  const olderCursor = older.cursor
 
-  useEffect(() => {
-    if (
-      !verifiedTimeline?.capabilities.markSeen ||
-      verifiedTimeline.highestSequence <=
-        verifiedTimeline.readState.highestSeenSequence ||
-      (markedSeen.current.threadId === threadId &&
-        verifiedTimeline.highestSequence <= markedSeen.current.sequence) ||
-      entries.at(-1)?.sequence !== verifiedTimeline.highestSequence
-    ) {
-      return
-    }
-    markedSeen.current = {
-      threadId,
-      sequence: verifiedTimeline.highestSequence,
-    }
-    void markConversationSeen({
+  const onSeen = useCallback(
+    () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.conversationSidebarRoot(projectId),
+      }),
+    [projectId, queryClient],
+  )
+  useAutoMarkSeen(
+    {
       conversationId: threadId,
-      highestSeenSequence: verifiedTimeline.highestSequence,
-    })
-      .then(() =>
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.conversationSidebarRoot(projectId),
-        }),
-      )
-      .catch(() => {
-        markedSeen.current = {
-          threadId,
-          sequence: verifiedTimeline.readState.highestSeenSequence,
-        }
-      })
-  }, [entries, projectId, queryClient, threadId, verifiedTimeline])
+      highestSequence: verifiedTimeline?.highestSequence ?? 0,
+      highestSeenSequence: verifiedTimeline?.readState.highestSeenSequence ?? 0,
+      // Only once the newest entry is on screen.
+      ready: Boolean(
+        verifiedTimeline?.capabilities.markSeen &&
+          entries.at(-1)?.sequence === verifiedTimeline.highestSequence,
+      ),
+    },
+    onSeen,
+  )
 
   const perform = async (key: string, action: () => Promise<unknown>) => {
     setBusyAction(key)
@@ -723,44 +712,21 @@ export function ThreadPage() {
     })
   }
 
-  const loadOlder = async () => {
-    if (!olderCursor || loadingOlder) return
-    setLoadingOlder(true)
-    setActionError(null)
-    try {
-      const parameters = new URLSearchParams({
-        limit: '50',
-        cursor: olderCursor,
-      })
-      if (includeArchived) parameters.set('includeArchived', 'true')
-      const older = normalizeTimeline(
-        await requestJson<unknown>(
-          `/api/v1/conversations/${encodeURIComponent(threadId)}/timeline?${parameters}`,
-        ),
-      )
-      if (
-        older.conversation.id !== threadId ||
-        older.conversation.projectId !== projectId ||
-        older.conversation.kind !== 'thread'
-      ) {
-        throw new Error('Older timeline page crossed its Project boundary.')
-      }
-      setOlderEntries((current) => ({
-        threadId,
-        entries: [
-          ...older.entries,
-          ...(current.threadId === threadId ? current.entries : []),
-        ],
-        nextCursor: older.nextCursor,
-      }))
-    } catch (reason) {
-      setActionError(
-        reason instanceof Error ? reason.message : 'Older Messages could not load.',
-      )
-    } finally {
-      setLoadingOlder(false)
-    }
-  }
+  const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
+  const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
+  const messageActions = useMessageActions({
+    projectId,
+    conversationId: threadId,
+    viewerId: session.user.actorId,
+    capabilities: verifiedTimeline?.capabilities,
+    searchActors,
+    searchWorkItems,
+    onReactionsChanged: older.patchReactions,
+    onChanged: (entry) => {
+      older.replaceEntry(entry)
+      void thread.timeline.refetch()
+    },
+  })
 
   const sendMessage = async (submission: ComposerSubmission) => {
     setPendingSends((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
@@ -1002,7 +968,8 @@ export function ThreadPage() {
         label={`Messages in ${threadName}`}
         revision={`${verifiedTimeline?.highestSequence ?? 0}:${pendingSends.length}:${Object.values(realtime.streaming).join('').length}:${pendingApproval?.id ?? ''}:${runForCard?.state ?? ''}`}
       >
-        {olderCursor ? <OlderMessagesButton busy={loadingOlder} onClick={() => void loadOlder()} /> : null}
+        {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
+        {older.error ? <Banner tone="danger">{older.error}</Banner> : null}
         {thread.timeline.isPending ? <MessageSkeleton label="Loading thread" /> : null}
         {thread.timeline.isError ? (
           <ErrorState action={<Button onClick={() => void thread.timeline.refetch()}>Try again</Button>} title="This thread didn’t load">
@@ -1016,7 +983,14 @@ export function ThreadPage() {
               : 'A focused conversation inside the channel. Everything said here stays with this thread.'}
           </ConversationIntro>
         ) : null}
-        <TimelineEntries entries={entries} viewerId={session.user.actorId} />
+        <TimelineEntries
+          entries={entries}
+          onOpenHistory={messageActions.openHistory}
+          renderEditor={messageActions.editorFor}
+          renderReactions={messageActions.reactionsFor}
+          renderToolbar={messageActions.toolbarFor}
+          viewerId={session.user.actorId}
+        />
         {pendingSends.map((item, index) => (
           <PendingMessageRow
             continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}
@@ -1068,8 +1042,8 @@ export function ThreadPage() {
           label={`Message ${threadName}`}
           onSubmit={sendMessage}
           placeholder={`Reply in ${threadName}`}
-          searchActors={async (query) => (await searchMentionableActors(projectId, query)).actors}
-          searchWorkItems={(query) => searchWorkItemReferences(projectId, query)}
+          searchActors={searchActors}
+          searchWorkItems={searchWorkItems}
           toolbar={modeSwitch}
         />
       ) : null}
@@ -1121,6 +1095,7 @@ export function ThreadPage() {
         <StructuredComposer disabledReason="This thread is archived. Nobody can post here." onSubmit={async () => undefined} searchActors={async () => []} />
       ) : null}
 
+      {messageActions.dialogs}
       <Dialog
         description="People can still read it from Archived conversations, but no one can post or start runs."
         footer={

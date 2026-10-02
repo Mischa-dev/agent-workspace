@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { ActorTag, Avatar, Icon, IconButton, actorKind, type IconName } from '../ui'
 import { MessageContent } from './MessageContent'
 import { dayKey, dayLabel, eventLabel, formatFullDate, formatTime } from './timeFormat'
-import type { ConversationTimelineEntry, ConversationWorkerEvent } from './types'
+import type { ConversationMessage, ConversationTimelineEntry, ConversationWorkerEvent } from './types'
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000
 
@@ -113,24 +113,63 @@ export function ConversationTimeline({
   )
 }
 
+/** "This message was removed." or, when someone else removed it, who did. */
+function removedLabel(message: ConversationMessage) {
+  const remover = message.removed?.removedBy
+  return remover && remover.id !== message.author.id ? `Removed by ${remover.displayName}.` : 'This message was removed.'
+}
+
+function EditedMark({ message, onOpenHistory }: { message: ConversationMessage; onOpenHistory?: (message: ConversationMessage) => void }) {
+  const title = message.editedAt ? `Edited ${formatFullDate(message.editedAt)}` : 'Edited'
+  if (!onOpenHistory) {
+    return (
+      <span className="aw-msg__edited" title={title}>
+        (edited)
+      </span>
+    )
+  }
+  return (
+    <button
+      aria-label={`${title}. Show earlier versions`}
+      className="aw-msg__edited"
+      onClick={() => onOpenHistory(message)}
+      title={title}
+      type="button"
+    >
+      (edited)
+    </button>
+  )
+}
+
 export function MessageRow({
   continued = false,
+  editor,
   entry,
   extras,
   highlighted = false,
+  onOpenHistory,
+  reactions,
   toolbar,
   viewerId,
 }: {
   continued?: boolean
+  /** Replaces the body while the message is being edited. */
+  editor?: ReactNode
   entry: ConversationTimelineEntry
   extras?: ReactNode
   highlighted?: boolean
+  /** Opens the message's earlier versions from its "(edited)" mark. */
+  onOpenHistory?: (message: ConversationMessage) => void
+  /** The reaction chips, shown under the body (never for a removed message). */
+  reactions?: ReactNode
   toolbar?: ReactNode
   viewerId?: string
 }) {
   const message = entry.message
   if (!message) return null
   const kind = actorKind(message.author.kind)
+  const removed = Boolean(message.removed)
+  const edited = !removed && (message.revision > 1 || Boolean(message.editedAt))
   const copyLink = () => {
     const url = `${window.location.origin}${window.location.pathname}#message-${message.id}`
     void navigator.clipboard?.writeText(url).catch(() => undefined)
@@ -138,7 +177,15 @@ export function MessageRow({
   return (
     <article
       aria-label={`${message.author.displayName}, ${formatTime(entry.createdAt)}`}
-      className={['aw-msg', continued ? 'is-continued' : '', highlighted ? 'is-highlighted' : ''].filter(Boolean).join(' ')}
+      className={[
+        'aw-msg',
+        continued ? 'is-continued' : '',
+        highlighted && !removed ? 'is-highlighted' : '',
+        removed ? 'is-removed' : '',
+        editor ? 'is-editing' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       id={`message-${message.id}`}
       // Focusable by tap, not Tab: touch screens have no hover, so tapping a
       // message is how its toolbar appears (see .aw-msg:focus-within).
@@ -162,23 +209,39 @@ export function MessageRow({
             <time className="aw-msg__time" dateTime={entry.createdAt} title={formatFullDate(entry.createdAt)}>
               {formatTime(entry.createdAt)}
             </time>
+            {edited ? <EditedMark message={message} onOpenHistory={onOpenHistory} /> : null}
           </div>
         )}
-        <div className="aw-msg__body">
-          <MessageContent
-            actors={message.mentionedActors ?? []}
-            content={message.content}
-            fallbackPlainText={message.plainText}
-            viewerId={viewerId}
-            workItems={message.referencedWorkItems ?? []}
-          />
-        </div>
+        {removed ? (
+          <p className="aw-msg__removed">{removedLabel(message)}</p>
+        ) : editor ? (
+          editor
+        ) : (
+          <div className="aw-msg__body">
+            <MessageContent
+              actors={message.mentionedActors ?? []}
+              content={message.content}
+              fallbackPlainText={message.plainText}
+              viewerId={viewerId}
+              workItems={message.referencedWorkItems ?? []}
+            />
+            {continued && edited ? (
+              <>
+                {' '}
+                <EditedMark message={message} onOpenHistory={onOpenHistory} />
+              </>
+            ) : null}
+          </div>
+        )}
+        {removed || editor ? null : reactions}
         {extras}
       </div>
-      <div aria-label="Message actions" className="aw-msg__toolbar" role="toolbar">
-        {toolbar}
-        <IconButton icon="link" label="Copy link to message" onClick={copyLink} size="sm" />
-      </div>
+      {editor ? null : (
+        <div aria-label="Message actions" className="aw-msg__toolbar" role="toolbar">
+          {toolbar}
+          <IconButton icon="link" label="Copy link to message" onClick={copyLink} size="sm" />
+        </div>
+      )}
     </article>
   )
 }
@@ -259,14 +322,22 @@ export function SystemRow({ createdAt }: { createdAt: string }) {
 export function TimelineEntries({
   entries,
   firstUnreadSequence,
+  onOpenHistory,
+  renderEditor,
   renderExtras,
+  renderReactions,
   renderToolbar,
   viewerId,
 }: {
   entries: ConversationTimelineEntry[]
   /** Show the New line before the first entry at or past this sequence. */
   firstUnreadSequence?: number | null
+  onOpenHistory?: (message: ConversationMessage) => void
+  /** The inline editor for the message being edited, if any. */
+  renderEditor?: (entry: ConversationTimelineEntry) => ReactNode
   renderExtras?: (entry: ConversationTimelineEntry) => ReactNode
+  /** The reaction chips for a message. */
+  renderReactions?: (entry: ConversationTimelineEntry) => ReactNode
   renderToolbar?: (entry: ConversationTimelineEntry) => ReactNode
   viewerId?: string
 }) {
@@ -297,9 +368,12 @@ export function TimelineEntries({
       row = (
         <MessageRow
           continued={continued}
+          editor={renderEditor?.(entry)}
           entry={entry}
           extras={renderExtras?.(entry)}
           highlighted={highlighted}
+          onOpenHistory={onOpenHistory}
+          reactions={renderReactions?.(entry)}
           toolbar={renderToolbar?.(entry)}
           viewerId={viewerId}
         />

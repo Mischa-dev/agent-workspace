@@ -24,24 +24,25 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, ConversationCreateResponse, ConversationView, ReadStateView, enqueue_event,
-        insert_audit_event, normalize_conversation_name,
+        insert_audit_event, lock_conversation_for, normalize_conversation_name, parse_actor_kind,
     },
     error::{ApiJson, ApiPath, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     outbox::{
-        ConversationCreatedPayload, ConversationUpdatedPayload, OutboxConversationKind,
-        OutboxEventPayload,
+        ConversationCreatedPayload, ConversationMemberRemovedPayload, ConversationUpdatedPayload,
+        OutboxConversationKind, OutboxEventPayload,
     },
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
     projects::membership_handle,
+    replies::{self, Withdraw},
 };
 
 const DIRECT_PROJECT_KEY: &str = "DMSPACE";
 const DIRECT_PROJECT_NAME: &str = "Direct messages";
 const DM_NAME: &str = "Direct message";
-const MAX_GROUP_MEMBERS: usize = 20;
+pub(crate) const MAX_GROUP_MEMBERS: usize = 20;
 const MAX_LISTED_CONVERSATIONS: i64 = 200;
 
 pub fn router() -> Router<AppState> {
@@ -403,37 +404,15 @@ async fn add_member(
     ApiPath(conversation_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<AddMemberRequest>,
 ) -> Result<Json<MembersResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
-    let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
-    require(&principal, &space, Action::ChannelCreate)?;
-    lock_group(&mut transaction, &space, &principal, conversation_id).await?;
-    lock_people(&mut transaction, space.project_id, &[request.actor_id]).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .bind(space.project_id)
-    .bind(conversation_id)
-    .bind(request.actor_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
-    let response = finish_membership_change(
-        &mut transaction,
+    change_members_from_web(
+        &state,
         &headers,
         &principal,
-        space.project_id,
         conversation_id,
-        "conversation.member_added",
-        request.actor_id,
+        &[request.actor_id],
+        &[],
     )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(response))
+    .await
 }
 
 async fn remove_member(
@@ -442,38 +421,336 @@ async fn remove_member(
     principal: AuthenticatedActor,
     ApiPath((conversation_id, actor_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Json<MembersResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal)?;
-    let mut transaction = state.pool.begin().await?;
-    let space = ensure_direct_space(&mut transaction, &Person::from(&principal)).await?;
-    require(&principal, &space, Action::ChannelCreate)?;
-    lock_group(&mut transaction, &space, &principal, conversation_id).await?;
-    let remaining = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM conversation_members WHERE conversation_id = $1 AND actor_id <> $2",
-    )
-    .bind(conversation_id)
-    .bind(actor_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if remaining == 0 {
-        return Err(AppError::Validation("a group needs at least one member"));
-    }
-    sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1 AND actor_id = $2")
-        .bind(conversation_id)
-        .bind(actor_id)
-        .execute(&mut *transaction)
-        .await?;
-    let response = finish_membership_change(
-        &mut transaction,
+    change_members_from_web(
+        &state,
         &headers,
         &principal,
-        space.project_id,
         conversation_id,
-        "conversation.member_removed",
-        actor_id,
+        &[],
+        &[actor_id],
+    )
+    .await
+}
+
+async fn change_members_from_web(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    conversation_id: Uuid,
+    add: &[Uuid],
+    remove: &[Uuid],
+) -> Result<Json<MembersResponse>, AppError> {
+    require_authenticated_write(state, headers, principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let change = change_group_members(
+        &mut transaction,
+        GroupEditor {
+            actor_id: principal.actor_id,
+            actor_kind: parse_actor_kind(&principal.actor_kind)?,
+        },
+        conversation_id,
+        add,
+        remove,
+        None,
     )
     .await?;
+    for (members, action) in [
+        (&change.added, "conversation.member_added"),
+        (&change.removed, "conversation.member_removed"),
+    ] {
+        for member in members {
+            insert_audit_event(
+                &mut transaction,
+                headers,
+                principal,
+                change.project_id,
+                action,
+                conversation_id,
+                serde_json::json!({ "actor_id": member.id }),
+            )
+            .await?;
+        }
+    }
     transaction.commit().await?;
-    Ok(Json(response))
+    Ok(Json(MembersResponse {
+        conversation_id,
+        version: change.version,
+        members: change.members,
+    }))
+}
+
+/// Who changes a group's members.
+pub(crate) struct GroupEditor {
+    pub actor_id: Uuid,
+    pub actor_kind: ActorKind,
+}
+
+/// What `change_group_members` did. `added` and `removed` hold only the
+/// actors whose membership actually changed; both empty means nothing did.
+pub(crate) struct GroupMembersChange {
+    pub project_id: Uuid,
+    pub conversation_id: Uuid,
+    pub name: String,
+    pub version: i64,
+    /// Everyone in the group after the change.
+    pub members: Vec<ActorView>,
+    pub added: Vec<ActorView>,
+    pub removed: Vec<ActorView>,
+}
+
+/// Add and remove people and agents in a group. Shared by the browser API and
+/// MCP; callers record their own audit rows.
+///
+/// - Visibility goes through `lock_conversation_for` (`conversation_visible_to`),
+///   which also locks the group row, so concurrent changes are serialized and
+///   the cap is checked under that lock. Someone who can't see the group gets
+///   `NotFound("conversation")`.
+/// - People can add and remove anyone. Anyone else (agents) can only remove
+///   themselves: whoever is added reads the whole history, so handing out
+///   that access needs a person (`Forbidden`).
+/// - Leaving needs only to see the group; changing others needs
+///   `ChannelCreate` in the Messages space.
+/// - A change that changes nothing bumps no version and sends no events.
+/// - New members' read marks start at the newest entry of the group and of
+///   each thread under it, so its history isn't flagged as unread.
+/// - Removed agents' open reply requests there are withdrawn, and each removed
+///   actor gets a `conversation.member.removed` event of their own.
+/// - There's no minimum: the last member can leave. An empty group is
+///   invisible to everyone, and nothing is deleted.
+pub(crate) async fn change_group_members(
+    transaction: &mut Transaction<'_, Postgres>,
+    editor: GroupEditor,
+    conversation_id: Uuid,
+    add: &[Uuid],
+    remove: &[Uuid],
+    expected_version: Option<i64>,
+) -> Result<GroupMembersChange, AppError> {
+    let add = add.iter().copied().collect::<BTreeSet<_>>();
+    let remove = remove.iter().copied().collect::<BTreeSet<_>>();
+    if (add.is_empty() && remove.is_empty()) || !add.is_disjoint(&remove) {
+        return Err(AppError::Validation("group members"));
+    }
+    let leaving_only = add.is_empty() && remove.iter().all(|id| *id == editor.actor_id);
+    let conversation = lock_conversation_for(
+        transaction,
+        editor.actor_id,
+        editor.actor_kind,
+        conversation_id,
+        if leaving_only {
+            Action::ProjectView
+        } else {
+            Action::ChannelCreate
+        },
+        false,
+    )
+    .await?;
+    if conversation.kind != "group" {
+        return Err(AppError::Conflict(
+            "conversation",
+            "only groups can change members",
+        ));
+    }
+    if editor.actor_kind != ActorKind::Human && !leaving_only {
+        return Err(AppError::Forbidden);
+    }
+    if let Some(expected_version) = expected_version
+        && expected_version != conversation.version
+    {
+        return Err(AppError::VersionConflict {
+            resource: "conversation",
+            current_version: conversation.version,
+        });
+    }
+    let project_id = conversation.project_id;
+    let current = sqlx::query_scalar::<_, Uuid>(
+        "SELECT actor_id FROM conversation_members WHERE conversation_id = $1",
+    )
+    .bind(conversation_id)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let to_add = add.difference(&current).copied().collect::<Vec<_>>();
+    let to_remove = remove.intersection(&current).copied().collect::<Vec<_>>();
+    if to_add.is_empty() && to_remove.is_empty() {
+        return Ok(GroupMembersChange {
+            project_id,
+            conversation_id,
+            name: conversation.name,
+            version: conversation.version,
+            members: group_member_views(transaction, conversation_id).await?,
+            added: Vec::new(),
+            removed: Vec::new(),
+        });
+    }
+    let added = if to_add.is_empty() {
+        Vec::new()
+    } else {
+        let people = lock_people(transaction, project_id, &to_add).await?;
+        if current.len() + to_add.len() - to_remove.len() > MAX_GROUP_MEMBERS {
+            return Err(AppError::Conflict(
+                "group members",
+                "a group can have at most 20 members",
+            ));
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
+            SELECT $1, $2, member, $3 FROM unnest($4::uuid[]) AS member
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(project_id)
+        .bind(conversation_id)
+        .bind(editor.actor_id)
+        .bind(&to_add)
+        .execute(&mut **transaction)
+        .await?;
+        // New members can read the whole history, but it isn't counted as
+        // unread: their marks start at the newest entry of the group and of
+        // each thread under it.
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_read_states (
+                project_id, conversation_id, actor_id, highest_seen_sequence, version
+            )
+            SELECT $1, conversation.id, member, conversation.next_entry_sequence - 1, 1
+            FROM conversations conversation
+            CROSS JOIN unnest($3::uuid[]) AS member
+            WHERE conversation.project_id = $1
+              AND (conversation.id = $2
+                   OR (conversation.parent_channel_id = $2 AND conversation.kind = 'thread'))
+              AND conversation_visible_to(conversation.id, $4)
+            ON CONFLICT (project_id, conversation_id, actor_id) DO UPDATE
+            SET highest_seen_sequence = EXCLUDED.highest_seen_sequence,
+                version = conversation_read_states.version + 1,
+                updated_at = now()
+            WHERE EXCLUDED.highest_seen_sequence > conversation_read_states.highest_seen_sequence
+            "#,
+        )
+        .bind(project_id)
+        .bind(conversation_id)
+        .bind(&to_add)
+        .bind(editor.actor_id)
+        .execute(&mut **transaction)
+        .await?;
+        people.into_iter().map(ActorView::from).collect()
+    };
+    let removed = if to_remove.is_empty() {
+        Vec::new()
+    } else {
+        let removed = member_views(transaction, project_id, &to_remove).await?;
+        // A removed agent can no longer see the group or its threads, so its
+        // open requests there could never be answered or retried. Withdraw
+        // them while the visibility check still sees the group (the editor
+        // may be the one leaving), before the member rows go.
+        replies::withdraw_requests(
+            transaction,
+            Withdraw::AgentsInGroup {
+                group_id: conversation_id,
+                agent_actor_ids: &to_remove,
+                editor_actor_id: editor.actor_id,
+            },
+            "Removed from the group.",
+        )
+        .await?;
+        sqlx::query(
+            "DELETE FROM conversation_members WHERE conversation_id = $1 AND actor_id = ANY($2)",
+        )
+        .bind(conversation_id)
+        .bind(&to_remove)
+        .execute(&mut **transaction)
+        .await?;
+        removed
+    };
+    let version = sqlx::query_scalar::<_, i64>(
+        "UPDATE conversations SET version = version + 1, updated_at = now() WHERE id = $1 RETURNING version",
+    )
+    .bind(conversation_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    // Everyone who can still see the group (including whoever was just
+    // added) hears about the change; each removed actor is told on their own.
+    enqueue_event(
+        transaction,
+        project_id,
+        OutboxEventPayload::ConversationUpdated(ConversationUpdatedPayload {
+            conversation_id,
+            version,
+        }),
+    )
+    .await?;
+    for actor_id in &to_remove {
+        enqueue_event(
+            transaction,
+            project_id,
+            OutboxEventPayload::ConversationMemberRemoved(ConversationMemberRemovedPayload {
+                conversation_id,
+                actor_id: *actor_id,
+                version,
+            }),
+        )
+        .await?;
+    }
+    Ok(GroupMembersChange {
+        project_id,
+        conversation_id,
+        name: conversation.name,
+        version,
+        members: group_member_views(transaction, conversation_id).await?,
+        added,
+        removed,
+    })
+}
+
+/// Everyone in a group, by name.
+async fn group_member_views(
+    transaction: &mut Transaction<'_, Postgres>,
+    conversation_id: Uuid,
+) -> Result<Vec<ActorView>, AppError> {
+    Ok(sqlx::query_as::<_, PersonRow>(
+        r#"
+        SELECT actor.id, actor.kind, membership.display_name, membership.handle
+        FROM conversation_members member
+        JOIN actors actor ON actor.id = member.actor_id
+        JOIN project_memberships membership
+          ON membership.project_id = member.project_id
+         AND membership.actor_id = member.actor_id
+        WHERE member.conversation_id = $1
+        ORDER BY lower(membership.display_name), actor.id
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .map(ActorView::from)
+    .collect())
+}
+
+/// These members of a space, by name, whether or not they're still enabled
+/// (a former member can still be removed from a group).
+async fn member_views(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    actor_ids: &[Uuid],
+) -> Result<Vec<ActorView>, AppError> {
+    Ok(sqlx::query_as::<_, PersonRow>(
+        r#"
+        SELECT actor.id, actor.kind, membership.display_name, membership.handle
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id
+        WHERE membership.project_id = $1 AND membership.actor_id = ANY($2)
+        ORDER BY lower(membership.display_name), actor.id
+        "#,
+    )
+    .bind(project_id)
+    .bind(actor_ids)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .map(ActorView::from)
+    .collect())
 }
 
 /// Find or create the DM between two members of a direct space. Returns the
@@ -801,38 +1078,6 @@ async fn lock_people(
     Ok(rows)
 }
 
-async fn lock_group(
-    transaction: &mut Transaction<'_, Postgres>,
-    space: &DirectSpace,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-) -> Result<(), AppError> {
-    let kind = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT kind
-        FROM conversations
-        WHERE id = $1
-          AND project_id = $2
-          AND archived_at IS NULL
-          AND conversation_visible_to(id, $3)
-        FOR UPDATE
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(space.project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("conversation"))?;
-    if kind != "group" {
-        return Err(AppError::Conflict(
-            "conversation",
-            "only groups can change members",
-        ));
-    }
-    Ok(())
-}
-
 async fn insert_members(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -897,65 +1142,6 @@ async fn announce_created(
         serde_json::json!({}),
     )
     .await
-}
-
-async fn finish_membership_change(
-    transaction: &mut Transaction<'_, Postgres>,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    conversation_id: Uuid,
-    audit_action: &'static str,
-    actor_id: Uuid,
-) -> Result<MembersResponse, AppError> {
-    let version = sqlx::query_scalar::<_, i64>(
-        "UPDATE conversations SET version = version + 1, updated_at = now() WHERE id = $1 RETURNING version",
-    )
-    .bind(conversation_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    enqueue_event(
-        transaction,
-        project_id,
-        OutboxEventPayload::ConversationUpdated(ConversationUpdatedPayload {
-            conversation_id,
-            version,
-        }),
-    )
-    .await?;
-    insert_audit_event(
-        transaction,
-        headers,
-        principal,
-        project_id,
-        audit_action,
-        conversation_id,
-        serde_json::json!({ "actor_id": actor_id }),
-    )
-    .await?;
-    let members = sqlx::query_as::<_, PersonRow>(
-        r#"
-        SELECT actor.id, actor.kind, membership.display_name, membership.handle
-        FROM conversation_members member
-        JOIN actors actor ON actor.id = member.actor_id
-        JOIN project_memberships membership
-          ON membership.project_id = member.project_id
-         AND membership.actor_id = member.actor_id
-        WHERE member.conversation_id = $1
-        ORDER BY lower(membership.display_name), actor.id
-        "#,
-    )
-    .bind(conversation_id)
-    .fetch_all(&mut **transaction)
-    .await?
-    .into_iter()
-    .map(ActorView::from)
-    .collect();
-    Ok(MembersResponse {
-        conversation_id,
-        version,
-        members,
-    })
 }
 
 async fn conversation_response(

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   durableMessageId,
+  messageUpdate,
   parseLegacyRealtimeEvent,
   parseRealtimeEnvelope,
+  reactionChange,
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
@@ -143,5 +145,50 @@ describe('realtime wire validation', () => {
     expect(streamDelta(event('unsafe\u0000text'))).toBeNull()
     expect(streamDelta(event('🙂'.repeat(20_001)))).toBeNull()
     expect(streamDelta(event('🙂'.repeat(20_000)))).not.toBeNull()
+  })
+
+  it('parses a message edit or removal and refuses malformed ones', () => {
+    const envelope = parseRealtimeEnvelope({
+      eventId,
+      eventCursor: 9,
+      version: 1,
+      projectId,
+      type: 'conversation.message.updated',
+      occurredAt: '2026-10-01T10:00:00Z',
+      payload: { conversationId, messageId: eventId, revision: 2, removed: true },
+    })
+    expect(envelope && messageUpdate(envelope)).toEqual({
+      conversationId,
+      messageId: eventId,
+      revision: 2,
+      removed: true,
+    })
+    const updated = (payload: Record<string, unknown>) => ({
+      type: 'conversation.message.updated',
+      conversationId,
+      payload,
+    })
+    expect(messageUpdate(updated({ messageId: eventId, revision: 0, removed: false }))).toBeNull()
+    expect(messageUpdate(updated({ messageId: 'not-a-uuid', revision: 1, removed: false }))).toBeNull()
+    expect(messageUpdate(updated({ messageId: eventId, revision: 1 }))).toBeNull()
+    expect(messageUpdate({ ...updated({ messageId: eventId, revision: 1, removed: false }), conversationId: null })).toBeNull()
+    expect(
+      messageUpdate({ type: 'conversation.message.created', conversationId, payload: { messageId: eventId, revision: 1, removed: false } }),
+    ).toBeNull()
+  })
+
+  it('reads reaction changes, IDs only, scoped to one conversation', () => {
+    const changed = (payload: Record<string, unknown>, id: string | null = conversationId) => ({
+      type: 'conversation.message.reactions.updated',
+      conversationId: id,
+      payload,
+    })
+    expect(reactionChange(changed({ conversationId, messageId: eventId }))).toEqual({ conversationId, messageId: eventId })
+    expect(reactionChange(changed({ conversationId, messageId: 'nope' }))).toBeNull()
+    expect(reactionChange(changed({ conversationId: projectId, messageId: eventId }))).toBeNull()
+    expect(reactionChange(changed({ conversationId, messageId: eventId }, null))).toBeNull()
+    expect(
+      reactionChange({ type: 'conversation.message.updated', conversationId, payload: { conversationId, messageId: eventId } }),
+    ).toBeNull()
   })
 })

@@ -3,11 +3,26 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { coalesceDeltaBatch } from '../app/streaming'
+import {
+  dropRemovedConversation,
+  dropRemovedMessage,
+  invalidateConversation,
+  NO_MESSAGE_UPDATES,
+  NO_REACTION_UPDATES,
+  refreshMemoryCaches,
+  rememberMessageUpdate,
+  rememberReactionUpdate,
+  type MessageUpdates,
+  type ReactionUpdates,
+} from '../conversations/liveMessages'
 import type { ConnectionStatus, RealtimeContextValue } from './realtimeContext'
 import {
   durableMessageId,
+  messageUpdate,
   parseLegacyRealtimeEvent,
+  reactionChange,
   parseRealtimeEnvelope,
+  removedConversationId,
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
@@ -35,6 +50,11 @@ export function useRealtimeConnection(): RealtimeContextValue {
   const [streams, setStreams] = useState<
     Record<string, Record<string, string>>
   >({})
+  const [messageUpdates, setMessageUpdates] =
+    useState<MessageUpdates>(NO_MESSAGE_UPDATES)
+  const [reactionUpdates, setReactionUpdates] =
+    useState<ReactionUpdates>(NO_REACTION_UPDATES)
+  const [resyncGeneration, setResyncGeneration] = useState(0)
   const reconnectAttempt = useRef(0)
 
   useEffect(() => {
@@ -67,6 +87,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
         // DMs and groups live in a Project the client does not list, so
         // refresh the Messages overview on any change.
         void queryClient.invalidateQueries({ queryKey: ['direct'] })
+        // Thread boards are keyed by conversation, outside the project, and
+        // change with threads: new ones, renames, replies, removed origins.
+        void queryClient.invalidateQueries({ queryKey: ['threads'] })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -76,9 +99,22 @@ export function useRealtimeConnection(): RealtimeContextValue {
       invalidationTimers.set(projectId, timer)
     }
 
+    // Reactions change one conversation's timelines and nothing else, so
+    // they refetch only those (including a DM thread shown in a side panel).
+    const invalidateReactions = (projectId: string, conversationId: string) => {
+      const key = `${projectId}:${conversationId}`
+      if (invalidationTimers.has(key)) return
+      const timer = window.setTimeout(() => {
+        invalidationTimers.delete(key)
+        invalidateConversation(queryClient, projectId, conversationId)
+      }, INVALIDATION_DELAY_MS)
+      invalidationTimers.set(key, timer)
+    }
+
     const refetchAuthenticatedState = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
       void queryClient.invalidateQueries({ queryKey: ['direct'] })
+      void queryClient.invalidateQueries({ queryKey: ['threads'] })
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })
@@ -188,6 +224,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
         setConnection('live')
         resetStreams()
         refetchAuthenticatedState()
+        // Removals sent while the socket was down never arrive: refresh the
+        // caches that live outside a project, and older timeline pages.
+        refreshMemoryCaches(queryClient)
+        setResyncGeneration((generation) => generation + 1)
       })
       current.addEventListener('message', (event) => {
         if (socket !== current) return
@@ -201,7 +241,23 @@ export function useRealtimeConnection(): RealtimeContextValue {
 
         const envelope = parseRealtimeEnvelope(wire)
         if (envelope) {
+          // One dispatch order for durable events: (1) drop repeats, (2) change
+          // caches synchronously, so removed text is gone before any fetch,
+          // (3) invalidate so everything converges over HTTP.
           if (!remember(envelope.eventId)) return
+          const reactions = reactionChange(envelope)
+          if (reactions) {
+            setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
+            invalidateReactions(envelope.projectId, reactions.conversationId)
+            return
+          }
+          const removedFrom = removedConversationId(envelope)
+          if (removedFrom) dropRemovedConversation(queryClient, envelope.projectId, removedFrom)
+          const update = messageUpdate(envelope)
+          if (update) {
+            setMessageUpdates((current) => rememberMessageUpdate(current, update))
+            if (update.removed) dropRemovedMessage(queryClient, update)
+          }
           const messageId = durableMessageId(envelope)
           const terminalRunId = terminalAgentRunId(envelope)
           if (envelope.conversationId && messageId) {
@@ -210,6 +266,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
             clearRunStreams(envelope.conversationId, terminalRunId)
           }
           invalidateProject(envelope.projectId)
+          if (update?.removed) refreshMemoryCaches(queryClient)
           return
         }
 
@@ -283,5 +340,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
     }
   }, [queryClient])
 
-  return useMemo(() => ({ connection, streams }), [connection, streams])
+  return useMemo(
+    () => ({ connection, streams, messageUpdates, reactionUpdates, resyncGeneration }),
+    [connection, streams, messageUpdates, reactionUpdates, resyncGeneration],
+  )
 }

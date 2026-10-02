@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RealtimeProvider } from './RealtimeProvider'
@@ -75,11 +75,87 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(4))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
+    // Thread boards are keyed outside the project; every event refreshes them.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['threads'] })
+  })
+
+  it('blanks a removed message in cached timelines and pins before refetching', async () => {
+    const queryClient = new QueryClient()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const removedId = '019fb600-0000-7000-8000-000000000020'
+    const timelineKey = ['project', projectId, 'conversation', conversationId, 'timeline', 'active']
+    queryClient.setQueryData(timelineKey, {
+      entries: [
+        {
+          id: '019fb600-0000-7000-8000-000000000021',
+          sequence: 1,
+          kind: 'message',
+          createdAt: '2026-10-01T10:00:00Z',
+          message: {
+            id: removedId,
+            author: { id: eventId, kind: 'human', displayName: 'Bob', handle: 'bob', avatarUrl: null },
+            content: { version: 1, nodes: [{ type: 'text', text: 'ghp_secret' }] },
+            plainText: 'ghp_secret',
+            mentionedActors: [],
+            referencedWorkItems: [],
+            createdAt: '2026-10-01T10:00:00Z',
+            via: null,
+            revision: 1,
+            editedAt: null,
+            removed: null,
+          },
+          workerEvent: null,
+        },
+      ],
+    })
+    queryClient.setQueryData(['pins', conversationId], {
+      pins: [{ kind: 'message', id: removedId, title: 'Bob', text: 'ghp_secret' }],
+    })
+    // A thread named from the message's first line, on a board that's open.
+    const threadsKey = ['threads', conversationId]
+    queryClient.setQueryData(threadsKey, [
+      { id: runId, name: 'ghp_secret', status: 'Open', originMessageId: removedId, messageCount: 1 },
+    ])
+    const unsubscribe = new QueryObserver(queryClient, {
+      queryKey: threadsKey,
+      // The refetch never answers here, so what's shown is the synchronous change.
+      queryFn: () => new Promise<unknown>(() => undefined),
+      staleTime: Infinity,
+    }).subscribe(() => undefined)
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeProvider>
+          <Probe />
+        </RealtimeProvider>
+      </QueryClientProvider>,
+    )
+    WebSocketStub.instances[0].message({
+      eventId,
+      eventCursor: 4,
+      version: 1,
+      projectId,
+      conversationId,
+      type: 'conversation.message.updated',
+      occurredAt: '2026-10-01T10:01:00Z',
+      payload: { conversationId, messageId: removedId, revision: 1, removed: true },
+    })
+
+    // Synchronous: no refetch has run yet.
+    expect(JSON.stringify(queryClient.getQueryData(timelineKey))).not.toContain('ghp_secret')
+    // Pins on no screen are forgotten outright; shown ones lose the message.
+    expect(JSON.stringify(queryClient.getQueryData(['pins', conversationId]) ?? null)).not.toContain('ghp_secret')
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['pins'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] })
+    // The open board shows the neutral name at once and refetches the real one.
+    expect(JSON.stringify(queryClient.getQueryData(threadsKey))).not.toContain('ghp_secret')
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['threads'] })
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] }))
+    unsubscribe()
   })
 
   it('coalesces bounded legacy provider deltas without creating another socket', async () => {

@@ -16,8 +16,8 @@ use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, mark_via, parse_id, parse_since, project_is_chosen, public_url,
-        scope_projects, snippet, string_or_number, version_conflict_message,
+        flag_or_text, mark_via, parse_id, parse_message_id, parse_since, project_is_chosen,
+        public_url, scope_projects, snippet, string_or_number, version_conflict_message,
     },
     history,
     reads::{self, ReadResult, WorkItemProjection},
@@ -1204,7 +1204,9 @@ pub(super) async fn task_open(
                    COALESCE(page.title, decision.title,
                             'Message from ' || COALESCE(author.display_name, 'someone')) AS title,
                    decision.status AS status,
-                   left(COALESCE(page.body, decision.detail, message.plain_text, ''), 400) AS text
+                   CASE WHEN message.removed_at IS NOT NULL THEN 'Message removed'
+                        ELSE left(COALESCE(page.body, decision.detail, message.plain_text, ''), 400)
+                   END AS text
             FROM work_item_links link
             LEFT JOIN project_pages page
               ON link.target_kind = 'page' AND page.id = link.target_id AND page.archived_at IS NULL
@@ -2273,7 +2275,7 @@ pub(super) struct TaskLinkArguments {
     pub task_id: String,
     /// A thread or conversation about this task.
     pub conversation_id: Option<String>,
-    /// A message this task came from.
+    /// A message this task came from: its ID, or a link to it.
     pub message_id: Option<String>,
     /// A page in the task's project.
     pub page_id: Option<String>,
@@ -2407,6 +2409,10 @@ pub(super) async fn task_link(
     }
     let record_id = match *kind {
         "repository" | "pull_request" => None,
+        "message" => match parse_message_id(target) {
+            Some(id) => Some(id),
+            None => return ToolResult::invalid(field, "Pass an ID or link."),
+        },
         _ => match parse_id(target) {
             Some(id) => Some(id),
             None => return ToolResult::invalid(field, "Pass an ID or link."),
@@ -2449,7 +2455,16 @@ async fn task_link_inner(
     let key = task_key_by_id(state, task_id).await?;
     let target = match request.record_id {
         Some(id) => {
-            if !record_visible(state, principal, project_id, request.kind, id).await? {
+            if !record_visible(
+                state,
+                principal,
+                project_id,
+                request.kind,
+                id,
+                request.remove,
+            )
+            .await?
+            {
                 return Ok(ToolResult::not_found(&format!("That {}", request.kind)));
             }
             LinkTarget::Record {
@@ -2696,20 +2711,27 @@ async fn task_link_inner(
 /// Whether a conversation, message, page or decision is in the task's
 /// project and the caller can see it, so a link never shows another
 /// project's (or a private conversation's) content to the task's readers.
+/// A removed message can be unlinked but not linked.
 async fn record_visible(
     state: &AppState,
     principal: &McpPrincipal,
     project_id: Uuid,
     kind: &str,
     id: Uuid,
+    unlinking: bool,
 ) -> Result<bool, AppError> {
     Ok(match kind {
         "conversation" => sqlx::query_scalar::<_, bool>(
             r#"SELECT EXISTS (SELECT 1 FROM conversations WHERE id = $1 AND project_id = $3
                AND conversation_visible_to(id, $2) AND actor_can_access_project($2, $4, $3))"#,
         ),
+        "message" if unlinking => sqlx::query_scalar::<_, bool>(
+            r#"SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND project_id = $3
+               AND conversation_visible_to(conversation_id, $2) AND actor_can_access_project($2, $4, $3))"#,
+        ),
         "message" => sqlx::query_scalar::<_, bool>(
             r#"SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND project_id = $3
+               AND removed_at IS NULL
                AND conversation_visible_to(conversation_id, $2) AND actor_can_access_project($2, $4, $3))"#,
         ),
         "page" => sqlx::query_scalar::<_, bool>(

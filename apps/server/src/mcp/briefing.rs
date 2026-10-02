@@ -164,6 +164,7 @@ pub(super) async fn briefing(
             WHERE mention.actor_id = $1
               AND message.project_id = ANY($2)
               AND message.author_actor_id <> $1
+              AND message.removed_at IS NULL
               AND message.created_at > now() - interval '30 days'
               AND entry.sequence > COALESCE(read_state.highest_seen_sequence, 0)
               AND conversation.archived_at IS NULL

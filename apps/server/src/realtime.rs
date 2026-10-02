@@ -170,8 +170,13 @@ impl OutboxPublisher for RealtimeHub {
             .and_then(serde_json::Value::as_str)
             .and_then(|value| Uuid::parse_str(value).ok())
             .filter(|value| !value.is_nil());
-        let invalid_actor_scope = if envelope.event_type == "conversation.read_state.updated" {
-            payload_actor_id != envelope.recipient_actor_id
+        // Actor-targeted events reach only the actor named in their payload.
+        let actor_targeted_event = matches!(
+            envelope.event_type.as_str(),
+            "conversation.read_state.updated" | "conversation.member.removed"
+        );
+        let invalid_actor_scope = if actor_targeted_event {
+            payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
         } else {
             envelope.recipient_actor_id.is_some()
         };
@@ -182,7 +187,10 @@ impl OutboxPublisher for RealtimeHub {
                 | "conversation.reply_requests.updated"
                 | "conversation.archived"
                 | "conversation.message.created"
+                | "conversation.message.updated"
+                | "conversation.message.reactions.updated"
                 | "conversation.read_state.updated"
+                | "conversation.member.removed"
                 | "conversation.agent_run.updated"
                 | "work_item.updated"
                 | "project.membership.updated"
@@ -193,6 +201,10 @@ impl OutboxPublisher for RealtimeHub {
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
+        } else if envelope.event_type == "conversation.member.removed" {
+            // The removed actor can no longer see the group, so this event
+            // is never conversation-scoped; it still names the group.
+            envelope.conversation_id.is_some() || payload_conversation_id.is_none()
         } else {
             envelope.conversation_id.is_none()
                 || payload_conversation_id != envelope.conversation_id
@@ -902,6 +914,58 @@ mod tests {
     }
 
     #[test]
+    fn message_updates_are_conversation_scoped() {
+        let hub = RealtimeHub::new(2);
+        let mut receiver = hub.subscribe();
+        let conversation_id = Uuid::now_v7();
+        let message_id = Uuid::now_v7();
+        for (event_type, payload) in [
+            (
+                "conversation.message.updated",
+                serde_json::json!({
+                    "conversationId": conversation_id,
+                    "messageId": message_id,
+                    "revision": 2,
+                    "removed": true,
+                }),
+            ),
+            (
+                "conversation.message.reactions.updated",
+                serde_json::json!({
+                    "conversationId": conversation_id,
+                    "messageId": message_id,
+                }),
+            ),
+        ] {
+            let envelope = OutboxEnvelope {
+                event_id: Uuid::now_v7(),
+                event_cursor: 43,
+                version: OUTBOX_SCHEMA_VERSION,
+                project_id: Uuid::now_v7(),
+                conversation_id: Some(conversation_id),
+                recipient_actor_id: None,
+                event_type: event_type.to_owned(),
+                occurred_at: "2026-10-01T15:00:00Z".to_owned(),
+                payload,
+            };
+            OutboxPublisher::publish(&hub, &envelope).expect("publish message update");
+            let delivery = receiver.try_recv().expect("message update delivery");
+            assert_eq!(delivery.conversation_id(), Some(conversation_id));
+
+            // Never project-wide, never targeted, never about another conversation.
+            let mut unscoped = envelope.clone();
+            unscoped.conversation_id = None;
+            assert!(OutboxPublisher::publish(&hub, &unscoped).is_err());
+            let mut targeted = envelope.clone();
+            targeted.recipient_actor_id = Some(Uuid::now_v7());
+            assert!(OutboxPublisher::publish(&hub, &targeted).is_err());
+            let mut mismatched = envelope;
+            mismatched.payload["conversationId"] = serde_json::json!(Uuid::now_v7());
+            assert!(OutboxPublisher::publish(&hub, &mismatched).is_err());
+        }
+    }
+
+    #[test]
     fn durable_publication_without_a_connected_browser_is_successful() {
         let hub = RealtimeHub::new(1);
         let conversation_id = Uuid::now_v7();
@@ -1116,6 +1180,100 @@ mod tests {
         .expect("decode targeted wire event");
         assert_eq!(wire["conversationId"], conversation_id.to_string());
         assert!(wire.get("recipient_actor_id").is_none());
+    }
+
+    #[test]
+    fn member_removed_reaches_only_the_removed_actor() {
+        let removed = Uuid::now_v7();
+        let other = Uuid::now_v7();
+        let group = Uuid::now_v7();
+        let envelope = OutboxEnvelope {
+            event_id: Uuid::now_v7(),
+            event_cursor: 1,
+            version: OUTBOX_SCHEMA_VERSION,
+            project_id: Uuid::now_v7(),
+            conversation_id: None,
+            recipient_actor_id: Some(removed),
+            event_type: "conversation.member.removed".to_owned(),
+            occurred_at: "2026-10-02T15:00:00Z".to_owned(),
+            payload: serde_json::json!({
+                "conversationId": group,
+                "actorId": removed,
+                "version": 3,
+            }),
+        };
+        OutboxPublisher::publish(&RealtimeHub::new(1), &envelope)
+            .expect("publish an unscoped member removal to its actor");
+        let refused = [
+            // Conversation-scoped: delivery would depend on visibility the
+            // actor just lost.
+            OutboxEnvelope {
+                conversation_id: Some(group),
+                ..envelope.clone()
+            },
+            // Aimed at someone other than the actor it names.
+            OutboxEnvelope {
+                recipient_actor_id: Some(other),
+                ..envelope.clone()
+            },
+            // Aimed at nobody: it would reach everyone in the project.
+            OutboxEnvelope {
+                recipient_actor_id: None,
+                ..envelope.clone()
+            },
+            // No group named.
+            OutboxEnvelope {
+                payload: serde_json::json!({"actorId": removed, "version": 3}),
+                ..envelope.clone()
+            },
+        ];
+        for envelope in &refused {
+            assert_eq!(
+                OutboxPublisher::publish(&RealtimeHub::new(1), envelope),
+                Err(RealtimePublishError::InvalidMetadata)
+            );
+        }
+        // Other conversation events keep their scope checks: none may go out
+        // without a conversation the way member.removed does.
+        for event_type in [
+            "conversation.updated",
+            "conversation.message.updated",
+            "conversation.message.reactions.updated",
+            "conversation.read_state.updated",
+        ] {
+            let unscoped = OutboxEnvelope {
+                event_type: event_type.to_owned(),
+                recipient_actor_id: if event_type == "conversation.read_state.updated" {
+                    Some(removed)
+                } else {
+                    None
+                },
+                ..envelope.clone()
+            };
+            assert_eq!(
+                OutboxPublisher::publish(&RealtimeHub::new(1), &unscoped),
+                Err(RealtimePublishError::InvalidMetadata),
+                "{event_type} without a conversation scope"
+            );
+        }
+        // A read-state event must name its actor in the payload too.
+        let read_without_actor = OutboxEnvelope {
+            conversation_id: Some(group),
+            event_type: "conversation.read_state.updated".to_owned(),
+            payload: serde_json::json!({
+                "conversationId": group,
+                "highestSeenSequence": 1,
+                "version": 2,
+            }),
+            ..envelope.clone()
+        };
+        assert_eq!(
+            OutboxPublisher::publish(&RealtimeHub::new(1), &read_without_actor),
+            Err(RealtimePublishError::InvalidMetadata)
+        );
+        let delivery = RealtimeDelivery::Durable { envelope };
+        assert!(delivery.is_visible_to_actor(removed));
+        assert!(!delivery.is_visible_to_actor(other));
     }
 
     #[test]

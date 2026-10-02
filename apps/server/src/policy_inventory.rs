@@ -179,6 +179,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "conversations",
         Post,
+        "/api/v1/conversations/{id}/mark-unread",
+        ReadStateUpdate
+    ),
+    policy_route!(
+        "conversations",
+        Post,
         "/api/v1/conversations/{id}/messages",
         MessageSend
     ),
@@ -245,6 +251,33 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "replies",
         Post,
         "/api/v1/reply-requests/{id}/retry",
+        MessageSend
+    ),
+    // Editing and removing your own message needs MessageSend. Removing
+    // someone else's also needs MessageModerate, checked in the handler.
+    policy_route!(
+        "message_edits",
+        Patch,
+        "/api/v1/conversations/{id}/messages/{message_id}",
+        MessageSend
+    ),
+    policy_route!(
+        "message_edits",
+        Delete,
+        "/api/v1/conversations/{id}/messages/{message_id}",
+        MessageSend
+    ),
+    // Anyone who can post in a conversation can react there.
+    policy_route!(
+        "reactions",
+        Put,
+        "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
+        MessageSend
+    ),
+    policy_route!(
+        "reactions",
+        Delete,
+        "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
         MessageSend
     ),
     policy_route!(
@@ -509,6 +542,8 @@ mod tests {
         ("conversations", include_str!("conversations.rs")),
         ("direct", include_str!("direct.rs")),
         ("replies", include_str!("replies.rs")),
+        ("message_edits", include_str!("message_edits.rs")),
+        ("reactions", include_str!("reactions.rs")),
         ("github", include_str!("github.rs")),
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),

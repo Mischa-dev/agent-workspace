@@ -697,10 +697,13 @@ pub async fn record_decision(
     )?;
     let mut source_conversation_id = input.source_conversation_id;
     if let Some(message_id) = input.source_message_id {
+        // A removed message can't be a decision's source: not found.
         let conversation_id = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT conversation_id FROM messages
-            WHERE id = $1 AND project_id = $2 AND conversation_visible_to(conversation_id, $3)
+            WHERE id = $1 AND project_id = $2 AND removed_at IS NULL
+              AND conversation_visible_to(conversation_id, $3)
+            FOR SHARE
             "#,
         )
         .bind(message_id)
@@ -793,6 +796,7 @@ pub async fn list_pins(
               OR conversation_visible_to(decision.source_conversation_id, $2))
         LEFT JOIN messages message
           ON pin.target_kind = 'message' AND message.id = pin.target_id
+         AND message.removed_at IS NULL
          AND conversation_visible_to(message.conversation_id, $2)
         LEFT JOIN project_memberships author
           ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
@@ -860,16 +864,23 @@ pub async fn set_pin(
             .fetch_one(&mut **transaction)
             .await?
         }
-        "message" => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND project_id = $2 AND conversation_visible_to(conversation_id, $3))",
-            )
-            .bind(target_id)
-            .bind(conversation.project_id)
-            .bind(writer.actor_id)
-            .fetch_one(&mut **transaction)
-            .await?
-        }
+        // A removed message can't be pinned. The share lock waits out a
+        // removal in progress, which then sees (and deletes) this pin, or
+        // sees the message removed.
+        "message" => sqlx::query_scalar::<_, i32>(
+            r#"
+            SELECT 1 FROM messages
+            WHERE id = $1 AND project_id = $2 AND removed_at IS NULL
+              AND conversation_visible_to(conversation_id, $3)
+            FOR SHARE
+            "#,
+        )
+        .bind(target_id)
+        .bind(conversation.project_id)
+        .bind(writer.actor_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .is_some(),
         _ => return Err(AppError::Validation("kind")),
     };
     if !exists {

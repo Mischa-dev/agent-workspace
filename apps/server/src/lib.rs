@@ -23,6 +23,7 @@ pub mod mcp;
 pub mod memberships;
 pub mod memory;
 pub mod message_content;
+pub mod message_edits;
 pub mod migration_preflight;
 pub mod outbox;
 pub mod policy;
@@ -31,6 +32,7 @@ pub mod profile_runtime;
 pub mod projects;
 pub mod provider;
 pub mod rate_limit;
+pub mod reactions;
 pub mod realtime;
 pub mod recovery;
 pub mod replies;
@@ -88,6 +90,8 @@ pub fn router(state: AppState) -> Router {
         .merge(conversations::router())
         .merge(direct::router())
         .merge(replies::router())
+        .merge(message_edits::router())
+        .merge(reactions::router())
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(github::router())

@@ -162,6 +162,7 @@ const MESSAGES_SQL: &str = r#"
     LEFT JOIN project_memberships author
       ON author.project_id = message.project_id AND author.actor_id = message.author_actor_id
     WHERE message.search_vector @@ query.q
+      AND message.removed_at IS NULL
       AND message.project_id = ANY($2)
       AND conversation.archived_at IS NULL
       AND conversation_visible_to(conversation.id, $1)
