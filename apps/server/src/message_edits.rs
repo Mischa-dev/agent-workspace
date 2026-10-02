@@ -599,8 +599,8 @@ pub(crate) async fn apply_edit(
 /// are deleted (who wrote each, when and through which app stay), and so is
 /// every copy the server made: mentions, task references, pins, open reply
 /// requests about it, stored replays of the send and its edits, and thread
-/// names suggested from it. Removing an already removed message changes
-/// nothing.
+/// names suggested from it (and older audit rows naming those threads).
+/// Removing an already removed message changes nothing.
 pub(crate) async fn apply_removal(
     transaction: &mut Transaction<'_, Postgres>,
     locked: &LockedMessage,
@@ -684,6 +684,7 @@ pub(crate) async fn apply_removal(
     )
     .unwrap_or(i64::MAX);
     let renamed_threads = neutralize_thread_names(transaction, locked, &texts).await?;
+    scrub_thread_audit_names(transaction, locked).await?;
 
     let entry = locked_entry(transaction, locked).await?;
     scrub_send_replays(transaction, locked, &entry).await?;
@@ -878,6 +879,32 @@ async fn neutralize_thread_names(
         renamed += 1;
     }
     Ok(renamed)
+}
+
+/// Drop the name from audit rows of status changes on threads started from
+/// the message. The web wrote the thread's name there before audit metadata
+/// kept to IDs and counts, and that name may be (or once have been) one
+/// suggested from the removed text. Who changed what, and when, stays.
+async fn scrub_thread_audit_names(
+    transaction: &mut Transaction<'_, Postgres>,
+    locked: &LockedMessage,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE audit_events AS audit
+        SET metadata = audit.metadata - 'name'
+        FROM conversations AS thread
+        WHERE thread.origin_message_id = $1 AND thread.kind = 'thread'
+          AND audit.project_id = thread.project_id
+          AND audit.target_kind = 'conversation' AND audit.target_id = thread.id
+          AND audit.action = 'conversation.thread_updated'
+          AND audit.metadata ? 'name'
+        "#,
+    )
+    .bind(locked.id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 async fn threads_from(

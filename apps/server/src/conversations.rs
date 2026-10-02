@@ -1385,7 +1385,8 @@ async fn patch_thread(
         view.project_id,
         "conversation.thread_updated",
         thread_id,
-        serde_json::json!({ "status": view.thread_status, "name": view.name }),
+        // No name: one suggested from a message must vanish with it.
+        serde_json::json!({ "status": view.thread_status }),
     )
     .await?;
     transaction.commit().await?;

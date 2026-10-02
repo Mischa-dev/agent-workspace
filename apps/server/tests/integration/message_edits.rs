@@ -386,6 +386,50 @@ async fn removed_message_text_vanishes_everywhere() {
                 .to_owned(),
         );
     }
+    // Status changes on the board are audited without the thread's name.
+    for thread in &threads {
+        let (status, updated) = send(
+            app,
+            setup.browser.request(
+                "PATCH",
+                &format!("/api/v1/threads/{thread}"),
+                None,
+                json!({ "status": "Done" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{updated}");
+        let audit = sqlx::query_scalar::<_, Value>(
+            "SELECT metadata FROM audit_events WHERE action = 'conversation.thread_updated' AND target_id = $1",
+        )
+        .bind(thread.parse::<Uuid>().expect("thread"))
+        .fetch_one(&setup.pool)
+        .await
+        .expect("thread status audit");
+        assert_eq!(audit, json!({ "status": "Done" }));
+    }
+    // Rows written before that named the thread; the hand-named one was
+    // once named after the message too.
+    for thread in &threads {
+        sqlx::query(
+            r#"
+            INSERT INTO audit_events (
+                id, actor_id, project_id, authentication_class, action,
+                target_kind, target_id, outcome, metadata
+            )
+            VALUES ($1, $2, $3, 'password_session', 'conversation.thread_updated',
+                    'conversation', $4, 'succeeded', $5)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(owner)
+        .bind(work.parse::<Uuid>().expect("project"))
+        .bind(thread.parse::<Uuid>().expect("thread"))
+        .bind(json!({ "status": "Open", "name": plain_text }))
+        .execute(&setup.pool)
+        .await
+        .expect("older thread audit");
+    }
     let (status, edited) = edit(
         &setup,
         &setup.browser,
@@ -454,6 +498,33 @@ async fn removed_message_text_vanishes_everywhere() {
     .await
     .expect("thread names");
     assert_eq!(names, ["Thread", "Rotation plan"]);
+    // Older audit rows naming those threads keep who changed what, not the
+    // name.
+    let mut thread_audits = sqlx::query_scalar::<_, Value>(
+        r#"
+        SELECT metadata FROM audit_events
+        WHERE action = 'conversation.thread_updated' AND target_id = ANY($1)
+        "#,
+    )
+    .bind(
+        threads
+            .iter()
+            .map(|thread| thread.parse::<Uuid>().expect("thread"))
+            .collect::<Vec<_>>(),
+    )
+    .fetch_all(&setup.pool)
+    .await
+    .expect("thread audits");
+    thread_audits.sort_by_key(ToString::to_string);
+    assert_eq!(
+        thread_audits,
+        [
+            json!({ "status": "Done" }),
+            json!({ "status": "Done" }),
+            json!({ "status": "Open" }),
+            json!({ "status": "Open" }),
+        ]
+    );
 
     // What people and agents see.
     let mara_reply = mara(
