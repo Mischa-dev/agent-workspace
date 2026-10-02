@@ -73,7 +73,7 @@ async fn create_group(setup: &Setup, browser: &Browser, key: &str, members: &[Uu
 }
 
 /// The timeline entry for `message`, as `browser` sees it.
-async fn timeline_message(
+pub(super) async fn timeline_message(
     setup: &Setup,
     browser: &Browser,
     conversation: &str,
@@ -96,7 +96,7 @@ async fn timeline_message(
 }
 
 /// The MCP item for `message` in a conversation_read or conversation_open.
-fn item<'a>(result: &'a Value, message: &str) -> &'a Value {
+pub(super) fn item<'a>(result: &'a Value, message: &str) -> &'a Value {
     result["value"]["messages"]
         .as_array()
         .expect("messages")

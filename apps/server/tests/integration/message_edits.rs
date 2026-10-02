@@ -230,7 +230,7 @@ pub(super) async fn set_role(pool: &PgPool, project: &str, actor: Uuid, role: &s
 }
 
 /// Rows of `table` whose text mentions `needle` anywhere.
-async fn copies(pool: &PgPool, table: &str, needle: &str) -> i64 {
+pub(super) async fn copies(pool: &PgPool, table: &str, needle: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(&format!(
         "SELECT count(*) FROM {table} WHERE {table}::text LIKE $1"
     ))

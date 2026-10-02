@@ -42,4 +42,5 @@ mod mcp_tasks;
 mod message_edits;
 mod message_reactions;
 mod oauth_agent;
+mod phase3_takedown;
 mod reply_requests;

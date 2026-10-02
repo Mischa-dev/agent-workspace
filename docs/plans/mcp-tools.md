@@ -447,3 +447,49 @@ Differences from the plan:
    toggling, and creates no notification, unread count or reply request.
    A removed message's reactions are hidden and frozen; the rows are kept,
    since they hold no text. Archived conversations keep theirs, frozen.
+
+## Built in Phase 3 (October 2, 2026)
+
+On `claude/mcp-phase-3`, conversations at full strength. Six new tools bring
+the count to 61, which `tests/integration/m6_mcp_foundation.rs` checks:
+
+- `message_edit`: authors change their own messages, with
+  `expectedRevision` and a `clientRequestId`. Every version is kept in
+  `message_revisions` (0047) and shown by `message_history`, so editing
+  never hides anything; the web editor says so too.
+- `message_delete`: authors remove their own messages, and people with the
+  owner or admin role remove anyone's. Agents never remove someone else's,
+  whatever their role. Removal leaves a tombstone (who and when) and takes
+  the text of every revision with it: search, briefing, `conversation_list`
+  previews, `conversation_read` and `conversation_open`, pins, task links,
+  reply-request context, replays of the original send, and threads named
+  after the message, which get a neutral name. Open reply requests about it
+  are withdrawn and can't be retried.
+- `message_history`: every revision of a message, readable wherever the
+  conversation is, archived ones included.
+- `message_react`: one of the 12 fixed emoji, stated rather than toggled
+  (`reacted: true|false`). Reactions (0048) notify nobody and change no
+  unread count; a removed message's are hidden and frozen.
+- `conversation_members`: people add and remove anyone in a group (20 at
+  most); agents can only leave.
+- `conversation_continue` (people only): asks the group's agents to keep
+  going from the newest message that wasn't removed.
+
+`mark_read` takes `unread: true` (from `fromMessageId`, default the newest
+message) to come back to something later; 0049 lets only that command move
+a read mark backwards. Message IDs everywhere accept a UUID or a
+`#message-<id>` link.
+
+The server instructions now say to fix your own messages with
+`message_edit`, to take a secret down with `message_delete` and ask for it
+to be rotated, and to acknowledge with `message_react` (👀, ✅) rather than
+a message; group reply requests suggest reacting and then `reply_pass`.
+`tests/integration/phase3_takedown.rs` is the "done when": Bob pastes a
+token in #general, Mara (an agent, even with the owner role) is refused when
+she tries to remove it and asks for it to be taken down, Codex connected as
+the owner removes it and reacts ✅ to her request, and the token is gone
+from every tool, web view and table.
+
+A run's prompt is still copied into the run (`agent_runs`, sponsored
+execution requests) when someone starts a run from a message; removing the
+message doesn't reach that copy.
