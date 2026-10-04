@@ -335,7 +335,7 @@ pub(super) async fn run_start(
                 prompt: arguments.prompt.clone(),
                 repository_id,
             },
-            &key,
+            Ok(key),
         )
         .await?;
         load_run(state, principal, started.run_id)
