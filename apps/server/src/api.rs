@@ -186,14 +186,13 @@ pub(crate) async fn start_agent_run(
     ApiJson(request): ApiJson<StartRunRequest>,
 ) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let (status, response) = start_run_in(
         &state,
         &principal,
         None,
         conversation_id,
         request,
-        &idempotency_key,
+        IdempotencyKey::from_headers(&headers),
     )
     .await?;
     Ok((status, Json(response)))
@@ -208,7 +207,9 @@ pub(crate) async fn start_run_in(
     via_grant_id: Option<Uuid>,
     conversation_id: Uuid,
     mut request: StartRunRequest,
-    idempotency_key: &IdempotencyKey,
+    // Checked after authorization, so a caller who may not start runs is
+    // refused as such rather than for a missing key.
+    idempotency_key: Result<IdempotencyKey, AppError>,
 ) -> Result<(StatusCode, StartRunResponse), AppError> {
     request.prompt = request.prompt.trim().to_owned();
     let (prompt_content, prompt, prompt_mentions) =
@@ -230,6 +231,7 @@ pub(crate) async fn start_run_in(
         return Err(AppError::Invalid("agent runs require a Thread"));
     }
 
+    let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope = idempotency::resource_bound_scope("thread", conversation_id, "agent_run_start")?;
     let mut transaction = state.pool.begin().await?;
@@ -245,7 +247,7 @@ pub(crate) async fn start_run_in(
         &mut transaction,
         principal.actor_id(),
         &scope,
-        idempotency_key,
+        &idempotency_key,
         request_hash,
     )
     .await?
@@ -257,16 +259,15 @@ pub(crate) async fn start_run_in(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    if via_grant_id.is_some() || principal.actor_kind()? != ActorKind::Human {
-        if crate::runs::run_cap(&mut transaction, principal.actor_id())
+    if (via_grant_id.is_some() || principal.actor_kind()? != ActorKind::Human)
+        && crate::runs::run_cap(&mut transaction, principal.actor_id())
             .await?
             .reached()
-        {
-            return Err(AppError::Conflict(
-                "agent_run",
-                "you already have 5 Codex runs queued or working; wait for one to finish",
-            ));
-        }
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "you already have 5 Codex runs queued or working; wait for one to finish",
+        ));
     }
     if sqlx::query_scalar::<_, bool>(
         r#"

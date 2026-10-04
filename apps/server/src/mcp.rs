@@ -69,6 +69,7 @@ mod labels;
 mod memory_tools;
 mod message_edits;
 mod oauth;
+mod planning;
 mod reactions;
 mod reads;
 mod replies;
@@ -1213,6 +1214,61 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). Same project only; a dependency that would make a cycle is refused with the path. Returns the task's blockers and whether it's ready.",
+        annotations(
+            title = "Set dependencies",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_depend(
+        &self,
+        Parameters(arguments): Parameters<planning::TaskDependArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::DependencyValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::task_depend(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's milestones: target dates, how many tasks are finished, and which are overdue.",
+        annotations(
+            title = "List milestones",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn milestone_list(
+        &self,
+        Parameters(arguments): Parameters<planning::MilestoneListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::MilestoneListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::milestone_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create or change a milestone (name, description, targetDate, archived), and put tasks in it (addTasks) or take them out (removeTasks). Creating one whose name exists returns that one.",
+        annotations(
+            title = "Write milestone",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn milestone_write(
+        &self,
+        Parameters(arguments): Parameters<planning::MilestoneWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::MilestoneValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::milestone_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Start Codex on your own Codex account, in a thread. To work on a task: thread_start in a channel, task_link the thread to the task, then run_start there with the full instructions (Codex sees only your prompt and the repository). Returns the run; follow it with run_get. People with full access only; at most 5 of your runs at once through connected apps.",
         annotations(
             title = "Start Codex run",
@@ -1453,6 +1509,39 @@ impl McpServer {
         vec![PromptMessage::new_text(
             Role::User,
             "Call briefing in Agent Workspace. For each reply request, @mention and unread conversation, open it and answer or act where you can; tell me about anything that needs my decision. Mark conversations read once handled. Summarize what you did and what's left, briefly.",
+        )]
+    }
+
+    #[prompt(
+        name = "standup",
+        description = "What changed in your projects since yesterday, and what's next."
+    )]
+    async fn standup_prompt(&self) -> Vec<PromptMessage> {
+        vec![PromptMessage::new_text(
+            Role::User,
+            "In Agent Workspace, write my standup. Use task_list (updatedSince: 24h) for what moved, run_list for Codex runs, pull_request_list (needsMe) for PRs waiting on me, and briefing for what needs me. Three short sections: Done, Next, Blocked. Keys and links only, no filler.",
+        )]
+    }
+
+    #[prompt(
+        name = "plan_project",
+        description = "Turn a goal into tasks, milestones and dependencies, with a preview first."
+    )]
+    async fn plan_project_prompt(&self) -> Vec<PromptMessage> {
+        vec![PromptMessage::new_text(
+            Role::User,
+            "Help me plan work in Agent Workspace. Ask which project and what the goal is if I haven't said. Read the project's guide (project_open) and existing tasks (task_list) so you don't duplicate them. Draft the tasks, subtasks and acceptance criteria, then call task_create_many with preview: true and show me the plan. Once I agree, create them, group them with milestone_write, and record what blocks what with task_depend.",
+        )]
+    }
+
+    #[prompt(
+        name = "review_prs",
+        description = "Open pull requests that need you, their checks, and the tasks they belong to."
+    )]
+    async fn review_prs_prompt(&self) -> Vec<PromptMessage> {
+        vec![PromptMessage::new_text(
+            Role::User,
+            "In Agent Workspace, call pull_request_list with needsMe: true, then open each one's task (task_open). For each PR say what it does, its checks and review state, and what I should do. Put failing checks first.",
         )]
     }
 
