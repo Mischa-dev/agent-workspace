@@ -72,6 +72,7 @@ mod oauth;
 mod reactions;
 mod reads;
 mod replies;
+mod runs;
 mod talk;
 mod task_batch;
 mod task_drafts;
@@ -1195,6 +1196,68 @@ impl McpServer {
     // -- Code, runs and approvals --------------------------------------------
 
     #[tool(
+        description = "Approvals Codex is waiting on that you can answer, oldest first (people only). Answer one with approval_respond. Approvals that need a person are answered in the web app, where the step is shown in full; inWebApp counts them.",
+        annotations(
+            title = "List approvals",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn approval_list(
+        &self,
+        Parameters(arguments): Parameters<approvals::ApprovalListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<approvals::ApprovalListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(approvals::list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Start Codex on your own Codex account, in a thread. To work on a task: thread_start in a channel, task_link the thread to the task, then run_start there with the full instructions (Codex sees only your prompt and the repository). Returns the run; follow it with run_get. People with full access only; at most 5 of your runs at once through connected apps.",
+        annotations(
+            title = "Start Codex run",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn run_start(
+        &self,
+        Parameters(arguments): Parameters<runs::RunStartArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_start(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A Codex run: its stage (queued, working, waiting_for_approval, finished, failed, published, checks_pending, checks_passed, checks_failed), its pull request and checks, and what to do next. Poll it every pollAfterSeconds to follow a run.",
+        annotations(title = "Get run", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn run_get(
+        &self,
+        Parameters(arguments): Parameters<runs::RunGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List Codex runs you can see, newest first: active ones by default, or finished, failed, or all. mine: true for only runs you started.",
+        annotations(title = "List runs", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn run_list(
+        &self,
+        Parameters(arguments): Parameters<runs::RunListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<runs::RunListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(runs::run_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "List repositories in a project, or in every project you can reach: default branch, whether its copy on the server is prepared, whether GitHub is connected, and whether Codex can run on it now (readyForRuns, with notReadyBecause if not). Repositories are added and changed in project settings (settingsUrl), not through MCP.",
         annotations(
             title = "List repositories",
@@ -1312,7 +1375,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: read an approval addressed to you.",
+        description = "Read an approval Codex is waiting on: what it asks, its options, and whether you can answer it. People see approvals addressed to them or their role; agents see ones addressed to them.",
         annotations(
             title = "Get approval",
             read_only_hint = true,
@@ -1333,7 +1396,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: answer an approval addressed to you that doesn't require a person.",
+        description = "Answer an approval Codex is waiting on (approve, deny, or answer a question), passing its version as expectedVersion. Approving lets Codex continue on that run. Approvals that need a person are answered in the web app.",
         annotations(
             title = "Answer approval",
             read_only_hint = false,
