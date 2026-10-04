@@ -474,18 +474,48 @@ async fn resolve_identity(
 struct Profile {
     username: String,
     display_name: String,
+    /// The person's GitHub username, used only to find pull requests that
+    /// ask for their review (migration 0050). Never used for authorization
+    /// or attribution.
+    github_login: Option<String>,
 }
-async fn profile(principal: AuthenticatedActor) -> Json<Profile> {
-    Json(Profile {
+
+async fn profile(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+) -> Result<Json<Profile>, AppError> {
+    let github_login =
+        sqlx::query_scalar::<_, Option<String>>("SELECT github_login FROM users WHERE id = $1")
+            .bind(principal.user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+    Ok(Json(Profile {
         username: principal.login_name,
         display_name: principal.display_name,
-    })
+        github_login,
+    }))
 }
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateProfile {
-    display_name: String,
+    display_name: Option<String>,
+    /// "" clears it.
+    github_login: Option<String>,
 }
+
+/// A GitHub username as GitHub allows it (the same rule as the column).
+fn valid_github_login(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=39).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        && bytes[0] != b'-'
+        && bytes[bytes.len() - 1] != b'-'
+}
+
 async fn update_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -493,26 +523,56 @@ async fn update_profile(
     ApiJson(request): ApiJson<UpdateProfile>,
 ) -> Result<Json<Profile>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let name = request.display_name.trim();
-    if name.is_empty() || name.chars().count() > 120 || name.chars().any(char::is_control) {
-        return Err(AppError::Validation("display name"));
+    if request.display_name.is_none() && request.github_login.is_none() {
+        return Err(AppError::Validation("profile"));
     }
+    let name = match request.display_name.as_deref().map(str::trim) {
+        Some(name)
+            if name.is_empty()
+                || name.chars().count() > 120
+                || name.chars().any(char::is_control) =>
+        {
+            return Err(AppError::Validation("display name"));
+        }
+        name => name,
+    };
+    let github_login = match request.github_login.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(login) if valid_github_login(login) => Some(Some(login)),
+        Some(_) => return Err(AppError::Validation("GitHub username")),
+    };
     let mut tx = state.pool.begin().await?;
-    sqlx::query("UPDATE users SET display_name=$2,updated_at=now() WHERE id=$1")
-        .bind(principal.user_id)
-        .bind(name)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE organization_actor_profiles SET display_name=$2 WHERE actor_id=$1")
-        .bind(principal.actor_id)
-        .bind(name)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE project_memberships SET display_name=$2,version=version+1,updated_at=now() WHERE actor_id=$1").bind(principal.actor_id).bind(name).execute(&mut *tx).await?;
+    if let Some(name) = name {
+        sqlx::query("UPDATE users SET display_name=$2,updated_at=now() WHERE id=$1")
+            .bind(principal.user_id)
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE organization_actor_profiles SET display_name=$2 WHERE actor_id=$1")
+            .bind(principal.actor_id)
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE project_memberships SET display_name=$2,version=version+1,updated_at=now() WHERE actor_id=$1").bind(principal.actor_id).bind(name).execute(&mut *tx).await?;
+    }
+    if let Some(login) = github_login {
+        sqlx::query("UPDATE users SET github_login=$2,updated_at=now() WHERE id=$1")
+            .bind(principal.user_id)
+            .bind(login)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let github_login =
+        sqlx::query_scalar::<_, Option<String>>("SELECT github_login FROM users WHERE id = $1")
+            .bind(principal.user_id)
+            .fetch_one(&mut *tx)
+            .await?;
     tx.commit().await?;
     Ok(Json(Profile {
         username: principal.login_name,
-        display_name: name.into(),
+        display_name: name.map_or(principal.display_name, str::to_owned),
+        github_login,
     }))
 }
 

@@ -1,0 +1,915 @@
+//! Phase 4 read tools (docs/plans/mcp-tools.md): repository_list,
+//! pull_request_list and agent_list. The costly bugs are silent: a pull
+//! request from a private thread listed to the whole project, "needs me"
+//! pointing at someone else's work, or a token, webhook or server path in a
+//! result an AI client reads.
+
+use std::collections::BTreeMap;
+
+use agent_workspace_server::{
+    bootstrap::{BootstrapCommand, bootstrap_admin},
+    config::AppConfig,
+    seed::{DevSeed, dev_seed},
+};
+use axum::http::StatusCode;
+use serde_json::{Value, json};
+use sqlx::{Executor, PgPool, postgres::PgPoolOptions};
+use uuid::Uuid;
+
+use super::{
+    agent_interface::{
+        PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send, test_app, tool,
+    },
+    mcp_admin::{Setup, create_project, setup},
+    mcp_task_board::seed_pull_request,
+    mcp_tasks::{add_member, space},
+    message_edits::add_person,
+};
+
+/// The dev seed (project AW with a worker, profile and repository) with
+/// its person signed in as "owner".
+async fn seeded(prefix: &str) -> Option<(Setup, DevSeed, tempfile::TempDir)> {
+    let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
+        eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
+        return None;
+    };
+    let admin = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect to PostgreSQL");
+    let schema = format!("{prefix}_{}", Uuid::now_v7().simple());
+    admin
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create schema");
+    let pool = schema_pool(&database_url, &schema).await;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("apply migrations");
+    let temporary = tempfile::tempdir().expect("temporary root");
+    let data_root = temporary.path().join("data");
+    let config = AppConfig::from_values(&BTreeMap::from([
+        (
+            "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+            database_url.clone(),
+        ),
+        (
+            "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+            data_root.to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_CODEX_HOME_ROOT".to_owned(),
+            data_root.join("codex").to_string_lossy().into_owned(),
+        ),
+        (
+            "AGENT_WORKSPACE_WEB_ROOT".to_owned(),
+            temporary.path().to_string_lossy().into_owned(),
+        ),
+    ]))
+    .expect("configuration");
+    let seed = dev_seed(&pool, &config).await.expect("seed");
+    bootstrap_admin(
+        &pool,
+        BootstrapCommand {
+            login_name: "owner".to_owned(),
+            display_name: "Owner".to_owned(),
+            organization_name: None,
+            organization_slug: None,
+            adopt_actor_id: Some(seed.human_actor_id),
+            organization_id: Some(seed.organization_id),
+        },
+        PASSWORD.to_owned(),
+    )
+    .await
+    .expect("bootstrap owner");
+    sqlx::query(
+        "UPDATE execution_profiles SET account_state = 'authenticated', version = version + 1 WHERE id = $1",
+    )
+    .bind(seed.execution_profile_id)
+    .execute(&pool)
+    .await
+    .expect("authenticate profile");
+    let app = test_app(pool.clone(), &database_url);
+    let browser = login(&app).await;
+    Some((
+        Setup {
+            app,
+            browser,
+            organization_id: seed.organization_id,
+            pool,
+        },
+        seed,
+        temporary,
+    ))
+}
+
+async fn execute(pool: &PgPool, sql: &str, binds: &[Uuid]) {
+    let mut query = sqlx::query(sql);
+    for bind in binds {
+        query = query.bind(*bind);
+    }
+    query
+        .execute(pool)
+        .await
+        .unwrap_or_else(|error| panic!("{sql}: {error}"));
+}
+
+/// A thread under `channel` about the seed repository.
+async fn thread(pool: &PgPool, seed: &DevSeed, channel: Uuid, name: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name) VALUES ($1, $2, 'thread', $3, $4, $5)",
+    )
+    .bind(id)
+    .bind(seed.project_id)
+    .bind(channel)
+    .bind(seed.repository_id)
+    .bind(name)
+    .execute(pool)
+    .await
+    .expect("thread");
+    id
+}
+
+/// A queued run by the seed person in `thread`, with its branch. Returns
+/// the run and its workspace.
+async fn run(pool: &PgPool, seed: &DevSeed, thread: Uuid, branch: &str) -> (Uuid, Uuid) {
+    let workspace = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO repository_workspaces (id, project_id, repository_id, conversation_id,
+                                           branch_name, base_commit)
+        VALUES ($1, $2, $3, $4, $5, repeat('b', 40))
+        "#,
+    )
+    .bind(workspace)
+    .bind(seed.project_id)
+    .bind(seed.repository_id)
+    .bind(thread)
+    .bind(branch)
+    .execute(pool)
+    .await
+    .expect("workspace");
+    let run = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_runs (
+            id, conversation_id, execution_worker_id, requesting_actor_id,
+            execution_profile_id, repository_id, repository_workspace_id, state, prompt,
+            authorization_snapshot
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', 'list test', '{}'::jsonb)
+        "#,
+    )
+    .bind(run)
+    .bind(thread)
+    .bind(seed.execution_worker_id)
+    .bind(seed.human_actor_id)
+    .bind(seed.execution_profile_id)
+    .bind(seed.repository_id)
+    .bind(workspace)
+    .execute(pool)
+    .await
+    .expect("run");
+    (run, workspace)
+}
+
+/// Another pull request on the same repository and installation as `first`.
+async fn pull_request(pool: &PgPool, first: Uuid, number: i64, title: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_requests (
+            id, project_id, repository_id, github_installation_id, github_repository_id,
+            pull_request_number, node_id, html_url, head_ref, head_sha, base_ref, title,
+            author_login, draft, state, external_created_at, external_updated_at
+        )
+        SELECT $1, project_id, repository_id, github_installation_id, github_repository_id,
+               $2, 'PR_' || $1::text,
+               regexp_replace(html_url, '/pull/[0-9]+$', '/pull/' || $2::text),
+               'branch-' || $2::text, head_sha, base_ref, $3, author_login, false, 'open',
+               now() - interval '1 hour', now() - make_interval(mins => $2::int)
+        FROM github_pull_requests WHERE id = $4
+        "#,
+    )
+    .bind(id)
+    .bind(number)
+    .bind(title)
+    .bind(first)
+    .execute(pool)
+    .await
+    .expect("pull request");
+    id
+}
+
+/// What a run that opened `pull_request` leaves behind: the workspace link
+/// and the run_artifact link to its thread.
+async fn opened_by(
+    pool: &PgPool,
+    seed: &DevSeed,
+    pull_request: Uuid,
+    run: (Uuid, Uuid),
+    thread: Uuid,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_request_workspace_links (
+            project_id, github_pull_request_id, repository_workspace_id, agent_run_id, commit_sha
+        ) VALUES ($1, $2, $3, $4, repeat('c', 40))
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(pull_request)
+    .bind(run.1)
+    .bind(run.0)
+    .execute(pool)
+    .await
+    .expect("workspace link");
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_request_conversation_links (
+            project_id, github_pull_request_id, conversation_id, source, created_by_actor_id
+        ) VALUES ($1, $2, $3, 'run_artifact', $4)
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(pull_request)
+    .bind(thread)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("thread link");
+}
+
+async fn link_task(pool: &PgPool, seed: &DevSeed, pull_request: Uuid, task: Uuid) {
+    sqlx::query(
+        r#"
+        INSERT INTO github_pull_request_work_item_links (
+            project_id, github_pull_request_id, work_item_id, source, confirmed,
+            created_by_actor_id
+        ) VALUES ($1, $2, $3, 'explicit', true, $4)
+        "#,
+    )
+    .bind(seed.project_id)
+    .bind(pull_request)
+    .bind(task)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("task link");
+}
+
+async fn task_key(pool: &PgPool, task: Uuid) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT project.project_key || '-' || item.number FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.id = $1",
+    )
+    .bind(task)
+    .fetch_one(pool)
+    .await
+    .expect("task key")
+}
+
+fn ids(result: &Value) -> Vec<String> {
+    result["value"]["pullRequests"]
+        .as_array()
+        .unwrap_or_else(|| panic!("pull requests: {result}"))
+        .iter()
+        .map(|line| line["id"].as_str().expect("id").to_owned())
+        .collect()
+}
+
+fn line(result: &Value, id: Uuid) -> &Value {
+    result["value"]["pullRequests"]
+        .as_array()
+        .and_then(|lines| lines.iter().find(|line| line["id"] == id.to_string()))
+        .unwrap_or_else(|| panic!("{id} in {result}"))
+}
+
+#[tokio::test]
+async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
+    let Some((setup, seed, temporary)) = seeded("mcp_code_prs").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let (dana, dana_browser) = add_person(&setup, &[&aw], "dana").await;
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &aw, mara, "member").await;
+    let owner_app = connect_app(app, &setup.browser, "Claude Code", "full").await;
+    let reader_app = connect_app(app, &setup.browser, "Reader", "read").await;
+    let dana_app = connect_app(app, &dana_browser, "Dana Code", "full").await;
+    let mut sessions = Vec::new();
+    for token in [&owner_app, &reader_app, &dana_app, &mara_token] {
+        sessions.push((
+            token.clone(),
+            initialize(app, token).await.expect("MCP session"),
+        ));
+    }
+    let call = |who: usize, name: &'static str, arguments: Value| {
+        let (token, session) = sessions[who].clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    const OWNER: usize = 0;
+    const READER: usize = 1;
+    const DANA: usize = 2;
+    const MARA: usize = 3;
+
+    // repository_list explains why Codex can't run yet.
+    let listed = call(OWNER, "repository_list", json!({"projectId": "AW"})).await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let repository = &listed["value"]["repositories"][0];
+    assert_eq!(repository["name"], "Mischa-dev/agent-workspace-m0-spike");
+    assert_eq!(repository["readyForRuns"], false, "{listed}");
+    assert!(
+        repository["notReadyBecause"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("prepare")),
+        "{listed}"
+    );
+    assert_eq!(repository["github"], "not_connected");
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), version = version + 1 WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+
+    // A: the owner's run in a public thread, failing "build", on task T1.
+    // B: no run; on T2, assigned to Dana; approved, mergeable, fresh, and
+    //    asking Mischa-dev to review.
+    // C: the owner's run in a channel only the owner is in.
+    // D: the owner's run started from T3, with no task link.
+    // E: merged.
+    let (a, _) = seed_pull_request(&setup, &aw, seed.repository_id, 1).await;
+    let installation = sqlx::query_scalar::<_, Uuid>(
+        "SELECT github_installation_id FROM github_pull_requests WHERE id = $1",
+    )
+    .bind(a)
+    .fetch_one(pool)
+    .await
+    .expect("installation");
+    sqlx::query(
+        r#"
+        INSERT INTO github_installation_repositories (
+            project_id, github_installation_id, repository_id, github_repository_id,
+            access_state, last_verified_at
+        ) SELECT project_id, $2, id, github_repository_id, 'selected', now()
+          FROM repositories WHERE id = $1
+        "#,
+    )
+    .bind(seed.repository_id)
+    .bind(installation)
+    .execute(pool)
+    .await
+    .expect("installation repository");
+    let b = pull_request(pool, a, 2, "Approved work").await;
+    let c = pull_request(pool, a, 3, "Private work").await;
+    let d = pull_request(pool, a, 4, "Task work").await;
+    let e = pull_request(pool, a, 5, "Merged work").await;
+    execute(
+        pool,
+        "UPDATE github_pull_requests SET checks_state = 'failure', sync_state = 'fresh' WHERE id = $1",
+        &[a],
+    )
+    .await;
+    for (name, status, conclusion) in [
+        ("build", "completed", Some("failure")),
+        ("lint", "completed", Some("success")),
+        ("e2e", "in_progress", None),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO github_pull_request_check_runs (
+                id, project_id, github_pull_request_id, github_check_run_id, name, status, conclusion
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(seed.project_id)
+        .bind(a)
+        .bind((Uuid::now_v7().as_u128() % 1_000_000) as i64 + 1)
+        .bind(name)
+        .bind(status)
+        .bind(conclusion)
+        .execute(pool)
+        .await
+        .expect("check run");
+    }
+    execute(
+        pool,
+        r#"UPDATE github_pull_requests SET checks_state = 'success', review_state = 'approved',
+               mergeability_state = 'ready', sync_state = 'fresh', last_success_at = now(),
+               requested_reviewers = '["Mischa-dev"]'::jsonb
+           WHERE id = $1"#,
+        &[b],
+    )
+    .await;
+    execute(
+        pool,
+        "UPDATE github_pull_requests SET state = 'merged', merged_at = now(), merge_commit_sha = repeat('d', 40) WHERE id = $1",
+        &[e],
+    )
+    .await;
+
+    let mut tasks = Vec::new();
+    for title in ["Fix the build", "Approved change", "Run from a task"] {
+        let created = call(
+            OWNER,
+            "task_create",
+            json!({"projectId": "AW", "title": title}),
+        )
+        .await;
+        tasks.push(
+            created["workItemId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("task: {created}"))
+                .parse::<Uuid>()
+                .expect("task id"),
+        );
+    }
+    let (t1, t2, t3) = (tasks[0], tasks[1], tasks[2]);
+    sqlx::query("UPDATE work_items SET assignee_actor_id = $2 WHERE id = $1")
+        .bind(t2)
+        .bind(dana)
+        .execute(pool)
+        .await
+        .expect("assign Dana");
+
+    let thread_a = thread(pool, &seed, seed.channel_id, "Build fix").await;
+    let run_a = run(pool, &seed, thread_a, "codex/a").await;
+    opened_by(pool, &seed, a, run_a, thread_a).await;
+    link_task(pool, &seed, a, t1).await;
+    link_task(pool, &seed, b, t2).await;
+
+    let secret_channel = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, kind, name, visibility) VALUES ($1, $2, 'channel', 'secret', 'members')",
+    )
+    .bind(secret_channel)
+    .bind(seed.project_id)
+    .execute(pool)
+    .await
+    .expect("secret channel");
+    sqlx::query(
+        "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES ($1, $2, $3, $3)",
+    )
+    .bind(seed.project_id)
+    .bind(secret_channel)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("owner in secret");
+    let thread_c = thread(pool, &seed, secret_channel, "Secret plan").await;
+    let run_c = run(pool, &seed, thread_c, "codex/c").await;
+    opened_by(pool, &seed, c, run_c, thread_c).await;
+
+    let thread_d = thread(pool, &seed, seed.channel_id, "Task run").await;
+    let run_d = run(pool, &seed, thread_d, "codex/d").await;
+    opened_by(pool, &seed, d, run_d, thread_d).await;
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_worker_invocations (
+            id, project_id, work_item_id, conversation_id, requesting_actor_id,
+            idempotency_key, request_hash, repository_id, agent_run_id
+        ) VALUES ($1, $2, $3, $4, $5, 'start-d', sha256('d'::bytea), $6, $7)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(seed.project_id)
+    .bind(t3)
+    .bind(thread_d)
+    .bind(seed.human_actor_id)
+    .bind(seed.repository_id)
+    .bind(run_d.0)
+    .execute(pool)
+    .await
+    .expect("invocation");
+
+    // The owner sees every open one, newest first; E is merged.
+    let all = call(OWNER, "pull_request_list", json!({})).await;
+    assert_eq!(all["outcome"], "ok", "{all}");
+    assert_eq!(all["value"]["total"], 4, "{all}");
+    let listed = ids(&all);
+    for open in [a, b, c, d] {
+        assert!(listed.contains(&open.to_string()), "{all}");
+    }
+    assert!(!listed.contains(&e.to_string()), "{all}");
+    let merged = call(OWNER, "pull_request_list", json!({"state": "merged"})).await;
+    assert_eq!(ids(&merged), [e.to_string()], "{merged}");
+    let first = line(&all, a);
+    assert_eq!(first["failingChecks"], json!(["build"]), "{first}");
+    assert_eq!(first["pendingChecks"], 1, "{first}");
+    assert_eq!(first["runId"], run_a.0.to_string(), "{first}");
+    assert_eq!(first["thread"]["id"], thread_a.to_string(), "{first}");
+    assert_eq!(
+        first["tasks"][0]["key"],
+        task_key(pool, t1).await,
+        "{first}"
+    );
+    assert_eq!(first["needsYou"], json!(["checks_failing"]), "{first}");
+    assert_eq!(
+        line(&all, d)["tasks"][0]["key"],
+        task_key(pool, t3).await,
+        "{all}"
+    );
+
+    // Filters.
+    let failing = call(OWNER, "pull_request_list", json!({"checks": "failing"})).await;
+    assert_eq!(ids(&failing), [a.to_string()], "{failing}");
+    let approved = call(OWNER, "pull_request_list", json!({"review": "approved"})).await;
+    assert_eq!(ids(&approved), [b.to_string()], "{approved}");
+    let by_task = call(
+        OWNER,
+        "pull_request_list",
+        json!({"taskId": task_key(pool, t1).await}),
+    )
+    .await;
+    assert_eq!(ids(&by_task), [a.to_string()], "{by_task}");
+    let by_run = call(
+        OWNER,
+        "pull_request_list",
+        json!({"taskId": task_key(pool, t3).await}),
+    )
+    .await;
+    assert_eq!(ids(&by_run), [d.to_string()], "{by_run}");
+    let by_name = call(
+        OWNER,
+        "pull_request_list",
+        json!({"repositoryId": "mischa-dev/agent-workspace-m0-spike"}),
+    )
+    .await;
+    assert_eq!(by_name["value"]["total"], 4, "{by_name}");
+    let nowhere = call(
+        OWNER,
+        "pull_request_list",
+        json!({"repositoryId": "Mischa-dev/nothing-here"}),
+    )
+    .await;
+    assert_eq!(nowhere["outcome"], "not_found", "{nowhere}");
+    let page = call(OWNER, "pull_request_list", json!({"limit": 3})).await;
+    assert_eq!(ids(&page).len(), 3, "{page}");
+    let cursor = page["value"]["nextCursor"].as_str().expect("cursor");
+    let rest = call(
+        OWNER,
+        "pull_request_list",
+        json!({"limit": 3, "cursor": cursor}),
+    )
+    .await;
+    assert_eq!(ids(&rest).len(), 1, "{rest}");
+    assert!(rest["value"].get("nextCursor").is_none(), "{rest}");
+
+    // needsMe: the owner's failing run, and the review request only once
+    // their GitHub username is known.
+    let needs = call(OWNER, "pull_request_list", json!({"needsMe": true})).await;
+    assert_eq!(ids(&needs), [a.to_string()], "{needs}");
+    assert!(
+        needs["value"]["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("/settings/account")),
+        "{needs}"
+    );
+    let (status, bad) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            "/api/v1/account/profile",
+            None,
+            json!({"githubLogin": "not a login"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    let (status, profile) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            "/api/v1/account/profile",
+            None,
+            json!({"githubLogin": "mischa-dev"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["githubLogin"], "mischa-dev");
+    assert_eq!(profile["displayName"], "Owner");
+    let needs = call(OWNER, "pull_request_list", json!({"needsMe": true})).await;
+    let mut needed = ids(&needs);
+    needed.sort();
+    let mut expected = vec![a.to_string(), b.to_string()];
+    expected.sort();
+    assert_eq!(needed, expected, "{needs}");
+    assert_eq!(line(&needs, b)["needsYou"], json!(["review_requested"]));
+    assert!(needs["value"].get("note").is_none(), "{needs}");
+
+    // Dana: never C, not by listing, by ID or through a task; B is hers
+    // (her task) and ready to merge; A isn't hers.
+    let dana_all = call(DANA, "pull_request_list", json!({})).await;
+    assert_eq!(dana_all["value"]["total"], 3, "{dana_all}");
+    assert!(!ids(&dana_all).contains(&c.to_string()), "{dana_all}");
+    assert!(!dana_all.to_string().contains("Private work"), "{dana_all}");
+    assert!(!dana_all.to_string().contains(&run_c.0.to_string()));
+    let hidden = call(
+        DANA,
+        "pull_request_get",
+        json!({"identifier": c.to_string()}),
+    )
+    .await;
+    assert_eq!(hidden["outcome"], "not_found", "{hidden}");
+    let dana_needs = call(DANA, "pull_request_list", json!({"needsMe": true})).await;
+    assert_eq!(ids(&dana_needs), [b.to_string()], "{dana_needs}");
+    assert_eq!(
+        line(&dana_needs, b)["needsYou"],
+        json!(["ready_to_merge"]),
+        "{dana_needs}"
+    );
+    let dana_repositories = call(DANA, "repository_list", json!({})).await;
+    let dana_repository = &dana_repositories["value"]["repositories"][0];
+    assert_eq!(
+        dana_repository["openPullRequests"], 3,
+        "{dana_repositories}"
+    );
+    // Runs in threads Dana can't see aren't counted for her.
+    assert_eq!(dana_repository["activeRuns"], 2, "{dana_repositories}");
+
+    // Read-only apps read; an agent has nothing that needs it.
+    let read = call(READER, "pull_request_list", json!({})).await;
+    assert_eq!(read["value"]["total"], 4, "{read}");
+    let mara_needs = call(MARA, "pull_request_list", json!({"needsMe": true})).await;
+    assert_eq!(mara_needs["outcome"], "ok", "{mara_needs}");
+    assert!(ids(&mara_needs).is_empty(), "{mara_needs}");
+    assert!(mara_needs["value"].get("note").is_none(), "{mara_needs}");
+    let mara_all = call(MARA, "pull_request_list", json!({})).await;
+    assert!(!ids(&mara_all).contains(&c.to_string()), "{mara_all}");
+
+    // Bad input.
+    let draft = call(OWNER, "pull_request_list", json!({"state": "draft"})).await;
+    assert_eq!(draft["outcome"], "invalid_request", "{draft}");
+    assert_eq!(draft["field"], "state", "{draft}");
+    let zero = call(OWNER, "pull_request_list", json!({"limit": 0})).await;
+    assert_eq!(zero["field"], "limit", "{zero}");
+    let unknown_task = call(OWNER, "pull_request_list", json!({"taskId": "AW-999"})).await;
+    assert_eq!(unknown_task["field"], "taskId", "{unknown_task}");
+
+    // Repositories: ready now, connected, and counted for the owner.
+    let listed = call(OWNER, "repository_list", json!({})).await;
+    let repository = &listed["value"]["repositories"][0];
+    assert_eq!(repository["readyForRuns"], true, "{listed}");
+    assert!(repository.get("notReadyBecause").is_none(), "{listed}");
+    assert_eq!(repository["github"], "connected", "{listed}");
+    assert_eq!(repository["openPullRequests"], 4, "{listed}");
+    assert_eq!(repository["activeRuns"], 3, "{listed}");
+    assert!(
+        repository["settingsUrl"]
+            .as_str()
+            .is_some_and(|url| url.ends_with("/settings?tab=repositories")),
+        "{listed}"
+    );
+    let archived = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO repositories (
+            id, project_id, github_repository_id, owner, name, clone_url, default_branch,
+            mirror_path, trusted, enabled, archived_at, archived_by_actor_id
+        ) VALUES ($1, $2, 99, 'Mischa-dev', 'old', 'https://x-access-token:ghs_leak@github.com/Mischa-dev/old.git',
+                  'main', '/srv/aw/mirrors/old.git', true, false, now(), $3)
+        RETURNING id
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(seed.project_id)
+    .bind(seed.human_actor_id)
+    .fetch_one(pool)
+    .await
+    .expect("archived repository");
+    let without = call(OWNER, "repository_list", json!({})).await;
+    assert_eq!(
+        without["value"]["repositories"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let with = call(OWNER, "repository_list", json!({"includeArchived": true})).await;
+    let old = with["value"]["repositories"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["id"] == archived.to_string()))
+        .unwrap_or_else(|| panic!("{with}"));
+    assert_eq!(old["archived"], true);
+    assert_eq!(old["notReadyBecause"], "It's archived.");
+    assert_eq!(
+        old["cloneUrl"], "https://github.com/Mischa-dev/old.git",
+        "{with}"
+    );
+
+    // A project Dana isn't in.
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let refused = call(DANA, "repository_list", json!({"projectId": other})).await;
+    assert_eq!(refused["outcome"], "forbidden", "{refused}");
+
+    // Nothing internal ever reaches a result.
+    let (mirror_path, installation_id) = sqlx::query_as::<_, (String, Option<i64>)>(
+        "SELECT mirror_path, github_app_installation_id FROM repositories WHERE id = $1",
+    )
+    .bind(seed.repository_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed repository");
+    let installation_ids = sqlx::query_scalar::<_, i64>(
+        "SELECT installation_id FROM github_installations WHERE project_id = $1",
+    )
+    .bind(seed.project_id)
+    .fetch_all(pool)
+    .await
+    .expect("installations");
+    let data_root = temporary.path().to_string_lossy().into_owned();
+    for result in [&all, &with, &listed, &needs, &dana_all, &dana_repositories] {
+        let text = result.to_string();
+        for secret in [
+            mirror_path.as_str(),
+            "/srv/aw/mirrors",
+            "ghs_leak",
+            "x-access-token",
+            data_root.as_str(),
+            &installation.to_string(),
+        ] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        if let Some(id) = installation_id {
+            assert!(!text.contains(&id.to_string()), "{id} in {text}");
+        }
+        for id in &installation_ids {
+            assert!(!text.contains(&format!(":{id}")), "{id} in {text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn agent_list_shows_work_and_never_secrets() {
+    let Some(setup) = setup("mcp_code_agents").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let space = space(&setup).await;
+    let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
+    add_member(&setup, &work, mara, "member").await;
+    let (_, dana_browser) = add_person(&setup, &[&work], "dana").await;
+    let owner_app = connect_app(app, &setup.browser, "Claude Code", "full").await;
+    let dana_app = connect_app(app, &dana_browser, "Dana Code", "full").await;
+    let mut sessions = Vec::new();
+    for token in [&owner_app, &dana_app, &mara_token] {
+        sessions.push((
+            token.clone(),
+            initialize(app, token).await.expect("MCP session"),
+        ));
+    }
+    let call = |who: usize, name: &'static str, arguments: Value| {
+        let (token, session) = sessions[who].clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    const OWNER: usize = 0;
+    const DANA: usize = 1;
+    const MARA: usize = 2;
+
+    let briefed = call(MARA, "briefing", json!({})).await;
+    assert_eq!(briefed["outcome"], "ok", "{briefed}");
+    let created = call(
+        OWNER,
+        "task_create",
+        json!({"projectId": "WORK", "title": "Offline mode"}),
+    )
+    .await;
+    let task = created["workItemId"].as_str().expect("task").to_owned();
+    let claimed = call(
+        MARA,
+        "task_claim",
+        json!({"taskId": task, "note": "Drafting\u{7}the plan"}),
+    )
+    .await;
+    assert_eq!(claimed["outcome"], "ok", "{claimed}");
+    let dm = call(
+        OWNER,
+        "conversation_start",
+        json!({"people": ["@mara"], "text": "Can you look at the offline plan?"}),
+    )
+    .await;
+    assert_eq!(dm["outcome"], "ok", "{dm}");
+    let connection = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM external_agent_connections WHERE actor_id = $1",
+    )
+    .bind(mara)
+    .fetch_one(pool)
+    .await
+    .expect("connection");
+    let (status, hooked) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{space}/external-agents/{connection}/webhook"),
+            None,
+            json!({"url": "https://hook-secret-host.test/x"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hooked}");
+
+    let owner_list = call(OWNER, "agent_list", json!({})).await;
+    assert_eq!(owner_list["outcome"], "ok", "{owner_list}");
+    let agent = &owner_list["value"]["agents"][0];
+    assert_eq!(agent["actorId"], mara.to_string(), "{owner_list}");
+    assert_eq!(agent["handle"], "mara");
+    assert_eq!(agent["status"], "active");
+    assert!(agent["lastCheckIn"].is_string(), "{owner_list}");
+    assert_eq!(agent["claims"][0]["key"], "WORK-1", "{owner_list}");
+    assert_eq!(
+        agent["claims"][0]["note"], "Draftingthe plan",
+        "{owner_list}"
+    );
+    assert_eq!(agent["replyRequests"]["waiting"], 1, "{owner_list}");
+    let connection_view = &agent["connection"];
+    assert_eq!(connection_view["wakeups"], true, "{owner_list}");
+    assert_eq!(connection_view["connectsThrough"], json!(["token"]));
+    assert_eq!(connection_view["access"], "full");
+    assert_eq!(connection_view["canRequestRuns"], false);
+    assert!(
+        connection_view["manageUrl"]
+            .as_str()
+            .is_some_and(|url| url.ends_with("/messages/agents"))
+    );
+    let work_project = agent["projects"]
+        .as_array()
+        .and_then(|projects| projects.iter().find(|project| project["key"] == "WORK"))
+        .unwrap_or_else(|| panic!("{owner_list}"));
+    assert_eq!(work_project["role"], "member", "{owner_list}");
+
+    // Dana shares WORK with Mara but isn't in the DM and doesn't manage
+    // agents: work, yes; how it connects, no.
+    let dana_list = call(DANA, "agent_list", json!({})).await;
+    let dana_agent = &dana_list["value"]["agents"][0];
+    assert_eq!(dana_agent["actorId"], mara.to_string(), "{dana_list}");
+    assert_eq!(dana_agent["replyRequests"]["waiting"], 0, "{dana_list}");
+    assert_eq!(dana_agent["claims"][0]["key"], "WORK-1", "{dana_list}");
+    assert!(dana_agent.get("connection").is_none(), "{dana_list}");
+    for project in dana_agent["projects"].as_array().expect("projects") {
+        assert!(project.get("role").is_none(), "{dana_list}");
+    }
+    let searched = call(DANA, "agent_list", json!({"query": "@mar"})).await;
+    assert_eq!(
+        searched["value"]["agents"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let none = call(DANA, "agent_list", json!({"query": "nobody"})).await;
+    assert_eq!(none["value"]["agents"], json!([]), "{none}");
+
+    // No token, prefix, webhook or credential ID for anyone.
+    let credentials = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM mcp_client_credentials WHERE external_agent_connection_id = $1",
+    )
+    .bind(connection)
+    .fetch_all(pool)
+    .await
+    .expect("credentials");
+    for result in [&owner_list, &dana_list] {
+        let text = result.to_string();
+        assert!(!text.contains(&mara_token), "{text}");
+        assert!(!text.contains(&mara_token[..16]), "{text}");
+        assert!(!text.contains("hook-secret-host"), "{text}");
+        assert!(!text.contains(&connection.to_string()), "{text}");
+        for credential in &credentials {
+            assert!(!text.contains(&credential.to_string()), "{text}");
+        }
+    }
+
+    // An agent never sees itself; a turned-off one shows only when asked.
+    let own = call(MARA, "agent_list", json!({})).await;
+    assert_eq!(own["outcome"], "ok", "{own}");
+    assert!(!own.to_string().contains(&mara.to_string()), "{own}");
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM external_agent_connections WHERE id = $1",
+    )
+    .bind(connection)
+    .fetch_one(pool)
+    .await
+    .expect("version");
+    let (status, disabled) = send(
+        app,
+        setup.browser.request(
+            "PATCH",
+            &format!("/api/v1/projects/{space}/external-agents/{connection}"),
+            None,
+            json!({"expectedVersion": version, "enabled": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let after = call(OWNER, "agent_list", json!({})).await;
+    assert_eq!(after["value"]["agents"], json!([]), "{after}");
+    let with_disabled = call(OWNER, "agent_list", json!({"includeDisabled": true})).await;
+    assert_eq!(
+        with_disabled["value"]["agents"][0]["status"], "disabled",
+        "{with_disabled}"
+    );
+    let too_many = call(OWNER, "agent_list", json!({"limit": 101})).await;
+    assert_eq!(too_many["field"], "limit", "{too_many}");
+}

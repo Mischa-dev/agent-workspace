@@ -32,6 +32,7 @@ mod m7_invitations;
 mod m7_memberships;
 mod m9_external_agents;
 mod mcp_admin;
+mod mcp_code;
 mod mcp_groundwork;
 mod mcp_groups;
 mod mcp_labels;
