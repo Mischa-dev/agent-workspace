@@ -132,7 +132,8 @@ struct ApprovalContext {
     version: i64,
     created_at: String,
     membership_role: String,
-    connection_id: Uuid,
+    /// The agent's connection; `None` for a person acting through an app.
+    connection_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -172,11 +173,7 @@ pub async fn respond(
     principal: &McpPrincipal,
     mut arguments: ApprovalRespondArguments,
 ) -> ApprovalToolResult {
-    if principal.actor_kind != ActorKind::ExternalAgent
-        || principal.external_agent_connection_id.is_none()
-        || !principal.can_write()
-        || !principal.has_scope("approval_respond")
-    {
+    if !may_respond(principal) {
         return ApprovalToolResult::denied();
     }
     let Ok(approval_id) = arguments.approval_id.parse::<Uuid>() else {
@@ -343,11 +340,13 @@ async fn respond_inner(
         INSERT INTO audit_events (
             id, actor_id, project_id, authentication_class, action,
             target_kind, target_id, outcome, channel, client_name,
-            mcp_credential_id, external_agent_connection_id, metadata
+            mcp_credential_id, external_agent_connection_id, metadata,
+            mcp_oauth_grant_id
         ) VALUES (
-            $1, $2, $3, 'mcp_bearer', 'approval.external_responded',
+            $1, $2, $3, $10, 'approval.external_responded',
             'agent_approval', $4, 'succeeded', 'mcp', $5,
-            $6, $7, jsonb_build_object('resolution', $8, 'version', $9)
+            $6, $7, jsonb_build_object('resolution', $8, 'version', $9),
+            $11
         )
         "#,
     )
@@ -366,6 +365,8 @@ async fn respond_inner(
         "denied"
     })
     .bind(context.version + 1)
+    .bind(principal.authentication_class)
+    .bind(principal.oauth_grant_id)
     .execute(&mut *transaction)
     .await?;
     complete(
@@ -458,12 +459,10 @@ async fn load_context(
     lock: bool,
     include_human_required_for_denial: bool,
 ) -> Result<Option<ApprovalContext>, AppError> {
-    if principal.actor_kind != ActorKind::ExternalAgent
-        || principal.external_agent_connection_id.is_none()
-        || !principal.can_read()
-        || !principal.can_write()
-        || !principal.has_scope("approval_respond")
-    {
+    if principal.actor_kind == ActorKind::Human {
+        return person_context(transaction, principal, approval_id, lock).await;
+    }
+    if !may_respond(principal) || !principal.can_read() {
         return Ok(None);
     }
     let locking = if lock {
@@ -675,4 +674,179 @@ mod tests {
         assert_eq!(bounded_text("safe\u{1b}[31m", 8), "safe[31m");
         assert_eq!(bounded_text("abcdefgh", 4), "abcd");
     }
+}
+
+/// People with full access answer approvals as themselves; agents need an
+/// active connection with the approval_respond scope.
+fn may_respond(principal: &McpPrincipal) -> bool {
+    match principal.actor_kind {
+        ActorKind::Human => principal.can_write(),
+        ActorKind::ExternalAgent => {
+            principal.external_agent_connection_id.is_some()
+                && principal.can_write()
+                && principal.has_scope("approval_respond")
+        }
+        _ => false,
+    }
+}
+
+/// The approval as a person sees it: in a project they belong to and can
+/// reach, in a thread they can see, addressed to them or their role, and not
+/// on a run they started. Approvals that need a person stay in the web app,
+/// where the step Codex wants to take is shown in full.
+async fn person_context(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    approval_id: Uuid,
+    lock: bool,
+) -> Result<Option<ApprovalContext>, AppError> {
+    if !principal.can_read() {
+        return Ok(None);
+    }
+    let locking = if lock {
+        "FOR UPDATE OF approval, run FOR SHARE OF project, membership"
+    } else {
+        "FOR SHARE OF approval, run, project, membership"
+    };
+    let query = format!(
+        r#"
+        SELECT approval.id, approval.agent_run_id AS run_id,
+               run.conversation_id, conversation.project_id,
+               run.repository_id, run.state AS run_state,
+               approval.requesting_actor_id, approval.eligible_actor_id,
+               approval.eligible_role, approval.human_required,
+               approval.kind, approval.summary, approval.options,
+               approval.status, approval.version,
+               approval.created_at::text AS created_at,
+               membership.role AS membership_role,
+               NULL::uuid AS connection_id
+        FROM agent_approvals approval
+        JOIN agent_runs run ON run.id = approval.agent_run_id
+        JOIN conversations conversation ON conversation.id = run.conversation_id
+        JOIN projects project ON project.id = conversation.project_id
+         AND project.archived_at IS NULL
+        JOIN project_memberships membership
+          ON membership.project_id = project.id
+         AND membership.actor_id = $1
+         AND membership.enabled
+        WHERE approval.id = $2
+          AND NOT approval.human_required
+          AND approval.requesting_actor_id <> $1
+          AND (
+              approval.eligible_actor_id = $1
+              OR (
+                  approval.eligible_actor_id IS NULL
+                  AND approval.eligible_role IN (membership.role, 'any_authorized')
+              )
+          )
+          AND conversation_visible_to(conversation.id, $1)
+          AND actor_can_access_project($1, NULL, project.id)
+        {locking}
+        "#,
+    );
+    Ok(sqlx::query_as::<_, ApprovalContext>(&query)
+        .bind(principal.actor_id)
+        .bind(approval_id)
+        .fetch_optional(&mut **transaction)
+        .await?)
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalListArguments {
+    /// Only this project (ID, link or key).
+    pub project_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalListValue {
+    /// Approvals Codex is waiting on that you can answer, oldest first. Answer
+    /// one with approval_respond, passing its version as expectedVersion.
+    pub approvals: Vec<ApprovalProjection>,
+    /// Approvals that need a person in the web app, where the step is shown in
+    /// full.
+    pub in_web_app: i64,
+}
+
+/// Approvals waiting on the caller (people only; agents are told about theirs
+/// through events).
+pub async fn list(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ApprovalListArguments,
+) -> super::common::ToolResult<ApprovalListValue> {
+    use super::common::{ToolResult, parse_id};
+    if principal.actor_kind != ActorKind::Human {
+        return ToolResult::denied(
+            "Agents get their approvals through events; open one with approval_get.",
+        );
+    }
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    let project = match arguments.project_id.as_deref() {
+        Some(value) => match parse_id(value) {
+            Some(id) => Some(id),
+            None => return ToolResult::not_found("That project"),
+        },
+        None => None,
+    };
+    let result = async {
+        let rows = sqlx::query_as::<_, ApprovalContext>(
+            r#"
+            SELECT approval.id, approval.agent_run_id AS run_id,
+                   run.conversation_id, conversation.project_id,
+                   run.repository_id, run.state AS run_state,
+                   approval.requesting_actor_id, approval.eligible_actor_id,
+                   approval.eligible_role, approval.human_required,
+                   approval.kind, approval.summary, approval.options,
+                   approval.status, approval.version,
+                   approval.created_at::text AS created_at,
+                   membership.role AS membership_role,
+                   NULL::uuid AS connection_id
+            FROM agent_approvals approval
+            JOIN agent_runs run ON run.id = approval.agent_run_id
+            JOIN conversations conversation ON conversation.id = run.conversation_id
+            JOIN projects project ON project.id = conversation.project_id
+             AND project.archived_at IS NULL
+            JOIN project_memberships membership
+              ON membership.project_id = project.id
+             AND membership.actor_id = $1
+             AND membership.enabled
+            WHERE approval.status = 'pending'
+              AND run.state = 'blocked'
+              AND approval.requesting_actor_id <> $1
+              AND (
+                  approval.eligible_actor_id = $1
+                  OR (
+                      approval.eligible_actor_id IS NULL
+                      AND approval.eligible_role IN (membership.role, 'any_authorized')
+                  )
+              )
+              AND ($2::uuid IS NULL OR project.id = $2)
+              AND conversation_visible_to(conversation.id, $1)
+              AND actor_can_access_project($1, NULL, project.id)
+            ORDER BY approval.created_at, approval.id
+            LIMIT 50
+            "#,
+        )
+        .bind(principal.actor_id)
+        .bind(project)
+        .fetch_all(&state.pool)
+        .await?;
+        let in_web_app = rows.iter().filter(|row| row.human_required).count();
+        let approvals = rows
+            .iter()
+            .filter(|row| !row.human_required)
+            .filter(|row| require_policy(principal, row).is_ok())
+            .map(projection)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, AppError>(ToolResult::ok(ApprovalListValue {
+            approvals,
+            in_web_app: i64::try_from(in_web_app).unwrap_or(i64::MAX),
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "approval_list"))
 }

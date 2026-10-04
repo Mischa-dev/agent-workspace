@@ -913,3 +913,182 @@ async fn agent_list_shows_work_and_never_secrets() {
     let too_many = call(OWNER, "agent_list", json!({"limit": 101})).await;
     assert_eq!(too_many["field"], "limit", "{too_many}");
 }
+
+/// Codex runs and approvals through MCP for people. The costly bugs: an agent
+/// or a read-only app spending someone's Codex, runs from a private thread
+/// showing up elsewhere, or a person answering an approval that needs to be
+/// seen in full in the web app.
+#[tokio::test]
+async fn people_start_and_follow_runs_and_answer_approvals() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_runs").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let (dana, dana_browser) = add_person(&setup, &[&aw], "dana").await;
+    let (mara, mara_token) =
+        create_agent(app, &setup.browser, &space(&setup).await, "Mara", "mara").await;
+    add_member(&setup, &aw, mara, "member").await;
+    let owner_app = connect_app(app, &setup.browser, "Claude Code", "full").await;
+    let reader_app = connect_app(app, &setup.browser, "Reader", "read").await;
+    let dana_app = connect_app(app, &dana_browser, "Dana Code", "full").await;
+    let mut sessions = Vec::new();
+    for token in [&owner_app, &reader_app, &dana_app, &mara_token] {
+        sessions.push((
+            token.clone(),
+            initialize(app, token).await.expect("MCP session"),
+        ));
+    }
+    let call = |who: usize, name: &'static str, arguments: Value| {
+        let (token, session) = sessions[who].clone();
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    const OWNER: usize = 0;
+    const READER: usize = 1;
+    const DANA: usize = 2;
+    const MARA: usize = 3;
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+    let work = thread(pool, &seed, seed.channel_id, "Fix the mirrors").await;
+
+    // Agents and read-only apps can't spend Codex.
+    for who in [MARA, READER] {
+        let refused = call(
+            who,
+            "run_start",
+            json!({"threadId": work, "prompt": "Fix it"}),
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+
+    // A person starts a run on their own account; a retry doesn't start a second.
+    let started = call(
+        OWNER,
+        "run_start",
+        json!({"threadId": work, "prompt": "Make private repositories prepare", "clientRequestId": "run-1"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    assert_eq!(started["value"]["stage"], "queued", "{started}");
+    let run_id = started["value"]["id"].as_str().expect("run").to_owned();
+    let again = call(
+        OWNER,
+        "run_start",
+        json!({"threadId": work, "prompt": "Make private repositories prepare", "clientRequestId": "run-1"}),
+    )
+    .await;
+    assert_eq!(again["value"]["id"], run_id.as_str(), "{again}");
+    let via = sqlx::query_scalar::<_, bool>(
+        "SELECT via_oauth_grant_id IS NOT NULL FROM messages WHERE conversation_id = $1",
+    )
+    .bind(work)
+    .fetch_one(pool)
+    .await
+    .expect("prompt message");
+    assert!(via, "the prompt is labelled with the app it came through");
+
+    // Following it: run_get and run_list.
+    // The test scheduler picks the run up at once and, with no Codex here,
+    // fails it: run_get says so plainly.
+    let got = call(DANA, "run_get", json!({"runId": run_id})).await;
+    assert_eq!(got["outcome"], "ok", "{got}");
+    assert!(
+        ["queued", "working", "failed"]
+            .contains(&got["value"]["stage"].as_str().unwrap_or_default()),
+        "{got}"
+    );
+    let mine = call(OWNER, "run_list", json!({"mine": true, "state": "all"})).await;
+    assert!(ids_of(&mine["value"]["runs"]).contains(&run_id), "{mine}");
+
+    let dana_mine = call(DANA, "run_list", json!({"mine": true, "state": "all"})).await;
+    assert!(
+        !ids_of(&dana_mine["value"]["runs"]).contains(&run_id),
+        "mine means runs you started: {dana_mine}"
+    );
+
+    // An approval Codex is waiting on: Dana (member) can answer it, the
+    // person who started the run can't answer their own, and one that needs a
+    // person stays in the web app.
+    let asking = thread(pool, &seed, seed.channel_id, "Which branch").await;
+    let (blocked_run, _) = run(pool, &seed, asking, "which-branch").await;
+    for next in ["starting", "working", "blocked"] {
+        sqlx::query("UPDATE agent_runs SET state = $2 WHERE id = $1")
+            .bind(blocked_run)
+            .bind(next)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|error| panic!("run to {next}: {error}"));
+    }
+    let approval = Uuid::now_v7();
+    let human = Uuid::now_v7();
+    for (id, human_required) in [(approval, false), (human, true)] {
+        sqlx::query(
+            r#"
+            INSERT INTO agent_approvals (
+                id, agent_run_id, requesting_actor_id, eligible_role, human_required,
+                kind, summary, options, provider_request_id
+            ) VALUES ($1, $2, $3, 'member', $4, 'question', 'Which branch?',
+                      '["main", "develop"]'::jsonb, 'test-' || $1::text)
+            "#,
+        )
+        .bind(id)
+        .bind(blocked_run)
+        .bind(seed.human_actor_id)
+        .bind(human_required)
+        .execute(pool)
+        .await
+        .expect("approval");
+    }
+    let waiting = call(DANA, "approval_list", json!({})).await;
+    assert_eq!(waiting["outcome"], "ok", "{waiting}");
+    let listed = ids_of(&waiting["value"]["approvals"]);
+    assert!(listed.contains(&approval.to_string()), "{waiting}");
+    assert!(!listed.contains(&human.to_string()), "{waiting}");
+    assert_eq!(waiting["value"]["inWebApp"], 1, "{waiting}");
+    let own = call(OWNER, "approval_list", json!({})).await;
+    assert!(
+        !ids_of(&own["value"]["approvals"]).contains(&approval.to_string()),
+        "no answering approvals on your own run: {own}"
+    );
+    let agents = call(MARA, "approval_list", json!({})).await;
+    assert_eq!(agents["outcome"], "permission_denied", "{agents}");
+    let in_web = call(DANA, "approval_get", json!({"approvalId": human})).await;
+    assert_ne!(in_web["outcome"], "found", "{in_web}");
+    let read_only = call(
+        READER,
+        "approval_respond",
+        json!({"approvalId": approval, "expectedVersion": 1, "answer": "main", "clientRequestId": "a-0"}),
+    )
+    .await;
+    assert_ne!(read_only["outcome"], "applied", "{read_only}");
+    let answered = call(
+        DANA,
+        "approval_respond",
+        json!({"approvalId": approval, "expectedVersion": 1, "answer": "main", "clientRequestId": "a-1"}),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "applied", "{answered}");
+    let audited = sqlx::query_scalar::<_, bool>(
+        "SELECT mcp_oauth_grant_id IS NOT NULL FROM audit_events WHERE action = 'approval.external_responded' AND target_id = $1",
+    )
+    .bind(approval)
+    .fetch_one(pool)
+    .await
+    .expect("audit");
+    assert!(audited, "the answer records the app it came through");
+    let _ = dana;
+}
+
+fn ids_of(list: &Value) -> Vec<String> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["id"].as_str().map(str::to_owned))
+        .collect()
+}
