@@ -257,16 +257,15 @@ pub(crate) async fn start_run_in(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    if via_grant_id.is_some() || principal.actor_kind()? != ActorKind::Human {
-        if crate::runs::run_cap(&mut transaction, principal.actor_id())
+    if (via_grant_id.is_some() || principal.actor_kind()? != ActorKind::Human)
+        && crate::runs::run_cap(&mut transaction, principal.actor_id())
             .await?
             .reached()
-        {
-            return Err(AppError::Conflict(
-                "agent_run",
-                "you already have 5 Codex runs queued or working; wait for one to finish",
-            ));
-        }
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "you already have 5 Codex runs queued or working; wait for one to finish",
+        ));
     }
     if sqlx::query_scalar::<_, bool>(
         r#"
