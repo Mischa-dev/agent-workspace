@@ -301,11 +301,13 @@ async fn request_sponsored_execution_inner(
         FROM conversations conversation
         JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE conversation.id = $1 AND conversation.project_id = $2
+          AND conversation_visible_to(conversation.id, $3)
         FOR SHARE OF conversation, parent
         "#,
     )
     .bind(conversation_id)
     .bind(principal.project_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;

@@ -38,6 +38,7 @@ pub mod recovery;
 pub mod replies;
 pub mod repositories;
 pub mod retention;
+pub mod runs;
 pub mod scheduler;
 pub mod search;
 pub mod seed;

@@ -1325,11 +1325,14 @@ pub(super) async fn change_pull_request_link(
     link: bool,
     activity_summary: &str,
 ) -> Result<PullRequestLinkChange, AppError> {
+    // Nobody links (or unlinks) a pull request they can't see: one opened
+    // from a private thread stays private (migration 0050).
     let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM github_pull_requests WHERE project_id = $1 AND id = $2)",
+        "SELECT EXISTS (SELECT 1 FROM github_pull_requests WHERE project_id = $1 AND id = $2 AND pull_request_visible_to(id, $3))",
     )
     .bind(project_id)
     .bind(pull_request_id)
+    .bind(actor_id)
     .fetch_one(&mut **transaction)
     .await?;
     if !exists {

@@ -2478,10 +2478,12 @@ async fn task_link_inner(
                 Err(refused) => return Ok(refused),
             }
         }
-        None => match find_pull_request(state, project_id, &key, request.target).await? {
-            Ok(id) => LinkTarget::PullRequest { id },
-            Err(refused) => return Ok(refused),
-        },
+        None => {
+            match find_pull_request(state, principal, project_id, &key, request.target).await? {
+                Ok(id) => LinkTarget::PullRequest { id },
+                Err(refused) => return Ok(refused),
+            }
+        }
     };
 
     let mut transaction = state.pool.begin().await?;
@@ -2931,19 +2933,22 @@ async fn find_repository(
 }
 
 /// A pull request Agent Workspace knows about in the task's project, by ID,
-/// link, or GitHub URL.
+/// link, or GitHub URL, that the caller can see (one opened from a private
+/// thread stays private, migration 0050).
 async fn find_pull_request(
     state: &AppState,
+    principal: &McpPrincipal,
     project_id: Uuid,
     task_key: &str,
     reference: &str,
 ) -> Result<Result<Uuid, ToolResult<LinkValue>>, AppError> {
     let found = if let Some(id) = parse_id(reference) {
         sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM github_pull_requests WHERE project_id = $1 AND id = $2",
+            "SELECT id FROM github_pull_requests WHERE project_id = $1 AND id = $2 AND pull_request_visible_to(id, $3)",
         )
         .bind(project_id)
         .bind(id)
+        .bind(principal.actor_id)
         .fetch_optional(&state.pool)
         .await?
     } else if reference.starts_with("https://github.com/") && reference.len() <= 2048 {
@@ -2953,10 +2958,11 @@ async fn find_pull_request(
             .unwrap_or(reference)
             .trim_end_matches('/');
         sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM github_pull_requests WHERE project_id = $1 AND html_url = $2",
+            "SELECT id FROM github_pull_requests WHERE project_id = $1 AND html_url = $2 AND pull_request_visible_to(id, $3)",
         )
         .bind(project_id)
         .bind(url)
+        .bind(principal.actor_id)
         .fetch_optional(&state.pool)
         .await?
     } else {

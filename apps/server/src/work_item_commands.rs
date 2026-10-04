@@ -2659,6 +2659,22 @@ pub async fn record_audit(
     target_id: Uuid,
     metadata: serde_json::Value,
 ) -> Result<Uuid, AppError> {
+    record_audit_for(transaction, actor, "work_item", action, target_id, metadata).await
+}
+
+/// One audit row for a change, attributed the way the actor came in: a
+/// browser session, or an MCP credential or grant. Shared cores (runs,
+/// approvals, GitHub jobs) write theirs through this for both surfaces, with
+/// their own `target_kind`. Never put untrusted text (prompts, Codex output,
+/// titles) in `metadata`.
+pub async fn record_audit_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    target_kind: &str,
+    action: &str,
+    target_id: Uuid,
+    metadata: serde_json::Value,
+) -> Result<Uuid, AppError> {
     let audit_id = Uuid::now_v7();
     match &actor.audit {
         AuditAttribution::Browser {
@@ -2670,7 +2686,7 @@ pub async fn record_audit(
                 INSERT INTO audit_events (
                     id, actor_id, project_id, session_id, authentication_class,
                     action, target_kind, target_id, outcome, request_id, metadata
-                ) VALUES ($1, $2, $3, $4, 'password_session', $5, 'work_item', $6, 'succeeded', $7, $8)
+                ) VALUES ($1, $2, $3, $4, 'password_session', $5, $9, $6, 'succeeded', $7, $8)
                 "#,
             )
             .bind(audit_id)
@@ -2681,6 +2697,7 @@ pub async fn record_audit(
             .bind(target_id)
             .bind(request_id)
             .bind(metadata)
+            .bind(target_kind)
             .execute(&mut **transaction)
             .await?;
         }
@@ -2699,7 +2716,7 @@ pub async fn record_audit(
                     target_kind, target_id, outcome, request_id, metadata,
                     channel, client_name, mcp_credential_id, mcp_oauth_grant_id,
                     external_agent_connection_id
-                ) VALUES ($1, $2, $3, $4, $5, 'work_item', $6, 'succeeded', $7, $8, 'mcp', $9, $10, $11, $12)
+                ) VALUES ($1, $2, $3, $4, $5, $13, $6, 'succeeded', $7, $8, 'mcp', $9, $10, $11, $12)
                 "#,
             )
             .bind(audit_id)
@@ -2714,6 +2731,7 @@ pub async fn record_audit(
             .bind(mcp_credential_id)
             .bind(oauth_grant_id)
             .bind(external_agent_connection_id)
+            .bind(target_kind)
             .execute(&mut **transaction)
             .await?;
         }

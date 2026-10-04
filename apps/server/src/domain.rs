@@ -124,6 +124,23 @@ impl FromStr for RunState {
     }
 }
 
+/// Records, for this transaction only, which connected app a person is acting
+/// through, so rows written by shared command code carry it: messages,
+/// task activity and the audit rows that read `current_via_grant()`
+/// (migration 0042). `None` (the browser, or an agent) leaves it unset.
+pub(crate) async fn set_via_grant(
+    transaction: &mut Transaction<'_, Postgres>,
+    grant_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    if let Some(grant_id) = grant_id {
+        sqlx::query("SELECT set_config('aw.via_grant', $1, true)")
+            .bind(grant_id.to_string())
+            .execute(&mut **transaction)
+            .await?;
+    }
+    Ok(())
+}
+
 pub async fn allocate_conversation_sequence(
     transaction: &mut Transaction<'_, Postgres>,
     conversation_id: Uuid,
