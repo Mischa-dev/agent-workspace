@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Run the CI checks in this checkout, on the machine tools/ci/run.sh picked.
+#
+#   tools/ci/checks.sh [rust,web|rust|web]
+#
+# Quick checks run first so a typo fails in seconds; the web checks then run
+# alongside clippy and the Rust tests. Expects from run.sh: CI_RUN_ID,
+# CI_DATABASE_BASE (a PostgreSQL URL without a database) and optionally
+# CI_TARGET_DIR, CI_LOCK_DIR, CI_MEMORY_MAX, CI_CPU_WEIGHT.
+set -euo pipefail
+
+areas="${1:-rust,web}"
+has() { [[ ",${areas}," == *",$1,"* ]]; }
+
+# Run at low priority, capped, so the machine's owner always comes first.
+if [ -z "${CI_SCOPED:-}" ]; then
+  export CI_SCOPED=1
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [ -n "${CI_LOCK_DIR:-}" ]; then
+    echo "$$" > "${CI_LOCK_DIR}/pgid"
+  fi
+  if [ -n "${CI_MEMORY_MAX:-}" ] &&
+    systemd-run --user --scope --quiet -p MemoryMax=1G true 2>/dev/null; then
+    exec systemd-run --user --scope --quiet \
+      -p MemoryMax="${CI_MEMORY_MAX}" -p MemorySwapMax=0 \
+      -p CPUWeight="${CI_CPU_WEIGHT:-100}" -p IOWeight="${CI_CPU_WEIGHT:-100}" \
+      nice -n 10 "$0" "$@"
+  fi
+  exec nice -n 10 "$0" "$@"
+fi
+
+export PATH="${HOME}/.cargo/bin:${PATH}"
+export CARGO_TARGET_DIR="${CI_TARGET_DIR:-${PWD}/target}"
+export CARGO_TERM_COLOR=always
+export AGENT_WORKSPACE_ENV=test
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+started=$(date +%s)
+
+# The repo's scripts call `pnpm` themselves; corepack provides the pinned one.
+if ! type -P pnpm >/dev/null; then
+  mkdir -p "${HOME}/.local/bin"
+  corepack enable --install-directory "${HOME}/.local/bin" pnpm
+  export PATH="${HOME}/.local/bin:${PATH}"
+fi
+
+# `step <name> <command...>`: a folded, timed section in the GitHub log.
+step() {
+  local name="$1" t0=$(date +%s) status=0
+  shift
+  echo "::group::${name}"
+  "$@" || status=$?
+  echo "::endgroup::"
+  if [ "${status}" -ne 0 ]; then
+    echo "✗ ${name} failed after $(($(date +%s) - t0))s"
+    return "${status}"
+  fi
+  echo "✓ ${name} ($(($(date +%s) - t0))s)"
+}
+
+# The web checks run in the background next to the Rust ones.
+web_pid=""
+web_log="$(mktemp)"
+web_status_file="$(mktemp)"
+database=""
+
+finish() {
+  local status=$?
+  if [ -n "${web_pid}" ] && kill -0 "${web_pid}" 2>/dev/null; then
+    kill "${web_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${database}" ]; then
+    dropdb --force --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${database}" 2>/dev/null || true
+  fi
+  rm -f "${web_log}" "${web_status_file}"
+  echo "CI checks took $(($(date +%s) - started))s on $(hostname)"
+  exit "${status}"
+}
+trap finish EXIT
+
+# Stop early if the web checks already failed.
+web_failed() {
+  [ -n "${web_pid}" ] && ! kill -0 "${web_pid}" 2>/dev/null &&
+    [ "$(cat "${web_status_file}")" != "0" ]
+}
+report_web() {
+  [ -z "${web_pid}" ] && return 0
+  wait "${web_pid}" || true
+  web_pid=""
+  cat "${web_log}"
+  [ "$(cat "${web_status_file}")" = "0" ]
+}
+
+# 1. Quick checks: formatting, lint and types, fixtures.
+if has rust; then
+  rustup toolchain install >/dev/null 2>&1 || true
+  step "cargo fmt" cargo fmt --check
+  step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
+  step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
+  step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
+fi
+if has web; then
+  step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
+  step "web lint" pnpm lint
+  step "web typecheck" pnpm typecheck
+fi
+
+# 2. Web tests and build: in the background next to the Rust checks on a big
+# machine; on a small one they'd starve each other, so they wait their turn.
+run_web_checks() {
+  step "web tests" pnpm test &&
+    step "web build" pnpm build &&
+    step "web asset budgets" pnpm check:assets &&
+    step "performance tools" pnpm check:performance-tools
+}
+if has web && [ "$(nproc)" -lt 8 ] && has rust; then
+  web_later=1
+elif has web; then
+  (
+    status=0
+    run_web_checks > "${web_log}" 2>&1 || status=$?
+    echo "${status}" > "${web_status_file}"
+  ) &
+  web_pid=$!
+fi
+
+# 3. Clippy, then the Rust tests against a throwaway database.
+if has rust; then
+  step "cargo clippy" cargo clippy --workspace --all-targets --all-features -- -D warnings
+  if web_failed; then report_web; fi
+
+  if ! cargo nextest --version >/dev/null 2>&1; then
+    step "install cargo-nextest" cargo install cargo-nextest --version 0.9.136 --locked
+  fi
+  # Databases left by a run that was killed before it could clean up.
+  psql -d "${CI_DATABASE_BASE}/postgres" -Atc \
+    "SELECT datname FROM pg_database WHERE datname ~ '^aw_ci_run_'" 2>/dev/null |
+    while read -r stale; do
+      dropdb --force --if-exists --maintenance-db="${CI_DATABASE_BASE}/postgres" "${stale}" || true
+    done
+  database="aw_ci_run_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_')"
+  createdb --maintenance-db="${CI_DATABASE_BASE}/postgres" "${database}"
+  export AGENT_WORKSPACE_DATABASE_URL="${CI_DATABASE_BASE}/${database}"
+
+  step "rust tests" cargo nextest run --workspace --profile ci
+  step "doc tests" cargo test --workspace --doc --quiet
+  if web_failed; then report_web; fi
+  step "install cargo-deny" cargo install cargo-deny --version 0.20.2 --locked --quiet
+  step "cargo deny" cargo deny check
+fi
+
+report_web
+if [ -n "${web_later:-}" ]; then run_web_checks; fi
+echo "All checks passed (${areas})."
