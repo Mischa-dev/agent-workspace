@@ -547,3 +547,25 @@ Differences from the plan:
 Still open: a run's prompt is copied into the run (`agent_runs`, sponsored
 execution requests) when someone starts a run from a message, and removing
 the message doesn't reach that copy.
+
+## Built (Phase 4 and 5, October 3–4, 2026)
+
+**Phase 4** (PRs 109 and 110; migrations 0050–0051):
+- `pull_request_list`, `repository_list` and `agent_list`. PR visibility follows the run's thread (`pull_request_visible_to`).
+- `run_start`, `run_get` and `run_list`. A person starts Codex on their own account, capped at 5 runs through apps.
+- `approval_list`, with `approval_get` and `approval_respond` open to people.
+
+Differences from the plan:
+- Approvals that need a person stay in the web app, because Codex doesn't record the step they ask about.
+- Publishing a run's branch and opening its PR are still web buttons.
+
+**Phase 5** (migration 0052):
+- `task_depend`: blocks and blocked-by, with cycles refused and the path shown.
+- `milestone_list` and `milestone_write`: a target date, progress and an overdue flag; `addTasks` and `removeTasks`.
+- Three prompts: `standup`, `plan_project` and `review_prs`.
+
+Differences from the plan:
+- `workflow_update` isn't built. Projects still check their statuses against the default workflow, so editing statuses needs that check redesigned first.
+- Pages as MCP resources aren't built.
+
+The tool count is 71.

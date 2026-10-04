@@ -290,7 +290,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .and_then(Value::as_array)
             .map(Vec::len),
         // See docs/plans/mcp-tools.md for the tool list.
-        Some(68)
+        Some(71)
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),
@@ -323,7 +323,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             .pointer("/result/prompts")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(2)
+        Some(5)
     );
 
     let project = protocol_json(

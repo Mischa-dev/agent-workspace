@@ -807,3 +807,107 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
     .await;
     assert_ne!(direct["outcome"], "ok", "{direct}");
 }
+
+#[tokio::test]
+async fn dependencies_refuse_cycles_and_milestones_track_progress() {
+    let Some(setup) = setup("mcp_planning").await else {
+        return;
+    };
+    let app = &setup.app;
+    let work = create_project(&setup, "PLAN", "Plan").await;
+    let other = create_project(&setup, "ELSE", "Elsewhere").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let reader = connect_app(app, &setup.browser, "Reader", "read").await;
+    let reader_session = initialize(app, &reader).await.expect("Reader MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    for (project, title) in [
+        (&work, "Design"),
+        (&work, "Build"),
+        (&work, "Ship"),
+        (&other, "Elsewhere"),
+    ] {
+        let created = call("task_create", json!({"projectId": project, "title": title})).await;
+        assert_eq!(created["outcome"], "applied", "{created}");
+    }
+
+    // Ship waits on Build, Build on Design.
+    let shipped = call(
+        "task_depend",
+        json!({"taskId": "PLAN-3", "blockedBy": ["PLAN-2"]}),
+    )
+    .await;
+    assert_eq!(shipped["outcome"], "ok", "{shipped}");
+    assert_eq!(shipped["value"]["ready"], false);
+    let built = call(
+        "task_depend",
+        json!({"taskId": "PLAN-2", "blockedBy": ["PLAN-1"]}),
+    )
+    .await;
+    assert_eq!(built["value"]["blocks"][0]["key"], "PLAN-3", "{built}");
+    // Design waiting on Ship would close a cycle.
+    let cycle = call(
+        "task_depend",
+        json!({"taskId": "PLAN-1", "blockedBy": ["PLAN-3"]}),
+    )
+    .await;
+    assert_eq!(cycle["outcome"], "conflict", "{cycle}");
+    assert!(
+        cycle["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("PLAN-1 blocks PLAN-2 blocks PLAN-3")),
+        "{cycle}"
+    );
+    let elsewhere = call(
+        "task_depend",
+        json!({"taskId": "PLAN-1", "blocks": ["ELSE-1"]}),
+    )
+    .await;
+    assert_eq!(elsewhere["outcome"], "invalid_request", "{elsewhere}");
+    let refused = tool(
+        app,
+        &reader,
+        &reader_session,
+        "task_depend",
+        json!({"taskId": "PLAN-1", "blocks": ["PLAN-3"]}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    let removed = call(
+        "task_depend",
+        json!({"taskId": "PLAN-3", "blockedBy": ["PLAN-2"], "remove": true}),
+    )
+    .await;
+    assert_eq!(removed["value"]["ready"], true, "{removed}");
+
+    // A milestone with a target date holds the tasks and counts progress.
+    let milestone = call(
+        "milestone_write",
+        json!({"projectId": "PLAN", "name": "v1", "targetDate": "2020-01-01", "addTasks": ["PLAN-1", "PLAN-2", "PLAN-3"]}),
+    )
+    .await;
+    assert_eq!(milestone["outcome"], "ok", "{milestone}");
+    assert_eq!(milestone["value"]["total"], 3);
+    assert_eq!(milestone["value"]["overdue"], true);
+    let again = call("milestone_write", json!({"projectId": work, "name": "V1"})).await;
+    assert_eq!(again["value"]["id"], milestone["value"]["id"], "{again}");
+    let wrong = call(
+        "milestone_write",
+        json!({"projectId": work, "name": "v2", "addTasks": ["ELSE-1"]}),
+    )
+    .await;
+    assert_eq!(wrong["outcome"], "invalid_request", "{wrong}");
+    let trimmed = call(
+        "milestone_write",
+        json!({"projectId": work, "milestoneId": milestone["value"]["id"], "removeTasks": ["PLAN-3"], "targetDate": ""}),
+    )
+    .await;
+    assert_eq!(trimmed["value"]["total"], 2, "{trimmed}");
+    assert_eq!(trimmed["value"]["overdue"], false);
+    let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
+    assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
+}
