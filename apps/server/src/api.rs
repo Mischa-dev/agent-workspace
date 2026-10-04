@@ -1457,6 +1457,7 @@ async fn respond_to_approval(
           ON pm.project_id = c.project_id
          AND pm.actor_id = $2
         WHERE aa.id = $1
+          AND conversation_visible_to(ar.conversation_id, $2)
         FOR UPDATE OF aa
         FOR SHARE OF pm
         "#,
@@ -1879,6 +1880,7 @@ async fn interrupt_agent_run(
           ON pm.project_id = c.project_id
          AND pm.actor_id = $2
         WHERE ar.id = $1
+          AND conversation_visible_to(ar.conversation_id, $2)
         FOR UPDATE OF ar
         FOR SHARE OF pm
         "#,
