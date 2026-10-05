@@ -911,3 +911,320 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 }
+
+#[tokio::test]
+async fn moving_an_archived_original_does_not_reveal_its_hidden_destination() {
+    let Some(setup) = setup("mcp_move_hidden").await else {
+        return;
+    };
+    let source = create_project(&setup, "SOURCE", "Source").await;
+    let secret = create_project(&setup, "SECRET", "Secret").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (_, reader) = super::message_edits::add_person(&setup, &[&source, &other], "reader").await;
+    let owner_token = connect_app(&setup.app, &setup.browser, "Owner app", "full").await;
+    let owner_session = initialize(&setup.app, &owner_token)
+        .await
+        .expect("owner session");
+    let created = tool(
+        &setup.app,
+        &owner_token,
+        &owner_session,
+        "task_create",
+        json!({"projectId": source, "title": "Move me"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let original = created["workItemId"].clone();
+    let moved = tool(
+        &setup.app,
+        &owner_token,
+        &owner_session,
+        "task_move",
+        json!({"taskId": original, "toProjectId": secret}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let destination = moved["value"]["moved"][0]["id"].clone();
+    let reader_token = connect_app(&setup.app, &reader, "Reader app", "full").await;
+    let reader_session = initialize(&setup.app, &reader_token)
+        .await
+        .expect("reader session");
+    let result = tool(
+        &setup.app,
+        &reader_token,
+        &reader_session,
+        "task_move",
+        json!({"taskId": original, "toProjectId": other}),
+    )
+    .await;
+    assert_ne!(
+        result["outcome"], "ok",
+        "hidden destination leaked: {result}"
+    );
+    assert!(
+        !result
+            .to_string()
+            .contains(destination.as_str().expect("destination")),
+        "{result}"
+    );
+    assert!(!result.to_string().contains("SECRET-"), "{result}");
+}
+
+#[tokio::test]
+async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
+    use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
+    let Some(setup) = setup("mcp_move_confined").await else {
+        return;
+    };
+    let source = create_project(&setup, "SOURCE", "Source").await;
+    let target = create_project(&setup, "TARGET", "Target").await;
+    let actor =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("owner");
+    let issued = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: actor,
+            project_id: source.parse().expect("source"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let session = initialize(&setup.app, &issued.token)
+        .await
+        .expect("session");
+    let created = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "task_create",
+        json!({"title": "Stay here"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let result = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "task_move",
+        json!({"taskId": created["workItemId"], "toProjectId": target}),
+    )
+    .await;
+    assert_ne!(
+        result["outcome"], "ok",
+        "credential escaped its project: {result}"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM work_items WHERE project_id = $1")
+        .bind(target.parse::<Uuid>().expect("target"))
+        .fetch_one(&setup.pool)
+        .await
+        .expect("target tasks");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
+    let Some(setup) = setup("mcp_long_cycle").await else {
+        return;
+    };
+    let project = create_project(&setup, "PLAN", "Plan").await;
+    let token = connect_app(&setup.app, &setup.browser, "Planner", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let mut tasks = Vec::new();
+    for batch in 0..3 {
+        let count = if batch == 2 { 1 } else { 100 };
+        let result = tool(&setup.app, &token, &session, "task_create_many", json!({
+            "projectId": project, "clientRequestId": format!("chain-{batch}"),
+            "tasks": (0..count).map(|i| json!({"title": format!("Task {}", batch * 100 + i)})).collect::<Vec<_>>()
+        })).await;
+        assert_eq!(result["outcome"], "ok", "{result}");
+        tasks.extend(
+            result["value"]["tasks"]
+                .as_array()
+                .expect("tasks")
+                .iter()
+                .map(|task| {
+                    task["id"]
+                        .as_str()
+                        .expect("id")
+                        .parse::<Uuid>()
+                        .expect("uuid")
+                }),
+        );
+    }
+    let project_id = project.parse::<Uuid>().expect("project");
+    sqlx::query("INSERT INTO work_item_dependencies (project_id, blocking_work_item_id, blocked_work_item_id, created_by_actor_id) SELECT $1, chain.id, chain.next, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM (SELECT id, lead(id) OVER (ORDER BY n) AS next FROM unnest($2::uuid[]) WITH ORDINALITY AS t(id, n)) chain WHERE chain.next IS NOT NULL")
+        .bind(project_id).bind(&tasks).execute(&setup.pool).await.expect("chain");
+    let result = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_depend",
+        json!({"taskId": tasks[200], "blocks": [tasks[0]]}),
+    )
+    .await;
+    assert_eq!(
+        result["outcome"], "conflict",
+        "long cycle accepted: {result}"
+    );
+    let edges: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM work_item_dependencies WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("edges");
+    assert_eq!(edges, 200);
+}
+
+#[tokio::test]
+async fn task_moves_lock_projects_in_id_order() {
+    let Some(setup) = setup("mcp_move_locks").await else {
+        return;
+    };
+    let low = create_project(&setup, "LOW", "Low").await;
+    let high = create_project(&setup, "HIGH", "High").await;
+    assert!(low < high);
+    let token = connect_app(&setup.app, &setup.browser, "Mover", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let created = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_create",
+        json!({"projectId": high, "title": "Move down"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let mut blocker = setup.pool.begin().await.expect("blocker");
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *blocker)
+        .await
+        .expect("pid");
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+        .bind(low.parse::<Uuid>().expect("low"))
+        .execute(&mut *blocker)
+        .await
+        .expect("lock low");
+    let app = setup.app.clone();
+    let moving = tokio::spawn(async move {
+        tool(
+            &app,
+            &token,
+            &session,
+            "task_move",
+            json!({"taskId": created["workItemId"], "toProjectId": low}),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                .bind(pid).fetch_one(&setup.pool).await.expect("waiter");
+            if blocked { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("move waits for low project");
+    let mut observer = setup.pool.begin().await.expect("observer");
+    let high_free = sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE NOWAIT")
+        .bind(high.parse::<Uuid>().expect("high"))
+        .execute(&mut *observer)
+        .await
+        .is_ok();
+    observer.rollback().await.expect("release observer");
+    blocker.rollback().await.expect("release blocker");
+    let result = moving.await.expect("move");
+    assert_eq!(result["outcome"], "ok", "{result}");
+    assert!(
+        high_free,
+        "the move locked HIGH before LOW; opposite moves can deadlock"
+    );
+}
+
+#[tokio::test]
+async fn project_admin_rechecks_roles_after_waiting_for_the_project_lock() {
+    let Some(setup) = setup("admin_revocation").await else {
+        return;
+    };
+    let project = create_project(&setup, "RACE", "Original name")
+        .await
+        .parse::<Uuid>()
+        .expect("project");
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    for tool_name in ["project_update", "project_archive"] {
+        sqlx::query("UPDATE project_memberships SET role = 'owner' WHERE project_id = $1")
+            .bind(project)
+            .execute(&setup.pool)
+            .await
+            .expect("restore role");
+        let mut revocation = setup.pool.begin().await.expect("revocation");
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *revocation)
+            .await
+            .expect("pid");
+        sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+            .bind(project)
+            .execute(&mut *revocation)
+            .await
+            .expect("lock project");
+        sqlx::query("UPDATE project_memberships SET role = 'member' WHERE project_id = $1")
+            .bind(project)
+            .execute(&mut *revocation)
+            .await
+            .expect("demote");
+        let app = setup.app.clone();
+        let token = token.clone();
+        let session = session.clone();
+        let pending = tokio::spawn(async move {
+            let args = if tool_name == "project_update" {
+                json!({"projectId": project, "name": "Forbidden rename"})
+            } else {
+                json!({"project": project, "archived": true})
+            };
+            tool(&app, &token, &session, tool_name, args).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                    .bind(pid).fetch_one(&setup.pool).await.expect("waiter");
+                if blocked { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("admin command waits for revocation");
+        revocation.commit().await.expect("revoked");
+        let result = pending.await.expect("command result");
+        assert_eq!(
+            result["outcome"], "permission_denied",
+            "{tool_name} used obsolete authority: {result}"
+        );
+        let unchanged: bool = sqlx::query_scalar("SELECT name = 'Original name' AND archived_at IS NULL AND version = 1 FROM projects WHERE id = $1")
+            .bind(project).fetch_one(&setup.pool).await.expect("project");
+        assert!(unchanged, "{tool_name} changed the project after demotion");
+    }
+}
+
+#[tokio::test]
+async fn project_archive_checks_expected_version_even_when_already_in_that_state() {
+    let Some(setup) = setup("archive_version").await else {
+        return;
+    };
+    let project = create_project(&setup, "VERS", "Versioned").await;
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let result = tool(
+        &setup.app,
+        &token,
+        &session,
+        "project_archive",
+        json!({
+            "project": project, "archived": false, "expectedVersion": 999
+        }),
+    )
+    .await;
+    assert_eq!(result["outcome"], "conflict", "{result}");
+}

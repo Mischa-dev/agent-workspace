@@ -663,6 +663,19 @@ pub(crate) async fn apply_removal(
     if updated.rows_affected() != 1 {
         return Err(AppError::Internal("remove a locked message").into());
     }
+    let runs = sqlx::query_scalar::<_, Uuid>("SELECT redact_run_prompt_copies($1)")
+        .bind(locked.id)
+        .fetch_all(&mut **transaction)
+        .await?;
+    for run_id in runs {
+        crate::outbox::enqueue_agent_run_updated(
+            transaction,
+            locked.project_id,
+            locked.conversation.id,
+            run_id,
+        )
+        .await?;
+    }
     let cancelled_reply_requests = replies::withdraw_requests(
         transaction,
         Withdraw::Message {
@@ -683,6 +696,7 @@ pub(crate) async fn apply_removal(
     )
     .unwrap_or(i64::MAX);
     let renamed_threads = neutralize_thread_names(transaction, locked, &texts).await?;
+    scrub_thread_replays(transaction, locked).await?;
     scrub_thread_audit_names(transaction, locked).await?;
 
     let entry = locked_entry(transaction, locked, actor.actor_id).await?;
@@ -827,8 +841,6 @@ async fn neutralize_thread_names(
     .await?
     .into_iter()
     .collect::<BTreeSet<_>>();
-    let scope =
-        idempotency::resource_bound_scope("channel", locked.conversation.id, "thread_create")?;
     let mut renamed = 0;
     for thread_id in to_rename {
         let name = (1..)
@@ -863,23 +875,38 @@ async fn neutralize_thread_names(
             }),
         )
         .await?;
-        sqlx::query(
-            r#"
-            UPDATE idempotency_keys
-            SET response_body = jsonb_set(response_body, '{conversation,name}', to_jsonb($3::text)),
-                request_hash = $4
-            WHERE scope = $1 AND response_body->'conversation'->>'id' = $2
-            "#,
-        )
-        .bind(&scope)
-        .bind(thread_id.to_string())
-        .bind(&name)
-        .bind(tombstone_request_hash()?.as_bytes().as_slice())
-        .execute(&mut **transaction)
-        .await?;
         renamed += 1;
     }
     Ok(renamed)
+}
+
+/// A thread may already have a safe name while its creation replay still
+/// holds the removed text. Scrub every thread from the message, including
+/// those that did not need renaming during this removal.
+async fn scrub_thread_replays(
+    transaction: &mut Transaction<'_, Postgres>,
+    locked: &LockedMessage,
+) -> Result<(), AppError> {
+    let scope =
+        idempotency::resource_bound_scope("channel", locked.conversation.id, "thread_create")?;
+    sqlx::query(
+        r#"
+        UPDATE idempotency_keys replay
+        SET response_body = jsonb_set(replay.response_body, '{conversation,name}', to_jsonb(thread.name)),
+            request_hash = $3
+        FROM conversations thread
+        WHERE replay.scope = $1 AND thread.origin_message_id = $2
+          AND thread.parent_channel_id = $4 AND thread.kind = 'thread'
+          AND replay.response_body->'conversation'->>'id' = thread.id::text
+        "#,
+    )
+    .bind(scope)
+    .bind(locked.id)
+    .bind(tombstone_request_hash()?.as_bytes().as_slice())
+    .bind(locked.conversation.id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
 }
 
 /// Drop the name from audit rows of status changes on threads started from

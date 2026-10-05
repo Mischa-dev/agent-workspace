@@ -516,6 +516,7 @@ async fn load_context(
         JOIN conversations conversation ON conversation.id = run.conversation_id
          AND conversation.project_id = project.id
         WHERE credential.id = $1
+          AND conversation_visible_to(conversation.id, $3)
           AND connection.id = $2
           AND credential.actor_id = $3
           -- The credential stays anchored to its home project; the approval

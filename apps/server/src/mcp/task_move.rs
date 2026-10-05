@@ -130,6 +130,11 @@ pub(super) async fn task_move(
         return ToolResult::not_found("That target project");
     };
     let source_project_id = principal.project_id;
+    if super::common::confined_project(principal)
+        .is_some_and(|project| project != target_project_id)
+    {
+        return ToolResult::not_found("That target project");
+    }
     if target_project_id == source_project_id {
         return ToolResult::invalid("toProjectId", "The task is already in that project.");
     }
@@ -151,10 +156,13 @@ pub(super) async fn task_move(
         mark_via(&mut transaction, principal).await?;
         let source_actor = command_actor(principal, source_project_id);
         let target_actor = command_actor(principal, target_project_id);
-        for (actor, project, what) in [
+        let mut projects = [
             (&source_actor, source_project_id, "this task's project"),
             (&target_actor, target_project_id, "the target project"),
-        ] {
+        ];
+        // Opposite moves must take the same first project lock.
+        projects.sort_by_key(|(_, project, _)| *project);
+        for (actor, project, what) in projects {
             let Some(membership) =
                 lock_membership(&mut transaction, principal.actor_id, project).await?
             else {
@@ -184,7 +192,7 @@ pub(super) async fn task_move(
             return Ok(ToolResult::not_found("That task"));
         };
         if archived {
-            let moved = already_moved(&mut transaction, state, task_id).await?;
+            let moved = already_moved(&mut transaction, state, principal, task_id).await?;
             transaction.commit().await?;
             return Ok(match moved {
                 Some(moved) => ToolResult::ok(TaskMoveValue {
@@ -756,6 +764,7 @@ async fn archive(
 async fn already_moved(
     transaction: &mut Transaction<'_, Postgres>,
     state: &AppState,
+    principal: &McpPrincipal,
     source_id: Uuid,
 ) -> Result<Option<Vec<MovedTask>>, AppError> {
     let rows = sqlx::query_as::<_, (String, String, Uuid, Uuid, String)>(
@@ -767,9 +776,14 @@ async fn already_moved(
         JOIN work_items item ON item.id = alias.work_item_id
         JOIN projects project ON project.id = item.project_id
         WHERE alias.source_work_item_id = $1
+          AND actor_can_access_project($2, $3, item.project_id)
+          AND ($4::uuid IS NULL OR item.project_id = $4)
         "#,
     )
     .bind(source_id)
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(super::common::confined_project(principal))
     .fetch_all(&mut **transaction)
     .await?;
     if rows.is_empty() {

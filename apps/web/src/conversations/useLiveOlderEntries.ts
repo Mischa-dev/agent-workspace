@@ -9,6 +9,7 @@ import {
   needsRefresh,
   NO_MESSAGE_UPDATES,
   NO_REACTION_UPDATES,
+  tombstoneEntry,
   withMessageReactions,
   type ReactionUpdates,
 } from './liveMessages'
@@ -98,6 +99,29 @@ export function useLiveOlderEntries({
   const byMessageId = replacements.conversationId === conversationId ? replacements.byMessageId : NO_REPLACEMENTS
 
   const olderEntries = useMemo(() => pages.flatMap((page) => page.entries), [pages])
+  // Persist removals while reconciling the live inputs, before a fetch can
+  // fail or the bounded event history can forget them. The next render sees
+  // tombstoned pages, so this adjustment only runs once per removed message.
+  const removedEntries = olderEntries.filter((entry) => {
+    const message = entry.message
+    const update = message && updates[message.id]
+    return message && !message.removed && update?.removed && update.conversationId === conversationId
+  })
+  if (removedEntries.length > 0) {
+    setOlder({
+      ...older,
+      pages: pages.map((page) => ({
+        ...page,
+        entries: applyLiveMessages(page.entries, updates, NO_REPLACEMENTS, conversationId),
+      })),
+    })
+    const kept = { ...byMessageId }
+    for (const entry of removedEntries) {
+      const message = entry.message!
+      kept[message.id] = tombstoneEntry(kept[message.id] ?? entry)
+    }
+    setReplacements({ conversationId, byMessageId: kept })
+  }
   const entries = useMemo(
     () => applyLiveMessages(mergeTimelineEntries(olderEntries, newestEntries), updates, byMessageId, conversationId),
     [byMessageId, conversationId, newestEntries, olderEntries, updates],
@@ -188,7 +212,10 @@ export function useLiveOlderEntries({
       const replacement = byMessageId[base.id]?.message
       const message = replacement && isNewerMessage(replacement, base) ? replacement : base
       const update = updates[base.id]
-      if (!update || update.conversationId !== conversationId || !needsRefresh(message, update)) continue
+      if (!update || update.conversationId !== conversationId) continue
+      // A tombstone seen live still needs the server's removal attribution.
+      const needsRemovalDetails = update.removed && message.removed && !message.removed.removedBy
+      if (!needsRefresh(message, update) && !needsRemovalDetails) continue
       const key = `${conversationId}:${base.id}:${update.revision}:${update.removed}`
       if (attempted.current.has(key)) continue
       attempted.current.add(key)

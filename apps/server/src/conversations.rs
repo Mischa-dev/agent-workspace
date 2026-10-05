@@ -1925,6 +1925,7 @@ pub(crate) async fn lock_message_conversation(
     conversation_id: Uuid,
     action: Action,
 ) -> Result<ConversationAccessRow, AppError> {
+    lock_conversation_scope(transaction, actor.actor_id, conversation_id).await?;
     let mcp_project_id = if let Some(proof) = actor.mcp_credential {
         Some(
             sqlx::query_scalar::<_, Uuid>(
@@ -3372,6 +3373,47 @@ pub(crate) async fn lock_conversation_access(
     .await
 }
 
+/// Serialize conversation writes with project and parent changes before
+/// checking permission. A predicate evaluated before a row-lock wait may
+/// otherwise use membership that was revoked while the command waited.
+async fn lock_conversation_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<(), AppError> {
+    let (project_id, parent_id) = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT project_id, parent_channel_id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2)",
+    )
+    .bind(conversation_id).bind(actor_id)
+    .fetch_optional(&mut **transaction).await?
+    .ok_or(AppError::NotFound("conversation"))?;
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR SHARE")
+        .bind(project_id)
+        .execute(&mut **transaction)
+        .await?;
+    if let Some(parent_id) = parent_id {
+        sqlx::query("SELECT id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2) FOR SHARE")
+            .bind(parent_id).bind(actor_id).execute(&mut **transaction).await?;
+    }
+    sqlx::query(
+        "SELECT id FROM conversations WHERE id = $1 AND conversation_visible_to(id, $2) FOR UPDATE",
+    )
+    .bind(conversation_id)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    // Use a new statement snapshot after all waits, while retaining the locks.
+    if !sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+        .bind(conversation_id)
+        .bind(actor_id)
+        .fetch_one(&mut **transaction)
+        .await?
+    {
+        return Err(AppError::NotFound("conversation"));
+    }
+    Ok(())
+}
+
 /// Lock a conversation for a person or agent, whether they came through a
 /// browser session or MCP. Visibility goes through `conversation_visible_to`.
 pub(crate) async fn lock_conversation_for(
@@ -3382,6 +3424,7 @@ pub(crate) async fn lock_conversation_for(
     action: Action,
     include_archived: bool,
 ) -> Result<ConversationAccessRow, AppError> {
+    lock_conversation_scope(transaction, actor_id, conversation_id).await?;
     let row = sqlx::query_as::<_, ConversationAccessRow>(
         r#"
         SELECT

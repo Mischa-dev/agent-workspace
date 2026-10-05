@@ -67,6 +67,27 @@ describe('live older timeline pages', () => {
     realtime = { connection: 'live', streams: {}, messageUpdates: {}, reactionUpdates: {}, resyncGeneration: 1 }
   })
 
+  it('keeps a removal after its live event expires even when the message fetch fails', async () => {
+    const loadPage = vi.fn(async () => ({ entries: entries(wireEntry(1, 'removed-secret')), nextCursor: null }))
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result, rerender } = renderHook(
+      () => useLiveOlderEntries({ conversationId, loadPage, newestCursor: 'cursor-a', newestEntries: newest }),
+      { wrapper },
+    )
+    await act(() => result.current.loadOlder())
+    setRealtime({ messageUpdates: {
+      [messageId(1)]: { conversationId, messageId: messageId(1), revision: 1, removed: true },
+    } })
+    rerender()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.stringify(result.current.entries)).not.toContain('removed-secret')
+    // The realtime provider retains only its latest 500 updates.
+    setRealtime({ messageUpdates: {} })
+    rerender()
+    expect(JSON.stringify(result.current.entries)).not.toContain('removed-secret')
+  })
+
   it('blanks a removal at once, refetches that message, and refetches every page on reconnect', async () => {
     const pages: Record<string, OlderPage> = {
       'cursor-a': { entries: entries(wireEntry(2, 'ghp_secret')), nextCursor: 'cursor-b' },
