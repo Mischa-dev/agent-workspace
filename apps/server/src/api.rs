@@ -352,9 +352,9 @@ pub(crate) async fn start_run_in(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot
+            authorization_snapshot, prompt_message_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9)
         "#,
     )
     .bind(run_id)
@@ -369,6 +369,7 @@ pub(crate) async fn start_run_in(
         "project_id": conversation.project_id,
         "scope": ["repository.read", "repository.write", "provider.turn"]
     }))
+    .bind(prompt_message_id)
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
@@ -473,20 +474,34 @@ async fn retry_agent_run(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let (repository_id, prompt, predecessor_state) = sqlx::query_as::<_, (Uuid, String, String)>(
-        r#"
-            SELECT repository_id, prompt, state
+    let (repository_id, prompt, predecessor_state, prompt_message_id) =
+        sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>)>(
+            r#"
+            SELECT repository_id, prompt, state, prompt_message_id
               FROM agent_runs
              WHERE id = $1 AND conversation_id = $2 AND project_id = $3
              FOR UPDATE
             "#,
-    )
-    .bind(predecessor_run_id)
-    .bind(conversation_id)
-    .bind(conversation.project_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("agent_run"))?;
+        )
+        .bind(predecessor_run_id)
+        .bind(conversation_id)
+        .bind(conversation.project_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    if let Some(message_id) = prompt_message_id
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT removed_at IS NOT NULL FROM messages WHERE id = $1",
+        )
+        .bind(message_id)
+        .fetch_one(&mut *transaction)
+        .await?
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "the prompt message was removed; start a new run",
+        ));
+    }
     if !matches!(
         predecessor_state.as_str(),
         "completed" | "failed" | "canceled" | "interrupted"
@@ -528,9 +543,9 @@ async fn retry_agent_run(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, predecessor_run_id,
-            state, prompt, authorization_snapshot
+            state, prompt, authorization_snapshot, prompt_message_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10)
         "#,
     )
     .bind(run_id)
@@ -547,6 +562,7 @@ async fn retry_agent_run(
         "scope": ["repository.read", "repository.write", "provider.turn"],
         "retry_of": predecessor_run_id
     }))
+    .bind(prompt_message_id)
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
