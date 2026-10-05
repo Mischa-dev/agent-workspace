@@ -1092,3 +1092,123 @@ fn ids_of(list: &Value) -> Vec<String> {
         .filter_map(|item| item["id"].as_str().map(str::to_owned))
         .collect()
 }
+
+#[tokio::test]
+async fn legacy_bearer_run_starts_obey_the_mcp_run_cap() {
+    use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
+    let Some((setup, seed, _temporary)) = seeded("mcp_bearer_run_cap").await else {
+        return;
+    };
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    for index in 0..5 {
+        let conversation = thread(
+            &setup.pool,
+            &seed,
+            seed.channel_id,
+            &format!("Busy {index}"),
+        )
+        .await;
+        run(&setup.pool, &seed, conversation, &format!("busy-{index}")).await;
+    }
+    let next = thread(&setup.pool, &seed, seed.channel_id, "Sixth run").await;
+    let issued = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: seed.human_actor_id,
+            project_id: seed.project_id,
+            client_name: "Legacy app".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let session = initialize(&setup.app, &issued.token)
+        .await
+        .expect("session");
+    let result = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "run_start",
+        json!({
+            "threadId": next, "prompt": "Do more work", "clientRequestId": "sixth"
+        }),
+    )
+    .await;
+    assert_eq!(
+        result["outcome"], "conflict",
+        "bearer app bypassed the cap: {result}"
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_runs WHERE conversation_id = $1")
+            .bind(next)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("new runs");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn run_start_rechecks_visibility_after_waiting_for_conversation_locks() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_run_revoked").await else {
+        return;
+    };
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    let channel = Uuid::now_v7();
+    sqlx::query("INSERT INTO conversations (id, project_id, kind, name, visibility) VALUES ($1, $2, 'channel', 'private', 'members')")
+        .bind(channel).bind(seed.project_id).execute(&setup.pool).await.expect("channel");
+    sqlx::query("INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES ($1, $2, $3, $3)")
+        .bind(seed.project_id).bind(channel).bind(seed.human_actor_id).execute(&setup.pool).await.expect("member");
+    let work = thread(&setup.pool, &seed, channel, "Private run").await;
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let mut removal = setup.pool.begin().await.expect("removal");
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *removal)
+        .await
+        .expect("pid");
+    sqlx::query("SELECT id FROM conversations WHERE id = $1 FOR UPDATE")
+        .bind(channel)
+        .execute(&mut *removal)
+        .await
+        .expect("lock parent");
+    sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1 AND actor_id = $2")
+        .bind(channel)
+        .bind(seed.human_actor_id)
+        .execute(&mut *removal)
+        .await
+        .expect("remove member");
+    let app = setup.app.clone();
+    let pending = tokio::spawn(async move {
+        tool(
+            &app,
+            &token,
+            &session,
+            "run_start",
+            json!({"threadId": work, "prompt": "Should never run", "clientRequestId": "revoked"}),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                .bind(pid).fetch_one(&setup.pool).await.expect("waiter");
+            if blocked { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("start waits for removal");
+    removal.commit().await.expect("revoke access");
+    let result = pending.await.expect("start result");
+    assert_eq!(result["outcome"], "not_found", "{result}");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agent_runs WHERE conversation_id = $1")
+            .bind(work)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("runs");
+    assert_eq!(
+        count, 0,
+        "a run started after its caller lost conversation access"
+    );
+}

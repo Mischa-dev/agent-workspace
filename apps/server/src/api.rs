@@ -259,7 +259,7 @@ pub(crate) async fn start_run_in(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    if (via_grant_id.is_some() || principal.actor_kind()? != ActorKind::Human)
+    if principal.is_mcp()
         && crate::runs::run_cap(&mut transaction, principal.actor_id())
             .await?
             .reached()
@@ -2185,18 +2185,48 @@ async fn guard_conversation_mutation(
     #[derive(FromRow)]
     struct MutationGuard {
         kind: String,
-        parent_channel_id: Option<Uuid>,
         conversation_archived: bool,
         project_archived: bool,
         membership_role: String,
         membership_enabled: bool,
     }
 
+    // Match conversation writes: project first, then parent, then thread.
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR SHARE")
+        .bind(project_id)
+        .execute(&mut **transaction)
+        .await?;
+    let parent_channel_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT parent_channel_id FROM conversations WHERE id = $1 AND project_id = $2 AND conversation_visible_to(id, $3)",
+    )
+    .bind(conversation_id)
+    .bind(project_id)
+    .bind(principal.actor_id())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("conversation"))?;
+    let parent_archived = if let Some(parent_channel_id) = parent_channel_id {
+        !sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT archived_at IS NULL
+            FROM conversations
+            WHERE id = $1 AND project_id = $2 AND kind = 'channel'
+            FOR SHARE
+            "#,
+        )
+        .bind(parent_channel_id)
+        .bind(project_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("conversation"))?
+    } else {
+        false
+    };
+
     let guard = sqlx::query_as::<_, MutationGuard>(
         r#"
         SELECT
             c.kind,
-            c.parent_channel_id,
             c.archived_at IS NOT NULL AS conversation_archived,
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
@@ -2215,6 +2245,7 @@ async fn guard_conversation_mutation(
          AND pm.enabled
         WHERE c.id = $1
           AND c.project_id = $2
+          AND conversation_visible_to(c.id, $3)
         FOR SHARE OF c, p, pm
         "#,
     )
@@ -2240,23 +2271,16 @@ async fn guard_conversation_mutation(
     if guard.project_archived {
         return Err(AppError::ProjectArchived);
     }
-    let parent_archived = if let Some(parent_channel_id) = guard.parent_channel_id {
-        !sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT archived_at IS NULL
-            FROM conversations
-            WHERE id = $1 AND project_id = $2 AND kind = 'channel'
-            FOR SHARE
-            "#,
-        )
-        .bind(parent_channel_id)
-        .bind(project_id)
-        .fetch_optional(&mut **transaction)
+    // A visibility predicate evaluated before waiting on a lock can have an
+    // older snapshot. Check again while holding the parent and thread locks.
+    if !sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+        .bind(conversation_id)
+        .bind(principal.actor_id())
+        .fetch_one(&mut **transaction)
         .await?
-        .ok_or(AppError::NotFound("conversation"))?
-    } else {
-        false
-    };
+    {
+        return Err(AppError::NotFound("conversation"));
+    }
     if guard.conversation_archived || parent_archived {
         return Err(AppError::NotFound("conversation"));
     }
@@ -2349,6 +2373,9 @@ fn authorize_project_action(
 pub(crate) trait RunActor {
     fn actor_id(&self) -> Uuid;
     fn actor_kind(&self) -> Result<ActorKind, AppError>;
+    fn is_mcp(&self) -> bool {
+        false
+    }
 }
 
 impl RunActor for AuthenticatedActor {
@@ -2366,6 +2393,9 @@ impl RunActor for crate::runs::RunCaller {
     }
     fn actor_kind(&self) -> Result<ActorKind, AppError> {
         Ok(self.actor_kind)
+    }
+    fn is_mcp(&self) -> bool {
+        self.is_mcp()
     }
 }
 
