@@ -1212,3 +1212,56 @@ async fn run_start_rechecks_visibility_after_waiting_for_conversation_locks() {
         "a run started after its caller lost conversation access"
     );
 }
+
+#[tokio::test]
+async fn concurrent_run_starts_in_one_thread_do_not_deadlock() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_run_deadlock").await else {
+        return;
+    };
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    let work = thread(&setup.pool, &seed, seed.channel_id, "Concurrent runs").await;
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let sessions = [
+        initialize(&setup.app, &token).await.expect("first session"),
+        initialize(&setup.app, &token)
+            .await
+            .expect("second session"),
+    ];
+    // Hold the per-person cap lock until both commands have entered their
+    // conversation guard. Shared conversation locks would then deadlock on
+    // the first command's UPDATE while the second waits for the cap lock.
+    let mut blocker = setup.pool.begin().await.expect("blocker");
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *blocker)
+        .await
+        .expect("pid");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('run_cap:' || $1::text, 0))")
+        .bind(seed.human_actor_id)
+        .execute(&mut *blocker)
+        .await
+        .expect("cap lock");
+    let mut pending = Vec::new();
+    for (index, session) in sessions.into_iter().enumerate() {
+        let app = setup.app.clone();
+        let token = token.clone();
+        pending.push(tokio::spawn(async move {
+            tool(&app, &token, &session, "run_start", json!({"threadId": work, "prompt": "Start once", "clientRequestId": format!("concurrent-{index}")})).await
+        }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiters: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) OR EXISTS (SELECT 1 FROM pg_stat_activity first_waiter WHERE $1 = ANY(pg_blocking_pids(first_waiter.pid)) AND first_waiter.pid = ANY(pg_blocking_pids(pg_stat_activity.pid)))")
+                .bind(pid).fetch_one(&setup.pool).await.expect("waiters");
+            if waiters == 2 { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("both starts queued");
+    blocker.commit().await.expect("release cap");
+    for task in pending {
+        let result = task.await.expect("run start result");
+        assert!(
+            matches!(result["outcome"].as_str(), Some("ok" | "conflict")),
+            "run start deadlocked: {result}"
+        );
+    }
+}

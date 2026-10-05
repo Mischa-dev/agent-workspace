@@ -2246,7 +2246,8 @@ async fn guard_conversation_mutation(
         WHERE c.id = $1
           AND c.project_id = $2
           AND conversation_visible_to(c.id, $3)
-        FOR SHARE OF c, p, pm
+        FOR UPDATE OF c
+        FOR SHARE OF p, pm
         "#,
     )
     .bind(conversation_id)
