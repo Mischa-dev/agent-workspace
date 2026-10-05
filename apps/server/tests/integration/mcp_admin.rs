@@ -911,3 +911,87 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 }
+
+#[tokio::test]
+async fn project_admin_rechecks_roles_after_waiting_for_the_project_lock() {
+    let Some(setup) = setup("admin_revocation").await else {
+        return;
+    };
+    let project = create_project(&setup, "RACE", "Original name")
+        .await
+        .parse::<Uuid>()
+        .expect("project");
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    for tool_name in ["project_update", "project_archive"] {
+        sqlx::query("UPDATE project_memberships SET role = 'owner' WHERE project_id = $1")
+            .bind(project)
+            .execute(&setup.pool)
+            .await
+            .expect("restore role");
+        let mut revocation = setup.pool.begin().await.expect("revocation");
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *revocation)
+            .await
+            .expect("pid");
+        sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+            .bind(project)
+            .execute(&mut *revocation)
+            .await
+            .expect("lock project");
+        sqlx::query("UPDATE project_memberships SET role = 'member' WHERE project_id = $1")
+            .bind(project)
+            .execute(&mut *revocation)
+            .await
+            .expect("demote");
+        let app = setup.app.clone();
+        let token = token.clone();
+        let session = session.clone();
+        let pending = tokio::spawn(async move {
+            let args = if tool_name == "project_update" {
+                json!({"projectId": project, "name": "Forbidden rename"})
+            } else {
+                json!({"project": project, "archived": true})
+            };
+            tool(&app, &token, &session, tool_name, args).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                    .bind(pid).fetch_one(&setup.pool).await.expect("waiter");
+                if blocked { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("admin command waits for revocation");
+        revocation.commit().await.expect("revoked");
+        let result = pending.await.expect("command result");
+        assert_eq!(
+            result["outcome"], "permission_denied",
+            "{tool_name} used obsolete authority: {result}"
+        );
+        let unchanged: bool = sqlx::query_scalar("SELECT name = 'Original name' AND archived_at IS NULL AND version = 1 FROM projects WHERE id = $1")
+            .bind(project).fetch_one(&setup.pool).await.expect("project");
+        assert!(unchanged, "{tool_name} changed the project after demotion");
+    }
+}
+
+#[tokio::test]
+async fn project_archive_checks_expected_version_even_when_already_in_that_state() {
+    let Some(setup) = setup("archive_version").await else {
+        return;
+    };
+    let project = create_project(&setup, "VERS", "Versioned").await;
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let result = tool(
+        &setup.app,
+        &token,
+        &session,
+        "project_archive",
+        json!({
+            "project": project, "archived": false, "expectedVersion": 999
+        }),
+    )
+    .await;
+    assert_eq!(result["outcome"], "conflict", "{result}");
+}
