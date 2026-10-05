@@ -907,8 +907,8 @@ async fn launch_sponsored_run(
             id, conversation_id, execution_worker_id, requesting_actor_id,
             sponsoring_actor_id, external_execution_request_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10)
+            authorization_snapshot, prompt_message_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10, $11)
         "#,
     )
     .bind(run_id)
@@ -927,6 +927,7 @@ async fn launch_sponsored_run(
         "external_execution_request_id": external_request_id,
         "scope": ["repository.read", "repository.write", "provider.turn"]
     }))
+    .bind(prompt_message_id)
     .execute(&mut **transaction)
     .await?;
     transition_run(transaction, run_id, RunState::Queued, None).await?;

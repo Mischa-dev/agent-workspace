@@ -663,6 +663,19 @@ pub(crate) async fn apply_removal(
     if updated.rows_affected() != 1 {
         return Err(AppError::Internal("remove a locked message").into());
     }
+    let runs = sqlx::query_scalar::<_, Uuid>("SELECT redact_run_prompt_copies($1)")
+        .bind(locked.id)
+        .fetch_all(&mut **transaction)
+        .await?;
+    for run_id in runs {
+        crate::outbox::enqueue_agent_run_updated(
+            transaction,
+            locked.project_id,
+            locked.conversation.id,
+            run_id,
+        )
+        .await?;
+    }
     let cancelled_reply_requests = replies::withdraw_requests(
         transaction,
         Withdraw::Message {

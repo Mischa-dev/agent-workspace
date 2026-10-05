@@ -29,6 +29,10 @@ use super::{
 /// The dev seed (project AW with a worker, profile and repository) with
 /// its person signed in as "owner".
 async fn seeded(prefix: &str) -> Option<(Setup, DevSeed, tempfile::TempDir)> {
+    seeded_through(prefix, i64::MAX).await
+}
+
+async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, tempfile::TempDir)> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return None;
@@ -44,10 +48,12 @@ async fn seeded(prefix: &str) -> Option<(Setup, DevSeed, tempfile::TempDir)> {
         .await
         .expect("create schema");
     let pool = schema_pool(&database_url, &schema).await;
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("apply migrations");
+    let mut migrations = sqlx::migrate!("./migrations");
+    migrations
+        .migrations
+        .to_mut()
+        .retain(|migration| migration.version <= version);
+    migrations.run(&pool).await.expect("apply migrations");
     let temporary = tempfile::tempdir().expect("temporary root");
     let data_root = temporary.path().join("data");
     let config = AppConfig::from_values(&BTreeMap::from([
@@ -1325,5 +1331,241 @@ async fn concurrent_run_starts_in_one_thread_do_not_deadlock() {
             matches!(result["outcome"].as_str(), Some("ok" | "conflict")),
             "run start deadlocked: {result}"
         );
+}
+
+#[tokio::test]
+async fn removing_a_run_prompt_message_scrubs_the_run_and_its_retries() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_prompt_removal").await else {
+        return;
+    };
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    let work = thread(&setup.pool, &seed, seed.channel_id, "Remove prompt").await;
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let secret = "secret-copied-into-run-prompt";
+    let started = tool(
+        &setup.app,
+        &token,
+        &session,
+        "run_start",
+        json!({"threadId": work, "prompt": secret, "clientRequestId": "sensitive-run"}),
+    )
+    .await;
+    assert_eq!(started["outcome"], "ok", "{started}");
+    let run_id = started["value"]["id"]
+        .as_str()
+        .expect("run")
+        .parse::<Uuid>()
+        .expect("uuid");
+    // The fixture repository has no checkout; admission fails naturally.
+    // Do not race the scheduler by forcing a competing state transition.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let state: String = sqlx::query_scalar("SELECT state FROM agent_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&setup.pool)
+                .await
+                .expect("run state");
+            if state == "failed" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fixture run fails admission");
+    let (status, retried) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/agent-runs/{run_id}/retry"),
+            Some("retry-before-removal"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{retried}");
+    let prompt: Uuid = sqlx::query_scalar(
+        "SELECT id FROM messages WHERE conversation_id = $1 AND plain_text = $2",
+    )
+    .bind(work)
+    .bind(secret)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("prompt message");
+    let edited = tool(
+        &setup.app,
+        &token,
+        &session,
+        "message_edit",
+        json!({"messageId": prompt, "text": "Safe replacement", "clientRequestId": "edit-prompt"}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let removed = tool(
+        &setup.app,
+        &token,
+        &session,
+        "message_delete",
+        json!({"messageId": prompt}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    assert_eq!(
+        super::message_edits::copies(&setup.pool, "agent_runs", secret).await,
+        0,
+        "the copied prompt survives message removal"
+    );
+    let replay = tool(
+        &setup.app,
+        &token,
+        &session,
+        "run_start",
+        json!({"threadId": work, "prompt": secret, "clientRequestId": "sensitive-run"}),
+    )
+    .await;
+    assert_eq!(
+        replay["outcome"], "conflict",
+        "the removed prompt hash must be scrubbed: {replay}"
+    );
+    let got = tool(
+        &setup.app,
+        &token,
+        &session,
+        "run_get",
+        json!({"runId": run_id}),
+    )
+    .await;
+    assert_eq!(got["outcome"], "ok", "{got}");
+    assert!(!got.to_string().contains(secret), "{got}");
+    let (status, retry) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/agent-runs/{run_id}/retry"),
+            Some("retry-after-removal"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a removed prompt cannot be executed: {retry}"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_sponsored_prompt_scrubs_the_execution_request_too() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_sponsored_redact").await else {
+        return;
+    };
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    let work = thread(&setup.pool, &seed, seed.channel_id, "Sponsored prompt").await;
+    let (status, agent) = send(&setup.app, setup.browser.request("POST", &format!("/api/v1/projects/{}/external-agents", seed.project_id), None, json!({
+        "connectionName": "Requester", "displayName": "Requester", "handle": "requester", "role": "member", "scopes": ["read", "write", "worker_request"]
+    }))).await;
+    assert_eq!(status, StatusCode::OK, "{agent}");
+    let token = agent["oneTimeCredential"]["token"].as_str().expect("token");
+    let session = initialize(&setup.app, token).await.expect("session");
+    let secret = "secret-copied-into-sponsored-request";
+    let requested = tool(&setup.app, token, &session, "run_request", json!({
+        "conversationId": work, "repositoryId": seed.repository_id, "sponsorActorId": seed.human_actor_id,
+        "prompt": secret, "clientRequestId": "sponsor-secret"
+    })).await;
+    assert_eq!(requested["outcome"], "requested", "{requested}");
+    let approval = requested["approvalId"].as_str().expect("approval");
+    let (status, approved) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/agent-approvals/{approval}/respond"),
+            Some("approve-secret"),
+            json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    let message: Uuid = sqlx::query_scalar(
+        "SELECT id FROM messages WHERE conversation_id = $1 AND plain_text = $2",
+    )
+    .bind(work)
+    .bind(secret)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("prompt");
+    let removed = tool(
+        &setup.app,
+        token,
+        &session,
+        "message_delete",
+        json!({"messageId": message}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    for table in [
+        "agent_runs",
+        "external_execution_requests",
+        "idempotency_keys",
+        "outbox_events",
+    ] {
+        assert_eq!(
+            super::message_edits::copies(&setup.pool, table, secret).await,
+            0,
+            "{table} retains the prompt"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prompt_redaction_migration_backfills_edited_messages_and_retry_chains() {
+    let Some((setup, seed, _temporary)) = seeded_through("prompt_backfill", 52).await else {
+        return;
+    };
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    let work = thread(&setup.pool, &seed, seed.channel_id, "Old run").await;
+    let message = Uuid::now_v7();
+    let root = Uuid::now_v7();
+    let retry = Uuid::now_v7();
+    let mut transaction = setup.pool.begin().await.expect("old transaction");
+    sqlx::query(r#"INSERT INTO messages (id, conversation_id, author_actor_id, content_version, content, plain_text) VALUES ($1, $2, $3, 1, '{"version":1,"nodes":[]}', 'edited replacement')"#)
+        .bind(message).bind(work).bind(seed.human_actor_id).execute(&mut *transaction).await.expect("old message");
+    for (id, predecessor) in [(root, None), (retry, Some(root))] {
+        sqlx::query("INSERT INTO agent_runs (id, conversation_id, execution_worker_id, requesting_actor_id, execution_profile_id, repository_id, predecessor_run_id, state, prompt, authorization_snapshot) VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', 'old removed secret', '{}')")
+            .bind(id).bind(work).bind(seed.execution_worker_id).bind(seed.human_actor_id).bind(seed.execution_profile_id).bind(seed.repository_id).bind(predecessor)
+            .execute(&mut *transaction).await.expect("old run");
+        if predecessor.is_none() {
+            sqlx::query("UPDATE agent_runs SET state = 'failed' WHERE id = $1")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await
+                .expect("old failure");
+        }
+    }
+    sqlx::query("SELECT set_config('aw.message_command', $1, true)")
+        .bind(message.to_string())
+        .execute(&mut *transaction)
+        .await
+        .expect("allow removal");
+    sqlx::query("UPDATE messages SET plain_text = '', removed_at = now(), removed_by_actor_id = $2 WHERE id = $1")
+        .bind(message).bind(seed.human_actor_id).execute(&mut *transaction).await.expect("old removal");
+    transaction.commit().await.expect("old data committed");
+    sqlx::migrate!("./migrations")
+        .run(&setup.pool)
+        .await
+        .expect("upgrade populated database");
+    let runs = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT prompt_message_id, prompt, state FROM agent_runs WHERE id IN ($1, $2)",
+    )
+    .bind(root)
+    .bind(retry)
+    .fetch_all(&setup.pool)
+    .await
+    .expect("backfilled runs");
+    assert_eq!(runs.len(), 2);
+    for (source, prompt, state) in runs {
+        assert_eq!(source, message);
+        assert_eq!(prompt, "[Message removed]");
+        assert!(matches!(state.as_str(), "failed" | "canceled"), "{state}");
     }
 }
