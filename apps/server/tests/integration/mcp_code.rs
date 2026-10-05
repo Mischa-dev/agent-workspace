@@ -1092,3 +1092,65 @@ fn ids_of(list: &Value) -> Vec<String> {
         .filter_map(|item| item["id"].as_str().map(str::to_owned))
         .collect()
 }
+
+#[tokio::test]
+async fn an_agent_cannot_read_or_answer_an_approval_in_a_hidden_thread() {
+    let Some((setup, seed, _temporary)) = seeded("mcp_hidden_approval").await else {
+        return;
+    };
+    let app = &setup.app;
+    let (status, agent) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{}/external-agents", seed.project_id),
+            None,
+            json!({"connectionName": "Approver", "displayName": "Approver",
+                   "handle": "approver", "role": "member",
+                   "scopes": ["read", "write", "approval_respond"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{agent}");
+    let token = agent["oneTimeCredential"]["token"].as_str().expect("token");
+    let session = initialize(app, token).await.expect("session");
+    let private_channel = Uuid::now_v7();
+    sqlx::query("INSERT INTO conversations (id, project_id, kind, name, visibility) VALUES ($1, $2, 'channel', 'private', 'members')")
+        .bind(private_channel).bind(seed.project_id).execute(&setup.pool).await.expect("private channel");
+    let private_thread = thread(&setup.pool, &seed, private_channel, "Private work").await;
+    execute(&setup.pool, "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1", &[seed.repository_id]).await;
+    let (run_id, _) = run(&setup.pool, &seed, private_thread, "private-approval").await;
+    for next in ["starting", "working", "blocked"] {
+        sqlx::query("UPDATE agent_runs SET state = $2 WHERE id = $1")
+            .bind(run_id)
+            .bind(next)
+            .execute(&setup.pool)
+            .await
+            .expect("run state");
+    }
+    let approval = Uuid::now_v7();
+    sqlx::query("INSERT INTO agent_approvals (id, agent_run_id, requesting_actor_id, eligible_role, human_required, kind, summary, options, provider_request_id) VALUES ($1, $2, $3, 'member', false, 'question', 'Private release secret', '[\"main\"]'::jsonb, 'private-approval')")
+        .bind(approval).bind(run_id).bind(seed.human_actor_id).execute(&setup.pool).await.expect("approval");
+    let read = tool(
+        app,
+        token,
+        &session,
+        "approval_get",
+        json!({"approvalId": approval}),
+    )
+    .await;
+    let write = tool(app, token, &session, "approval_respond", json!({
+        "approvalId": approval, "expectedVersion": 1, "answer": "main", "clientRequestId": "hidden-answer"
+    })).await;
+    assert_eq!(
+        read["outcome"], "not_found",
+        "private approval leaked: {read}; write: {write}"
+    );
+    assert_eq!(write["outcome"], "not_found", "{write}");
+    let status: String = sqlx::query_scalar("SELECT status FROM agent_approvals WHERE id = $1")
+        .bind(approval)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("approval state");
+    assert_eq!(status, "pending");
+}

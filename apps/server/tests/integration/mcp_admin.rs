@@ -911,3 +911,118 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 }
+
+#[tokio::test]
+async fn moving_an_archived_original_does_not_reveal_its_hidden_destination() {
+    let Some(setup) = setup("mcp_move_hidden").await else {
+        return;
+    };
+    let source = create_project(&setup, "SOURCE", "Source").await;
+    let secret = create_project(&setup, "SECRET", "Secret").await;
+    let other = create_project(&setup, "OTHER", "Other").await;
+    let (_, reader) = super::message_edits::add_person(&setup, &[&source, &other], "reader").await;
+    let owner_token = connect_app(&setup.app, &setup.browser, "Owner app", "full").await;
+    let owner_session = initialize(&setup.app, &owner_token)
+        .await
+        .expect("owner session");
+    let created = tool(
+        &setup.app,
+        &owner_token,
+        &owner_session,
+        "task_create",
+        json!({"projectId": source, "title": "Move me"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let original = created["workItemId"].clone();
+    let moved = tool(
+        &setup.app,
+        &owner_token,
+        &owner_session,
+        "task_move",
+        json!({"taskId": original, "toProjectId": secret}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let destination = moved["value"]["moved"][0]["id"].clone();
+    let reader_token = connect_app(&setup.app, &reader, "Reader app", "full").await;
+    let reader_session = initialize(&setup.app, &reader_token)
+        .await
+        .expect("reader session");
+    let result = tool(
+        &setup.app,
+        &reader_token,
+        &reader_session,
+        "task_move",
+        json!({"taskId": original, "toProjectId": other}),
+    )
+    .await;
+    assert_ne!(
+        result["outcome"], "ok",
+        "hidden destination leaked: {result}"
+    );
+    assert!(
+        !result
+            .to_string()
+            .contains(destination.as_str().expect("destination")),
+        "{result}"
+    );
+    assert!(!result.to_string().contains("SECRET-"), "{result}");
+}
+
+#[tokio::test]
+async fn a_project_scoped_credential_cannot_move_tasks_outside_its_project() {
+    use agent_workspace_server::mcp::{IssueCredentialCommand, issue_credential};
+    let Some(setup) = setup("mcp_move_confined").await else {
+        return;
+    };
+    let source = create_project(&setup, "SOURCE", "Source").await;
+    let target = create_project(&setup, "TARGET", "Target").await;
+    let actor =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = 'owner'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("owner");
+    let issued = issue_credential(
+        &setup.pool,
+        IssueCredentialCommand {
+            actor_id: actor,
+            project_id: source.parse().expect("source"),
+            client_name: "Confined".to_owned(),
+            scopes: vec!["read".to_owned(), "write".to_owned()],
+            expires_in_days: 1,
+        },
+    )
+    .await
+    .expect("credential");
+    let session = initialize(&setup.app, &issued.token)
+        .await
+        .expect("session");
+    let created = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "task_create",
+        json!({"title": "Stay here"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let result = tool(
+        &setup.app,
+        &issued.token,
+        &session,
+        "task_move",
+        json!({"taskId": created["workItemId"], "toProjectId": target}),
+    )
+    .await;
+    assert_ne!(
+        result["outcome"], "ok",
+        "credential escaped its project: {result}"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM work_items WHERE project_id = $1")
+        .bind(target.parse::<Uuid>().expect("target"))
+        .fetch_one(&setup.pool)
+        .await
+        .expect("target tasks");
+    assert_eq!(count, 0);
+}
