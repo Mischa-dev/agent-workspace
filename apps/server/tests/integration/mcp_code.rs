@@ -1331,6 +1331,7 @@ async fn concurrent_run_starts_in_one_thread_do_not_deadlock() {
             matches!(result["outcome"].as_str(), Some("ok" | "conflict")),
             "run start deadlocked: {result}"
         );
+    }
 }
 
 #[tokio::test]
