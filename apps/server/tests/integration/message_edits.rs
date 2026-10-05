@@ -2057,3 +2057,72 @@ async fn edits_and_removals_never_widen_visibility() {
         0
     );
 }
+
+#[tokio::test]
+async fn removing_a_message_scrubs_creation_replays_after_its_thread_was_renamed() {
+    let Some(setup) = setup("msg_renamed_replay").await else {
+        return;
+    };
+    let project = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &project, "general").await;
+    let token = connect_app(&setup.app, &setup.browser, "Editor", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let secret = "secret-before-thread-rename";
+    let sent = tool(
+        &setup.app,
+        &token,
+        &session,
+        "message_send",
+        json!({"conversationId": channel, "text": secret}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    let message = sent["value"]["messageId"].clone();
+    let request = json!({"name": secret, "originMessageId": message});
+    let (status, thread) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/threads"),
+            Some("original-thread"),
+            request.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    let renamed = tool(
+        &setup.app,
+        &token,
+        &session,
+        "conversation_update",
+        json!({"conversationId": thread["conversation"]["id"], "name": "Safe name"}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    let removed = tool(
+        &setup.app,
+        &token,
+        &session,
+        "message_delete",
+        json!({"messageId": message}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    assert_eq!(
+        copies(&setup.pool, "idempotency_keys", secret).await,
+        0,
+        "the original thread-create response must lose its old name"
+    );
+    let (status, replay) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/threads"),
+            Some("original-thread"),
+            request,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{replay}");
+    assert!(!replay.to_string().contains(secret), "{replay}");
+}

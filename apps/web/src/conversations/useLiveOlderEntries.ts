@@ -9,6 +9,7 @@ import {
   needsRefresh,
   NO_MESSAGE_UPDATES,
   NO_REACTION_UPDATES,
+  tombstoneEntry,
   withMessageReactions,
   type ReactionUpdates,
 } from './liveMessages'
@@ -192,6 +193,21 @@ export function useLiveOlderEntries({
       const key = `${conversationId}:${base.id}:${update.revision}:${update.removed}`
       if (attempted.current.has(key)) continue
       attempted.current.add(key)
+      if (update.removed) {
+        // Keep the tombstone after the bounded realtime history forgets it,
+        // including when the fetch fails or an older page arrives late.
+        replaceEntry(tombstoneEntry({ ...entry, message }))
+        setOlder((current) => {
+          if (current.conversationId !== conversationId) return current
+          return {
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              entries: applyLiveMessages(page.entries, updates, NO_REPLACEMENTS, conversationId),
+            })),
+          }
+        })
+      }
       void getConversationMessage(conversationId, base.id)
         .then(replaceEntry)
         // The blanking above already hides a removed message's text; a failed
