@@ -911,3 +911,121 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 }
+
+#[tokio::test]
+async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
+    let Some(setup) = setup("mcp_long_cycle").await else {
+        return;
+    };
+    let project = create_project(&setup, "PLAN", "Plan").await;
+    let token = connect_app(&setup.app, &setup.browser, "Planner", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let mut tasks = Vec::new();
+    for batch in 0..3 {
+        let count = if batch == 2 { 1 } else { 100 };
+        let result = tool(&setup.app, &token, &session, "task_create_many", json!({
+            "projectId": project, "clientRequestId": format!("chain-{batch}"),
+            "tasks": (0..count).map(|i| json!({"title": format!("Task {}", batch * 100 + i)})).collect::<Vec<_>>()
+        })).await;
+        assert_eq!(result["outcome"], "ok", "{result}");
+        tasks.extend(
+            result["value"]["tasks"]
+                .as_array()
+                .expect("tasks")
+                .iter()
+                .map(|task| {
+                    task["id"]
+                        .as_str()
+                        .expect("id")
+                        .parse::<Uuid>()
+                        .expect("uuid")
+                }),
+        );
+    }
+    let project_id = project.parse::<Uuid>().expect("project");
+    sqlx::query("INSERT INTO work_item_dependencies (project_id, blocking_work_item_id, blocked_work_item_id, created_by_actor_id) SELECT $1, chain.id, chain.next, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM (SELECT id, lead(id) OVER (ORDER BY n) AS next FROM unnest($2::uuid[]) WITH ORDINALITY AS t(id, n)) chain WHERE chain.next IS NOT NULL")
+        .bind(project_id).bind(&tasks).execute(&setup.pool).await.expect("chain");
+    let result = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_depend",
+        json!({"taskId": tasks[200], "blocks": [tasks[0]]}),
+    )
+    .await;
+    assert_eq!(
+        result["outcome"], "conflict",
+        "long cycle accepted: {result}"
+    );
+    let edges: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM work_item_dependencies WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_one(&setup.pool)
+            .await
+            .expect("edges");
+    assert_eq!(edges, 200);
+}
+
+#[tokio::test]
+async fn task_moves_lock_projects_in_id_order() {
+    let Some(setup) = setup("mcp_move_locks").await else {
+        return;
+    };
+    let low = create_project(&setup, "LOW", "Low").await;
+    let high = create_project(&setup, "HIGH", "High").await;
+    assert!(low < high);
+    let token = connect_app(&setup.app, &setup.browser, "Mover", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let created = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_create",
+        json!({"projectId": high, "title": "Move down"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "applied", "{created}");
+    let mut blocker = setup.pool.begin().await.expect("blocker");
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *blocker)
+        .await
+        .expect("pid");
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+        .bind(low.parse::<Uuid>().expect("low"))
+        .execute(&mut *blocker)
+        .await
+        .expect("lock low");
+    let app = setup.app.clone();
+    let moving = tokio::spawn(async move {
+        tool(
+            &app,
+            &token,
+            &session,
+            "task_move",
+            json!({"taskId": created["workItemId"], "toProjectId": low}),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                .bind(pid).fetch_one(&setup.pool).await.expect("waiter");
+            if blocked { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("move waits for low project");
+    let mut observer = setup.pool.begin().await.expect("observer");
+    let high_free = sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE NOWAIT")
+        .bind(high.parse::<Uuid>().expect("high"))
+        .execute(&mut *observer)
+        .await
+        .is_ok();
+    observer.rollback().await.expect("release observer");
+    blocker.rollback().await.expect("release blocker");
+    let result = moving.await.expect("move");
+    assert_eq!(result["outcome"], "ok", "{result}");
+    assert!(
+        high_free,
+        "the move locked HIGH before LOW; opposite moves can deadlock"
+    );
+}
