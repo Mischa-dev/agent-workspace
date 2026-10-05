@@ -156,10 +156,13 @@ pub(super) async fn task_move(
         mark_via(&mut transaction, principal).await?;
         let source_actor = command_actor(principal, source_project_id);
         let target_actor = command_actor(principal, target_project_id);
-        for (actor, project, what) in [
+        let mut projects = [
             (&source_actor, source_project_id, "this task's project"),
             (&target_actor, target_project_id, "the target project"),
-        ] {
+        ];
+        // Opposite moves must take the same first project lock.
+        projects.sort_by_key(|(_, project, _)| *project);
+        for (actor, project, what) in projects {
             let Some(membership) =
                 lock_membership(&mut transaction, principal.actor_id, project).await?
             else {
