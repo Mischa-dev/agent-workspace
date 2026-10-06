@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::agent_interface::{
     Browser, PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send, test_app,
-    tool,
+    test_app_with, tool,
 };
 
 pub(super) struct Setup {
@@ -1227,4 +1227,104 @@ async fn project_archive_checks_expected_version_even_when_already_in_that_state
     )
     .await;
     assert_eq!(result["outcome"], "conflict", "{result}");
+}
+
+/// AWD-11: a fresh project, made through the web app with no seed data,
+/// becomes execution-ready when its first person connects their Codex
+/// account; doing it again, or by a second person, never duplicates setup.
+#[tokio::test]
+async fn a_fresh_project_gets_its_worker_when_someone_connects_codex() {
+    let Some(setup) = setup("fresh_execution").await else {
+        return;
+    };
+    let project = create_project(&setup, "FRESH", "Fresh").await;
+    let temporary = tempfile::tempdir().expect("temporary data root");
+    let data_root = temporary.path().join("data");
+    let app = test_app_with(
+        setup.pool.clone(),
+        &std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database"),
+        &[
+            (
+                "AGENT_WORKSPACE_DATA_ROOT",
+                data_root.to_string_lossy().into_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_CODEX_HOME_ROOT",
+                data_root
+                    .join("codex/profiles")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+    );
+    let uri = format!("/api/v1/projects/{project}/execution-profiles");
+    let (status, created) = send(
+        &app,
+        setup
+            .browser
+            .request("POST", &uri, Some("connect-1"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, again) = send(
+        &app,
+        setup
+            .browser
+            .request("POST", &uri, Some("connect-2"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["id"], created["id"]);
+    let project_id = project.parse::<Uuid>().expect("project");
+    let counts = |pool: PgPool| async move {
+        sqlx::query_as::<_, (i64, i64, i64, i64)>(
+            r#"
+            SELECT (SELECT count(*) FROM provider_connections WHERE project_id = $1),
+                   (SELECT count(*) FROM execution_workers WHERE project_id = $1),
+                   (SELECT count(*) FROM execution_workers WHERE project_id = $1 AND enabled),
+                   (SELECT count(*) FROM project_memberships
+                     WHERE project_id = $1 AND role = 'worker' AND lower(handle) = 'agent')
+            "#,
+        )
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("setup counts")
+    };
+    assert_eq!(
+        counts(setup.pool.clone()).await,
+        (1, 1, 0, 1),
+        "one provider and one @agent worker, waiting for a signed-in profile"
+    );
+    // Signing in to Codex makes the profile available and turns the worker on.
+    let profile_id = created["id"]
+        .as_str()
+        .expect("profile")
+        .parse::<Uuid>()
+        .expect("id");
+    sqlx::query("UPDATE execution_profiles SET status = 'available', account_state = 'authenticated', version = version + 1 WHERE id = $1")
+        .bind(profile_id)
+        .execute(&setup.pool)
+        .await
+        .expect("sign in");
+    agent_workspace_server::execution_setup::activate_pending_worker(&setup.pool, profile_id)
+        .await
+        .expect("activate");
+    assert_eq!(counts(setup.pool.clone()).await, (1, 1, 1, 1));
+    let (status, workers) = send(
+        &app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{project}/execution-workers"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workers}");
+    assert_eq!(
+        workers["workers"].as_array().map(Vec::len),
+        Some(1),
+        "{workers}"
+    );
 }
