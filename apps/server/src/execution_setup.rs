@@ -107,11 +107,14 @@ pub async fn ensure_default_worker(
     .bind(worker_actor_id)
     .execute(&mut **transaction)
     .await?;
-    let execution_worker_id = sqlx::query_scalar::<_, Uuid>(
+    // The dev seed (profile already available) also runs against schemas from
+    // before migration 0054 in upgrade tests, so only the pending path names
+    // the pending_setup column.
+    let insert = if profile_available {
         r#"
         INSERT INTO execution_workers (
             id, project_id, actor_id, provider_connection_id,
-            execution_profile_id, enabled, pending_setup
+            execution_profile_id, enabled
         )
         VALUES (
             $1, $2, $3, $4, $5,
@@ -121,23 +124,33 @@ pub async fn ensure_default_worker(
                     FROM execution_workers existing
                     WHERE existing.project_id = $2 AND existing.actor_id = $3
                 ),
-                $6
-            ),
-            NOT $6
+                true
+            )
         )
         ON CONFLICT (project_id, actor_id)
         DO UPDATE SET id = execution_workers.id
         RETURNING id
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(worker_actor_id)
-    .bind(provider_connection_id)
-    .bind(execution_profile_id)
-    .bind(profile_available)
-    .fetch_one(&mut **transaction)
-    .await?;
+        "#
+    } else {
+        r#"
+        INSERT INTO execution_workers (
+            id, project_id, actor_id, provider_connection_id,
+            execution_profile_id, enabled, pending_setup
+        )
+        VALUES ($1, $2, $3, $4, $5, false, true)
+        ON CONFLICT (project_id, actor_id)
+        DO UPDATE SET id = execution_workers.id
+        RETURNING id
+        "#
+    };
+    let execution_worker_id = sqlx::query_scalar::<_, Uuid>(insert)
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(worker_actor_id)
+        .bind(provider_connection_id)
+        .bind(execution_profile_id)
+        .fetch_one(&mut **transaction)
+        .await?;
     Ok((worker_actor_id, execution_worker_id))
 }
 
