@@ -442,7 +442,10 @@ async fn register_personal_execution_profile(
         idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
         (StatusCode::OK, profile_id)
     } else {
-        let provider_connection_id = sqlx::query_scalar::<_, Uuid>(
+        // A fresh project has no provider or worker yet: the first person to
+        // connect their Codex account sets them up (AWD-11).
+        crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
+        let existing_provider = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT connection.id
             FROM execution_workers worker
@@ -467,11 +470,14 @@ async fn register_personal_execution_profile(
         )
         .bind(project_id)
         .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or(AppError::Conflict(
-            "execution_worker",
-            "no compatible local provider is available",
-        ))?;
+        .await?;
+        let needs_worker = existing_provider.is_none();
+        let provider_connection_id = match existing_provider {
+            Some(provider_connection_id) => provider_connection_id,
+            None => {
+                crate::execution_setup::ensure_local_provider(&mut transaction, project_id).await?
+            }
+        };
         let profile_id = Uuid::now_v7();
         let project_key = project_id.simple().to_string();
         let actor_key = principal.actor_id.simple().to_string();
@@ -507,6 +513,16 @@ async fn register_personal_execution_profile(
         .bind(profile_path)
         .execute(&mut *transaction)
         .await?;
+        if needs_worker {
+            crate::execution_setup::ensure_default_worker(
+                &mut transaction,
+                project_id,
+                provider_connection_id,
+                profile_id,
+                false,
+            )
+            .await?;
+        }
         let reference = ExecutionProfileCommandReference { profile_id };
         idempotency::complete(
             &mut transaction,
