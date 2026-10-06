@@ -29,7 +29,7 @@ import { ThreadBoard, ThreadStatusChip } from './threadBoard'
 import { useThreads } from './threadModel'
 import { ThreadDialog } from './ThreadDialog'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from './Timeline'
-import type { ConversationTimelineEntry, SidebarThread } from './types'
+import type { ConversationTimelineEntry, ProjectConversationSidebar, SidebarThread } from './types'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
@@ -200,6 +200,12 @@ export function ChannelPage() {
     void archiveConversation({ conversationId: channelId, kind: 'channel', expectedVersion: page.conversation.version })
       .then(() => {
         setArchiveOpen(false)
+        // Drop the archived channel from every cached sidebar now, so the
+        // list stays put (minus this channel) while it refetches.
+        queryClient.setQueriesData<ProjectConversationSidebar>(
+          { queryKey: queryKeys.conversationSidebarRoot(projectId) },
+          (data) => data && { ...data, channels: data.channels.filter((channel) => channel.id !== channelId) },
+        )
         void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
         navigate(`/projects/${encodeURIComponent(projectId)}`, { replace: true })
       })
