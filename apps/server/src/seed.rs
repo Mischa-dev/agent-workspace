@@ -242,35 +242,9 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .fetch_one(&mut *transaction)
     .await?;
 
-    let provider_connection_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO provider_connections (
-            id, project_id, kind, host, capabilities
-        )
-        VALUES (
-            $1, $2, 'codex_app_server', 'local_project_host',
-            $3
-        )
-        ON CONFLICT (project_id, kind, host)
-        DO UPDATE SET id = provider_connections.id
-        RETURNING id
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(serde_json::json!({
-        "supports_streaming": true,
-        "supports_commands": true,
-        "supports_file_changes": true,
-        "supports_approvals": true,
-        "supports_questions": true,
-        "supports_resume": true,
-        "supports_interrupt": true,
-        "supports_pull_request_creation": false,
-        "supports_remote_execution": false
-    }))
-    .fetch_one(&mut *transaction)
-    .await?;
+    crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
+    let provider_connection_id =
+        crate::execution_setup::ensure_local_provider(&mut transaction, project_id).await?;
 
     let execution_profile_id = sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -317,73 +291,13 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         ));
     }
 
-    let existing_worker_actor = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT pm.actor_id
-          FROM project_memberships pm
-         WHERE pm.project_id = $1
-           AND lower(pm.handle) = 'agent'
-        "#,
+    let (worker_actor_id, execution_worker_id) = crate::execution_setup::ensure_default_worker(
+        &mut transaction,
+        project_id,
+        provider_connection_id,
+        execution_profile_id,
+        true,
     )
-    .bind(project_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let worker_actor_id = existing_worker_actor.unwrap_or_else(Uuid::now_v7);
-    sqlx::query(
-        r#"
-        INSERT INTO actors (id, kind)
-        VALUES ($1, 'execution_worker')
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .bind(worker_actor_id)
-    .execute(&mut *transaction)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle
-        )
-        VALUES ($1, $2, $3, 'worker', 'Agent Workspace Worker', 'agent')
-        ON CONFLICT (project_id, actor_id)
-        DO UPDATE SET updated_at = now()
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(worker_actor_id)
-    .execute(&mut *transaction)
-    .await?;
-
-    let execution_worker_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO execution_workers (
-            id, project_id, actor_id, provider_connection_id,
-            execution_profile_id, enabled
-        )
-        VALUES (
-            $1, $2, $3, $4, $5,
-            COALESCE(
-                (
-                    SELECT existing.enabled
-                    FROM execution_workers existing
-                    WHERE existing.project_id = $2 AND existing.actor_id = $3
-                ),
-                true
-            )
-        )
-        ON CONFLICT (project_id, actor_id)
-        DO UPDATE SET id = execution_workers.id
-        RETURNING id
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(worker_actor_id)
-    .bind(provider_connection_id)
-    .bind(execution_profile_id)
-    .fetch_one(&mut *transaction)
     .await?;
 
     transaction.commit().await?;
