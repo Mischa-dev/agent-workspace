@@ -32,6 +32,15 @@ const INVITATION_TOKEN_BYTES: usize = 32;
 const INVITATION_PREFIX_LENGTH: usize = 16;
 const MAX_EXPIRY_HOURS: i32 = 7 * 24;
 
+/// Where people open the app, so invitation links work outside the server host.
+fn public_origin(state: &AppState) -> String {
+    state
+        .config
+        .public_origin
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", state.config.server_addr))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -281,7 +290,7 @@ async fn issue_invitation(
     transaction.commit().await?;
 
     let invitation = fetch_invitation(&state, project_id, invitation_id).await?;
-    let origin = format!("http://{}", state.config.server_addr);
+    let origin = public_origin(&state);
     Ok((
         StatusCode::CREATED,
         Json(IssuedInvitation {
@@ -450,7 +459,7 @@ async fn replace_invitation(
     transaction.commit().await?;
 
     let invitation = fetch_invitation(&state, row.project_id, replacement_id).await?;
-    let origin = format!("http://{}", state.config.server_addr);
+    let origin = public_origin(&state);
     Ok((
         StatusCode::CREATED,
         Json(IssuedInvitation {
