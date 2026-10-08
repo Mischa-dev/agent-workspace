@@ -142,6 +142,12 @@ sudo chmod 0640 /etc/agent-workspace/agent-workspace.env
 sudo stat -c '%U %G %a %n' /etc/agent-workspace/agent-workspace.env
 ```
 
+When people reach the app through a public address (a domain, a tunnel or a
+reverse proxy), also set `AGENT_WORKSPACE_PUBLIC_ORIGIN` to that address, such as
+`https://workspace.example.com`, and add it to `AGENT_WORKSPACE_ALLOWED_ORIGINS`.
+Invitation links, sign-in callbacks and connect instructions use it; without it
+they point at `SERVER_ADDR`, which only works on the host itself.
+
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.
 
