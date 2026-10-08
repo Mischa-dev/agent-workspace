@@ -445,6 +445,188 @@ async fn requests_of_agents_removed_from_a_group_are_withdrawn() {
         .expect("drop schema");
 }
 
+/// Long work on one request: the agent reports what it's doing and posts
+/// interim messages without closing the request, and only its own live claim
+/// can do either. The final reply still answers exactly once.
+#[tokio::test]
+async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_progress").await
+    else {
+        return;
+    };
+    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let rook = owner.add_agent(&app, &space, "Rook", "rook").await;
+    let mara_mcp = mara.connect(&app).await;
+    let rook_mcp = rook.connect(&app).await;
+    let (_, dm) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": mara.actor_id }),
+        )
+        .await;
+    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    owner
+        .say(&app, &dm_id, "work-1", "Mara, can you fix the login bug?")
+        .await;
+    let request = only_request(&mara_mcp, &app).await;
+    let request_id = request["requestId"].as_str().expect("id").to_owned();
+
+    // Nothing to report on before claiming.
+    let early = mara_mcp
+        .tool(
+            &app,
+            "reply_progress",
+            json!({ "requestId": request_id, "generation": 1, "status": "Reading" }),
+        )
+        .await;
+    assert_eq!(early["outcome"], "conflict", "{early}");
+
+    let claim = mara_mcp
+        .tool(&app, "reply_claim", json!({ "requestId": request_id }))
+        .await;
+    let generation = claim["value"]["request"]["generation"]
+        .as_i64()
+        .expect("generation");
+
+    // Someone else's request, a stale generation and an empty or overlong
+    // status are all refused.
+    let other = rook_mcp
+        .tool(
+            &app,
+            "reply_progress",
+            json!({ "requestId": request_id, "generation": generation, "status": "Mine now" }),
+        )
+        .await;
+    assert_eq!(other["outcome"], "not_found", "{other}");
+    let stale = mara_mcp
+        .tool(
+            &app,
+            "reply_progress",
+            json!({ "requestId": request_id, "generation": generation + 1, "status": "Reading" }),
+        )
+        .await;
+    assert_eq!(stale["outcome"], "conflict", "{stale}");
+    for status in ["  ", &"x".repeat(201)] {
+        let invalid = mara_mcp
+            .tool(
+                &app,
+                "reply_progress",
+                json!({ "requestId": request_id, "generation": generation, "status": status }),
+            )
+            .await;
+        assert_eq!(invalid["outcome"], "invalid_request", "{invalid}");
+    }
+
+    // Progress renews the lease and shows on the timeline.
+    sqlx::query(
+        "UPDATE reply_requests SET lease_expires_at = now() + interval '1 minute' WHERE id = $1::uuid",
+    )
+    .bind(&request_id)
+    .execute(&pool)
+    .await
+    .expect("shorten the lease");
+    let progress = mara_mcp
+        .tool(
+            &app,
+            "reply_progress",
+            json!({ "requestId": request_id, "generation": generation, "status": "Running the server tests" }),
+        )
+        .await;
+    assert_eq!(progress["outcome"], "ok", "{progress}");
+    let renewed = sqlx::query_scalar::<_, bool>(
+        "SELECT lease_expires_at > now() + interval '10 minutes' FROM reply_requests WHERE id = $1::uuid",
+    )
+    .bind(&request_id)
+    .fetch_one(&pool)
+    .await
+    .expect("lease");
+    assert!(renewed, "progress renews the claim");
+    let shown = latest_request(&owner, &app, &dm_id).await;
+    assert_eq!(shown["status"], "claimed", "{shown}");
+    assert_eq!(shown["progress"], "Running the server tests", "{shown}");
+
+    // Interim messages keep the claim; resending one is a retry, not a copy.
+    for _ in 0..2 {
+        let interim = mara_mcp
+            .tool(
+                &app,
+                "reply_send",
+                json!({ "requestId": request_id, "generation": generation, "text": "Found it: the session cookie expires early.", "final": false }),
+            )
+            .await;
+        assert_eq!(interim["outcome"], "ok", "{interim}");
+        assert_eq!(interim["value"]["status"], "claimed", "{interim}");
+    }
+    let interim = mara_mcp
+        .tool(
+            &app,
+            "reply_send",
+            json!({ "requestId": request_id, "generation": generation, "text": "Opened a pull request.", "final": false }),
+        )
+        .await;
+    assert_eq!(interim["outcome"], "ok", "{interim}");
+    assert_eq!(agent_messages(&pool, &dm_id).await, 2);
+    assert_eq!(statuses(&pool, &[&request_id]).await, ["claimed"]);
+
+    // The final reply closes the request, and the status goes with it.
+    let done = mara_mcp
+        .tool(
+            &app,
+            "reply_send",
+            json!({ "requestId": request_id, "generation": generation, "text": "Fixed and merged." }),
+        )
+        .await;
+    assert_eq!(done["value"]["status"], "replied", "{done}");
+    assert_eq!(agent_messages(&pool, &dm_id).await, 3);
+    let shown = latest_request(&owner, &app, &dm_id).await;
+    assert_eq!(shown["status"], "replied", "{shown}");
+    assert!(shown["progress"].is_null(), "{shown}");
+    for (tool, arguments) in [
+        (
+            "reply_progress",
+            json!({ "requestId": request_id, "generation": generation, "status": "More" }),
+        ),
+        (
+            "reply_send",
+            json!({ "requestId": request_id, "generation": generation, "text": "One more thing", "final": false }),
+        ),
+    ] {
+        let late = mara_mcp.tool(&app, tool, arguments).await;
+        assert_eq!(late["outcome"], "conflict", "{tool}: {late}");
+    }
+    assert_eq!(agent_messages(&pool, &dm_id).await, 3);
+
+    admin
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("drop schema");
+}
+
+/// The newest reply request on a conversation's timeline, as a browser sees it.
+async fn latest_request(owner: &Owner, app: &axum::Router, conversation_id: &str) -> Value {
+    let (status, timeline) = owner
+        .call(
+            app,
+            "GET",
+            &format!("/api/v1/conversations/{conversation_id}/timeline"),
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    timeline["replyRequests"][0].clone()
+}
+
 async fn request_id(pool: &PgPool, conversation_id: &str, agent: &str, status: &str) -> String {
     sqlx::query_scalar::<_, String>(
         r#"

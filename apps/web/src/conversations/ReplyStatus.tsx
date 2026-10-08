@@ -21,7 +21,9 @@ function describe(request: ReplyRequest) {
   const name = request.agent.displayName
   switch (request.status) {
     case 'claimed':
-      return `${name} is writing a reply…`
+      return request.progress
+        ? `${name} is working · ${request.progress}${request.progressAt ? ` · ${timeAgo(request.progressAt)}` : ''}`
+        : `${name} is writing a reply…`
     case 'pending':
       return request.agentLastSeenAt
         ? `Waiting for ${name} to pick this up · last checked in ${timeAgo(request.agentLastSeenAt)}`
