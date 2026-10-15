@@ -348,10 +348,7 @@ pub async fn set_webhook_for_host(
     connection_id: Uuid,
     url: &str,
 ) -> Result<String, AppError> {
-    let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
-    if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
-        return Err(AppError::Validation("webhook URL"));
-    }
+    crate::replies::validate_webhook_url(url)?;
     let secret = crate::replies::new_webhook_secret();
     let updated = sqlx::query(
         r#"
@@ -501,10 +498,7 @@ async fn set_webhook(
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
     if let Some(url) = &url {
-        let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
-        if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
-            return Err(AppError::Validation("webhook URL"));
-        }
+        crate::replies::validate_webhook_url(url)?;
     }
     let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
     let mut transaction = state.pool.begin().await?;

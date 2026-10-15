@@ -811,22 +811,11 @@ async fn retry_request(
 
 /// Background loop: expire lapsed claims and deliver webhook wakeups.
 pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
-    let client = match reqwest::Client::builder()
-        .timeout(WEBHOOK_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::error!(%error, "reply worker could not build its HTTP client");
-            return;
-        }
-    };
     loop {
         if let Err(error) = expire_leases(&state.pool).await {
             tracing::warn!(category = error.log_category(), "reply lease sweep failed");
         }
-        if let Err(error) = deliver_webhooks(&state.pool, &client).await {
+        if let Err(error) = deliver_webhooks(&state.pool).await {
             tracing::warn!(category = error.log_category(), "webhook delivery failed");
         }
         tokio::select! {
@@ -874,7 +863,7 @@ struct DueDelivery {
     webhook_secret: Option<String>,
 }
 
-async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(), AppError> {
+async fn deliver_webhooks(pool: &PgPool) -> Result<(), AppError> {
     let mut transaction = pool.begin().await?;
     let due = sqlx::query_as::<_, DueDelivery>(
         r#"
@@ -909,7 +898,7 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
                 .await?;
             continue;
         };
-        let error = post_wakeup(client, url, secret, &delivery).await.err();
+        let error = post_wakeup(url, secret, &delivery).await.err();
         let attempts = delivery.attempts + 1;
         let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
         sqlx::query(
@@ -944,12 +933,8 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
     Ok(())
 }
 
-async fn post_wakeup(
-    client: &reqwest::Client,
-    url: &str,
-    secret: &str,
-    delivery: &DueDelivery,
-) -> Result<(), &'static str> {
+async fn post_wakeup(url: &str, secret: &str, delivery: &DueDelivery) -> Result<(), &'static str> {
+    let (url, client) = webhook_client(url).await?;
     let body = serde_json::json!({
         "event": "inbox.available",
         "deliveryId": delivery.id,
@@ -974,6 +959,92 @@ async fn post_wakeup(
     } else {
         Err("the webhook returned an error status")
     }
+}
+
+/// Validate webhook destinations without making a network request.
+pub(crate) fn validate_webhook_url(value: &str) -> Result<reqwest::Url, AppError> {
+    let url = reqwest::Url::parse(value).map_err(|_| AppError::Validation("webhook URL"))?;
+    let host = url.host().ok_or(AppError::Validation("webhook URL"))?;
+    let loopback = match host {
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+        url::Host::Domain(_) => false,
+    };
+    if value.len() > 500
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.scheme() != "https"
+        || matches!(host, url::Host::Domain(name) if name.eq_ignore_ascii_case("localhost") || name.ends_with(".localhost"))
+        || matches!(host, url::Host::Ipv4(address) if !loopback && !public_ipv4(address))
+        || matches!(host, url::Host::Ipv6(address) if !loopback && !public_ipv6(address))
+        || loopback
+    {
+        return Err(AppError::Validation("webhook URL"));
+    }
+    Ok(url)
+}
+
+async fn webhook_client(value: &str) -> Result<(reqwest::Url, reqwest::Client), &'static str> {
+    let url = validate_webhook_url(value).map_err(|_| "the webhook URL is unsafe")?;
+    let host = url
+        .host_str()
+        .ok_or("the webhook URL is unsafe")?
+        .to_owned();
+    let port = url
+        .port_or_known_default()
+        .ok_or("the webhook URL is unsafe")?;
+    let addresses = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|_| "the webhook host could not be resolved")?
+        .collect::<Vec<_>>();
+    if addresses.is_empty()
+        || addresses.iter().any(|address| match address.ip() {
+            std::net::IpAddr::V4(ip) => !public_ipv4(ip),
+            std::net::IpAddr::V6(ip) => !public_ipv6(ip),
+        })
+    {
+        return Err("the webhook host resolved to an unsafe address");
+    }
+    // Pin the already-checked address so a second DNS lookup cannot be used
+    // for rebinding. Disabling ambient proxies also prevents them from
+    // changing the destination selected by this security check.
+    let client = reqwest::Client::builder()
+        .timeout(WEBHOOK_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .resolve(&host, addresses[0])
+        .build()
+        .map_err(|_| "the webhook client could not be built")?;
+    Ok((url, client))
+}
+
+fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(a == 0
+        || a == 10
+        || a == 127
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 192 && b == 168)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+        || a >= 224)
+}
+
+fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    !ip.is_unspecified()
+        && !ip.is_loopback()
+        && (segments[0] & 0xfe00) != 0xfc00
+        && (segments[0] & 0xffc0) != 0xfe80
+        && (segments[0] & 0xff00) != 0xff00
+        && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+        && ip.to_ipv4_mapped().is_none_or(public_ipv4)
 }
 
 /// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
@@ -1016,5 +1087,21 @@ mod tests {
         assert_eq!(signature.len(), 64);
         assert_ne!(Some(signature.clone()), sign("secret", "1700000001", "{}"));
         assert_ne!(Some(signature), sign("other", "1700000000", "{}"));
+    }
+
+    #[test]
+    fn browser_webhooks_reject_ssrf_and_credential_vectors() {
+        for value in [
+            "http://example.com/hook",
+            "https://localhost/hook",
+            "https://127.0.0.1/hook",
+            "https://169.254.169.254/latest/meta-data",
+            "https://10.0.0.1/hook",
+            "https://user:password@example.com/hook",
+            "https://example.com/hook#secret",
+        ] {
+            assert!(validate_webhook_url(value).is_err(), "accepted {value}");
+        }
+        assert!(validate_webhook_url("https://example.com/hook").is_ok());
     }
 }
