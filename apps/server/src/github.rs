@@ -1290,13 +1290,25 @@ async fn sync_installation(
     .bind(installation_id)
     .execute(&mut *transaction)
     .await?;
-    for repository in &repositories {
+    if !repositories.is_empty() {
+        let repository_ids = repositories
+            .iter()
+            .map(|repository| repository.id)
+            .collect::<Vec<_>>();
+        let github_repository_ids = repositories
+            .iter()
+            .map(|repository| repository.github_repository_id)
+            .collect::<Vec<_>>();
         sqlx::query(
             r#"
             INSERT INTO github_installation_repositories (
                 project_id, github_installation_id, repository_id,
                 github_repository_id, access_state, last_verified_at
-            ) VALUES ($1, $2, $3, $4, 'selected', now())
+            )
+            SELECT $1, $2, selected.repository_id,
+                   selected.github_repository_id, 'selected', now()
+            FROM unnest($3::uuid[], $4::bigint[])
+                 AS selected(repository_id, github_repository_id)
             ON CONFLICT (github_installation_id, repository_id) DO UPDATE
                 SET github_repository_id = EXCLUDED.github_repository_id,
                     access_state = 'selected',
@@ -1306,16 +1318,23 @@ async fn sync_installation(
         )
         .bind(project_id)
         .bind(installation_id)
-        .bind(repository.id)
-        .bind(repository.github_repository_id)
+        .bind(&repository_ids)
+        .bind(&github_repository_ids)
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
-            "UPDATE repositories SET github_app_installation_id = $3, updated_at = now() WHERE project_id = $1 AND id = $2",
+            r#"
+            UPDATE repositories
+            SET github_app_installation_id = $3, updated_at = now()
+            WHERE project_id = $1 AND id = ANY($2::uuid[])
+            "#,
         )
         .bind(project_id)
-        .bind(repository.id)
-        .bind(i64::try_from(request.installation_id).map_err(|_| AppError::Validation("installationId"))?)
+        .bind(&repository_ids)
+        .bind(
+            i64::try_from(request.installation_id)
+                .map_err(|_| AppError::Validation("installationId"))?,
+        )
         .execute(&mut *transaction)
         .await?;
     }
@@ -2970,19 +2989,21 @@ async fn complete_pull_request_job(
     .bind(&job.head_sha)
     .execute(&mut *transaction)
     .await?;
-    for work_item_id in &job.work_item_ids.0 {
+    if !job.work_item_ids.0.is_empty() {
         sqlx::query(
             r#"
             INSERT INTO github_pull_request_work_item_links (
                 project_id, github_pull_request_id, work_item_id,
                 source, confirmed, created_by_actor_id
-            ) VALUES ($1, $2, $3, 'explicit', true, $4)
+            )
+            SELECT $1, $2, work_item_id, 'explicit', true, $4
+            FROM unnest($3::uuid[]) AS selected(work_item_id)
             ON CONFLICT DO NOTHING
             "#,
         )
         .bind(job.project_id)
         .bind(pull_request_id)
-        .bind(work_item_id)
+        .bind(&job.work_item_ids.0)
         .bind(job.requesting_actor_id)
         .execute(&mut *transaction)
         .await?;
