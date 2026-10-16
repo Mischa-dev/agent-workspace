@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{DateTime, NaiveDate, Utc};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,7 +20,7 @@ use super::{
         flag_or_text, mark_via, parse_id, parse_message_id, parse_since, project_is_chosen,
         public_url, scope_projects, snippet, string_or_number, version_conflict_message,
     },
-    history,
+    history, planning,
     reads::{self, ReadResult, WorkItemProjection},
     talk::can_write_in,
     writes::{self, PullRequestLinkChange, WriteAccess, WriteResult},
@@ -35,6 +36,7 @@ use crate::{
         lock_work_items, ranks_for_placement, record_audit, validate_assignee, validate_priority,
     },
     work_item_labels::{self, echo},
+    work_item_planning::{HAS_OPEN_BLOCKER, OPEN_BLOCKER_COUNT},
     work_items::decode_work_item_timeline_cursor,
 };
 
@@ -88,8 +90,18 @@ pub(super) struct TaskListArguments {
     /// Changed since: a date (YYYY-MM-DD), a timestamp such as
     /// 2026-09-30T14:00:00Z, or a span such as 24h or 7d.
     pub updated_since: Option<String>,
-    /// true: only blocked tasks. false: leave blocked tasks out.
+    /// true: only blocked tasks, whether marked blocked or waiting on an
+    /// unfinished task (task_depend). false: leave them out.
     pub blocked: Option<bool>,
+    /// true: only tasks ready to start (not finished, not blocked, nothing
+    /// unfinished blocking them). false: the rest.
+    pub ready: Option<bool>,
+    /// A milestone by name or ID, or "none" for tasks in no milestone.
+    pub milestone: Option<String>,
+    /// Only tasks due on or before this date (YYYY-MM-DD).
+    pub due_before: Option<String>,
+    /// true: only unfinished tasks past their due date. false: the rest.
+    pub overdue: Option<bool>,
     /// yes (someone is working on it), no, me, or an @handle. true and false
     /// work too.
     #[serde(default, deserialize_with = "flag_or_text")]
@@ -126,7 +138,23 @@ pub(super) struct TaskSummary {
     pub assignee: Option<String>,
     /// 1 is the top of its status column on the board; 0 for an archived task.
     pub board_position: i64,
+    /// Marked blocked, or waiting on an unfinished task.
     pub blocked: bool,
+    /// How many unfinished tasks it waits on.
+    #[serde(default)]
+    pub open_blocker_count: i64,
+    /// Not finished, not blocked, and nothing unfinished blocking it.
+    #[serde(default)]
+    pub ready: bool,
+    /// YYYY-MM-DD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+    /// Past its due date and not finished.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overdue: bool,
+    /// Its milestone, by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<String>,
     pub project: String,
@@ -139,6 +167,48 @@ pub(super) struct TaskSummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
 }
+
+/// The planning columns of a task line: blocked (marked or by an unfinished
+/// dependency), how many unfinished tasks it waits on, whether it's ready,
+/// its due date and milestone.
+fn task_planning_columns() -> String {
+    format!(
+        r#"
+        (item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER}) AS blocked,
+        {OPEN_BLOCKER_COUNT} AS open_blocker_count,
+        ({READY}) AS ready,
+        item.due_date::text AS due_date,
+        ({OVERDUE}) AS overdue,
+        (SELECT milestone.name FROM project_milestones milestone
+          WHERE milestone.project_id = item.project_id AND milestone.id = item.milestone_id) AS milestone
+        "#
+    )
+}
+
+/// SQL for a task row aliased `item` with its `status`: ready to start.
+const READY: &str = r#"
+    item.archived_at IS NULL
+    AND status.semantic_category NOT IN ('completed', 'canceled')
+    AND item.blocked_reason IS NULL
+    AND NOT EXISTS (SELECT 1
+       FROM work_item_dependencies ready_dependency
+       JOIN work_items ready_blocker
+         ON ready_blocker.project_id = ready_dependency.blocking_project_id
+        AND ready_blocker.id = ready_dependency.blocking_work_item_id
+       JOIN work_item_statuses ready_status
+         ON ready_status.project_id = ready_blocker.project_id
+        AND ready_status.id = ready_blocker.status_id
+      WHERE ready_dependency.project_id = item.project_id
+        AND ready_dependency.blocked_work_item_id = item.id
+        AND ready_blocker.archived_at IS NULL
+        AND ready_status.semantic_category NOT IN ('completed', 'canceled'))
+"#;
+
+/// SQL for a task row aliased `item` with its `status`: past due, unfinished.
+const OVERDUE: &str = r#"
+    COALESCE(item.due_date < current_date
+             AND status.semantic_category NOT IN ('completed', 'canceled'), false)
+"#;
 
 /// The `labels` column of a task line, read through the active-labels view
 /// so archived labels never show. There's no `#[sqlx(default)]` on the
@@ -162,7 +232,7 @@ pub(super) struct TaskListValue {
 }
 
 /// What a task_list call filters on, resolved: the same values bind as $1 to
-/// $16 in both the count and the page, so `total` and the page agree.
+/// $21 in both the count and the page, so `total` and the page agree.
 #[derive(Debug, Default)]
 struct ListFilters {
     projects: Vec<Uuid>,
@@ -182,6 +252,12 @@ struct ListFilters {
     claimed_id: Option<Uuid>,
     /// Label names, lowercased and each once.
     labels: Vec<String>,
+    /// any, none, or one (in `milestone_ids`).
+    milestone_mode: &'static str,
+    milestone_ids: Vec<Uuid>,
+    ready: Option<bool>,
+    due_before: Option<NaiveDate>,
+    overdue: Option<bool>,
 }
 
 /// The filters a cursor was made for. A cursor carries a short hash of it,
@@ -204,6 +280,15 @@ struct ListFingerprint<'a> {
     updated_since: Option<&'a str>,
     blocked: Option<bool>,
     claimed: (&'a str, Option<Uuid>),
+    // Added later: left out when absent, so cursors made before still fit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    milestone: Option<(&'a str, &'a [Uuid])>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ready: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due_before: Option<NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overdue: Option<bool>,
 }
 
 impl ListFingerprint<'_> {
@@ -214,26 +299,80 @@ impl ListFingerprint<'_> {
     }
 }
 
-/// Where the next page starts. Cursors read `{offset}.{fingerprint}`; a bare
-/// number, as cursors were before, is still taken as an offset.
-fn cursor_offset(cursor: Option<&str>, fingerprint: &str) -> Result<i64, &'static str> {
+/// The sort keys of the last task on a page: the next page starts after
+/// it, whatever was added or finished in between, without counting past
+/// every earlier task.
+#[derive(Clone, Debug, Deserialize, FromRow, PartialEq, Serialize)]
+struct ListPosition {
+    project_name: String,
+    project_id: Uuid,
+    status_position: i32,
+    archived: bool,
+    board_rank: i64,
+    id: Uuid,
+    priority_rank: i32,
+    updated_at: DateTime<Utc>,
+    number: i64,
+}
+
+/// Where a page starts.
+#[derive(Debug, PartialEq)]
+enum ListCursor {
+    Start,
+    /// Cursors made before keyset pages, `{offset}.{fingerprint}` or a bare
+    /// number, still read as an offset.
+    Offset(i64),
+    After(Box<ListPosition>),
+}
+
+/// Reads a cursor: `k{position}.{fingerprint}`, or an older offset.
+fn read_cursor(cursor: Option<&str>, fingerprint: &str) -> Result<ListCursor, &'static str> {
     let Some(cursor) = cursor.map(str::trim).filter(|cursor| !cursor.is_empty()) else {
-        return Ok(0);
+        return Ok(ListCursor::Start);
     };
-    let (offset, from) = match cursor.split_once('.') {
-        Some((offset, from)) => (offset, Some(from)),
-        None => (cursor, None),
-    };
-    if offset.is_empty() || offset.len() > 9 || !offset.bytes().all(|b| b.is_ascii_digit()) {
+    if cursor.len() > 1_000 {
         return Err(CURSOR_MESSAGE);
     }
+    let (position, from) = match cursor.rsplit_once('.') {
+        Some((position, from)) => (position, Some(from)),
+        None => (cursor, None),
+    };
     if from.is_some_and(|from| from != fingerprint) {
         return Err(
             "That cursor came from a different search. Leave out cursor to start from the first page.",
         );
     }
-    offset.parse::<i64>().map_err(|_| CURSOR_MESSAGE)
+    if let Some(encoded) = position.strip_prefix('k') {
+        if from.is_none() {
+            return Err(CURSOR_MESSAGE);
+        }
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| CURSOR_MESSAGE)?;
+        let position =
+            serde_json::from_slice::<ListPosition>(&bytes).map_err(|_| CURSOR_MESSAGE)?;
+        return Ok(ListCursor::After(Box::new(position)));
+    }
+    if position.is_empty() || position.len() > 9 || !position.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(CURSOR_MESSAGE);
+    }
+    position
+        .parse::<i64>()
+        .map(ListCursor::Offset)
+        .map_err(|_| CURSOR_MESSAGE)
 }
+
+fn write_cursor(position: &ListPosition, fingerprint: &str) -> Result<String, AppError> {
+    let encoded =
+        serde_json::to_vec(position).map_err(|_| AppError::Internal("task_list cursor"))?;
+    Ok(format!(
+        "k{}.{fingerprint}",
+        URL_SAFE_NO_PAD.encode(encoded)
+    ))
+}
+
+/// How priority sorts: urgent first, no priority last.
+const PRIORITY_RANK: &str = "CASE item.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END";
 
 /// The tables every filter reads. Only one claim per task can be live (the
 /// claims primary key), so the join never repeats a task.
@@ -250,7 +389,20 @@ const TASK_FROM: &str = r#"
 
 /// Every filter, bound by `bind_task_filters`. Labels match by name through
 /// the active-labels view, so an archived label never matches.
-const TASK_WHERE: &str = r#"
+fn task_where() -> String {
+    format!(
+        r#"{TASK_WHERE_BASE}
+      AND ($13::boolean IS NULL OR (item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER}) = $13)
+      AND ($17 = 'any' OR ($17 = 'none' AND item.milestone_id IS NULL)
+           OR ($17 = 'one' AND item.milestone_id = ANY($18::uuid[])))
+      AND ($19::boolean IS NULL OR ({READY}) = $19)
+      AND ($20::date IS NULL OR item.due_date <= $20)
+      AND ($21::boolean IS NULL OR ({OVERDUE}) = $21)
+"#
+    )
+}
+
+const TASK_WHERE_BASE: &str = r#"
     WHERE item.project_id = ANY($1)
       AND ($8 OR item.archived_at IS NULL)
       AND ($2 OR status.semantic_category NOT IN ('completed', 'canceled'))
@@ -267,7 +419,6 @@ const TASK_WHERE: &str = r#"
       AND ($10::text IS NULL OR item.priority = $10)
       AND ($11::uuid IS NULL OR item.created_by_actor_id = $11)
       AND ($12::timestamptz IS NULL OR item.updated_at >= $12)
-      AND ($13::boolean IS NULL OR (item.blocked_reason IS NOT NULL) = $13)
       AND ($14 = 'any' OR ($14 = 'none' AND claim.work_item_id IS NULL)
            OR ($14 = 'some' AND claim.work_item_id IS NOT NULL)
            OR ($14 = 'one' AND claim.actor_id = $15))
@@ -278,7 +429,7 @@ const TASK_WHERE: &str = r#"
           ) = cardinality($16::text[]))
 "#;
 
-/// Binds $1 to $16 of `TASK_WHERE`, identically for the count and the page.
+/// Binds $1 to $21 of `task_where`, identically for the count and the page.
 macro_rules! bind_task_filters {
     ($query:expr, $filters:expr) => {
         $query
@@ -298,6 +449,11 @@ macro_rules! bind_task_filters {
             .bind($filters.claimed_mode)
             .bind($filters.claimed_id)
             .bind(&$filters.labels)
+            .bind($filters.milestone_mode)
+            .bind(&$filters.milestone_ids)
+            .bind($filters.ready)
+            .bind($filters.due_before)
+            .bind($filters.overdue)
     };
 }
 
@@ -324,16 +480,30 @@ async fn task_list_inner(
         return Ok(ToolResult::invalid("limit", "Use a limit from 1 to 200."));
     }
     let sort = arguments.sort.as_deref().unwrap_or("board");
-    // Archived tasks (includeArchived) go to the end of their column.
-    let order = match sort {
-        "board" => {
-            "project.name, item.project_id, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id"
-        }
-        "priority" => {
-            "CASE item.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id"
-        }
-        "updated" => "item.updated_at DESC, item.id",
-        "number" => "project.name, item.project_id, item.number",
+    // Archived tasks (includeArchived) go to the end of their column. Each
+    // order ends in the task's ID, so it's total and a page can start right
+    // after the last task of the one before ($23 to $31, after $22).
+    let (order, after) = match sort {
+        "board" => (
+            "project.name, item.project_id, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id".to_owned(),
+            "(project.name, item.project_id, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id) > ($23, $24, $25, $26, $27, $28)".to_owned(),
+        ),
+        "priority" => (
+            format!(
+                "{PRIORITY_RANK}, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id"
+            ),
+            format!(
+                "({PRIORITY_RANK}, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id) > ($29, $25, $26, $27, $28)"
+            ),
+        ),
+        "updated" => (
+            "item.updated_at DESC, item.id".to_owned(),
+            "(item.updated_at < $30 OR (item.updated_at = $30 AND item.id > $28))".to_owned(),
+        ),
+        "number" => (
+            "project.name, item.project_id, item.number".to_owned(),
+            "(project.name, item.project_id, item.number) > ($23, $24, $31)".to_owned(),
+        ),
         _ => {
             return Ok(ToolResult::invalid(
                 "sort",
@@ -379,6 +549,13 @@ async fn task_list_inner(
         Some(value) => match parse_since(value) {
             Some(time) => Some(time),
             None => return Ok(ToolResult::invalid("updatedSince", UPDATED_SINCE_MESSAGE)),
+        },
+    };
+    let due_before = match arguments.due_before.as_deref() {
+        None => None,
+        Some(value) => match NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d") {
+            Ok(date) => Some(date),
+            Err(_) => return Ok(ToolResult::invalid("dueBefore", "Use a date: YYYY-MM-DD.")),
         },
     };
 
@@ -498,6 +675,16 @@ async fn task_list_inner(
             },
         },
     };
+    let (milestone_mode, milestone_ids) = match arguments.milestone.as_deref().map(str::trim) {
+        None => ("any", Vec::new()),
+        Some(value) if value.is_empty() || value.eq_ignore_ascii_case("none") => {
+            ("none", Vec::new())
+        }
+        Some(value) => match filter_milestones(state, &projects, &place, value).await? {
+            Ok(ids) => ("one", ids),
+            Err(message) => return Ok(ToolResult::invalid("milestone", message)),
+        },
+    };
     let filters = ListFilters {
         projects,
         include_done: arguments.include_done.unwrap_or(false),
@@ -520,6 +707,11 @@ async fn task_list_inner(
         claimed_mode,
         claimed_id,
         labels,
+        milestone_mode,
+        milestone_ids,
+        ready: arguments.ready,
+        due_before,
+        overdue: arguments.overdue,
     };
     let fingerprint = ListFingerprint {
         projects: &filters.projects,
@@ -537,11 +729,24 @@ async fn task_list_inner(
         updated_since: arguments.updated_since.as_deref().map(str::trim),
         blocked: filters.blocked,
         claimed: (filters.claimed_mode, filters.claimed_id),
+        milestone: (filters.milestone_mode != "any")
+            .then_some((filters.milestone_mode, filters.milestone_ids.as_slice())),
+        ready: filters.ready,
+        due_before: filters.due_before,
+        overdue: filters.overdue,
     }
     .hash()?;
-    let offset = match cursor_offset(arguments.cursor.as_deref(), &fingerprint) {
-        Ok(offset) => offset,
+    let cursor = match read_cursor(arguments.cursor.as_deref(), &fingerprint) {
+        Ok(cursor) => cursor,
         Err(message) => return Ok(ToolResult::invalid("cursor", message)),
+    };
+    let offset = match &cursor {
+        ListCursor::Offset(offset) => *offset,
+        _ => 0,
+    };
+    let position = match cursor {
+        ListCursor::After(position) => Some(*position),
+        _ => None,
     };
 
     // One snapshot for both queries, so the total and the page agree.
@@ -549,58 +754,149 @@ async fn task_list_inner(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *transaction)
         .await?;
+    let task_where = task_where();
     let total = bind_task_filters!(
-        sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) {TASK_FROM} {TASK_WHERE}")),
+        sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) {TASK_FROM} {task_where}")),
         filters
     )
     .fetch_one(&mut *transaction)
     .await?;
-    // Board positions count every open task in a column, so they're numbered
-    // before the filters and the page apply.
+    // The page is chosen first, from the sort keys alone; only its tasks
+    // then get their board position, labels and planning columns. A board
+    // position counts the open tasks above it in its column, through the
+    // (project, status, rank) index, never by ranking a whole project.
+    let planning_columns = task_planning_columns();
     let mut tasks = bind_task_filters!(
         sqlx::query_as::<_, TaskSummary>(&format!(
             r#"
-            WITH numbered AS (
-                SELECT item.id,
-                       row_number() OVER (PARTITION BY item.project_id, item.status_id
-                                          ORDER BY item.board_rank, item.id) AS board_position
-                FROM work_items item
-                WHERE item.project_id = ANY($1) AND item.archived_at IS NULL
-            )
             SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
                    item.title, status.name AS status, status.semantic_category AS status_group,
                    item_type.name AS task_type, item.priority,
                    assignee.display_name AS assignee,
-                   COALESCE(numbered.board_position, 0) AS board_position,
-                   item.blocked_reason IS NOT NULL AS blocked,
+                   CASE WHEN item.archived_at IS NOT NULL THEN 0::bigint
+                        ELSE 1 + (SELECT count(*) FROM work_items peer
+                                  WHERE peer.project_id = item.project_id
+                                    AND peer.status_id = item.status_id
+                                    AND peer.archived_at IS NULL
+                                    AND (peer.board_rank, peer.id) < (item.board_rank, item.id))
+                   END AS board_position,
                    claimer.display_name AS claimed_by, project.name AS project,
                    item.version, item.updated_at::text AS updated_at,
                    item.archived_at IS NOT NULL AS archived,
-                   {TASK_LABELS_COLUMN}
+                   {TASK_LABELS_COLUMN},
+                   {planning_columns}
             {TASK_FROM}
-            LEFT JOIN numbered ON numbered.id = item.id
             LEFT JOIN project_memberships assignee
               ON assignee.project_id = item.project_id AND assignee.actor_id = item.assignee_actor_id
             LEFT JOIN project_memberships claimer
               ON claimer.project_id = item.project_id AND claimer.actor_id = claim.actor_id
-            {TASK_WHERE}
+            WHERE item.id IN (
+                SELECT item.id
+                {TASK_FROM}
+                {task_where}
+                  AND ($22::boolean IS NOT TRUE OR {after})
+                ORDER BY {order}
+                LIMIT $32 OFFSET $33
+            )
             ORDER BY {order}
-            LIMIT $17 OFFSET $18
             "#
         )),
         filters
     )
+    .bind(position.is_some())
+    .bind(position.as_ref().map_or("", |position| position.project_name.as_str()))
+    .bind(position.as_ref().map_or(Uuid::nil(), |position| position.project_id))
+    .bind(position.as_ref().map_or(0, |position| position.status_position))
+    .bind(position.as_ref().is_some_and(|position| position.archived))
+    .bind(position.as_ref().map_or(0, |position| position.board_rank))
+    .bind(position.as_ref().map_or(Uuid::nil(), |position| position.id))
+    .bind(position.as_ref().map_or(0, |position| position.priority_rank))
+    .bind(position.as_ref().map_or(DateTime::<Utc>::UNIX_EPOCH, |position| position.updated_at))
+    .bind(position.as_ref().map_or(0, |position| position.number))
     .bind(limit + 1)
     .bind(offset)
     .fetch_all(&mut *transaction)
     .await?;
-    transaction.commit().await?;
     let has_more = i64::try_from(tasks.len()).unwrap_or(i64::MAX) > limit;
     tasks.truncate(usize::try_from(limit).unwrap_or(200));
+    let next_cursor = match tasks.last() {
+        Some(last) if has_more => {
+            let position = sqlx::query_as::<_, ListPosition>(&format!(
+                r#"
+                SELECT project.name AS project_name, item.project_id,
+                       status.position AS status_position,
+                       item.archived_at IS NOT NULL AS archived, item.board_rank, item.id,
+                       ({PRIORITY_RANK})::int4 AS priority_rank, item.updated_at, item.number
+                FROM work_items item
+                JOIN projects project ON project.id = item.project_id
+                JOIN work_item_statuses status
+                  ON status.project_id = item.project_id AND status.id = item.status_id
+                WHERE item.id = $1
+                "#
+            ))
+            .bind(
+                last.id
+                    .parse::<Uuid>()
+                    .map_err(|_| AppError::Internal("task_list row ID"))?,
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
+            Some(write_cursor(&position, &fingerprint)?)
+        }
+        _ => None,
+    };
+    transaction.commit().await?;
     Ok(ToolResult::ok(TaskListValue {
         tasks,
         total,
-        next_cursor: has_more.then(|| format!("{}.{fingerprint}", offset + limit)),
+        next_cursor,
+    }))
+}
+
+/// The milestones a task_list call names, by ID or name (any case, archived
+/// ones too) in the projects; otherwise the message listing the active ones.
+async fn filter_milestones(
+    state: &AppState,
+    projects: &[Uuid],
+    place: &str,
+    value: &str,
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    let ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM project_milestones
+        WHERE project_id = ANY($1) AND (id::text = lower($2) OR lower(name) = lower($2))
+        LIMIT 100
+        "#,
+    )
+    .bind(projects)
+    .bind(value)
+    .fetch_all(&state.pool)
+    .await?;
+    if !ids.is_empty() {
+        return Ok(Ok(ids));
+    }
+    let names = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT name FROM project_milestones
+        WHERE project_id = ANY($1) AND archived_at IS NULL
+        GROUP BY name ORDER BY min(target_date) NULLS LAST, name
+        LIMIT 40
+        "#,
+    )
+    .bind(projects)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Err(if names.is_empty() {
+        format!(
+            "{place} has no milestone called \"{}\", and no milestones yet. Create one with milestone_write.",
+            echo(value)
+        )
+    } else {
+        format!(
+            "No milestone called \"{}\" in {place}. Milestones: {}. Use \"none\" for tasks in none.",
+            echo(value),
+            names.join(", ")
+        )
     }))
 }
 
@@ -1065,6 +1361,68 @@ pub(super) struct TaskDetail {
     /// With include: ["history"], what happened to the task.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<history::TaskHistory>,
+    /// The task it's a subtask of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<planning::TaskRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<MilestoneRef>,
+    /// YYYY-MM-DD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// YYYY-MM-DD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+    /// Past its due date and not finished.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overdue: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<f64>,
+    /// What estimates count in this project: points or hours.
+    #[serde(default)]
+    pub estimate_unit: String,
+    /// Why it's marked blocked (task_mark_blocked), if it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    /// Tasks that must finish first, each with its status. Tasks in projects
+    /// you can't reach are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<planning::TaskRef>,
+    /// Tasks waiting on this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<planning::TaskRef>,
+    /// Not finished, not marked blocked, and nothing unfinished blocking it
+    /// (counting blockers you can't see).
+    #[serde(default)]
+    pub ready: bool,
+    /// Related and duplicate tasks (task_relate).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<planning::RelationRef>,
+    /// Who hears about its changes (task_watch).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watchers: Vec<planning::WatcherRef>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MilestoneRef {
+    pub id: String,
+    pub name: String,
+    /// YYYY-MM-DD, if it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_date: Option<String>,
+}
+
+/// A task's planning fields, as task_open reads them.
+#[derive(Debug, FromRow)]
+struct PlanningRow {
+    milestone_id: Option<Uuid>,
+    milestone_name: Option<String>,
+    milestone_target_date: Option<NaiveDate>,
+    start_date: Option<NaiveDate>,
+    due_date: Option<NaiveDate>,
+    overdue: bool,
+    estimate: Option<f64>,
+    blocked_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -1149,15 +1507,17 @@ pub(super) async fn task_open(
             None => None,
         };
         let claimed_by = current_claim(state, task_id).await?;
+        let planning_columns = task_planning_columns();
         let subtasks = sqlx::query_as::<_, TaskSummary>(&format!(
             r#"
             SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
                    item.title, status.name AS status, status.semantic_category AS status_group,
                    item_type.name AS task_type, item.priority,
                    assignee.display_name AS assignee, 0::bigint AS board_position,
-                   item.blocked_reason IS NOT NULL AS blocked, NULL::text AS claimed_by,
+                   NULL::text AS claimed_by,
                    project.name AS project, item.version, item.updated_at::text AS updated_at,
-                   item.archived_at IS NOT NULL AS archived, {TASK_LABELS_COLUMN}
+                   item.archived_at IS NOT NULL AS archived, {TASK_LABELS_COLUMN},
+                   {planning_columns}
             FROM work_items item
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_statuses status
@@ -1258,7 +1618,53 @@ pub(super) async fn task_open(
         .fetch_optional(&state.pool)
         .await?
         .map(|id| id.to_string());
+        let mut connection = state.pool.acquire().await?;
+        let planning_row = sqlx::query_as::<_, PlanningRow>(&format!(
+            r#"
+            SELECT item.milestone_id, milestone.name AS milestone_name,
+                   milestone.target_date AS milestone_target_date,
+                   item.start_date, item.due_date, {OVERDUE} AS overdue,
+                   item.estimate, item.blocked_reason
+            FROM work_items item
+            JOIN work_item_statuses status
+              ON status.project_id = item.project_id AND status.id = item.status_id
+            LEFT JOIN project_milestones milestone
+              ON milestone.project_id = item.project_id AND milestone.id = item.milestone_id
+            WHERE item.project_id = $1 AND item.id = $2
+            "#
+        ))
+        .bind(project_id)
+        .bind(task_id)
+        .fetch_one(&mut *connection)
+        .await?;
+        let (_, estimate_unit) =
+            crate::work_item_workflow::task_settings(&mut connection, project_id).await?;
+        let parent = match task.parent_work_item_id.as_deref().and_then(parse_id) {
+            Some(parent) => planning::own_task_ref(&mut connection, project_id, parent).await?,
+            None => None,
+        };
+        let planning_links =
+            planning::visible_links(&mut connection, principal, project_id, task_id).await?;
+        let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
+        drop(connection);
         Ok::<_, AppError>(ToolResult::ok(TaskDetail {
+            parent,
+            milestone: planning_row.milestone_id.map(|id| MilestoneRef {
+                id: id.to_string(),
+                name: planning_row.milestone_name.clone().unwrap_or_default(),
+                target_date: planning_row.milestone_target_date.map(|date| date.to_string()),
+            }),
+            start_date: planning_row.start_date.map(|date| date.to_string()),
+            due_date: planning_row.due_date.map(|date| date.to_string()),
+            overdue: planning_row.overdue,
+            estimate: planning_row.estimate,
+            estimate_unit,
+            blocked_reason: planning_row.blocked_reason,
+            blocked_by: planning_links.blocked_by,
+            blocks: planning_links.blocks,
+            ready: planning_links.ready,
+            relations: planning_links.relations,
+            watchers,
             task,
             claimed_by,
             subtasks,
@@ -1316,6 +1722,16 @@ pub(super) struct TaskCreateArguments {
     pub after_task_id: Option<String>,
     /// A stable ID so retrying never creates it twice.
     pub client_request_id: Option<String>,
+    /// An active milestone of the project, by name or ID (see
+    /// milestone_list).
+    pub milestone: Option<String>,
+    /// When work starts: YYYY-MM-DD.
+    pub start_date: Option<String>,
+    /// When it's due: YYYY-MM-DD, on or after startDate.
+    pub due_date: Option<String>,
+    /// How big it is, in the project's unit (points or hours; see
+    /// workflow_get), from 0 to 100000.
+    pub estimate: Option<f64>,
 }
 
 pub(super) async fn task_create(
@@ -1338,6 +1754,10 @@ pub(super) async fn task_create(
         position: arguments.position.clone(),
         before_task_id: arguments.before_task_id.clone(),
         after_task_id: arguments.after_task_id.clone(),
+        milestone: arguments.milestone.clone(),
+        start_date: arguments.start_date.clone(),
+        due_date: arguments.due_date.clone(),
+        estimate: arguments.estimate,
     };
     if arguments.parent_id.is_none() {
         // Tasks never go in the hidden Messages space, where nobody would
@@ -1475,6 +1895,18 @@ pub(super) struct TaskUpdateArguments {
     pub archived: Option<bool>,
     /// A stable ID so retrying is safe.
     pub client_request_id: Option<String>,
+    /// Put it in this active milestone, by name or ID (see milestone_list);
+    /// "none" takes it out.
+    pub milestone: Option<String>,
+    /// When work starts: YYYY-MM-DD, or "" to clear it.
+    pub start_date: Option<String>,
+    /// When it's due: YYYY-MM-DD, or "" to clear it.
+    pub due_date: Option<String>,
+    /// How big it is, in the project's unit (points or hours), from 0 to
+    /// 100000.
+    pub estimate: Option<f64>,
+    /// true removes the estimate.
+    pub clear_estimate: Option<bool>,
 }
 
 impl TaskUpdateArguments {
@@ -1502,6 +1934,11 @@ impl TaskUpdateArguments {
             || self.position.is_some()
             || self.before_task_id.is_some()
             || self.after_task_id.is_some()
+            || self.milestone.is_some()
+            || self.start_date.is_some()
+            || self.due_date.is_some()
+            || self.estimate.is_some()
+            || self.clear_estimate == Some(true)
     }
 }
 
@@ -1581,6 +2018,11 @@ pub(super) async fn task_update(
         position: arguments.position,
         before_task_id: arguments.before_task_id,
         after_task_id: arguments.after_task_id,
+        milestone: arguments.milestone,
+        start_date: arguments.start_date,
+        due_date: arguments.due_date,
+        estimate: arguments.estimate,
+        clear_estimate: arguments.clear_estimate.filter(|clear| *clear),
     };
     match status {
         Some(status) => writes::update_work_item_and_status(state, principal, update, status).await,

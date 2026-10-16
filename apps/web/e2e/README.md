@@ -10,9 +10,10 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
 - `smoke.spec.ts`
   - signing in with a password lands on Home with the seeded Project in the rail
   - a wrong password shows an error and stays on the sign-in page
-  - creating a Task from the Work items page, then moving it on the board:
-    Backlog → Ready with the card's status menu, Ready → In Progress by
-    dragging, and checking it's still there after a reload
+  - creating a Task from the Work items page (it opens in the task panel),
+    then moving it on the board: Backlog → Ready with the keyboard (Space,
+    an arrow, Space), Ready → In Progress by dragging, and checking it's still
+    there after a reload
 - `screenshots.spec.ts`: Home, a Project channel, the work item list and
   board, and Appearance settings, each in light and dark ("Match system" with
   the browser's color scheme). Each page must render without uncaught errors

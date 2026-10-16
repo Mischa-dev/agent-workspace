@@ -20,6 +20,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use axum::http::StatusCode;
+use chrono::NaiveDate;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
@@ -46,7 +47,7 @@ use crate::{
     error::AppError,
     idempotency::{IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope},
     work_item_commands::{
-        ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, LockedWorkItem,
+        ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, LockedWorkItem, TaskFieldChanges,
         UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_items, set_archived,
         update_locked_work_item,
     },
@@ -759,6 +760,11 @@ pub(super) struct TaskUpdateManyArguments {
     pub add_labels: Option<Vec<String>>,
     /// Labels to take off them, by name or ID (at most 20).
     pub remove_labels: Option<Vec<String>>,
+    /// Put them in this active milestone, by name or ID (see
+    /// milestone_list); "none" takes them out of theirs.
+    pub milestone: Option<String>,
+    /// Their due date: YYYY-MM-DD, or "" to clear it.
+    pub due_date: Option<String>,
     /// true archives them (their claims are released); false restores them.
     /// Pass it on its own.
     pub archived: Option<bool>,
@@ -825,6 +831,11 @@ struct UpdateManyFingerprint<'a> {
     add_labels: &'a [String],
     remove_labels: &'a [String],
     archived: Option<bool>,
+    // Added later: left out when absent, so older calls hash as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    milestone: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due_date: Option<Option<NaiveDate>>,
 }
 
 /// The change one task_update_many call asks for, checked.
@@ -837,6 +848,9 @@ struct Change {
     add_labels: Vec<String>,
     remove_labels: Vec<String>,
     archived: Option<bool>,
+    /// As written; "none" or "" takes them out of their milestone.
+    milestone: Option<String>,
+    due_date: Option<Option<NaiveDate>>,
 }
 
 impl Change {
@@ -866,6 +880,17 @@ impl Change {
             add_labels: labels(&arguments.add_labels),
             remove_labels: labels(&arguments.remove_labels),
             archived: arguments.archived,
+            milestone: arguments
+                .milestone
+                .as_deref()
+                .map(|value| value.trim().to_owned()),
+            due_date: match arguments.due_date.as_deref() {
+                Some(value) => match super::planning::date_change(value) {
+                    Some(date) => Some(date),
+                    None => return Err(("dueDate", super::planning::DATE_MESSAGE.to_owned())),
+                },
+                None => None,
+            },
         };
         let changes_fields = change.status.is_some()
             || change.priority.is_some()
@@ -873,12 +898,21 @@ impl Change {
             || change.clear_assignee
             || change.task_type.is_some()
             || !change.add_labels.is_empty()
-            || !change.remove_labels.is_empty();
+            || !change.remove_labels.is_empty()
+            || change.milestone.is_some()
+            || change.due_date.is_some();
         if !changes_fields && change.archived.is_none() {
             return Err((
                 "status",
-                "Say what to change: status, priority, assignee, clearAssignee, type, addLabels, removeLabels, or archived.".to_owned(),
+                "Say what to change: status, priority, assignee, clearAssignee, type, addLabels, removeLabels, milestone, dueDate, or archived.".to_owned(),
             ));
+        }
+        if change
+            .milestone
+            .as_deref()
+            .is_some_and(|value| value.len() > 200)
+        {
+            return Err(("milestone", super::writes::MILESTONE_MESSAGE.to_owned()));
         }
         if changes_fields && change.archived.is_some() {
             return Err((
@@ -1180,10 +1214,11 @@ async fn update_many(
                     .map(|label| label_key(label))
                     .collect::<Vec<_>>()
             };
-            let (status, assignee, task_type) = (
+            let (status, assignee, task_type, milestone) = (
                 lower(&change.status),
                 lower(&change.assignee),
                 lower(&change.task_type),
+                lower(&change.milestone),
             );
             let (add_labels, remove_labels) = (
                 normalized(&change.add_labels),
@@ -1201,6 +1236,8 @@ async fn update_many(
                 add_labels: &add_labels,
                 remove_labels: &remove_labels,
                 archived: change.archived,
+                milestone: milestone.as_deref(),
+                due_date: change.due_date,
             })?;
             match reserve(&mut transaction, principal.actor_id, &scope, key, hash).await? {
                 IdempotencyOutcome::Replay(replay) => {
@@ -1268,6 +1305,20 @@ async fn update_many(
     let delta = LabelDelta {
         add: &add_ids,
         remove: &remove_ids,
+    };
+    let milestone_id = match change.milestone.as_deref() {
+        Some(value) => {
+            match super::planning::milestone_change(&mut transaction, project_id, value).await? {
+                Some(milestone) => Some(milestone),
+                None => {
+                    return Ok(BatchResult::invalid(
+                        "milestone",
+                        super::writes::MILESTONE_MESSAGE,
+                    ));
+                }
+            }
+        }
+        None => None,
     };
 
     // Lock every task, in id order so two batches never deadlock, then check
@@ -1381,6 +1432,23 @@ async fn update_many(
                 }),
             }
         }
+        // Every task whose start date would fall after the new due date is
+        // listed, not just the first one reached while applying.
+        if let Some(Some(due)) = change.due_date
+            && current.start_date.is_some_and(|start| start > due)
+        {
+            problems.push(
+                BatchProblem::new(
+                    index,
+                    "dueDate",
+                    format!(
+                        "{key} starts after that due date. {}",
+                        super::writes::DATES_MESSAGE
+                    ),
+                )
+                .with_task(&key),
+            );
+        }
         if !delta.add.is_empty() {
             let plan =
                 work_item_labels::plan(&mut transaction, project_id, *task_id, &delta).await?;
@@ -1476,6 +1544,8 @@ async fn update_many(
             "assigneeActorId": current.assignee_actor_id,
             "typeId": current.type_id,
             "archived": current.archived,
+            "milestoneId": current.milestone_id,
+            "dueDate": current.due_date,
         });
         let outcome = match change.archived {
             Some(archived) => {
@@ -1497,6 +1567,11 @@ async fn update_many(
                         parent_work_item_id: None,
                         board_placement: None,
                         labels: (!delta.is_empty()).then_some(delta),
+                        fields: TaskFieldChanges {
+                            milestone_id,
+                            due_date: change.due_date,
+                            ..TaskFieldChanges::default()
+                        },
                         summary: "Work Item updated through MCP",
                         audit_action: "work_item.mcp_bulk_updated",
                         audit_version_metadata: AuditVersionMetadata::Include,
@@ -1609,6 +1684,10 @@ async fn update_many(
                 "addLabelIds": add_ids,
                 "removeLabelIds": remove_ids,
                 "archived": change.archived,
+                "milestoneId": milestone_id.flatten(),
+                "clearMilestone": matches!(milestone_id, Some(None)),
+                "dueDate": change.due_date.flatten(),
+                "clearDueDate": matches!(change.due_date, Some(None)),
             },
             "previous": previous,
         }),
@@ -1786,6 +1865,12 @@ async fn apply_update(
                 "A task can have at most {limit} labels; this change would give {key} {would_have}. Remove some with removeLabels first, or leave it out."
             ),
         ),
+        UpdateWorkItemOutcome::InvalidMilestone => {
+            problem("milestone", super::writes::MILESTONE_MESSAGE.to_owned())
+        }
+        UpdateWorkItemOutcome::InvalidDates => {
+            problem("dueDate", super::writes::DATES_MESSAGE.to_owned())
+        }
         UpdateWorkItemOutcome::NotFound
         | UpdateWorkItemOutcome::InvalidParent(_)
         | UpdateWorkItemOutcome::InvalidPlacement(_) => {
@@ -1824,6 +1909,8 @@ mod tests {
                 add_labels: &[],
                 remove_labels: &[],
                 archived: None,
+                milestone: None,
+                due_date: None,
             })
             .expect("hash")
         };
