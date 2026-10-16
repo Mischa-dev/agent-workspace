@@ -80,19 +80,28 @@ sync_source() {
   esac
 }
 
-# One CI job per machine: mkdir is atomic. A lock older than 90 minutes is
-# from a run that died without cleaning up.
+# One CI job per machine: mkdir is atomic. The holder touches lock/alive every
+# minute (heartbeat below); a lock with no heartbeat for 5 minutes is from a
+# run that died without cleaning up, e.g. a cancelled job the runner killed.
 acquire() {
   remote "mkdir -p ${work} && cd ${work} && now=\$(date +%s) &&
-    if mkdir lock 2>/dev/null; then echo '${run_id}' \$now > lock/owner; echo acquired;
-    elif [ \$((now - \$(cut -d' ' -f2 lock/owner 2>/dev/null || echo 0))) -gt 5400 ]; then
-      rm -rf lock && mkdir lock && echo '${run_id}' \$now > lock/owner && echo acquired;
+    if mkdir lock 2>/dev/null; then echo '${run_id}' \$now > lock/owner; touch lock/alive; echo acquired;
+    elif [ \$((now - \$(stat -c %Y lock/alive 2>/dev/null || cut -d' ' -f2 lock/owner 2>/dev/null || echo 0))) -gt 300 ]; then
+      rm -rf lock && mkdir lock && echo '${run_id}' \$now > lock/owner && touch lock/alive && echo acquired;
     else echo busy; fi" 2>/dev/null
+}
+
+heartbeat_pid=""
+heartbeat() {
+  while sleep 60; do
+    remote "cd ${work} && grep -qs '^${run_id} ' lock/owner && touch lock/alive" < /dev/null 2>/dev/null || true
+  done
 }
 
 held_host=""
 release() {
   [ -z "${held_host}" ] && return 0
+  if [ -n "${heartbeat_pid}" ]; then kill "${heartbeat_pid}" 2>/dev/null || true; fi
   load_host "${held_host}"
   remote "cd ${work} && if grep -qs '^${run_id} ' lock/owner; then
       pg=\$(cat lock/pgid 2>/dev/null); [ -n \"\$pg\" ] && kill -TERM -- -\$pg 2>/dev/null;
@@ -133,18 +142,22 @@ while [ -z "${held_host}" ]; do
     fi
     [ -z "${waited}" ] && echo "ci: waiting for a machine..."
     waited=1
-    sleep 20
+    sleep 20 & wait $!
   fi
 done
 
 load_host "${held_host}"
+heartbeat & heartbeat_pid=$!
 echo "ci: running ${areas} checks on ${held_host}"
 sync_source
 set +e
 remote "cd ${work}/src && CI_RUN_ID='${run_id}' CI_DATABASE_BASE='${database_base}' \
   CI_TARGET_DIR='${work}/target' CI_LOCK_DIR='${work}/lock' \
   CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' \
-  exec setsid -w tools/ci/checks.sh '${areas}'" < /dev/null
+  exec setsid -w tools/ci/checks.sh '${areas}'" < /dev/null &
+# Wait in the background so a cancelled job runs the traps (and frees the
+# lock) straight away instead of after the checks finish.
+wait $!
 status=$?
 set -e
 exit "${status}"
