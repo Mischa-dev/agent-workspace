@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -20,6 +20,9 @@ import type { WorkItem, WorkItemWorkflow } from './types'
 import { useTaskSave } from './useTaskSave'
 
 export type TaskLayout = 'panel' | 'page'
+
+// Readiness, AI suggestions and summaries load in their own chunk.
+const TaskAiPanel = lazy(() => import('../ai/TaskAiPanel'))
 
 /**
  * A task, loaded by id: the side panel on the list and board, and the body of
@@ -161,6 +164,9 @@ function TaskDetailBody({
         save={save}
         workflow={workflow}
       />
+      <Suspense fallback={null}>
+        <TaskAiPanel disabled={disabled} projectId={item.projectId} taskId={item.id} version={item.version} />
+      </Suspense>
       <OpenInCodex item={item} projectArchived={projectArchived} />
       {!disabled ? (
         <div className="aw-sidecard">

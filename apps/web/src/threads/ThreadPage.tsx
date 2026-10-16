@@ -16,6 +16,7 @@ import {
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { CatchUpButton } from '../ai/CatchUpButton'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProject } from '../projects/hooks'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
@@ -923,6 +924,7 @@ export function ThreadPage() {
                   outcome: verifiedTimeline.conversation.threadOutcome,
                 }}
               />
+              <CatchUpButton conversationId={threadId} name={threadName} />
               <IconButton
                 icon="panel-right"
                 label={detailsOpen ? 'Hide details' : 'Show details'}

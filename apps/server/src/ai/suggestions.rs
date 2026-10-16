@@ -254,7 +254,7 @@ pub async fn insert<'e, E: PgExecutor<'e>>(
 
 /// A source, as the reader sees it.
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum SourceView {
     Task {
         task: TaskRef,

@@ -549,7 +549,7 @@ const IMPORT_COLUMNS: &str = r#"
 
 /// Where a plan comes from.
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
 pub enum Source {
     Text { text: String },
     Page { page_id: Uuid },
