@@ -19,6 +19,7 @@ export function BulkBar({
   onArchive,
   onClear,
   onDueDate,
+  onLaunch,
   onPick,
   onRestore,
 }: {
@@ -29,6 +30,8 @@ export function BulkBar({
   onArchive: () => void
   onClear: () => void
   onDueDate: (value: string | null) => void
+  /** Start an agent on each selected task; left out where launching isn't offered. */
+  onLaunch?: () => void
   onPick: (field: PickerField, anchor: HTMLElement) => void
   onRestore: () => void
 }) {
@@ -60,6 +63,11 @@ export function BulkBar({
                 {action.label}
               </Button>
             ))}
+            {onLaunch ? (
+              <Button disabled={busy} icon="play" onClick={onLaunch} size="sm">
+                Launch
+              </Button>
+            ) : null}
             <DatePicker className="aw-bulkbar__date" disabled={busy} label="Due date for selected" onChange={onDueDate} placeholder="Due date" value={null} />
             <Button busy={busy} icon="archive" onClick={onArchive} size="sm" variant="ghost">
               Archive

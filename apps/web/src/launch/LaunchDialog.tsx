@@ -1,0 +1,272 @@
+import { useState, type FormEvent, type RefObject } from 'react'
+
+import { isApiError } from '../api/errors'
+import { Banner, Button, Dialog, MessageSkeleton, SelectField, TextArea, TextField } from '../ui'
+import type { Launch, LaunchInput, LaunchPlan, LaunchTask, SettingSource, StartWhen } from './api'
+import { useCreateLaunches, useLaunchPlan } from './hooks'
+import { MAX_TASKS_PER_LAUNCH, sourceLabel } from './launchModel'
+
+type Choice = { environmentId?: string; harness?: string }
+
+/**
+ * Everything a launch can change before it starts: where it runs, on whose account, which model, when it starts and
+ * the prompt. Opens on the project's defaults, so pressing Launch straight away does what the one-click button does.
+ */
+export function LaunchDialog({
+  onClose,
+  onLaunched,
+  projectId,
+  returnFocus,
+  tasks,
+}: {
+  onClose: () => void
+  onLaunched: (launches: Launch[]) => void
+  projectId: string
+  returnFocus?: RefObject<HTMLElement | null>
+  tasks: LaunchTask[]
+}) {
+  const [choice, setChoice] = useState<Choice>({})
+  const first = tasks[0]
+  const plan = useLaunchPlan(projectId, first?.id ?? '', choice)
+  const create = useCreateLaunches(projectId)
+  const [idempotencyKey] = useState(() => crypto.randomUUID())
+  const [accountId, setAccountId] = useState('')
+  const [model, setModel] = useState('')
+  const [reasoning, setReasoning] = useState('')
+  const [speed, setSpeed] = useState('')
+  const [attempts, setAttempts] = useState('')
+  const [startWhen, setStartWhen] = useState<StartWhen>('now')
+  const [startAt, setStartAt] = useState('')
+  const [prompt, setPrompt] = useState<string | null>(null)
+  const single = tasks.length === 1
+  const tooMany = tasks.length > MAX_TASKS_PER_LAUNCH
+  const data = plan.data
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!data || create.isPending || tooMany) return
+    const harness = data.harness ?? undefined
+    const input: LaunchInput = {
+      workItemIds: tasks.map((task) => task.id),
+      environmentId: data.environmentId ?? undefined,
+      overrides: {
+        ...(choice.harness && !data.environmentId ? { harness: choice.harness } : {}),
+        ...(model ? { model } : {}),
+        ...(reasoning ? { reasoning } : {}),
+        ...(speed ? { speed } : {}),
+        ...(attempts ? { attempts: Number(attempts) } : {}),
+      },
+      providerAccountId: accountId || undefined,
+      prompt: single && prompt !== null && prompt.trim() !== data.prompt.trim() ? prompt : undefined,
+      startWhen,
+      startAt: startWhen === 'at' && startAt ? new Date(startAt).toISOString() : undefined,
+      dialog: true,
+    }
+    if (!harness && !input.overrides?.harness) return
+    create.mutate({ input, idempotencyKey }, { onSuccess: (result) => onLaunched(result.launches) })
+  }
+
+  const harnessPlan = data?.harnesses.find((candidate) => candidate.kind === data.harness)
+  const models = harnessPlan?.models ?? []
+  const chosenModel = models.find((candidate) => candidate.id === (model || String(data?.settings['run.model']?.value ?? '')))
+    ?? models.find((candidate) => candidate.isDefault)
+  const accounts = (data?.accounts ?? []).filter((account) => account.harness === data?.harness)
+  const blocked = (data?.blockers.length ?? 0) > 0
+  const scheduledWithoutTime = startWhen === 'at' && !startAt
+  const queueing = !single || startWhen !== 'now'
+  const title = single && first ? `Launch ${first.key}` : `Launch ${tasks.length} tasks`
+
+  return (
+    <Dialog
+      description={
+        single && first
+          ? `${first.title}. An agent works on it in the task’s thread, with the prompt below.`
+          : 'Each task gets its own thread. They start as accounts have room, unblocked tasks first.'
+      }
+      footer={
+        <>
+          <Button onClick={onClose} variant="ghost">
+            Cancel
+          </Button>
+          <Button
+            busy={create.isPending}
+            disabled={!data || !data.harness || accounts.length === 0 || scheduledWithoutTime || tooMany}
+            icon={queueing ? 'clock' : 'play'}
+            type="submit"
+            variant="primary"
+          >
+            {queueing ? 'Queue' : 'Launch'}
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      onSubmit={submit}
+      open
+      returnFocus={returnFocus}
+      title={title}
+      width={620}
+    >
+      {tooMany ? (
+        <Banner tone="warning">Launch takes up to {MAX_TASKS_PER_LAUNCH} tasks at a time. Select fewer and try again.</Banner>
+      ) : null}
+      {plan.isPending ? <MessageSkeleton label="Loading launch options" rows={4} /> : null}
+      {plan.isError ? (
+        <Banner
+          action={
+            <Button onClick={() => void plan.refetch()} size="sm">
+              Retry
+            </Button>
+          }
+          tone="danger"
+        >
+          {isApiError(plan.error) ? plan.error.message : 'The launch options didn’t load.'}
+        </Banner>
+      ) : null}
+      {data ? (
+        <>
+          {single && blocked ? (
+            <Banner icon="triangle-alert" tone="warning" title="This task is waiting on other work.">
+              Open blockers: {data.blockers.map((blocker) => blocker.key).join(', ')}. You can still launch it now, or start it
+              when they finish.
+            </Banner>
+          ) : null}
+          <div className="aw-form__grid">
+            <SelectField
+              data-autofocus
+              hint={environmentHint(data)}
+              id="launch-environment"
+              label="Environment"
+              onChange={(event) => setChoice({ environmentId: event.target.value || undefined, harness: choice.harness })}
+              value={data.environmentId ?? ''}
+            >
+              <option value="">No environment</option>
+              {data.environments.map((environment) => (
+                <option key={environment.id} value={environment.id}>
+                  {environment.name} · {environment.harnessName}
+                  {environment.isDefault ? ' (default)' : ''}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              disabled={Boolean(data.environmentId)}
+              hint={data.environmentId ? 'Set by the environment.' : undefined}
+              id="launch-harness"
+              label="Agent"
+              onChange={(event) => {
+                setModel('')
+                setReasoning('')
+                setSpeed('')
+                setAccountId('')
+                setChoice({ environmentId: data.environmentId ?? undefined, harness: event.target.value || undefined })
+              }}
+              value={data.harness ?? ''}
+            >
+              {data.harness ? null : <option value="">Choose an agent</option>}
+              {data.harnesses.map((harness) => (
+                <option key={harness.kind} value={harness.kind}>
+                  {harness.displayName}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              hint={accounts.length === 0 ? 'Connect an account for this agent in Project settings first.' : undefined}
+              id="launch-account"
+              label="Account"
+              onChange={(event) => setAccountId(event.target.value)}
+              value={accountId}
+            >
+              <option value="">{accounts.length ? 'The one with room' : 'No account'}</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name} · {account.running} of {account.maxConcurrentRuns} busy
+                </option>
+              ))}
+            </SelectField>
+            <SelectField id="launch-model" label="Model" onChange={(event) => setModel(event.target.value)} value={model}>
+              <option value="">{defaultLabel(data.settings['run.model']?.value, data.settings['run.model']?.source, models)}</option>
+              {models.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.displayName}
+                </option>
+              ))}
+            </SelectField>
+            {chosenModel && chosenModel.reasoningLevels.length > 0 ? (
+              <SelectField id="launch-reasoning" label="Thinking" onChange={(event) => setReasoning(event.target.value)} value={reasoning}>
+                <option value="">{defaultLabel(data.settings['run.reasoning']?.value, data.settings['run.reasoning']?.source)}</option>
+                {chosenModel.reasoningLevels.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </SelectField>
+            ) : null}
+            {chosenModel && chosenModel.speeds.length > 0 ? (
+              <SelectField id="launch-speed" label="Speed" onChange={(event) => setSpeed(event.target.value)} value={speed}>
+                <option value="">{defaultLabel(data.settings['run.speed']?.value, data.settings['run.speed']?.source)}</option>
+                {chosenModel.speeds.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </SelectField>
+            ) : null}
+            {harnessPlan && harnessPlan.maxAttempts > 1 ? (
+              <SelectField id="launch-attempts" label="Attempts" onChange={(event) => setAttempts(event.target.value)} value={attempts}>
+                <option value="">{defaultLabel(data.settings['run.attempts']?.value, data.settings['run.attempts']?.source)}</option>
+                {Array.from({ length: harnessPlan.maxAttempts }, (_, index) => index + 1).map((count) => (
+                  <option key={count} value={count}>
+                    {count}
+                  </option>
+                ))}
+              </SelectField>
+            ) : null}
+            <SelectField id="launch-start" label="Start" onChange={(event) => setStartWhen(event.target.value as StartWhen)} value={startWhen}>
+              <option value="now">{single ? 'Now' : 'As accounts have room'}</option>
+              <option value="at">At a time</option>
+              <option value="window_reset">When the usage window resets</option>
+              <option value="blockers_done">When blockers finish</option>
+            </SelectField>
+            {startWhen === 'at' ? (
+              <TextField id="launch-start-at" label="Start at" onChange={(event) => setStartAt(event.target.value)} required type="datetime-local" value={startAt} />
+            ) : null}
+          </div>
+          {single ? (
+            <TextArea
+              hint={
+                prompt === null
+                  ? `Built from the ${sourceLabel(data.templateSource)} launch template. Edit it for this launch only.`
+                  : 'Edited for this launch only.'
+              }
+              id="launch-prompt"
+              label="Prompt"
+              maxLength={19000}
+              onChange={(event) => setPrompt(event.target.value)}
+              rows={10}
+              value={prompt ?? data.prompt}
+            />
+          ) : (
+            <p className="aw-launch__note">Each task’s prompt is built from the launch template when it starts.</p>
+          )}
+        </>
+      ) : null}
+      {create.isError ? (
+        <Banner role="alert" tone="danger">
+          {isApiError(create.error) ? create.error.message : 'The launch didn’t go through. Try again.'}
+        </Banner>
+      ) : null}
+    </Dialog>
+  )
+}
+
+function environmentHint(plan: LaunchPlan) {
+  const chosen = plan.environments.find((environment) => environment.id === plan.environmentId)
+  if (chosen?.lastCheckOk === false) return chosen.lastCheckMessage ?? 'The last check of this environment failed.'
+  if (plan.environments.length === 0) return 'Add environments in Project settings, under Launch.'
+  return undefined
+}
+
+function defaultLabel(value: unknown, source: SettingSource | undefined, models: { id: string; displayName: string }[] = []) {
+  if (value === null || value === undefined || value === '' || value === 'default') return 'Agent’s default'
+  const shown = models.find((candidate) => candidate.id === value)?.displayName ?? String(value)
+  return `${shown} (${sourceLabel(source ?? 'default')} default)`
+}

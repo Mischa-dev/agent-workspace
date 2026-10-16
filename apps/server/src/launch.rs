@@ -1170,7 +1170,7 @@ async fn plan_for(
     .fetch_all(&state.pool)
     .await?;
     let mut launches = views_by_id(state, caller, project_id, &launch_ids).await?;
-    launches.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    launches.sort_by_key(|launch| std::cmp::Reverse(launch.created_at));
     let thread_id =
         reusable_thread(&state.pool, project_id, work_item_id, caller.actor_id, None).await?;
     Ok(LaunchPlan {
@@ -2624,9 +2624,13 @@ mod tests {
     #[test]
     fn the_default_template_reads_well() {
         let template = settings::definition("launch.template")
-            .unwrap()
+            .expect("launch.template is registered")
             .default_value();
-        let rendered = render(template.as_str().unwrap(), &fields(), "codex");
+        let rendered = render(
+            template.as_str().expect("the default is a string"),
+            &fields(),
+            "codex",
+        );
         assert!(rendered.starts_with("You're working on AWD-12 in Agent Workspace: Fix the flaky test\n\n## Done when\n\n- [ ] CI is green\n\nWhen you finish"));
         assert!(!rendered.contains("{{"));
         assert!(!rendered.contains("\n\n\n"));

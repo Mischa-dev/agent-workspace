@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -20,8 +20,8 @@ import {
   useWorkItem,
   useWorkItemWorkflow,
   useWorkItemTimeline,
-  useWorkWithWorker,
 } from './hooks'
+import { useCreateLaunches, useLaunchPlan } from '../launch/hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
 import { buildOpenInCodexLink } from './codexDeepLink'
 import { EMPTY_PLANNING } from './testFixtures'
@@ -60,8 +60,8 @@ vi.mock('./hooks', () => ({
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
   useWorkItemTimeline: vi.fn(),
-  useWorkWithWorker: vi.fn(),
 }))
+vi.mock('../launch/hooks', () => ({ useCreateLaunches: vi.fn(), useLaunchPlan: vi.fn() }))
 vi.mock('../shell/AppShell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
 }))
@@ -185,6 +185,22 @@ function listRequests() {
   return requests.filter((url) => /\/work-items(\?|$)/.test(url))
 }
 
+const launchPlan = {
+  workItem: { id: workItemId, key: 'AW-1', title: 'Task' },
+  blockers: [],
+  environments: [{ id: 'environment-a', name: 'Web', harness: 'codex_cloud', harnessName: 'Codex Cloud', isDefault: true, lastCheckOk: true }],
+  defaultEnvironmentId: 'environment-a',
+  environmentId: 'environment-a',
+  harness: 'codex_cloud',
+  harnesses: [{ kind: 'codex_cloud', displayName: 'Codex Cloud', runsOn: 'cloud', maxAttempts: 4, models: [] }],
+  accounts: [{ id: 'account-a', name: 'Mischa', harness: 'codex_cloud', running: 0, maxConcurrentRuns: 3 }],
+  settings: {},
+  prompt: 'Do AW-1.',
+  templateSource: 'default',
+  launches: [],
+  threadId: null,
+}
+
 beforeEach(() => {
   vi.mocked(useProjectConversationSidebar).mockReturnValue({
     data: { channels: [] },
@@ -250,11 +266,8 @@ beforeEach(() => {
     isError: false,
     isSuccess: true,
   } as unknown as ReturnType<typeof useWorkItemTimeline>)
-  vi.mocked(useWorkWithWorker).mockReturnValue({
-    mutate: vi.fn(),
-    isPending: false,
-    isError: false,
-  } as unknown as ReturnType<typeof useWorkWithWorker>)
+  vi.mocked(useLaunchPlan).mockReturnValue({ isPending: true, isError: false } as unknown as ReturnType<typeof useLaunchPlan>)
+  vi.mocked(useCreateLaunches).mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false } as unknown as ReturnType<typeof useCreateLaunches>)
 })
 
 afterEach(() => {
@@ -461,53 +474,47 @@ describe('Work Item detail', () => {
     expect(screen.getByText(new RegExp(reason))).toHaveAttribute('id', button.getAttribute('aria-describedby'))
   })
 
-  it('starts a linked Worker Thread with explicit user instructions', () => {
-    vi.mocked(useProjectConversationSidebar).mockReturnValue({
-      data: {
-        channels: [{ id: 'channel-a', name: 'Implementation', archivedAt: null, threads: [] }],
-      },
-      isPending: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useProjectConversationSidebar>)
-    const mutate = vi.fn((_input, options) => {
-      options.onSuccess({
-        threadId: 'thread-a',
-        run: { runId: 'run-a', state: 'queued', repositoryId: 'repository-a' },
-      })
-    })
-    vi.mocked(useWorkWithWorker).mockReturnValue({
-      mutate,
-      isPending: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useWorkWithWorker>)
+  it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', () => {
+    const launched = {
+      id: 'launch-a',
+      workItem: { id: workItemId, key: 'AW-1', title: workItem.title },
+      conversationId: 'thread-a',
+      state: 'started',
+      harnessName: 'Codex Cloud',
+      statusReason: null,
+    }
+    const mutate = vi.fn((_input, options) => options.onSuccess({ launches: [launched] }))
+    vi.mocked(useCreateLaunches).mockReturnValue({ mutate, isPending: false, isError: false } as unknown as ReturnType<typeof useCreateLaunches>)
+    vi.mocked(useLaunchPlan).mockReturnValue({ data: launchPlan, isPending: false, isError: false } as unknown as ReturnType<typeof useLaunchPlan>)
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <MemoryRouter initialEntries={[`/projects/${projectId}/work-items/${workItemId}`]}>
           <Routes>
             <Route element={<WorkItemDetailPage />} path="/projects/:projectId/work-items/:workItemId" />
-            <Route element={<p>Worker Thread opened</p>} path="/projects/:projectId/threads/:threadId" />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start a run' }))
-    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'channel-a' } })
-    fireEvent.change(screen.getByLabelText('Instructions'), {
-      target: { value: 'Implement one verified change.' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Start run' }))
-
-    expect(mutate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelId: 'channel-a',
-        expectedVersion: 1,
-        prompt: 'Implement one verified change.',
-        repositoryId: undefined,
-      }),
+    expect(screen.getByText(/Codex Cloud in Web, on the project’s defaults/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Launch' }))
+    expect(mutate).toHaveBeenLastCalledWith(
+      { input: { workItemIds: [workItemId], environmentId: 'environment-a' }, idempotencyKey: expect.any(String) },
       expect.any(Object),
     )
-    expect(screen.getByText('Worker Thread opened')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Launch' }), { shiftKey: true })
+    const prompt = screen.getByLabelText('Prompt')
+    expect(prompt).toHaveValue('Do AW-1.')
+    fireEvent.change(prompt, { target: { value: 'Do AW-1, and only the parser.' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Launch' }))
+    expect(mutate).toHaveBeenLastCalledWith(
+      {
+        input: expect.objectContaining({ workItemIds: [workItemId], environmentId: 'environment-a', prompt: 'Do AW-1, and only the parser.', dialog: true }),
+        idempotencyKey: expect.any(String),
+      },
+      expect.any(Object),
+    )
   })
 
   it('saves one field at a time and says plainly when someone else changed the task first', () => {

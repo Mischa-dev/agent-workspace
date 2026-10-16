@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 
+import { LazyLaunchDialog as LaunchDialog } from '../launch/LazyLaunchDialog'
+import { launchSummary, launchesHref } from '../launch/launchModel'
 import { Button, EmptyState, ErrorState, Icon, MessageSkeleton } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
 import { BulkBar } from './BulkBar'
@@ -136,6 +139,8 @@ export function WorkItemList({
     [collapsedState, state.groupBy],
   )
   const [selectionState, setSelection] = useState<Selection>(emptySelection)
+  const [launching, setLaunching] = useState<WorkItemCard[] | null>(null)
+  const navigate = useNavigate()
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [picker, setPicker] = useState<PickerState | null>(null)
   const focusWanted = useRef(false)
@@ -472,10 +477,27 @@ export function WorkItemList({
           onArchive={() => void archiveSelected()}
           onClear={() => setSelection(emptySelection)}
           onDueDate={(value) => void setDueDate(value)}
+          onLaunch={() => setLaunching(selectedCards().filter((card) => !card.archivedAt))}
           onPick={(field, anchor) => openPicker(field, anchor)}
           onRestore={() => void restoreSelected()}
         />
       )}
+      {launching ? (
+        <LaunchDialog
+          onClose={() => setLaunching(null)}
+          onLaunched={(launches) => {
+            setLaunching(null)
+            setSelection(emptySelection)
+            notify({
+              tone: 'success',
+              message: launchSummary(launches).title,
+              action: { label: 'View queue', run: () => navigate(launchesHref(projectId)) },
+            })
+          }}
+          projectId={projectId}
+          tasks={launching.map((card) => ({ id: card.id, key: card.key, title: card.title }))}
+        />
+      ) : null}
       {picker ? (
         <FieldPicker
           anchor={picker.anchor}

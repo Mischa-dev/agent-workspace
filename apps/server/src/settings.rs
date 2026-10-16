@@ -173,7 +173,7 @@ impl SettingDef {
                         .chars()
                         .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
                     // Stored values are capped at 16 KiB of JSON.
-                    && serde_json::to_string(value).map_or(false, |json| json.len() <= 16_000)
+                    && serde_json::to_string(value).is_ok_and(|json| json.len() <= 16_000)
             }
             (SettingType::Identifier { .. }, Value::String(text)) => {
                 (1..=200).contains(&text.len())

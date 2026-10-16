@@ -1125,7 +1125,10 @@ async fn build_workspace(
         ),
     )
     .await;
-    assert!(status.is_success(), "{label} POST {uri}: {status} {written}");
+    assert!(
+        status.is_success(),
+        "{label} POST {uri}: {status} {written}"
+    );
     let uri = format!("/api/v1/projects/{project}/launches");
     let start_at = (chrono::Utc::now() + chrono::Duration::days(20)).to_rfc3339();
     let (status, written) = send(
@@ -1143,7 +1146,10 @@ async fn build_workspace(
         ),
     )
     .await;
-    assert!(status.is_success(), "{label} POST {uri}: {status} {written}");
+    assert!(
+        status.is_success(),
+        "{label} POST {uri}: {status} {written}"
+    );
 
     World {
         marker,

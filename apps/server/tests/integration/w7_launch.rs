@@ -191,7 +191,13 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     );
 
     let mut tasks = Vec::new();
-    for title in ["Design it", "Build it", "Test it", "Ship it", "Member's task"] {
+    for title in [
+        "Design it",
+        "Build it",
+        "Test it",
+        "Ship it",
+        "Member's task",
+    ] {
         let created = send(
             &application,
             owner,
@@ -202,11 +208,13 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
         )
         .await;
         assert_eq!(created.0, StatusCode::CREATED, "{}", created.1);
-        tasks.push((uuid_field(&created.2, "id"), created.2["key"].as_str().unwrap().to_owned()));
+        tasks.push((
+            uuid_field(&created.2, "id"),
+            created.2["key"].as_str().expect("key").to_owned(),
+        ));
     }
-    let (design, build, test, ship, members_task) = (
-        tasks[0].0, tasks[1].0, tasks[2].0, tasks[3].0, tasks[4].0,
-    );
+    let (design, build, test, ship, members_task) =
+        (tasks[0].0, tasks[1].0, tasks[2].0, tasks[3].0, tasks[4].0);
     // Build waits on design.
     sqlx::query(
         r#"
@@ -230,7 +238,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     assert_eq!(plan.0, StatusCode::OK, "{}", plan.1);
     assert_eq!(plan.2["environmentId"], environment_id.to_string());
     assert_eq!(plan.2["blockers"][0]["key"], tasks[0].1.as_str());
-    let prompt = plan.2["prompt"].as_str().unwrap();
+    let prompt = plan.2["prompt"].as_str().expect("prompt");
     assert!(prompt.contains("Build it"), "{prompt}");
     assert!(prompt.contains("- [ ] Checked by someone"), "{prompt}");
 
@@ -269,7 +277,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     )
     .await;
     assert_eq!(queued.0, StatusCode::CREATED, "{}", queued.1);
-    let launches = queued.2["launches"].as_array().unwrap();
+    let launches = queued.2["launches"].as_array().expect("launches");
     assert_eq!(launches.len(), 4);
     assert!(launches.iter().all(|launch| launch["state"] == "queued"));
     // A retry replays rather than queueing again.
@@ -349,7 +357,12 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
         json!({"workItemIds": [members_task], "queue": true}),
     )
     .await;
-    assert_eq!(members_launch.0, StatusCode::CREATED, "{}", members_launch.1);
+    assert_eq!(
+        members_launch.0,
+        StatusCode::CREATED,
+        "{}",
+        members_launch.1
+    );
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND handle = 'w2-member'",
     )
@@ -385,7 +398,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     assert!(
         list.2["recent"]
             .as_array()
-            .unwrap()
+            .expect("recent")
             .iter()
             .any(|launch| launch["state"] == "cancelled")
     );

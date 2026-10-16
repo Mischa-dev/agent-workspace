@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
@@ -10,7 +10,7 @@ import { GitHubIntegrationSettings } from '../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../repositories/RepositorySettings'
 import { TeamSettings } from '../team/TeamSettings'
 import { AppShell } from '../shell/AppShell'
-import { Banner, Button, DetailList, PageHeader, PageTabs, Section, TextField, type IconName } from '../ui'
+import { Banner, Button, DetailList, PageHeader, PageTabs, Section, SettingsSkeleton, TextField, type IconName } from '../ui'
 import { roleLabel } from './format'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from './ProjectPageStates'
@@ -19,6 +19,8 @@ import { projectLocationHref } from './locations'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
 import { WorkflowSettings } from '../work-items/WorkflowSettings'
+
+const LaunchSettings = lazy(() => import('../launch/LaunchSettings').then((module) => ({ default: module.LaunchSettings })))
 
 type SettingsTab = { id: string; label: string; icon: IconName }
 
@@ -30,6 +32,7 @@ function settingsTabs(project: Project, organizationRole: string | undefined): S
     ...(manage && organizationRole ? [{ id: 'members', label: 'Members', icon: 'users' as const }] : []),
     ...(manage ? [{ id: 'agents', label: 'Agents', icon: 'bot' as const }] : []),
     ...(member ? [{ id: 'codex', label: 'Codex', icon: 'terminal' as const }] : []),
+    ...(member ? [{ id: 'launch', label: 'Launch', icon: 'play' as const }] : []),
     ...(member ? [{ id: 'workflow', label: 'Workflow', icon: 'work' as const }] : []),
     { id: 'repositories', label: 'Repositories', icon: 'repo' as const },
     ...(manage ? [{ id: 'github', label: 'GitHub', icon: 'pull-request' as const }] : []),
@@ -203,6 +206,12 @@ export function ProjectSettingsPage() {
               <SponsoredExecutionSettings projectId={project.data.id} />
             </Section>
           </>
+        )}
+
+        {current === 'launch' && (
+          <Suspense fallback={<SettingsSkeleton />}>
+            <LaunchSettings projectId={project.data.id} />
+          </Suspense>
         )}
 
         {current === 'repositories' && (

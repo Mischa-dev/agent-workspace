@@ -351,7 +351,7 @@ pub(crate) fn parse_status(text: &str) -> Option<TaskStatus> {
     };
     // The meta line (environment and age) is skipped; the last line is the
     // diff summary.
-    let summary = lines.last().map(str::to_owned);
+    let summary = lines.next_back().map(str::to_owned);
     Some(TaskStatus {
         state,
         title: title.trim().chars().take(200).collect(),
