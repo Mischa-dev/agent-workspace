@@ -79,8 +79,12 @@ export function useInstantMutation<TInput, TResult>(options: InstantMutationOpti
       if (toast) showToast(toast)
       options.onSuccess?.(result, input)
     },
-    onSettled: (result, _error, input) => {
-      for (const queryKey of options.invalidate?.(input, result) ?? []) void queryClient.invalidateQueries({ queryKey })
+    // Stays pending until the refetch lands, so controls don't re-enable on
+    // capabilities that still describe the old state.
+    onSettled: async (result, _error, input) => {
+      await Promise.all(
+        (options.invalidate?.(input, result) ?? []).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      )
     },
   })
 }

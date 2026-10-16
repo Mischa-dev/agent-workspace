@@ -53,6 +53,14 @@ function useAppBadge(count: number) {
     if (count > 0) void badge.setAppBadge?.(count).catch(() => undefined)
     else void badge.clearAppBadge?.().catch(() => undefined)
   }, [count])
+  // Signing out unmounts this without a zero render: don't leave their count behind.
+  useEffect(
+    () => () => {
+      const badge = navigator as Navigator & { clearAppBadge?: () => Promise<void> }
+      void badge.clearAppBadge?.().catch(() => undefined)
+    },
+    [],
+  )
 }
 
 /**
@@ -76,6 +84,8 @@ export function DocumentTitle() {
   }, [count, title])
   useEffect(() => () => {
     document.title = 'Agent Workspace'
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (link) link.href = BASE_ICON
   }, [])
   useFaviconBadge(count)
   useAppBadge(count)

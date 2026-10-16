@@ -6,7 +6,7 @@ import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '.
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import { useProjectSearch, useProjects, useUpdateProjectNavigation } from '../projects/hooks'
+import { useProject, useProjectSearch, useProjects, useUpdateProjectNavigation } from '../projects/hooks'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -20,12 +20,17 @@ import { useProjectByKey } from './useProjectByKey'
 const projectPath = (projectId: string, rest = '') => `/projects/${encodeURIComponent(projectId)}${rest}`
 
 /** The Project in the address bar, if any. */
-function useRouteProject(projects: Project[]) {
+function useRouteProject(projects: Project[], listed: boolean) {
   const location = useLocation()
   const match = /^\/projects\/([^/]+)/.exec(location.pathname)
   const id = match ? decodeURIComponent(match[1]) : ''
-  return projects.find((project) => project.id === id) ?? null
+  const inList = projects.find((project) => project.id === id) ?? null
+  // The rail holds the first 100 Projects; the page's own Project may not be one.
+  const fetched = useProject(listed && !inList && UUID.test(id) ? id : '')
+  return inList ?? (fetched.data && !fetched.data.archivedAt ? fetched.data : null)
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function useSettled(value: string, delay = 150) {
   const [settled, setSettled] = useState(value)
@@ -72,7 +77,7 @@ export function CommandCenter() {
     () => (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt),
     [projectsQuery.data?.projects],
   )
-  const current = useRouteProject(projects)
+  const current = useRouteProject(projects, projectsQuery.isSuccess)
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const sidebar = useProjectConversationSidebar(state.open === 'commands' ? current?.id ?? '' : '')
