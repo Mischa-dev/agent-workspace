@@ -38,6 +38,7 @@ const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((mod
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
+const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
 const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
 
 function createQueryClient() {
@@ -89,6 +90,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/home"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <InboxPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/inbox"
                   />
                   <Route
                     element={

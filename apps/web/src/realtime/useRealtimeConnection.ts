@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
+import { affectsInbox, invalidateInbox } from '../inbox/api'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
   dropRemovedConversation,
@@ -118,6 +119,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })
+      invalidateInbox(queryClient)
     }
 
     const queueDelta = (
@@ -267,6 +269,9 @@ export function useRealtimeConnection(): RealtimeContextValue {
           }
           invalidateProject(envelope.projectId)
           if (update?.removed) refreshMemoryCaches(queryClient)
+          // The inbox reads names and previews live, so a change to the
+          // notifications, a message or who can see what refreshes it.
+          if (affectsInbox(envelope.type)) invalidateInbox(queryClient)
           return
         }
 

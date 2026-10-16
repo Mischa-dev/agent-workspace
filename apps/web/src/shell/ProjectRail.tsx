@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
+import { useInboxSummary } from '../inbox/api'
 import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
 import { ProjectSwitcher } from '../projects/ProjectSwitcher'
@@ -92,6 +93,7 @@ export function ProjectRail({
   const projectsQuery = useProjects()
   const direct = useDirectOverview()
   const unreadConversations = direct.data?.conversations.filter((conversation) => conversation.unread).length ?? 0
+  const inboxUnread = useInboxSummary().data?.unreadCount ?? 0
   const switchProject = useSwitchProject()
   const updateNavigation = useUpdateProjectNavigation()
   const queryClient = useQueryClient()
@@ -186,6 +188,14 @@ export function ProjectRail({
     <>
       <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
         <UtilityTile active={location.pathname === '/home'} icon="home" label="Home" onClick={onNavigate} to="/home" />
+        <UtilityTile
+          active={location.pathname === '/inbox'}
+          badge={inboxUnread}
+          icon="inbox"
+          label="Inbox"
+          onClick={onNavigate}
+          to="/inbox"
+        />
         <UtilityTile
           active={inMessages}
           badge={unreadConversations}
