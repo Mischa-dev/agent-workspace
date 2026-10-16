@@ -120,6 +120,8 @@ export function patchList(
   if (matches === null) return present && card ? replaceAt(list, index, card) : 'refetch'
   if (!matches) {
     if (!present) return 'unchanged'
+    // A shorter page with more behind it would leave a gap: let the next task in.
+    if (list.nextCursor !== null) return 'refetch'
     return { data: { ...list, items: list.items.filter((item) => item.id !== workItemId) } }
   }
   if (!card) return 'unchanged'
@@ -158,12 +160,17 @@ export function patchBoard(
     ...column,
     items: column.items.filter((item) => item.id !== workItemId),
   }))
+  // A card leaving a column with more cards behind it would leave the column
+  // short: refetch so the next one comes up.
+  const source = board.columns.find((column) => column.items.some((item) => item.id === workItemId))
+  const removed = (): Patched<WorkItemBoardResponse> =>
+    !present ? 'unchanged' : source?.hasMore ? 'refetch' : { data: { columns } }
   const matches = card ? cardMatchesFilters(card, { ...filters, cursor: undefined }) : false
   if (matches === null) return 'refetch'
-  if (!card || !matches) return present ? { data: { columns } } : 'unchanged'
+  if (!card || !matches) return removed()
   if (!placement || placement.statusId !== card.status.id) return 'refetch'
   const column = columns.find((candidate) => candidate.status.id === placement.statusId)
-  if (!column) return present ? { data: { columns } } : 'unchanged'
+  if (!column) return removed()
   const items = column.items
   let at = -1
   if (placement.afterId === null) at = 0
@@ -178,9 +185,10 @@ export function patchBoard(
   if (at < 0 && placement.beforeId === null && !column.hasMore) at = items.length
   if (at < 0) {
     // Neither neighbour is loaded: it belongs further down a long column.
-    if (column.hasMore) return present ? { data: { columns } } : 'unchanged'
+    if (column.hasMore) return removed()
     return 'refetch'
   }
+  if (source && source.status.id !== column.status.id && source.hasMore) return 'refetch'
   column.items = [...items.slice(0, at), card, ...items.slice(at)]
   return { data: { columns } }
 }

@@ -133,6 +133,17 @@ describe('work item live patches', () => {
     expect(ids(queryClient.getQueryData<WorkItemBoardResponse>(boardKey)!)).toEqual([[2, 3, 1]])
   })
 
+  it('refetches a long list or column instead of leaving it a card short', () => {
+    const archived = { ...card(2, todo, 2), archivedAt: '2026-10-16T11:00:00Z' }
+    expect(patchList({ items: [card(3), card(2)], nextCursor: 'next' }, archived, id(2), {})).toBe('refetch')
+    const long = board()
+    long.columns[0].hasMore = true
+    expect(patchBoard(long, archived, id(2), null, {})).toBe('refetch')
+    expect(patchBoard(long, card(2, doing, 2), id(2), {
+      statusId: doing.id, archived: false, afterId: id(4), beforeId: id(5),
+    }, {})).toBe('refetch')
+  })
+
   it('moves a card on an open board without refetching the board', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const boardKey = [...queryKeys.workItems(projectId, { cursor: undefined }), 'board']
