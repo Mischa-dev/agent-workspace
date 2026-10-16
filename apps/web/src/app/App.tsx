@@ -16,7 +16,7 @@ import { BrandMark } from '../auth/AuthLayout'
 import { AppShell } from '../shell/AppShell'
 import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { ThemeProvider } from '../theme/ThemeProvider'
-import { Button, EmptyState, MessageSkeleton } from '../ui'
+import { Button, EmptyState, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
 const AccountSettingsPage = lazy(() => import('../auth/AccountSettingsPage').then((module) => ({ default: module.AccountSettingsPage })))
@@ -39,6 +39,11 @@ const MilestonesPage = lazy(() => import('../work-items/MilestonesPage').then((m
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
+const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
+// Only development builds include the kit page; production drops the import.
+const DevUiPage = import.meta.env.DEV
+  ? lazy(() => import('./DevUiPage').then((module) => ({ default: module.DevUiPage })))
+  : null
 const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
 
 function createQueryClient() {
@@ -227,10 +232,15 @@ export function App() {
                     }
                     path="/search"
                   />
+                  {DevUiPage ? (
+                    <Route element={<AuthenticatedRouteBoundary><DevUiPage /></AuthenticatedRouteBoundary>} path="/dev/ui" />
+                  ) : null}
+                  <Route element={<AuthenticatedRouteBoundary><TaskKeyRedirect /></AuthenticatedRouteBoundary>} path="/:taskKey" />
                   <Route element={<NotFoundPage />} path="*" />
                 </Route>
               </Routes>
             </MobileNavigationProvider>
+            <ToastViewport />
           </AppErrorBoundary>
         </BrowserRouter>
       </QueryClientProvider>
@@ -277,7 +287,7 @@ function AuthenticatedRouteFallback() {
         <p className="visually-hidden" role="status">
           Loading workspace view.
         </p>
-        <MessageSkeleton decorative />
+        <PageSkeleton decorative />
       </div>
     </AppShell>
   )

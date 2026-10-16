@@ -1,7 +1,10 @@
+import { renderHook } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
+import { openCommandMenu, useCommandState } from '../shell/commandStore'
+import { showToast, useToasts } from '../ui/toastStore'
 import {
   clearAuthenticatedQueryCache,
   getSession,
@@ -183,6 +186,18 @@ describe('authenticated query-cache boundary', () => {
       user: null,
       organizations: [],
     })
+  })
+
+  it('drops toasts that could name a private conversation or undo into it, and closes the command menu', () => {
+    const queryClient = new QueryClient()
+    showToast({ title: 'Archived #private-plans', onUndo: async () => undefined })
+    openCommandMenu('private-plans')
+
+    clearAuthenticatedQueryCache(queryClient)
+
+    const { result } = renderHook(() => useToasts())
+    expect(result.current).toEqual([])
+    expect(renderHook(() => useCommandState()).result.current.open).toBeNull()
   })
 
   it('clears stale Actor data before installing a successful login', () => {

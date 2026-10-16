@@ -2,7 +2,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
 import type { MessageUpdate } from '../realtime/realtimeModel'
 import { REMOVED_MESSAGE_CONTENT } from './api'
-import { threadsQueryKey } from './threadModel'
+import { isThreadsKey } from './threadModel'
 import type { ConversationMessage, ConversationTimelineEntry, MessageReaction } from './types'
 
 /** How many edited or removed messages the client remembers between refetches. */
@@ -286,7 +286,9 @@ export function dropRemovedMessage(
     },
     redactRevisions,
   )
-  queryClient.setQueriesData({ queryKey: ['pins'] }, (data: unknown) => withoutMessageItems(data, 'pins', messageId))
+  queryClient.setQueriesData({ predicate: (query) => isMemoryKey(query.queryKey, 'pins') }, (data: unknown) =>
+    withoutMessageItems(data, 'pins', messageId),
+  )
   queryClient.setQueriesData({ queryKey: ['search'] }, (data: unknown) => withoutMessageItems(data, 'hits', messageId))
   // Thread boards and sidebars list threads with an origin message. Only touch
   // caches that change, so the rest keep their freshness.
@@ -294,18 +296,13 @@ export function dropRemovedMessage(
     const next = neutralizeThreadNames(data, messageId)
     return next === data ? undefined : next
   }
-  queryClient.setQueriesData({ queryKey: threadsQueryKey(conversationId) }, neutralized)
+  queryClient.setQueriesData({ predicate: (query) => isThreadsKey(query.queryKey, conversationId) }, neutralized)
   queryClient.setQueriesData(
     { predicate: (query) => query.queryKey[0] === 'project' && query.queryKey[2] === 'conversation-sidebar' },
     neutralized,
   )
 }
 
-/**
- * Pins, search results, decisions and thread boards are cached outside a
- * project's queries, so a project refresh misses them. Forget the ones on no
- * screen (they'd show stale text on return) and refetch the rest.
- */
 /**
  * The viewer was removed from a group (or left it): nothing they hold of it
  * may stay on screen. Every query in its space is reset, because the group's
@@ -325,9 +322,26 @@ export function dropRemovedConversation(
   refreshMemoryCaches(queryClient)
 }
 
+function isMemoryKey(key: QueryKey, kind: 'pins' | 'decisions') {
+  return key[0] === 'project' && key[2] === 'memory' && key[3] === kind
+}
+
+function quotesMessages(key: QueryKey) {
+  return (
+    key[0] === 'search' ||
+    isMemoryKey(key, 'pins') ||
+    isMemoryKey(key, 'decisions') ||
+    (key[0] === 'project' && key[2] === 'threads')
+  )
+}
+
+/**
+ * Pins, decisions, thread boards and search results quote messages, and a
+ * refresh of one project misses the others' copies. Forget the ones on no
+ * screen (they'd show stale text on return) and refetch the rest.
+ */
 export function refreshMemoryCaches(queryClient: QueryClient) {
-  for (const queryKey of [['pins'], ['search'], ['decisions'], ['threads']]) {
-    queryClient.removeQueries({ queryKey, type: 'inactive' })
-    void queryClient.invalidateQueries({ queryKey })
-  }
+  const predicate = (query: { queryKey: QueryKey }) => quotesMessages(query.queryKey)
+  queryClient.removeQueries({ predicate, type: 'inactive' })
+  void queryClient.invalidateQueries({ predicate })
 }

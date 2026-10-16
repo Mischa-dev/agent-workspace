@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 
-import { ComboboxList, Popover } from '../ui'
+import { ComboboxList, Popover } from '../ui/pickers'
 import { useTaskSearch } from './planningHooks'
 import { useDebouncedValue } from './pickerModel'
 import { StatusIcon } from './WorkItemIcons'

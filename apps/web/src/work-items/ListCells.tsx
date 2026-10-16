@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
-import { Avatar, Icon, actorKind, formatDateLabel } from '../ui'
+import { Avatar, Icon, actorKind } from '../ui'
+import { formatDateLabel } from '../ui/pickers'
 import type { PickerField } from './FieldPicker'
 import type { ListRow } from './listRows'
 import { TaskGlyph } from './TaskGlyph'

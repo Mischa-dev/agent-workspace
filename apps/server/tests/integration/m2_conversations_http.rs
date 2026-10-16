@@ -725,6 +725,40 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         "each independently advanced read cursor emits a durable invalidation"
     );
 
+    // Undo for archive: a thread can't come back while its channel is
+    // archived, a stale version is refused, and the channel itself restores.
+    let restore = |path: String, version: i64| {
+        let app = app.clone();
+        let headers = write_headers(&cookie, &csrf, None);
+        async move {
+            app.oneshot(request(
+                "POST",
+                &path,
+                &headers,
+                json!({"expectedVersion": version}),
+            ))
+            .await
+            .expect("restore Conversation")
+        }
+    };
+    assert_eq!(
+        restore(format!("/api/v1/threads/{thread_id}/restore"), 2)
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        restore(format!("/api/v1/channels/{channel_id}/restore"), 1)
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let restored = restore(format!("/api/v1/channels/{channel_id}/restore"), 2).await;
+    assert_eq!(restored.status(), StatusCode::OK);
+    let restored = response_json(restored).await;
+    assert_eq!(restored["conversation"]["archivedAt"], Value::Null);
+    assert_eq!(restored["conversation"]["version"], 3);
+
     administrative_pool
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
         .await

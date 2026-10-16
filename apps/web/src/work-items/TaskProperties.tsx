@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 
-import { Avatar, AvatarStack, Button, DatePicker, Icon, Popover, TextArea, actorKind } from '../ui'
+import { Avatar, AvatarStack, Button, Icon, TextArea, actorKind } from '../ui'
+import { DatePicker, Popover } from '../ui/pickers'
 import { priorityLabel } from './constants'
 import { FieldPicker, type PickerField } from './FieldPicker'
 import { useSetWatching } from './planningHooks'

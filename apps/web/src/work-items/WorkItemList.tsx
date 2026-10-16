@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 
-import { Button, EmptyState, ErrorState, Icon, MessageSkeleton, Table, type TableRow } from '../ui'
+import { Button, EmptyState, ErrorState, Icon, MessageSkeleton } from '../ui'
+import { Table, type TableRow } from '../ui/pickers'
 import { BulkBar } from './BulkBar'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { AssigneeMark, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'

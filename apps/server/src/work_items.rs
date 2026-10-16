@@ -1903,7 +1903,7 @@ async fn search_work_item_references(
               $2 = '' OR item.title ILIKE '%' || $2 || '%'
               OR project.project_key || '-' || item.number::text ILIKE '%' || $2 || '%'
           )
-        -- An exact key comes first, so AW-1 isn't crowded out by AW-10..AW-199.
+        -- An exact key comes first, so AW-1 isn't crowded out by AW-10 to AW-199.
         ORDER BY upper(project.project_key || '-' || item.number::text) = upper($2) DESC,
                  item.archived_at NULLS FIRST, item.number DESC, item.id
         LIMIT $3

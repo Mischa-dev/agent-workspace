@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Avatar, ComboboxList, Icon, Popover, actorKind, type ComboboxOption } from '../ui'
+import { Avatar, Icon, actorKind } from '../ui'
+import { ComboboxList, Popover, type ComboboxOption } from '../ui/pickers'
 import { workItemPriorities } from './constants'
 import { useAssignableActors } from './hooks'
 import { useCreateLabel, useLabels, useMilestones } from './planningHooks'

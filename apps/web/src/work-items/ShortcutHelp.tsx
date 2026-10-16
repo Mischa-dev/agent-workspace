@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { Kbd, Popover } from '../ui'
+import { Kbd } from '../ui'
+import { Popover } from '../ui/pickers'
 import { isTypingTarget } from './shortcutKeys'
 import { TaskGlyph } from './TaskGlyph'
 

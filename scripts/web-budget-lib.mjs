@@ -9,12 +9,16 @@ import { join, relative } from 'node:path'
 export const WEB_ASSET_LIMITS = Object.freeze({
   // index.html's scripts and module preloads: the entry chunk, the shared UI
   // chunk and theme-boot.js. Measured 388,329 raw / 120,899 gzip bytes when
-  // the budget moved to per-chunk limits (October 2026).
-  initialJavascriptRawBytes: 400 * 1024,
-  initialJavascriptGzipBytes: 128 * 1024,
+  // the budget moved to per-chunk limits (October 2026). The app shell (command
+  // menu, shortcuts, toasts with Undo, tab titles and badges, live task
+  // patches) brings it to 423,687 / 130,474; Markdown loads with its routes.
+  initialJavascriptRawBytes: 420 * 1024,
+  initialJavascriptGzipBytes: 132 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
-  // components and page layouts. Measured 101,925 raw bytes.
-  initialCssRawBytes: 106 * 1024,
+  // components and page layouts. Measured 101,925 raw bytes; the UI kit
+  // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles
+  // bring it to 112,083.
+  initialCssRawBytes: 112 * 1024,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
   // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
   // Tasks at scale (W3) made the task list page (list, board, filters, bulk

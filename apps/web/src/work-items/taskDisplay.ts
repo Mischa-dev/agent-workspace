@@ -1,4 +1,4 @@
-import type { TableColumn } from '../ui'
+import type { TableColumn } from '../ui/pickers'
 import type { WorkItemCard } from './types'
 
 export const LIST_COLUMNS: TableColumn[] = [

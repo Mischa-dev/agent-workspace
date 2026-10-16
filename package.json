@@ -20,6 +20,7 @@
     "dev:web": "pnpm --filter @agent-workspace/web dev",
     "lint": "pnpm --filter @agent-workspace/web lint",
     "test": "pnpm --filter @agent-workspace/web test",
+    "test:e2e": "pnpm --filter @agent-workspace/web test:e2e",
     "typecheck": "pnpm --filter @agent-workspace/web typecheck"
   }
 }

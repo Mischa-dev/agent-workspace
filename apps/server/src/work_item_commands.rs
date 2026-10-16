@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     external_events::enqueue_external_work_item_event,
-    outbox::{OutboxEventPayload, WorkItemUpdatedPayload, enqueue_typed},
+    outbox::enqueue_work_item_updated,
     policy::{
         Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
         authorize,
@@ -2892,15 +2892,7 @@ pub async fn enqueue_update(
     work_item_id: Uuid,
     version: i64,
 ) -> Result<(), AppError> {
-    enqueue_typed(
-        transaction,
-        project_id,
-        OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
-            work_item_id,
-            version,
-        }),
-    )
-    .await?;
+    enqueue_work_item_updated(transaction, project_id, work_item_id, version).await?;
     Ok(())
 }
 

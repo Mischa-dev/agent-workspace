@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
-import { Avatar, Button, Calendar, ComboboxList, Icon, Popover, SegmentedControl, SelectField, TextField, actorKind } from '../ui'
+import { Avatar, Button, Icon, SegmentedControl, SelectField, TextField, actorKind } from '../ui'
+import { Calendar, ComboboxList, Popover } from '../ui/pickers'
 import { workItemPriorities } from './constants'
 import { CATEGORY_LABELS, FILTER_FIELDS, TOGGLE_FIELDS, chipText, type FilterField } from './filterModel'
 import { useAssignableActors, useWorkItem } from './hooks'

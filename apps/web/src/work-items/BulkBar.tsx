@@ -1,4 +1,5 @@
-import { Button, DatePicker } from '../ui'
+import { Button } from '../ui'
+import { DatePicker } from '../ui/pickers'
 import type { PickerField } from './FieldPicker'
 import { MAX_BULK } from './selectionModel'
 
