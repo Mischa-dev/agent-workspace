@@ -156,7 +156,7 @@ FOR EACH ROW
 EXECUTE FUNCTION validate_execution_profile_account();
 
 -- Copies what changed on the account to its profiles; a health check that
--- only touches last_health_at leaves the profiles' login state alone.
+-- only touches last_health_at copies the time without bumping versions.
 CREATE OR REPLACE FUNCTION mirror_provider_account_state()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -165,6 +165,11 @@ BEGIN
     IF NEW.account_state IS NOT DISTINCT FROM OLD.account_state
        AND NEW.status IS NOT DISTINCT FROM OLD.status
        AND NEW.last_failure_category IS NOT DISTINCT FROM OLD.last_failure_category THEN
+        IF NEW.last_health_at IS DISTINCT FROM OLD.last_health_at THEN
+            UPDATE execution_profiles profile
+               SET last_health_at = NEW.last_health_at
+             WHERE profile.provider_account_id = NEW.id;
+        END IF;
         RETURN NEW;
     END IF;
     UPDATE execution_profiles profile

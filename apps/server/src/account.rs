@@ -683,8 +683,26 @@ pub(crate) async fn use_account_in_project(
         crate::execution_setup::ensure_provider_connection(transaction, project_id, &manifest)
             .await?;
     let profile_id = Uuid::now_v7();
-    let name = format!("{} · @{owner_handle}", manifest.display_name);
-    let name: String = name.chars().take(MAX_ACCOUNT_NAME_CHARS).collect();
+    // Profile names are unique per project; a second account for the same
+    // harness gets a short piece of its id. The project setup lock above
+    // keeps this check and the insert together.
+    let base = format!("{} · @{owner_handle}", manifest.display_name);
+    let mut name: String = base.chars().take(MAX_ACCOUNT_NAME_CHARS).collect();
+    let taken = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM execution_profiles WHERE project_id = $1 AND name = $2)",
+    )
+    .bind(project_id)
+    .bind(&name)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if taken {
+        let suffix = format!(" · {}", &account.account_id.simple().to_string()[24..]);
+        name = base
+            .chars()
+            .take(MAX_ACCOUNT_NAME_CHARS - suffix.chars().count())
+            .chain(suffix.chars())
+            .collect();
+    }
     sqlx::query(
         r#"
         INSERT INTO execution_profiles (

@@ -421,6 +421,29 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     .await;
     assert_eq!(refused.0, StatusCode::BAD_REQUEST, "{}", refused.1);
 
+    // A second account for the same harness gets its own profile here.
+    let second_account = send(
+        &application,
+        owner,
+        "POST",
+        &accounts,
+        "create-second-demo",
+        json!({"adapterKind": "demo"}),
+    )
+    .await;
+    assert!(second_account.0.is_success(), "{}", second_account.1);
+    let second_used = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{accounts}/{}/use", uuid_field(&second_account.2, "id")),
+        "use-second-demo",
+        json!({}),
+    )
+    .await;
+    assert!(second_used.0.is_success(), "use second: {}", second_used.1);
+    assert_ne!(uuid_field(&second_used.2, "profileId"), profile_id);
+
     // Signing out sticks, even though it stops the account's harness sessions.
     let signed_out = send(
         &application,
