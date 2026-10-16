@@ -32,6 +32,15 @@ fi
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${CI_TARGET_DIR:-${PWD}/target}"
 export CARGO_TERM_COLOR=always
+# Incremental caches only help repeat local edits; on CI hosts they grew to
+# 12 GB and filled the Red Hat disk.
+export CARGO_INCREMENTAL=0
+# Keep the build cache from filling a shared disk: start fresh past 16 GB.
+if [ -d "${CARGO_TARGET_DIR}" ] &&
+  [ "$(du -s --block-size=1G "${CARGO_TARGET_DIR}" | cut -f1)" -gt 16 ]; then
+  echo "Build cache is over 16 GB; clearing it."
+  rm -rf "${CARGO_TARGET_DIR}"
+fi
 export AGENT_WORKSPACE_ENV=test
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 started=$(date +%s)
