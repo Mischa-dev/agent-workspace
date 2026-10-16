@@ -844,7 +844,15 @@ pub(crate) fn prepare(request: &CreateImportRequest) -> Result<Prepared, Refusal
         .file_name
         .as_deref()
         .map(|name| name.trim().chars().take(200).collect::<String>())
-        .unwrap_or_default();
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| {
+            match request.source.as_str() {
+                "github" => "GitHub issues",
+                "csv" => "CSV",
+                _ => "Markdown plan",
+            }
+            .to_owned()
+        });
     if request.source == "github" {
         if request.repository_id.is_none() {
             return refuse("repositoryId", "Pick a repository to import issues from.");
