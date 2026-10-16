@@ -2,6 +2,7 @@
 //! compiled and linked for tests once rather than once per file.
 
 mod agent_interface;
+mod backbone;
 mod direct_conversations;
 mod m0_database;
 mod m1_api_policy_database;

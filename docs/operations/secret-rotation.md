@@ -138,3 +138,23 @@ never scan by putting the canary in SQL text, a URL, or argv. Record only
 `clear` or the affected category. After the old material is proven rejected,
 remove the exact temporary candidate, canary, and overlap files and state that
 they are no longer recoverable unless retained by the external provider.
+
+## Secrets keyring (encrypted secrets)
+
+Keys people save in the app (provider API keys) and the server's own signing
+secrets are stored encrypted (`secrets.rs`): each with its own data key,
+sealed with AES-256-GCM, and the data keys sealed under a master key from the
+keyring file named by `AGENT_WORKSPACE_SECRETS_KEY_PATH` (owner-only, outside
+the data and release roots).
+
+- Create it once: `agent-workspace-server secret-key-init --path /etc/agent-workspace/secrets.keyring`,
+  then set `AGENT_WORKSPACE_SECRETS_KEY_PATH` and restart. On start, agent
+  webhook secrets still stored in plaintext move into the store.
+- Rotate: `agent-workspace-server secret-key-rotate`. It writes a new first
+  key, re-seals every data key under it while the server keeps running, and
+  removes keys nothing uses. Back the keyring up again afterwards
+  (`agent-workspace-backup-key` does this when the file changes).
+- Back it up apart from database dumps (docs/operations/backups.md): a dump
+  and its keyring together are the plaintext.
+- In development without the variable, the server creates
+  `.agent-workspace-secrets/dev.keyring` in its working directory.

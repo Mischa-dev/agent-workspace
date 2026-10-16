@@ -501,7 +501,12 @@ const METADATA_COLUMNS: &str = r#"
     secret.id, secret.name, secret.description, secret.organization_id,
     secret.project_id, secret.owner_actor_id, secret.last_four,
     secret.created_by_actor_id,
-    (SELECT display_name FROM actors WHERE id = secret.created_by_actor_id) AS created_by_name,
+    COALESCE(
+        (SELECT display_name FROM organization_actor_profiles
+         WHERE organization_id = secret.organization_id
+           AND actor_id = secret.created_by_actor_id),
+        (SELECT display_name FROM users WHERE actor_id = secret.created_by_actor_id)
+    ) AS created_by_name,
     secret.created_at, secret.updated_at, secret.last_used_at, secret.version
 "#;
 

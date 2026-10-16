@@ -475,31 +475,36 @@ pub async fn run_due(
 /// Make sure each recurring system job has its next run queued.
 pub async fn ensure_recurring(pool: &PgPool, registry: &JobRegistry) -> Result<(), AppError> {
     for recurring in &registry.recurring {
-        let interval_seconds = recurring.interval.as_secs_f64();
-        sqlx::query(
-            r#"
-            INSERT INTO background_jobs (id, kind, unique_key, run_at, max_attempts)
-            SELECT $1, $2::text, $3::text,
-                   GREATEST(
-                       now(),
-                       (SELECT max(finished_at) FROM background_jobs
-                        WHERE kind = $2::text AND unique_key = $3::text
-                          AND state IN ('succeeded', 'dead'))
-                       + make_interval(secs => $4)
-                   ),
-                   3
-            ON CONFLICT (unique_key)
-                WHERE unique_key IS NOT NULL AND state IN ('queued', 'running')
-                DO NOTHING
-            "#,
-        )
-        .bind(Uuid::now_v7())
-        .bind(recurring.kind)
-        .bind(format!("recurring:{}", recurring.kind))
-        .bind(interval_seconds)
-        .execute(pool)
-        .await?;
+        ensure_next(pool, recurring).await?;
     }
+    Ok(())
+}
+
+/// Queue the next run of one recurring job, `interval` after its last.
+async fn ensure_next(pool: &PgPool, recurring: &Recurring) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO background_jobs (id, kind, unique_key, run_at, max_attempts)
+        SELECT $1, $2::text, $3::text,
+               GREATEST(
+                   now(),
+                   (SELECT max(finished_at) FROM background_jobs
+                    WHERE kind = $2::text AND unique_key = $3::text
+                      AND state IN ('succeeded', 'dead'))
+                   + make_interval(secs => $4)
+               ),
+               3
+        ON CONFLICT (unique_key)
+            WHERE unique_key IS NOT NULL AND state IN ('queued', 'running')
+            DO NOTHING
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(recurring.kind)
+    .bind(format!("recurring:{}", recurring.kind))
+    .bind(recurring.interval.as_secs_f64())
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -583,6 +588,18 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
             job_id = %job.id,
             kind,
             "could not record a job's result; its lease will expire and it will run again"
+        );
+    }
+    if let Some(recurring) = registry
+        .recurring
+        .iter()
+        .find(|recurring| recurring.kind == job.kind)
+        && let Err(error) = ensure_next(&state.pool, recurring).await
+    {
+        tracing::warn!(
+            category = error.log_category(),
+            kind,
+            "could not queue the next run"
         );
     }
 }

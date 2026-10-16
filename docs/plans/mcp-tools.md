@@ -70,6 +70,7 @@ limited by their role in the project.
 | `project_members` | + | Members with roles, kind (person or agent), and last active. | Anyone who can see members |
 | `project_member_set` | + | Add an org member, change a role, or remove someone. Destructive when removing. | Owner or admin, people only |
 | `workflow_get` | + | Task types, statuses (with category and order), and allowed transitions. | Everyone |
+| `settings_get` | + | A project's settings as they apply to the caller (run defaults, environment, AI options), each with where its value came from. Read only. | Everyone |
 | `workflow_update` | + | Add, rename, reorder or retire statuses and types. Phase 5. | Owner or admin |
 
 ### Tasks

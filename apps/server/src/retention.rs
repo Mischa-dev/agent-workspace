@@ -284,6 +284,53 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
         },
     );
     registry.every(WORKTREES_JOB, std::time::Duration::from_secs(24 * 60 * 60));
+    registry.register(DATABASE_WINDOWS_JOB, |context| async move {
+        let removed = clean_database_windows(&context.state.pool).await?;
+        tracing::info!(removed, "trimmed rows past their retention windows");
+        Ok(())
+    });
+    registry.every(
+        DATABASE_WINDOWS_JOB,
+        std::time::Duration::from_secs(24 * 60 * 60),
+    );
+}
+
+pub const DATABASE_WINDOWS_JOB: &str = "retention.database_windows";
+
+/// The fixed database windows of docs/operations/retention.md, the same
+/// statements `agent-workspace-host-maintenance retention-cleanup --apply
+/// true` runs, under the same advisory lock so the two never overlap.
+/// Returns how many rows changed.
+pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(470127786, 1)")
+        .execute(&mut *transaction)
+        .await?;
+    let changed = sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH
+        expired_idempotency AS (DELETE FROM idempotency_keys WHERE expires_at <= now() - interval '1 day' RETURNING 1),
+        expired_invitations AS (UPDATE project_invitations SET status='revoked', revoked_at=now(), version=version+1, updated_at=now() WHERE status='active' AND expires_at <= now() RETURNING 1),
+        oauth_authorization_codes AS (DELETE FROM mcp_oauth_authorization_codes WHERE (used_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '1 day' RETURNING 1),
+        oauth_access_tokens AS (DELETE FROM mcp_oauth_access_tokens WHERE (revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '7 days' RETURNING 1),
+        refresh_eligible AS (SELECT id FROM mcp_oauth_refresh_tokens WHERE (used_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '30 days' FOR UPDATE),
+        refresh_links AS (UPDATE mcp_oauth_refresh_tokens SET rotated_to_token_id=NULL WHERE rotated_to_token_id IN (SELECT id FROM refresh_eligible) RETURNING 1),
+        oauth_refresh_tokens AS (DELETE FROM mcp_oauth_refresh_tokens WHERE id IN (SELECT id FROM refresh_eligible) RETURNING 1),
+        published_outbox AS (DELETE FROM outbox_events WHERE published_at <= now() - interval '30 days' RETURNING 1),
+        completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1)
+        SELECT (SELECT count(*) FROM expired_idempotency)
+             + (SELECT count(*) FROM expired_invitations)
+             + (SELECT count(*) FROM oauth_authorization_codes)
+             + (SELECT count(*) FROM oauth_access_tokens)
+             + (SELECT count(*) FROM oauth_refresh_tokens)
+             + (SELECT count(*) FROM published_outbox)
+             + (SELECT count(*) FROM completed_temporary_jobs)
+        "#,
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(changed)
 }
 
 pub const EXTERNAL_EVENTS_JOB: &str = "retention.external_events";
