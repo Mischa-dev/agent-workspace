@@ -18,7 +18,15 @@
 //! The server never puts prompt or reply text in logs or usage rows, and
 //! suggestions store a one-line reason, not the model's reply.
 
+pub mod detect;
 pub mod gateway;
 pub mod prompts;
 pub mod providers;
+pub mod ready;
 pub mod schema;
+pub mod suggestions;
+
+/// The AI jobs, for `jobs::default_registry`.
+pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
+    detect::register_jobs(registry);
+}
