@@ -99,6 +99,8 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // Every notification belongs to a project, so the inbox's unread count is the sum.
+  const inboxUnread = (projectsQuery.data?.projects ?? []).reduce((sum, project) => sum + project.attentionCount, 0)
   const pinned = projects.filter((project) => project.navigation.pinned)
   const recent = projects
     .filter((project) => !project.navigation.pinned)
@@ -150,6 +152,14 @@ export function ProjectRail({
     <>
       <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
         <UtilityTile active={location.pathname === '/home'} icon="home" label="Home" onClick={onNavigate} to="/home" />
+        <UtilityTile
+          active={location.pathname === '/inbox'}
+          badge={inboxUnread}
+          icon="inbox"
+          label="Inbox"
+          onClick={onNavigate}
+          to="/inbox"
+        />
         <UtilityTile
           active={inMessages}
           badge={unreadConversations}

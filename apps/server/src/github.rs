@@ -1581,6 +1581,7 @@ async fn publish_agent_run(
          AND worktree.state IN ('ready', 'dirty')
         WHERE run.project_id = $1
           AND run.id = $2
+          AND conversation_visible_to(run.conversation_id, $3)
           AND repository.enabled
           AND repository.trusted
           AND repository.archived_at IS NULL
@@ -1590,6 +1591,7 @@ async fn publish_agent_run(
     )
     .bind(project_id)
     .bind(run_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
@@ -1879,6 +1881,7 @@ async fn create_pull_request(
          AND installation.state = 'available'
         WHERE run.project_id = $1
           AND run.id = $2
+          AND conversation_visible_to(run.conversation_id, $3)
           AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
           AND NOT EXISTS (
               SELECT 1 FROM agent_runs active
@@ -1890,6 +1893,7 @@ async fn create_pull_request(
     )
     .bind(project_id)
     .bind(run_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Conflict("agent_run", "branch_not_published"))?;
