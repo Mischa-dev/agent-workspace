@@ -875,6 +875,55 @@ pub(super) async fn group_counts(
         .await?)
 }
 
+/// The values a board column can stand for, each with no tasks yet, in
+/// board order. A filter on the column's own field leaves just the columns
+/// that have tasks.
+async fn column_values(
+    pool: &PgPool,
+    project_id: Uuid,
+    grouping: Grouping,
+    filters: &Filters,
+) -> Result<Vec<GroupCount>, AppError> {
+    let sql = match grouping {
+        Grouping::Type if filters.type_id.is_none() => {
+            "SELECT id::text AS key, name AS label, 0::bigint AS count, NULL::text AS color \
+             FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position, id::text"
+                .to_owned()
+        }
+        Grouping::Priority if filters.priority.is_none() => format!(
+            "SELECT item.priority AS key, {PRIORITY_LABEL} AS label, 0::bigint AS count, NULL::text AS color \
+             FROM (VALUES ('urgent'), ('high'), ('medium'), ('low'), ('no_priority')) AS item(priority) \
+             WHERE $1::uuid IS NOT NULL ORDER BY {PRIORITY_RANK}"
+        ),
+        Grouping::Assignee if filters.assignee.is_none() => {
+            "SELECT membership.actor_id::text AS key, membership.display_name AS label, \
+                    0::bigint AS count, NULL::text AS color \
+             FROM project_memberships membership JOIN actors actor ON actor.id = membership.actor_id \
+             WHERE membership.project_id = $1 AND membership.enabled AND actor.status = 'active' \
+               AND actor.kind IN ('human', 'external_agent') \
+             ORDER BY lower(membership.display_name), membership.actor_id::text"
+                .to_owned()
+        }
+        Grouping::Label if filters.labels.is_none() => {
+            "SELECT id::text AS key, name AS label, 0::bigint AS count, color \
+             FROM project_labels WHERE project_id = $1 AND archived_at IS NULL \
+             ORDER BY lower(name), id::text"
+                .to_owned()
+        }
+        Grouping::Milestone if filters.milestone.is_none() => {
+            "SELECT id::text AS key, name AS label, 0::bigint AS count, NULL::text AS color \
+             FROM project_milestones WHERE project_id = $1 AND archived_at IS NULL \
+             ORDER BY COALESCE(target_date, 'infinity'::date), lower(name), id::text"
+                .to_owned()
+        }
+        _ => return Ok(Vec::new()),
+    };
+    Ok(sqlx::query_as::<_, GroupCount>(&sql)
+        .bind(project_id)
+        .fetch_all(pool)
+        .await?)
+}
+
 /// A task as list rows and board cards show it.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1359,10 +1408,27 @@ pub(super) async fn get_work_item_board(
             })
             .collect()
     } else {
-        let mut columns = counts
+        // Every value a card can be dropped on gets a column, used or not;
+        // values only tasks still carry (an archived label, a removed
+        // member) follow them.
+        let mut count_of = counts
             .into_iter()
-            .map(|group| (group, None))
+            .map(|group| (group.key.clone(), group))
+            .collect::<HashMap<_, _>>();
+        let mut columns = column_values(&state.pool, project_id, grouping, &filters)
+            .await?
+            .into_iter()
+            .map(|empty| (count_of.remove(&empty.key).unwrap_or(empty), None))
             .collect::<Vec<_>>();
+        let mut rest = count_of.into_values().collect::<Vec<_>>();
+        rest.sort_by(|a, b| {
+            (a.key == "none", a.label.to_lowercase(), &a.key).cmp(&(
+                b.key == "none",
+                b.label.to_lowercase(),
+                &b.key,
+            ))
+        });
+        columns.extend(rest.into_iter().map(|group| (group, None)));
         if grouping.has_none() && !columns.iter().any(|(group, _)| group.key == "none") {
             columns.push((
                 GroupCount {

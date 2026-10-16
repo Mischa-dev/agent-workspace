@@ -456,6 +456,23 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
             "{name} column lost the task"
         );
     }
+
+    // Every priority is a column to drop on, even one no task has yet.
+    let (status, board) = owner
+        .get(&format!("{base}/work-items/board?columnsBy=priority"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let keys = board["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .map(|column| column["key"].as_str().expect("key").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        ["urgent", "high", "medium", "low", "no_priority"],
+        "{board}"
+    );
 }
 
 #[tokio::test]

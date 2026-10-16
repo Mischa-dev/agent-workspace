@@ -38,8 +38,13 @@ export function pick(
   return toggleOne(selection, id)
 }
 
+/** The most tasks one bulk change takes, as the server allows. */
+export const MAX_BULK = 200
+
+/** Every loaded task, up to the first `MAX_BULK`. */
 export function selectAll(order: readonly string[]): Selection {
-  return { ids: new Set(order), anchor: order[order.length - 1] ?? null }
+  const ids = order.slice(0, MAX_BULK)
+  return { ids: new Set(ids), anchor: ids[ids.length - 1] ?? null }
 }
 
 /** Drops ids that are no longer loaded, for example after a filter change. */

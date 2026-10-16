@@ -13,7 +13,7 @@ import { buildListRows, visibleTaskIds, type ListRow } from './listRows'
 import type { Notice } from './notice'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems, useWorkItemGroups, useWorkItemPages } from './planningHooks'
-import { emptySelection, keepLoaded, pick, selectAll, toggleOne, type Selection } from './selectionModel'
+import { emptySelection, keepLoaded, MAX_BULK, pick, selectAll, toggleOne, type Selection } from './selectionModel'
 import { useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
 import type { BulkChanges, WorkItemCard, WorkItemWorkflow } from './types'
@@ -215,6 +215,10 @@ export function WorkItemList({
     const targets = card && !selection.ids.has(card.id) ? [card] : selected.length ? selected : card ? [card] : []
     const editable = targets.filter((target) => target.capabilities.edit && !target.archivedAt)
     if (!editable.length) return
+    if (editable.length > MAX_BULK) {
+      notify({ tone: 'warning', message: `Bulk changes take up to ${MAX_BULK} work items at a time.` })
+      return
+    }
     setPicker({ field, anchor, targets: editable })
   }
 
@@ -267,6 +271,15 @@ export function WorkItemList({
     })
   }
 
+  const restoreSelected = async () => {
+    const cards = selectedCards()
+    if (!cards.length) return
+    const result = await runBulk({ archived: false }, cards)
+    if (!result) return
+    setSelection(emptySelection)
+    notify({ tone: 'success', message: `Restored ${cards.length} work item${cards.length === 1 ? '' : 's'}.` })
+  }
+
   const setDueDate = async (value: string | null) => {
     const cards = selectedCards()
     if (!cards.length) return
@@ -282,6 +295,7 @@ export function WorkItemList({
     const key = event.key.toLowerCase()
     if ((event.metaKey || event.ctrlKey) && key === 'a' && bodyRef.current?.contains(document.activeElement)) {
       setSelection(selectAll(order))
+      if (order.length > MAX_BULK) notify({ tone: 'info', message: `Selected the first ${MAX_BULK}; bulk changes take up to ${MAX_BULK} at a time.` })
       return true
     }
     if (event.metaKey || event.ctrlKey) return false
@@ -448,12 +462,14 @@ export function WorkItemList({
         spaceBefore={windowed.before}
       />
       <BulkBar
+        archived={selection.ids.size > 0 && selectedCards().every((card) => Boolean(card.archivedAt))}
         busy={bulkBusy || applyPick.isPending}
         count={selection.ids.size}
         onArchive={() => void archiveSelected()}
         onClear={() => setSelection(emptySelection)}
         onDueDate={(value) => void setDueDate(value)}
         onPick={(field, anchor) => openPicker(field, anchor)}
+        onRestore={() => void restoreSelected()}
       />
       {picker ? (
         <FieldPicker

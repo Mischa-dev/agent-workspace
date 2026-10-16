@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { listQuery, parametersFromRemembered, readListState, rememberedState, withFilter, writeListState } from './listModel'
 import { buildListRows, visibleTaskIds, type ListRow } from './listRows'
-import { emptySelection, keepLoaded, pick, selectAll } from './selectionModel'
+import { emptySelection, keepLoaded, MAX_BULK, pick, selectAll } from './selectionModel'
 import type { WorkItemCard } from './types'
 
 function card(id: string, group?: string): WorkItemCard {
@@ -136,5 +136,7 @@ describe('bulk selection', () => {
     expect([...kept.ids]).toEqual(['a', 'b'])
     expect(kept.anchor).toBeNull()
     expect(keepLoaded(kept, new Set(order))).toBe(kept)
+    const many = Array.from({ length: MAX_BULK + 50 }, (_, index) => `t${index}`)
+    expect(selectAll(many).ids.size).toBe(MAX_BULK)
   })
 })
