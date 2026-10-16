@@ -203,9 +203,9 @@ don't collide.
 
 - [ ] [F1](#f1-land-or-close-the-open-pull-requests) Land or close the open pull requests
 - [ ] [F2](#f2-make-main-ci-green-and-keep-it-green) Make main CI green and keep it green
-- [ ] [F3](#f3-cloud-sessions-can-build-and-test) Cloud sessions can build and test
-- [ ] [F4](#f4-changes-that-dont-collide) Changes that don't collide
-- [ ] [F10](#f10-docs-that-match-the-code) Docs that match the code
+- [x] [F3](#f3-cloud-sessions-can-build-and-test) Cloud sessions can build and test
+- [x] [F4](#f4-changes-that-dont-collide) Changes that don't collide
+- [x] [F10](#f10-docs-that-match-the-code) Docs that match the code
 
 **Owns:** The checks F4 changes (`tests/integration/m6_mcp_foundation.rs`,
 `scripts/web-budget-lib.mjs`, `migration_preflight.rs`), the cloud setup
