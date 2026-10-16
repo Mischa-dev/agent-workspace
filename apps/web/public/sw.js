@@ -3,6 +3,8 @@
 // (index.html and the hashed files under /assets/), never API responses, so no
 // conversation or account data is kept by it. Everything else goes straight to
 // the network: API calls, sign-in callbacks, OAuth and MCP pages, health checks.
+// It also shows push notifications (the server sends only the notification's
+// title, preview and in-app links) and opens the app when one is tapped.
 
 const SHELL_CACHE = 'aw-shell-v1'
 const ASSET_CACHE = 'aw-assets-v1'
@@ -41,6 +43,65 @@ self.addEventListener('fetch', (event) => {
   }
   if (url.pathname.startsWith('/assets/')) event.respondWith(asset(event))
 })
+
+// Push: {id, kind, title, body, place, url, tag, actions}. Every push shows a
+// notification, as browsers require; anything malformed shows a plain one.
+self.addEventListener('push', (event) => {
+  event.waitUntil(showPush(event))
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const data = event.notification.data || {}
+  const target = (event.action === 'launch' && data.launch) || data.url || '/home'
+  event.waitUntil(focusApp(target))
+})
+
+function inAppPath(value) {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : null
+}
+
+function pushPayload(event) {
+  try {
+    const payload = event.data ? event.data.json() : null
+    return payload && typeof payload === 'object' ? payload : {}
+  } catch {
+    return {}
+  }
+}
+
+function showPush(event) {
+  const payload = pushPayload(event)
+  const text = (value) => (typeof value === 'string' && value ? value : null)
+  const listed = Array.isArray(payload.actions) ? payload.actions : []
+  const launch = listed.find((action) => action && action.action === 'launch' && inAppPath(action.url))
+  const actions = [{ action: 'open', title: 'Open' }]
+  if (launch) actions.push({ action: 'launch', title: text(launch.title) || 'Launch' })
+  const tag = text(payload.tag)
+  return self.registration.showNotification(text(payload.title) || 'Agent Workspace', {
+    body: [text(payload.place), text(payload.body)].filter(Boolean).join(' · ') || undefined,
+    tag: tag || undefined,
+    renotify: Boolean(tag),
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    timestamp: Date.now(),
+    actions,
+    data: { id: text(payload.id), url: inAppPath(payload.url) || '/home', launch: launch ? inAppPath(launch.url) : null },
+  })
+}
+
+// Focus an open window of the app and take it there, else open one.
+async function focusApp(path) {
+  const url = new URL(path, self.location.origin).href
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  const open = windows.find((client) => new URL(client.url).origin === self.location.origin)
+  if (!open) return self.clients.openWindow(url)
+  await open.focus()
+  if (typeof open.navigate === 'function') {
+    return open.navigate(url).catch(() => self.clients.openWindow(url))
+  }
+  return undefined
+}
 
 // Network first, so a new release shows up at once; the saved shell when offline.
 async function openApp(event) {

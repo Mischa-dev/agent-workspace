@@ -50,6 +50,7 @@ const CATEGORIES: { value: InboxCategory; label: string }[] = [
   { value: 'tasks', label: 'Tasks' },
   { value: 'runs', label: 'Runs' },
   { value: 'pull_requests', label: 'Pull requests' },
+  { value: 'usage', label: 'Usage' },
 ]
 
 const KIND_ICON: Record<string, IconName> = {
@@ -63,6 +64,10 @@ const KIND_ICON: Record<string, IconName> = {
   checks_failed: 'triangle-alert',
   review_requested: 'pull-request',
   task_changed: 'work',
+  capacity_reset_soon: 'clock',
+  capacity_high_usage: 'activity',
+  capacity_limit_reached: 'circle-alert',
+  capacity_reset_credit: 'retry',
 }
 
 function isView(value: string | null): value is InboxView {
@@ -509,6 +514,12 @@ function NotificationDetail({
             <span className="aw-btn__label">{pendingQuestion ? 'Answer in the thread' : 'Open'}</span>
           </Link>
         )}
+        {item.launchHref ? (
+          <Link className="aw-btn aw-btn--secondary aw-btn--md" to={item.launchHref}>
+            <Icon name="play" size={16} />
+            <span className="aw-btn__label">Launch</span>
+          </Link>
+        ) : null}
         <Button icon={view === 'archived' ? 'undo' : 'archive'} onClick={onArchive}>
           {view === 'archived' ? 'Restore' : 'Archive'}
         </Button>

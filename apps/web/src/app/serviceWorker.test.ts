@@ -53,3 +53,69 @@ describe('service worker', () => {
     expect(handles(`${origin}/assets/index-Cx1.js`)).toBe(true)
   })
 })
+
+type ShownOptions = { actions: { title: string }[]; data: { url: string; launch: string | null } }
+
+describe('service worker push', () => {
+  const origin = 'https://workspace.example'
+
+  function loadPushWorker() {
+    const listeners: Record<string, (event: unknown) => void> = {}
+    const showNotification = vi.fn(async () => undefined)
+    const openWindow = vi.fn(async () => null)
+    const self = {
+      location: { origin },
+      addEventListener: (type: string, listener: (event: unknown) => void) => {
+        listeners[type] = listener
+      },
+      registration: { showNotification },
+      clients: { matchAll: async () => [], openWindow },
+    }
+    new Function('self', 'caches', 'fetch', workerSource)(self, {}, async () => new Response(''))
+    const dispatch = async (type: string, event: Record<string, unknown>) => {
+      const waits: Promise<unknown>[] = []
+      listeners[type]?.({ ...event, waitUntil: (promise: Promise<unknown>) => waits.push(promise) })
+      await Promise.all(waits)
+    }
+    return { dispatch, showNotification, openWindow }
+  }
+
+  it('shows a capacity alert with its Launch action and opens the ready tasks', async () => {
+    const worker = loadPushWorker()
+    const payload = {
+      id: 'n1',
+      kind: 'capacity_reset_soon',
+      title: 'Codex weekly limit resets in 2 h · 38% unused',
+      body: '4 ready tasks across 2 projects can use it.',
+      place: 'Usage',
+      url: '/settings/account/usage?account=a1',
+      tag: 'a1',
+      actions: [
+        { action: 'open', title: 'Open' },
+        { action: 'launch', title: 'Launch', url: '/settings/account/usage?account=a1&ready=1#ready-tasks' },
+      ],
+    }
+    await worker.dispatch('push', { data: { json: () => payload } })
+    expect(worker.showNotification).toHaveBeenCalledTimes(1)
+    const [title, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions]
+    expect(title).toBe('Codex weekly limit resets in 2 h · 38% unused')
+    expect(options.actions.map((action) => action.title)).toEqual(['Open', 'Launch'])
+
+    const close = vi.fn()
+    await worker.dispatch('notificationclick', { action: 'launch', notification: { close, data: options.data } })
+    expect(close).toHaveBeenCalled()
+    expect(worker.openWindow).toHaveBeenCalledWith(`${origin}/settings/account/usage?account=a1&ready=1#ready-tasks`)
+  })
+
+  it('never follows a link off the app and still shows a malformed push', async () => {
+    const worker = loadPushWorker()
+    await worker.dispatch('push', {
+      data: { json: () => ({ title: 'Hi', url: 'https://evil.example/', actions: [{ action: 'launch', url: '//evil.example' }] }) },
+    })
+    const [, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions]
+    expect(options.data.url).toBe('/home')
+    expect(options.actions).toHaveLength(1)
+    await worker.dispatch('push', { data: { json: () => { throw new Error('bad') } } })
+    expect(worker.showNotification).toHaveBeenLastCalledWith('Agent Workspace', expect.any(Object))
+  })
+})
