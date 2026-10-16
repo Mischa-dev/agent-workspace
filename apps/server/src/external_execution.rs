@@ -25,6 +25,7 @@ use crate::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
         MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    provider::run_config::RunConfig,
 };
 
 pub fn router() -> Router<AppState> {
@@ -711,7 +712,7 @@ pub(crate) async fn respond_to_sponsored_execution(
     }
 
     let run_id = if decision == "approve" {
-        Some(launch_sponsored_run(&mut transaction, &context, external_request_id).await?)
+        Some(launch_sponsored_run(state, &mut transaction, &context, external_request_id).await?)
     } else {
         None
     };
@@ -817,6 +818,7 @@ struct SponsoredApprovalReference {
 }
 
 async fn launch_sponsored_run(
+    state: &AppState,
     transaction: &mut Transaction<'_, Postgres>,
     context: &impl SponsoredRunContext,
     external_request_id: Uuid,
@@ -900,6 +902,17 @@ async fn launch_sponsored_run(
     .bind(prompt_message_id)
     .execute(&mut **transaction)
     .await?;
+    // Settings freeze when the run is created, as for every other start:
+    // the sponsor's account defaults, each one that no longer fits the
+    // catalog falling back to the harness's own.
+    let config = crate::provider::resolve_stored_run_config(
+        state,
+        setup.organization_id,
+        &setup.adapter_kind,
+        &setup.run_defaults,
+        &RunConfig::default(),
+    )
+    .await?;
     let run_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -907,8 +920,8 @@ async fn launch_sponsored_run(
             id, conversation_id, execution_worker_id, requesting_actor_id,
             sponsoring_actor_id, external_execution_request_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot, prompt_message_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10, $11)
+            authorization_snapshot, prompt_message_id, config
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'created', $9, $10, $11, $12)
         "#,
     )
     .bind(run_id)
@@ -928,6 +941,7 @@ async fn launch_sponsored_run(
         "scope": ["repository.read", "repository.write", "provider.turn"]
     }))
     .bind(prompt_message_id)
+    .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
     .execute(&mut **transaction)
     .await?;
     transition_run(transaction, run_id, RunState::Queued, None).await?;

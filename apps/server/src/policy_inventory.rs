@@ -186,6 +186,72 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ExecutionProfileManage
     ),
     policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
+        Patch,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/browser",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/api-key",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/cancel",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
+        CredentialManage
+    ),
+    policy_route!(
+        "execution",
+        Post,
+        "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "execution",
+        Put,
+        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+        ProjectManage
+    ),
+    policy_route!(
+        "execution",
+        Delete,
+        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+        ProjectManage
+    ),
+    policy_route!(
         "conversations",
         Post,
         "/api/v1/projects/{id}/channels",
