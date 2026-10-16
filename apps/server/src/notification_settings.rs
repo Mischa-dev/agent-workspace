@@ -20,7 +20,7 @@ use axum::{
 };
 use chrono::{DateTime, Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgConnection, PgExecutor, PgPool};
+use sqlx::{FromRow, PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::{
@@ -304,24 +304,29 @@ pub struct NotificationSettingsView {
     pub email_available: bool,
 }
 
-/// The workspace notification settings apply to when none is named: the
-/// person's first, like their direct messages.
-pub async fn home_workspace<'e, E: PgExecutor<'e>>(
-    executor: E,
+/// The workspace notification settings apply to: `wanted` if the person is
+/// an enabled member there, else the one they chose as their default (as
+/// their direct messages do).
+pub async fn home_workspace(
+    pool: &PgPool,
     actor_id: Uuid,
     wanted: Option<Uuid>,
 ) -> Result<Uuid, AppError> {
+    let Some(wanted) = wanted else {
+        return crate::workspace::default_workspace(pool, actor_id)
+            .await?
+            .map(|(organization_id, _)| organization_id)
+            .ok_or(AppError::NotFound("organization"));
+    };
     sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT organization_id FROM organization_memberships
-        WHERE actor_id = $1 AND enabled AND ($2::uuid IS NULL OR organization_id = $2)
-        ORDER BY created_at, organization_id
-        LIMIT 1
+        WHERE actor_id = $1 AND enabled AND organization_id = $2
         "#,
     )
     .bind(actor_id)
     .bind(wanted)
-    .fetch_optional(executor)
+    .fetch_optional(pool)
     .await?
     .ok_or(AppError::NotFound("organization"))
 }

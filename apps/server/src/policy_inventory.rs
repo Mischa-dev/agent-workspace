@@ -127,8 +127,134 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/members",
         MembershipManage
     ),
+    policy_route!(
+        "workspace",
+        Patch,
+        "/api/v1/organizations/{organization_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "workspace",
+        Patch,
+        "/api/v1/organizations/{organization_id}/members/{actor_id}",
+        MembershipManage
+    ),
+    policy_route!(
+        "workspace",
+        Post,
+        "/api/v1/organizations/{organization_id}/transfer-ownership",
+        MembershipManage
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/organizations/{organization_id}/leave",
+        SessionAuthentication
+    ),
+    policy_route!(
+        "workspace",
+        Post,
+        "/api/v1/organizations/{organization_id}/invitations",
+        InvitationManage
+    ),
+    policy_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/{invitation_id}/revoke",
+        InvitationManage
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/resolve",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/accept-new",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/accept-existing",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "workspace",
+        Put,
+        "/api/v1/account/default-workspace",
+        SessionAuthentication
+    ),
     boundary_route!("auth", Post, "/api/v1/auth/login", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/logout", SessionAuthentication),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/auth/login/two-factor",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/password",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/sessions/{session_id}/revoke",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/sessions/revoke-others",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/setup",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/confirm",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/recovery-codes",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/disable",
+        SessionAuthentication
+    ),
+    policy_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/api-tokens",
+        CredentialManage
+    ),
+    policy_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/api-tokens/{credential_id}/revoke",
+        CredentialManage
+    ),
+    boundary_route!(
+        "account_security",
+        Put,
+        "/api/v1/account/appearance",
+        SessionAuthentication
+    ),
     policy_route!("api", Post, "/api/v1/threads/{id}/agent-runs", WorkerInvoke),
     policy_route!(
         "api",
@@ -448,6 +574,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         GithubIntegrationManage
     ),
     policy_route!(
+        "github/connect",
+        Post,
+        "/api/v1/projects/{project_id}/integrations/github/connect",
+        GithubIntegrationManage
+    ),
+    policy_route!(
+        "github/connect",
+        Post,
+        "/api/v1/projects/{project_id}/integrations/github/repositories",
+        RepositoryManage
+    ),
+    policy_route!(
         "github",
         Put,
         "/api/v1/projects/{project_id}/integrations/github/automation",
@@ -739,6 +877,7 @@ mod tests {
 
     const ROUTER_SOURCES: &[(&str, &str)] = &[
         ("account", include_str!("account.rs")),
+        ("account_security", include_str!("account_security.rs")),
         ("api", include_str!("api.rs")),
         ("auth", include_str!("auth/mod.rs")),
         ("auth/workos", include_str!("auth/workos.rs")),
@@ -749,8 +888,11 @@ mod tests {
         ("reactions", include_str!("reactions.rs")),
         ("notifications", include_str!("notifications.rs")),
         ("github", include_str!("github.rs")),
+        ("github/connect", include_str!("github/connect.rs")),
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),
+        ("workspace", include_str!("workspace.rs")),
+        ("audit_log", include_str!("audit_log.rs")),
         ("mcp/oauth", include_str!("mcp/oauth.rs")),
         ("projects", include_str!("projects.rs")),
         ("repositories", include_str!("repositories.rs")),

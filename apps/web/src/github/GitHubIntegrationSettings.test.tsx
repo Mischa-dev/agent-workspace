@@ -9,7 +9,7 @@ import {
   syncGitHubInstallation,
   updateGitHubAutomationSettings,
 } from './api'
-import { GitHubIntegrationSettings } from './GitHubIntegrationSettings'
+import { GitHubAutomationSettings, GitHubIntegrationSettings } from './GitHubIntegrationSettings'
 
 vi.mock('../repositories/api', () => ({ listRepositories: vi.fn() }))
 vi.mock('./api', () => ({
@@ -77,12 +77,10 @@ describe('GitHubIntegrationSettings', () => {
       screen.getByText('Mischa-dev/agent-workspace-m0-spike'),
     ).toBeVisible()
     expect(screen.queryByText(/private key|webhook secret|token value/i)).not.toBeInTheDocument()
+    // Automation lives on its own settings page now.
     expect(
-      await screen.findByLabelText('Move linked work items to Verification when the pull request merges'),
-    ).toBeChecked()
-    expect(
-      screen.getByLabelText('Move linked work items to Review when a pull request opens'),
-    ).not.toBeChecked()
+      screen.queryByLabelText('Move linked work items to Review when a pull request opens'),
+    ).not.toBeInTheDocument()
   })
 
   it('updates project-owned automation with optimistic versioning', async () => {
@@ -120,8 +118,11 @@ describe('GitHubIntegrationSettings', () => {
       updatedAt: '2026-08-01T08:01:00Z',
     })
 
-    renderSettings()
-    fireEvent.click(await screen.findByLabelText(
+    renderAutomation()
+    expect(
+      await screen.findByLabelText('Move linked work items to Verification when the pull request merges'),
+    ).toBeChecked()
+    fireEvent.click(screen.getByLabelText(
       'Move linked work items to Review when a pull request opens',
     ))
 
@@ -149,36 +150,8 @@ describe('GitHubIntegrationSettings', () => {
     expect(screen.getByText(/host operator must install/i)).toBeVisible()
   })
 
-  it('verifies a configured installation against explicitly selected repositories', async () => {
-    const projectId = '019fbc80-0000-7000-8000-000000000003'
-    const repositoryId = '019fbc80-0000-7000-8000-000000000002'
+  it('points to the connect flow instead of asking for an installation ID', async () => {
     vi.mocked(getGitHubStatus).mockResolvedValue({
-      configured: true,
-      apiVersion: '2026-03-10',
-      installation: null,
-      capabilities: { manage: true },
-    })
-    vi.mocked(listRepositories).mockResolvedValue({
-      repositories: [
-        {
-          id: repositoryId,
-          githubRepositoryId: 123456,
-          owner: 'Mischa-dev',
-          name: 'agent-workspace-m0-spike',
-          cloneUrl: 'https://github.com/Mischa-dev/agent-workspace-m0-spike.git',
-          defaultBranch: 'main',
-          enabled: true,
-          trusted: true,
-          version: 1,
-          preparationState: 'ready',
-          preparationFailureCategory: null,
-          archivedAt: null,
-          capabilities: { manage: true },
-        },
-      ],
-      canManage: true,
-    })
-    vi.mocked(syncGitHubInstallation).mockResolvedValue({
       configured: true,
       apiVersion: '2026-03-10',
       installation: null,
@@ -187,18 +160,9 @@ describe('GitHubIntegrationSettings', () => {
 
     renderSettings()
 
-    fireEvent.change(await screen.findByLabelText('GitHub installation ID'), {
-      target: { value: '150232852' },
-    })
-    fireEvent.click(screen.getByLabelText('Mischa-dev/agent-workspace-m0-spike'))
-    fireEvent.click(screen.getByRole('button', { name: 'Verify installation' }))
-
-    await waitFor(() => {
-      expect(syncGitHubInstallation).toHaveBeenCalledWith(projectId, {
-        installationId: 150232852,
-        repositoryIds: [repositoryId],
-      })
-    })
+    expect(await screen.findByText(/No GitHub installation is linked to this Project yet/)).toBeVisible()
+    expect(screen.queryByLabelText('GitHub installation ID')).not.toBeInTheDocument()
+    expect(syncGitHubInstallation).not.toHaveBeenCalled()
   })
 
   it('adds a newly registered repository when reverifying an existing installation', async () => {
@@ -290,6 +254,17 @@ function renderSettings() {
   render(
     <QueryClientProvider client={queryClient}>
       <GitHubIntegrationSettings projectId="019fbc80-0000-7000-8000-000000000003" />
+    </QueryClientProvider>,
+  )
+}
+
+function renderAutomation() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <GitHubAutomationSettings projectId="019fbc80-0000-7000-8000-000000000003" />
     </QueryClientProvider>,
   )
 }

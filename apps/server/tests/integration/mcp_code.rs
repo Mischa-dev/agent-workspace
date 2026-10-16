@@ -99,7 +99,16 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
     .await
     .expect("authenticate profile");
     let app = test_app(pool.clone(), &database_url);
-    let browser = login(&app).await;
+    // Signing in needs the current schema (sessions, two-factor), so a
+    // database held at an older migration gets no browser session.
+    let browser = if version == i64::MAX {
+        login(&app).await
+    } else {
+        Browser {
+            cookie: String::new(),
+            csrf: String::new(),
+        }
+    };
     Some((
         Setup {
             app,

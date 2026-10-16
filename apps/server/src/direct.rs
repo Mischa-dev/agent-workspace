@@ -953,21 +953,12 @@ async fn ensure_direct_space(
     if principal.actor_kind != "human" {
         return Err(AppError::NotFound("direct messages"));
     }
-    // Solo-first: a person normally belongs to one Organization. Use the
-    // earliest one if there are several.
-    let (organization_id, organization_role) = sqlx::query_as::<_, (Uuid, String)>(
-        r#"
-        SELECT organization_id, role
-        FROM organization_memberships
-        WHERE actor_id = $1 AND enabled
-        ORDER BY created_at, organization_id
-        LIMIT 1
-        "#,
-    )
-    .bind(principal.actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("organization"))?;
+    // Messages live in the workspace the person chose (Settings, Workspace),
+    // else the earliest one they joined.
+    let (organization_id, organization_role) =
+        crate::workspace::default_workspace(&mut **transaction, principal.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("organization"))?;
     ensure_space_in(transaction, principal, organization_id, &organization_role).await
 }
 
