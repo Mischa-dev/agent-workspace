@@ -1,0 +1,7 @@
+{
+  "input": {"kind": "thread", "title": "Release timing", "entries": [
+    {"author": "Ana", "at": "2026-10-16T10:00:00Z", "text": "Can we ship Friday?"},
+    {"author": "Sam", "at": "2026-10-16T10:05:00Z", "text": "Yes if the migration test passes. I'll run it today."}
+  ]},
+  "output": {"lines": ["Ana asked to ship on Friday.", "Sam agreed, if the migration test passes; Sam runs it today."], "outcome": "Ship Friday if the migration test passes.", "status": "Waiting on test"}
+}

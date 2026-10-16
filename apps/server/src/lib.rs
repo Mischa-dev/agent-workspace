@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod account;
+pub mod ai;
 pub mod api;
 pub mod auth;
 pub mod bootstrap;

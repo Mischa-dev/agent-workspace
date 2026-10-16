@@ -1,0 +1,57 @@
+{
+  "input": {
+    "messages": [
+      {
+        "index": 0,
+        "conversation": "ACME-2 Login page",
+        "author": "Sam",
+        "text": "Still waiting on ACME-1 before I can wire the form.",
+        "linkedTask": "ACME-2"
+      },
+      {
+        "index": 1,
+        "conversation": "general",
+        "author": "Ana",
+        "text": "ACME-4 is waiting for legal to approve the copy.",
+        "linkedTask": null
+      }
+    ],
+    "tasks": [
+      {
+        "key": "ACME-1",
+        "title": "Add the login API",
+        "status": "In progress"
+      },
+      {
+        "key": "ACME-2",
+        "title": "Login page",
+        "status": "Todo"
+      },
+      {
+        "key": "ACME-4",
+        "title": "Signup copy",
+        "status": "Todo"
+      }
+    ]
+  },
+  "output": {
+    "findings": [
+      {
+        "message": 0,
+        "task": "ACME-2",
+        "kind": "blocks",
+        "blocker": "ACME-1",
+        "reason": "Waiting on the login API before the form can be wired.",
+        "confidence": 0.9
+      },
+      {
+        "message": 1,
+        "task": "ACME-4",
+        "kind": "blocked_reason",
+        "blocker": null,
+        "reason": "Waiting for legal to approve the copy.",
+        "confidence": 0.85
+      }
+    ]
+  }
+}
