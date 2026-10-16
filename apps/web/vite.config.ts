@@ -1,5 +1,8 @@
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
+
+// The e2e smoke tests (e2e/) point the proxy at their own throwaway server.
+const apiTarget = process.env.AGENT_WORKSPACE_API_PROXY_TARGET ?? 'http://127.0.0.1:3100'
 
 export default defineConfig({
   plugins: [react()],
@@ -8,14 +11,16 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3100',
+        target: apiTarget,
         ws: true,
       },
-      '/health': 'http://127.0.0.1:3100',
+      '/health': apiTarget,
     },
   },
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
+    // Playwright owns e2e/*.spec.ts; vitest would try to run them otherwise.
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 })

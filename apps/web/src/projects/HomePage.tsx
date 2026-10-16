@@ -4,20 +4,15 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
-import { Badge, Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, PageHeader, Row, RowList, Section } from '../ui'
+import { Badge, Banner, Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
 import { useProjects, useSwitchProject } from './hooks'
-import { ProjectInitials } from './ProjectSwitcher'
+import { ProjectInitials } from './ProjectInitials'
 import type { Project } from './types'
 
 function openedLabel(iso: string | null) {
   if (!iso) return 'Not opened yet'
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return 'Not opened yet'
-  const startOf = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
-  const days = Math.round((startOf(new Date()) - startOf(date)) / 86_400_000)
-  if (days === 0) return 'Opened today'
-  if (days === 1) return 'Opened yesterday'
-  return `Opened ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+  const day = relativeDay(iso)
+  return day ? `Opened ${day}` : 'Not opened yet'
 }
 
 export function HomePage() {
@@ -93,7 +88,7 @@ export function HomePage() {
           </Banner>
         )}
         <Section id="recent-projects-heading" title="Your Projects">
-          {projects.isPending && <MessageSkeleton label="Loading your Projects" rows={3} />}
+          {projects.isPending && <ListSkeleton label="Loading your Projects" rows={3} />}
           {projects.isError && (
             <ErrorState action={<Button onClick={() => void projects.refetch()}>Try again</Button>} title="Your Projects didn’t load">
               Check your connection and try again.
