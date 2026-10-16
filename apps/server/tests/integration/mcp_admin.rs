@@ -783,6 +783,10 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["value"]["created"], false);
     assert_eq!(again["value"]["moved"][0]["id"], new_task.as_str());
+    assert_eq!(
+        again["value"]["moved"], moved["value"]["moved"],
+        "the replay lists the subtask too: {again}"
+    );
 
     // Mara isn't in the new project, so the old key opens what she could
     // always see: the archived original, pointing at where it went.

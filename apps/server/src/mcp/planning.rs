@@ -321,7 +321,8 @@ fn link_refusal<T>(field: &str, reference: &str, refusal: &LinkRefusal) -> ToolR
         LinkRefusal::Cycle { .. }
         | LinkRefusal::AlreadyDuplicate { .. }
         | LinkRefusal::CantClose { .. }
-        | LinkRefusal::TooMany { .. } => ToolResult::conflict(message),
+        | LinkRefusal::TooMany { .. }
+        | LinkRefusal::Archived { .. } => ToolResult::conflict(message),
     }
 }
 
@@ -852,6 +853,21 @@ pub(super) async fn milestone_write(
             access_refusal(check_write_access(&mut transaction, principal).await?)
         {
             return Ok(refusal);
+        }
+        // An archived task takes no changes until it's restored; refuse
+        // rather than skip it and report success. Locked so it stays so.
+        let locked = sqlx::query_as::<_, (String, bool)>(
+            "SELECT project.project_key || '-' || item.number::text, item.archived_at IS NOT NULL \
+             FROM work_items item JOIN projects project ON project.id = item.project_id \
+             WHERE item.id = ANY($1) AND item.project_id = $2 \
+             ORDER BY item.id FOR UPDATE OF item",
+        )
+        .bind(task_ids.as_slice())
+        .bind(project_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        if let Some((key, _)) = locked.iter().find(|(_, archived)| *archived) {
+            return Ok(ToolResult::conflict(archived_task_message(key)));
         }
         let actor = command_actor(principal, project_id);
         let milestone_id = match arguments.milestone_id.as_deref() {

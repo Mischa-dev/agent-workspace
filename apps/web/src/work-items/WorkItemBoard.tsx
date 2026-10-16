@@ -186,6 +186,22 @@ export function WorkItemBoard({
       )
         .then(({ laneError }) => {
           if (laneError === undefined) return
+          // The move stands; only the lane goes back, so the cache matches the server until the refetch lands.
+          const undoLane = state.lanes === 'none' ? null : fieldMove(state.lanes, target.laneKey, lane.key, lane.label, undefined, labelIds)
+          if (undoLane) {
+            queryClient.setQueryData<WorkItemBoardResponse>(boardKey, (current) =>
+              current
+                ? {
+                    ...current,
+                    columns: current.columns.map((column) =>
+                      column.items.some((item) => item.id === cardId)
+                        ? { ...column, items: column.items.map((item) => (item.id === cardId ? undoLane.apply(item) : item)) }
+                        : column,
+                    ),
+                  }
+                : current,
+            )
+          }
           setAnnouncement(`Moved ${card.key} to ${to.label}, but its lane didn’t change.`)
           notify({ tone: 'warning', message: `${card.key} moved to ${to.label}, but it stayed in ${lane.label}. ${editErrorMessage(laneError, 'The lane change')}` })
         })

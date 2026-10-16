@@ -314,6 +314,25 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     .execute(&setup.pool)
     .await
     .expect("archive WORK-3");
+    // Nor can another task link to it, or a milestone take it in.
+    let linked = call(
+        "task_depend",
+        json!({"taskId": "WORK-1", "blockedBy": ["WORK-3"]}),
+    )
+    .await;
+    assert_eq!(linked["outcome"], "conflict", "{linked}");
+    let gathered = call(
+        "milestone_write",
+        json!({"projectId": "WORK", "name": "Later", "addTasks": ["WORK-3"]}),
+    )
+    .await;
+    assert_eq!(gathered["outcome"], "conflict", "{gathered}");
+    assert!(
+        gathered["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("WORK-3 is archived")),
+        "{gathered}"
+    );
     for (tool, arguments) in [
         (
             "task_depend",

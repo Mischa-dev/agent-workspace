@@ -304,7 +304,8 @@ fn link_refusal(refused: &LinkRefusal, reference: &str) -> Response {
         ),
         LinkRefusal::AlreadyDuplicate { .. }
         | LinkRefusal::CantClose { .. }
-        | LinkRefusal::TooMany { .. } => {
+        | LinkRefusal::TooMany { .. }
+        | LinkRefusal::Archived { .. } => {
             refusal(StatusCode::CONFLICT, "conflict", message, Value::Null)
         }
         LinkRefusal::NotFound | LinkRefusal::SelfLink | LinkRefusal::OtherWorkspace => {

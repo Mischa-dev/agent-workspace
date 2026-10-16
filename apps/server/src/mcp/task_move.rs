@@ -853,16 +853,27 @@ async fn already_moved(
     source_id: Uuid,
 ) -> Result<Option<Vec<MovedTask>>, AppError> {
     let rows = sqlx::query_as::<_, (String, String, Uuid, Uuid, String)>(
+        // The moved subtasks have aliases of their own, keyed by their own
+        // source IDs, so the whole source tree is walked.
         r#"
+        WITH RECURSIVE source_tree(id, depth) AS (
+            SELECT $1::uuid, 0
+            UNION ALL
+            SELECT child.id, source_tree.depth + 1
+            FROM work_items child
+            JOIN source_tree ON child.parent_work_item_id = source_tree.id
+            WHERE source_tree.depth < 50
+        )
         SELECT alias.project_key || '-' || alias.number,
                project.project_key || '-' || item.number,
                item.id, item.project_id, item.title
-        FROM work_item_key_aliases alias
+        FROM source_tree
+        JOIN work_item_key_aliases alias ON alias.source_work_item_id = source_tree.id
         JOIN work_items item ON item.id = alias.work_item_id
         JOIN projects project ON project.id = item.project_id
-        WHERE alias.source_work_item_id = $1
-          AND actor_can_access_project($2, $3, item.project_id)
+        WHERE actor_can_access_project($2, $3, item.project_id)
           AND ($4::uuid IS NULL OR item.project_id = $4)
+        ORDER BY source_tree.depth, alias.number
         "#,
     )
     .bind(source_id)

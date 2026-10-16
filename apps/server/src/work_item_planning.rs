@@ -348,6 +348,10 @@ pub enum LinkRefusal {
     TooMany {
         key: String,
     },
+    /// The other task is archived, so new links to it would stay hidden.
+    Archived {
+        key: String,
+    },
 }
 
 impl LinkRefusal {
@@ -371,6 +375,9 @@ impl LinkRefusal {
             Self::TooMany { key } => format!(
                 "{key} already has {MAX_LINKS_PER_TASK} links of this kind, the most a task can have. Remove some first."
             ),
+            Self::Archived { key } => {
+                format!("{key} is archived. Restore it before linking to it.")
+            }
         }
     }
 }
@@ -381,6 +388,7 @@ struct LockedEnd {
     project_id: Uuid,
     key: String,
     version: i64,
+    archived: bool,
 }
 
 /// Locks tasks across projects in ID order.
@@ -406,7 +414,7 @@ async fn lock_ends(
     Ok(sqlx::query_as::<_, LockedEnd>(
         r#"
         SELECT item.id, item.project_id, project.project_key || '-' || item.number AS key,
-               item.version
+               item.version, item.archived_at IS NOT NULL AS archived
         FROM work_items item
         JOIN projects project ON project.id = item.project_id
         WHERE item.id = ANY($1)
@@ -533,6 +541,14 @@ pub async fn change_dependencies(
         let Some(other) = ends.get(other_id) else {
             return Ok(Err((index, LinkRefusal::NotFound)));
         };
+        if other.archived && !remove {
+            return Ok(Err((
+                index,
+                LinkRefusal::Archived {
+                    key: named(other, task),
+                },
+            )));
+        }
         let (blocking, blocked) = match direction {
             Direction::BlockedBy => (other, task),
             Direction::Blocks => (task, other),
@@ -803,6 +819,11 @@ pub async fn change_relation(
     };
     if task.project_id != actor.project_id {
         return Ok(Err(LinkRefusal::NotFound));
+    }
+    if other.archived && !remove {
+        return Ok(Err(LinkRefusal::Archived {
+            key: named(other, task),
+        }));
     }
     let rows = if remove {
         sqlx::query(
