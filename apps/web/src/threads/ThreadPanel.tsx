@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { getConversationTimeline, retryReplyRequest, sendConversationMessage } from '../conversations/api'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
@@ -10,25 +11,36 @@ import { StructuredComposer } from '../conversations/StructuredComposer'
 import { ThreadStatusButton } from '../conversations/threadBoard'
 import { useRefreshThreads } from '../conversations/threadModel'
 import { PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
-import type { ConversationActor, ConversationTimelineEntry, ReplyRequest } from '../conversations/types'
+import type { ConversationActor, ConversationTimelineEntry, ConversationWorkItemReference, ReplyRequest } from '../conversations/types'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
-import { Button, ErrorState, IconButton, MessageSkeleton } from '../ui'
+import { Button, ErrorState, Icon, IconButton, MessageSkeleton } from '../ui'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
-/** A thread under a DM or group, open beside the conversation so you keep your place. */
+/**
+ * A thread open beside its channel, DM or group, so you keep your place. The
+ * one thread component: project channels and direct conversations both use it.
+ */
 export function ThreadPanel({
+  fullPageHref,
   members,
   onClose,
   parentId,
   projectId,
+  searchActors,
+  searchWorkItems,
   threadId,
   viewer,
 }: {
-  members: ConversationActor[]
+  /** Where the thread opens as a page, with its runs and details. */
+  fullPageHref?: string
+  /** Who can be mentioned, for a DM or group. Project channels pass searchActors instead. */
+  members?: ConversationActor[]
   onClose: () => void
   parentId: string
   projectId: string
+  searchActors?: (query: string) => Promise<ConversationActor[]>
+  searchWorkItems?: (query: string) => Promise<ConversationWorkItemReference[]>
   threadId: string
   viewer: { actorId: string; displayName: string }
 }) {
@@ -45,20 +57,21 @@ export function ThreadPanel({
     newestCursor: null,
     loadPage: (cursor) => getConversationTimeline(threadId, cursor),
   })
-  const searchMembers = async (query: string) => {
+  const searchMembers = searchActors ?? (async (query: string) => {
     const needle = query.trim().toLowerCase()
-    return members.filter(
+    return (members ?? []).filter(
       (member) =>
         member.id !== viewer.actorId &&
         (!needle || member.handle.toLowerCase().includes(needle) || member.displayName.toLowerCase().includes(needle)),
     )
-  }
+  })
   const messageActions = useMessageActions({
     projectId,
     conversationId: threadId,
     viewerId: viewer.actorId,
     capabilities: valid ? page?.capabilities : null,
     searchActors: searchMembers,
+    searchWorkItems,
     onReactionsChanged: live.patchReactions,
     onChanged: (entry) => {
       live.replaceEntry(entry)
@@ -121,6 +134,11 @@ export function ThreadPanel({
             }}
           />
         ) : null}
+        {fullPageHref ? (
+          <Link aria-label="Open as a page" className="aw-iconbtn aw-iconbtn--sm" title="Open as a page" to={fullPageHref}>
+            <Icon name="external" size={16} />
+          </Link>
+        ) : null}
         <IconButton icon="x" label="Close thread" onClick={onClose} size="sm" />
       </div>
       {conversation?.threadOutcome ? <p className="aw-threadpanel__outcome">{conversation.threadOutcome}</p> : null}
@@ -155,6 +173,7 @@ export function ThreadPanel({
           onSubmit={send}
           placeholder="Reply in thread"
           searchActors={searchMembers}
+          searchWorkItems={searchWorkItems}
         />
       ) : null}
       {messageActions.dialogs}

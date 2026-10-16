@@ -362,11 +362,12 @@ describe('M2 Channel workspace', () => {
       name: 'Latest follow-up',
       originMessageId: messageId(3),
     })
+    // The new thread opens beside the channel, which stays in place.
     await waitFor(() =>
-      expect(window.location.pathname).toBe(
-        `/projects/${projectId}/threads/${createdThreadId}`,
-      ),
+      expect(new URLSearchParams(window.location.search).get('thread')).toBe(createdThreadId),
     )
+    expect(window.location.pathname).toBe(`/projects/${projectId}/channels/${channelId}`)
+    expect(await screen.findByRole('complementary', { name: 'Thread' })).toBeVisible()
   })
 
   it('falls back to the Project overview when a durable refetch returns 404', async () => {

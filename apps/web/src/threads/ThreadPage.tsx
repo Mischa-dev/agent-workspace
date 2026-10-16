@@ -40,6 +40,7 @@ import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useArchiveConversation } from '../conversations/useArchiveConversation'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { useInstantMutation } from '../app/mutations'
+import { usePageTitle } from '../shell/documentTitleModel'
 import {
   normalizeTimelinePage,
   searchMentionableActors,
@@ -453,6 +454,7 @@ export function ThreadPage() {
   const realtime = useConversationRealtime(threadId)
   const timeline = thread.timeline.data
   const verifiedTimeline = thread.routeMatches ? timeline : undefined
+  usePageTitle(verifiedTimeline?.conversation.name ?? null)
   const activeRun = verifiedTimeline?.activeRun ?? null
   const latestTerminalRun = verifiedTimeline?.latestTerminalRun ?? null
   const [prompt, setPrompt] = useState('')

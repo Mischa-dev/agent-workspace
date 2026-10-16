@@ -40,7 +40,8 @@ import {
   actorKind,
 } from '../ui'
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
-import { ThreadPanel } from './ThreadPanel'
+import { usePageTitle } from '../shell/documentTitleModel'
+import { ThreadPanel } from '../threads/ThreadPanel'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -175,11 +176,13 @@ export function DirectConversationPage() {
     }
   }
 
+  const title = summary ? conversationTitle(summary, viewerId) : page?.conversation.name ?? 'Conversation'
+  usePageTitle(summary || page ? title : null)
+
   if (isApiError(timeline.error) && timeline.error.status === 404) {
     return <Navigate replace to="/messages" />
   }
 
-  const title = summary ? conversationTitle(summary, viewerId) : page?.conversation.name ?? 'Conversation'
   const otherKind = other ? actorKind(other.kind) : 'person'
   const memberPeople = members.map((member) => ({ id: member.id, name: member.displayName, kind: actorKind(member.kind) }))
   const othersNames = members.filter((member) => member.id !== viewerId).map((member) => member.displayName)

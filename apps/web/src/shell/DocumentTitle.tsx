@@ -71,7 +71,8 @@ export function DocumentTitle() {
   const title = pageTitleFor(location.pathname, location.search, projects.data?.projects ?? [], override)
 
   useEffect(() => {
-    document.title = `${count > 0 ? `(${count > 99 ? '99+' : count}) ` : ''}${title ? `${title} · ` : ''}Agent Workspace`
+    const named = !title ? 'Agent Workspace' : title.endsWith('Agent Workspace') ? title : `${title} · Agent Workspace`
+    document.title = `${count > 0 ? `(${count > 99 ? '99+' : count}) ` : ''}${named}`
   }, [count, title])
   useEffect(() => () => {
     document.title = 'Agent Workspace'

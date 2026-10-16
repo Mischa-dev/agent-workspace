@@ -144,7 +144,7 @@ export function ThreadBoard({
     filter === 'all' ? true : filter === 'open' ? !isSettled(thread.status) : isSettled(thread.status),
   )
   return (
-    <aside aria-label="Threads" className="context-drawer aw-board">
+    <aside aria-label="Threads" className="context-drawer aw-threadboard">
       <div className="aw-members__head">
         <h2>Threads</h2>
         <IconButton icon="x" label="Close threads" onClick={onClose} size="sm" />
@@ -165,21 +165,21 @@ export function ThreadBoard({
           Start a thread from any message when a topic is going to run long.
         </EmptyState>
       ) : null}
-      <ul className="aw-board__list">
+      <ul className="aw-threadboard__list">
         {shown.map((thread) => (
           <li key={thread.id}>
-            <button className="aw-board__item" onClick={() => onOpen(thread)} type="button">
-              <span className="aw-board__top">
-                <span className="aw-board__name">{thread.name}</span>
+            <button className="aw-threadboard__item" onClick={() => onOpen(thread)} type="button">
+              <span className="aw-threadboard__top">
+                <span className="aw-threadboard__name">{thread.name}</span>
                 {thread.unread ? <span aria-label="New replies" className="aw-badge aw-badge--mention aw-badge--dot" role="img" /> : null}
               </span>
-              <span className="aw-board__meta">
+              <span className="aw-threadboard__meta">
                 <ThreadStatusChip status={thread.status} />
                 <span>
                   {thread.messageCount} {thread.messageCount === 1 ? 'message' : 'messages'}
                 </span>
               </span>
-              {thread.outcome ? <span className="aw-board__outcome">{thread.outcome}</span> : null}
+              {thread.outcome ? <span className="aw-threadboard__outcome">{thread.outcome}</span> : null}
             </button>
           </li>
         ))}

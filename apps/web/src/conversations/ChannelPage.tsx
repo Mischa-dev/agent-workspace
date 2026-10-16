@@ -28,6 +28,8 @@ import { StructuredComposer } from './StructuredComposer'
 import { ThreadBoard, ThreadStatusChip } from './threadBoard'
 import { useThreads } from './threadModel'
 import { ThreadDialog } from './ThreadDialog'
+import { ThreadPanel } from '../threads/ThreadPanel'
+import { usePageTitle } from '../shell/documentTitleModel'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from './Timeline'
 import type { ConversationTimelineEntry, SidebarThread } from './types'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
@@ -51,11 +53,20 @@ export function ChannelPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const includeArchived = searchParams.get('includeArchived') === 'true'
   const boardOpen = searchParams.get('threads') === 'all'
+  const openThreadId = searchParams.get('thread')
   const setBoardOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams)
     if (open) next.set('threads', 'all')
     else next.delete('threads')
     setSearchParams(next, { replace: true })
+  }
+  // Threads open beside the channel, so you keep your place in it.
+  const openThread = (threadId: string | null) => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('threads')
+    if (threadId) next.set('thread', threadId)
+    else next.delete('thread')
+    setSearchParams(next)
   }
   const threadStatuses = useThreads(channelId)
   const navigate = useNavigate()
@@ -138,6 +149,7 @@ export function ChannelPage() {
   )
 
   const name = validBoundary ? page?.conversation.name ?? 'Channel' : 'Channel'
+  usePageTitle(validBoundary ? `#${name}` : null)
   const archived = Boolean(page?.conversation.archivedAt)
   const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
   const threadRoute = (threadId: string) => `/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`
@@ -162,7 +174,7 @@ export function ChannelPage() {
       if (threads.length) {
         return (
           <>
-            <IconButton icon="messages" label="Open thread" onClick={() => navigate(threadRoute(threads[0].id))} size="sm" />
+            <IconButton icon="messages" label="Open thread" onClick={() => openThread(threads[0].id)} size="sm" />
             {memory}
           </>
         )
@@ -229,17 +241,29 @@ export function ChannelPage() {
   return (
     <AppShell
       context={
-        boardOpen ? (
+        openThreadId && validBoundary ? (
+          <ThreadPanel
+            fullPageHref={threadRoute(openThreadId)}
+            key={openThreadId}
+            onClose={() => openThread(null)}
+            parentId={channelId}
+            projectId={projectId}
+            searchActors={searchActors}
+            searchWorkItems={searchWorkItems}
+            threadId={openThreadId}
+            viewer={{ actorId: session.user.actorId, displayName: session.user.displayName }}
+          />
+        ) : boardOpen ? (
           <ThreadBoard
             conversationId={channelId}
             onClose={() => setBoardOpen(false)}
-            onOpen={(thread) => navigate(threadRoute(thread.id))}
+            onOpen={(thread) => openThread(thread.id)}
           />
         ) : undefined
       }
-      contextKey={boardOpen ? 'threads' : undefined}
+      contextKey={openThreadId ?? (boardOpen ? 'threads' : undefined)}
       mainClassName="aw-main--conversation"
-      onContextDismiss={() => setBoardOpen(false)}
+      onContextDismiss={() => (openThreadId ? openThread(null) : setBoardOpen(false))}
       project={project.data}
       selectedChannelId={validBoundary ? channelId : undefined}
       user={session.user}
@@ -314,7 +338,17 @@ export function ChannelPage() {
           renderExtras={(entry) => {
             const threads = entry.message ? linkedThreadsByMessage.get(entry.message.id) ?? [] : []
             return threads.map((thread) => (
-              <Link className="aw-threadlink" key={thread.id} to={threadRoute(thread.id)}>
+              <Link
+                aria-current={thread.id === openThreadId ? 'true' : undefined}
+                className="aw-threadlink"
+                key={thread.id}
+                onClick={(event) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+                  event.preventDefault()
+                  openThread(thread.id)
+                }}
+                to={threadRoute(thread.id)}
+              >
                 <Icon name="messages" size={14} />
                 <span className="aw-threadlink__name">{thread.name}</span>
                 {statusByThread.get(thread.id) ? <ThreadStatusChip status={statusByThread.get(thread.id)?.status ?? 'Open'} /> : null}
@@ -366,7 +400,7 @@ export function ChannelPage() {
           onClose={() => setThreadDialog(null)}
           onCreated={(threadId) => {
             void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
-            navigate(threadRoute(threadId))
+            openThread(threadId)
           }}
           open
           origin={threadDialog.origin}
