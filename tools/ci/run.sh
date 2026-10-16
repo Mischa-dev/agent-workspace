@@ -70,8 +70,12 @@ remote() {
   esac
 }
 
+# Files that changed get the time of this sync (--no-times), not the time they
+# were checked out. Cargo and `tsc -b` rebuild only sources newer than their
+# last build, and jobs check out long before they get a machine, so keeping
+# checkout times let a run reuse another PR's newer build.
 sync_source() {
-  local rsync_args=(-a --checksum --delete --exclude .git --exclude node_modules
+  local rsync_args=(-a --no-times --checksum --delete --exclude .git --exclude node_modules
     --exclude target --exclude dist --exclude .claude --filter=':- .gitignore')
   remote "mkdir -p ${work}/src"
   case "${transport}" in
@@ -82,6 +86,11 @@ sync_source() {
         --rsync-path="sudo -n -u aw-runner rsync" ./ "${target}:${work}/src/"
       ;;
   esac
+  # Builds from before --no-times may not match the source beside them: touch
+  # it all once per machine so the next build redoes everything.
+  remote "cd ${work} && if [ ! -e synced-without-times ]; then
+      find src \\( -name node_modules -o -name dist -o -name target \\) -prune -o -type f -exec touch {} + &&
+      touch synced-without-times; fi"
 }
 
 # One CI job per machine: mkdir is atomic. The holder touches lock/alive every
