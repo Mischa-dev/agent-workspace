@@ -150,6 +150,25 @@ pub async fn pickable_models(
         .collect())
 }
 
+/// The reported models that fit beside the `kept` ones without the catalog
+/// passing `MAX_CATALOG_MODELS`, in the harness's order.
+fn within_cap<'a>(models: &'a [ModelEntry], kept: &[String]) -> Vec<&'a ModelEntry> {
+    let mut total = kept.len();
+    models
+        .iter()
+        .filter(|model| {
+            if kept.contains(&model.id) {
+                return true;
+            }
+            if total >= MAX_CATALOG_MODELS {
+                return false;
+            }
+            total += 1;
+            true
+        })
+        .collect()
+}
+
 /// Replaces what the harness reported, keeping every person's edits. Models
 /// the harness no longer lists are dropped unless someone edited them.
 pub async fn store_refresh(
@@ -158,12 +177,25 @@ pub async fn store_refresh(
     adapter_kind: &str,
     models: &[ModelEntry],
 ) -> Result<usize, AppError> {
-    let models = &models[..models.len().min(MAX_CATALOG_MODELS)];
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("harness-catalog:{organization_id}:{adapter_kind}"))
         .execute(&mut *transaction)
         .await?;
+    // Edited and hand-added models stay whatever the harness reports, so
+    // they take their room in the cap before any new model does.
+    let kept = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT model_id FROM harness_models
+        WHERE organization_id = $1 AND adapter_kind = $2
+          AND (provider_data IS NULL OR overrides <> '{}'::jsonb)
+        "#,
+    )
+    .bind(organization_id)
+    .bind(adapter_kind)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let models = within_cap(models, &kept);
     let ids = models
         .iter()
         .map(|model| model.id.clone())
@@ -358,4 +390,28 @@ pub async fn remove_model(
     .await?
     .rows_affected();
     Ok(deleted + cleared > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str) -> ModelEntry {
+        serde_json::from_value(serde_json::json!({ "id": id, "displayName": id }))
+            .unwrap_or_else(|_| panic!("model entry"))
+    }
+
+    #[test]
+    fn kept_models_take_their_room_before_new_ones() {
+        let reported = (0..MAX_CATALOG_MODELS)
+            .map(|index| entry(&format!("m{index}")))
+            .collect::<Vec<_>>();
+        // One edited model the harness stopped listing and one it still lists.
+        let kept = vec!["gone".to_owned(), "m5".to_owned()];
+        let fitted = within_cap(&reported, &kept);
+        assert_eq!(fitted.len(), MAX_CATALOG_MODELS - 1);
+        assert!(fitted.iter().any(|model| model.id == "m5"));
+        assert_eq!(fitted.last().map(|model| model.id.as_str()), Some("m198"));
+        assert_eq!(within_cap(&reported, &[]).len(), MAX_CATALOG_MODELS);
+    }
 }

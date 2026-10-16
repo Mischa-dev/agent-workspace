@@ -459,7 +459,7 @@ async fn mark_account_healthy(state: &AppState, account_id: Uuid) -> Result<(), 
         r#"
         UPDATE provider_accounts
         SET last_health_at = now(), last_failure_category = NULL,
-            version = version + 1, updated_at = now()
+            updated_at = now()
         WHERE id = $1
         "#,
     )
@@ -499,7 +499,7 @@ async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'st
         r#"
         UPDATE provider_accounts
         SET last_health_at = now(), last_failure_category = $2,
-            version = version + 1, updated_at = now()
+            updated_at = now()
         WHERE id = $1
         "#,
     )
