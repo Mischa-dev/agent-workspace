@@ -410,13 +410,16 @@ results land in an inbox with a badge.
 - [ ] [N2](#n2-inbox) Inbox
 
 **Owns:** A new notifications module and table, the fan-out from outbox
-events, `attention_count` in `projects.rs`, notifications in
-`mcp/briefing.rs`, and a new `apps/web/src/inbox/`.
+events, any event payloads in `outbox.rs` it needs for approvals, pull request
+checks and review requests, `attention_count` in `projects.rs`, notifications
+in `mcp/briefing.rs`, and a new `apps/web/src/inbox/`.
 
 **Seams:**
 
 - Notifications are written in the outbox publisher's transaction, so they
   don't wait for W1's job queue.
+- W4 also adds payloads to `outbox.rs` (for F7). Add lines next to related
+  ones, as F4 says, so either can merge first.
 - Uses W4's toasts and skeletons if they're on main, and plain states
   otherwise.
 - Capacity alerts (W9) and AI suggestions (W10) add their own kinds later.
@@ -839,9 +842,10 @@ test.
 
 One durable job queue in PostgreSQL (`FOR UPDATE SKIP LOCKED`, retries with
 backoff, run-at times, unique keys, a dead state) with a small worker pool.
-The outbox publisher, reply webhooks and run scheduler stay as they are; new
-background work (usage polling, AI jobs, notification fan-out, push delivery,
-the launch queue, automations, outgoing webhooks) uses this instead of another
+The outbox publisher, reply webhooks and run scheduler stay as they are, and
+so does notification fan-out, which N1 writes in the outbox publisher's
+transaction; new background work (usage polling, AI jobs, push delivery, the
+launch queue, automations, outgoing webhooks) uses this instead of another
 hand-written loop. HTTP calls happen outside row locks, which also settles the
 open risk PR #128 noted for webhooks. Delivery is at least once, because a
 worker can crash after a remote call succeeds and before the job is marked
@@ -1627,15 +1631,17 @@ shown today), assignments, approvals waiting, runs finished, failed or
 waiting, failing PR checks and review requests, and later capacity alerts and
 AI suggestions. Repeats collapse into one. `attention_count` stops being
 hard-coded to 0 (`projects.rs:479`). The MCP briefing includes them. Rows hold
-ids, not message text: the inbox, push and the briefing build each preview
-from its source through `conversation_visible_to` when they read it, and hide
-a notification whose source the reader can no longer see. Notifications are
-written in the outbox publisher's transaction, so they need no job queue;
-fan-out moves to a job if volume calls for it.
+ids, not message text: the inbox, push and the briefing build each title and
+preview from its source when they read it, checking the reader's current
+access each time (`actor_can_access_project` for the project,
+`conversation_visible_to` for a conversation, `pull_request_visible_to` for a
+pull request), and hide a notification whose source the reader can no longer
+see. Notifications are written in the outbox publisher's transaction, so they
+need no job queue; fan-out moves to a job if volume calls for it.
 
 **Done when:** A comment @mention reaches the person and the project's
-attention count, and someone removed from a private group stops seeing its
-notifications' previews.
+attention count, and someone removed from a private group or a project stops
+seeing its notifications.
 
 #### N2. Inbox
 
