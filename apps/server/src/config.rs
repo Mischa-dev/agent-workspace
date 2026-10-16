@@ -196,11 +196,8 @@ impl AppConfig {
             Duration::from_secs(parse(values, "CODEX_REQUEST_TIMEOUT_SECONDS", "120")?);
         let codex_shutdown_timeout =
             Duration::from_secs(parse(values, "CODEX_SHUTDOWN_TIMEOUT_SECONDS", "5")?);
-        let codex_cloud_poll_interval = Duration::from_millis(parse(
-            values,
-            "CODEX_CLOUD_POLL_MILLISECONDS",
-            "15000",
-        )?);
+        let codex_cloud_poll_interval =
+            Duration::from_millis(parse(values, "CODEX_CLOUD_POLL_MILLISECONDS", "15000")?);
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");

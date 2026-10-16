@@ -113,16 +113,17 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
     .await?;
     // The host-wide cap only counts runs on this server; cloud harnesses
     // never wait on it (H8).
+    let cloud_kinds = state.supervisors.cloud_kinds();
     let local_active = sqlx::query_scalar::<_, i64>(&format!(
         r#"
         SELECT count(*) FROM agent_runs run
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
-        JOIN provider_connections connection
-          ON connection.id = profile.provider_connection_id
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
         WHERE run.state IN {ACTIVE_TURN_STATES}
-          AND connection.host = 'local_project_host'
+          AND account.adapter_kind <> ALL($1)
         "#
     ))
+    .bind(&cloud_kinds)
     .fetch_one(&mut *transaction)
     .await?;
     let host_full = local_active
@@ -160,11 +161,9 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         JOIN projects project ON project.id = run.project_id
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
         JOIN provider_accounts account ON account.id = profile.provider_account_id
-        JOIN provider_connections connection
-          ON connection.id = profile.provider_connection_id
         WHERE run.state = 'queued'
           AND run.scheduler_claim_id IS NULL
-          AND (connection.host <> 'local_project_host' OR NOT $1)
+          AND (account.adapter_kind = ANY($2) OR NOT $1)
           AND (
               SELECT count(*) FROM agent_runs active
               JOIN execution_profiles active_profile
@@ -183,6 +182,7 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         "#
     ))
     .bind(host_full)
+    .bind(&cloud_kinds)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(candidate) = candidate else {

@@ -35,8 +35,8 @@ use super::{
         LoginStart, ProfileHealth, RateLimitSummary, RecoveredTurn,
     },
     manifest::{
-        AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry,
-        RunLocation, RunOptionSupport, VersionRange,
+        AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
+        RunOptionSupport, VersionRange,
     },
     registry::ShutdownSignal,
     run_config::RunConfig,
@@ -636,8 +636,7 @@ impl Follower {
                     HarnessEvent::TurnCompleted { completed: false },
                 ],
                 TaskState::Ready | TaskState::Applied => {
-                    match bring_back(&self.cli, &self.home, &self.task_id, &self.cwd, &status)
-                        .await
+                    match bring_back(&self.cli, &self.home, &self.task_id, &self.cwd, &status).await
                     {
                         Ok(commit) => vec![
                             HarnessEvent::ItemCompleted(HarnessItem {
@@ -819,12 +818,20 @@ impl HarnessSession for CloudSession {
         })
     }
 
-    fn answer(&mut self, _request: HarnessRequest, _answer: HarnessAnswer) -> HarnessFuture<'_, ()> {
+    fn answer(
+        &mut self,
+        _request: HarnessRequest,
+        _answer: HarnessAnswer,
+    ) -> HarnessFuture<'_, ()> {
         Box::pin(async { Err(HarnessError::Unsupported("answering requests")) })
     }
 
     fn read_latest_turn<'a>(&'a mut self, _thread_id: &'a str) -> HarnessFuture<'a, RecoveredTurn> {
-        Box::pin(async { Err(HarnessError::Unsupported("reading a thread without its task")) })
+        Box::pin(async {
+            Err(HarnessError::Unsupported(
+                "reading a thread without its task",
+            ))
+        })
     }
 
     fn read_turn<'a>(
@@ -919,9 +926,7 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{
-        CodexCloudAdapter, TaskState, finished_message, parse_status, task_id_from_url,
-    };
+    use super::{CodexCloudAdapter, TaskState, finished_message, parse_status, task_id_from_url};
     use crate::{
         config::AppConfig,
         provider::{
@@ -935,10 +940,9 @@ mod tests {
 
     #[test]
     fn statuses_are_read_from_the_command_line_text() {
-        let ready = parse_status(
-            "[READY] Fix the flaky test\nCodex env  •  3m ago\n+12/-3 • 2 files\n",
-        )
-        .expect("ready");
+        let ready =
+            parse_status("[READY] Fix the flaky test\nCodex env  •  3m ago\n+12/-3 • 2 files\n")
+                .expect("ready");
         assert_eq!(ready.state, TaskState::Ready);
         assert_eq!(ready.title, "Fix the flaky test");
         assert_eq!(ready.summary.as_deref(), Some("+12/-3 • 2 files"));
@@ -1080,7 +1084,10 @@ esac
     }
 
     fn account(fake: &FakeCloud, max: u16) -> AccountHandle {
-        let home = fake.data_root.join("homes").join(Uuid::now_v7().to_string());
+        let home = fake
+            .data_root
+            .join("homes")
+            .join(Uuid::now_v7().to_string());
         fs::create_dir_all(&home).expect("home");
         AccountHandle {
             id: Uuid::now_v7(),
@@ -1104,8 +1111,14 @@ esac
         let adapter = adapter(&fake);
         // Account pages go through Codex's own App Server, which the fake
         // doesn't speak; the contract's run half is what this adapter adds.
-        adapter_contract_with(&adapter, account(&fake, 2), &fake.worktree, with_environment(), false)
-            .await;
+        adapter_contract_with(
+            &adapter,
+            account(&fake, 2),
+            &fake.worktree,
+            with_environment(),
+            false,
+        )
+        .await;
     }
 
     #[cfg(unix)]
@@ -1116,9 +1129,7 @@ esac
         let account = account(&fake, 1);
         let mut config = with_environment();
         config.attempts = Some(2);
-        config
-            .options
-            .insert("branch".to_owned(), "main".into());
+        config.options.insert("branch".to_owned(), "main".into());
         let mut run = adapter.acquire_run(account.clone()).await.expect("run");
         let thread = run
             .start_thread(&fake.worktree, &config)
@@ -1183,7 +1194,12 @@ esac
             .check_environment(&account, "env_abc")
             .await
             .expect("known environment");
-        assert!(adapter.check_environment(&account, "missing").await.is_err());
+        assert!(
+            adapter
+                .check_environment(&account, "missing")
+                .await
+                .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -1192,10 +1208,7 @@ esac
         let fake = fake_cloud();
         let adapter = adapter(&fake);
         let account = account(&fake, 1);
-        let mut control = adapter
-            .acquire_control(account)
-            .await
-            .expect("control");
+        let mut control = adapter.acquire_control(account).await.expect("control");
         control
             .resume_thread("cloud-1", &fake.worktree, &RunConfig::default())
             .await

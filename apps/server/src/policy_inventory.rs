@@ -73,6 +73,36 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SettingsManage
     ),
     policy_route!(
+        "environments",
+        Post,
+        "/api/v1/projects/{project_id}/environments",
+        SettingsManage
+    ),
+    policy_route!(
+        "environments",
+        Put,
+        "/api/v1/projects/{project_id}/environments/{environment_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "environments",
+        Post,
+        "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
+        SettingsManage
+    ),
+    policy_route!(
+        "environments",
+        Post,
+        "/api/v1/projects/{project_id}/environments/{environment_id}/default",
+        SettingsManage
+    ),
+    policy_route!(
+        "environments",
+        Post,
+        "/api/v1/projects/{project_id}/environments/{environment_id}/check",
+        WorkerInvoke
+    ),
+    policy_route!(
         "secrets",
         Put,
         "/api/v1/organizations/{organization_id}/secrets/{name}",
@@ -602,6 +632,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         WorkerInvoke
     ),
     policy_route!(
+        "launch",
+        Post,
+        "/api/v1/projects/{project_id}/launches",
+        WorkerInvoke
+    ),
+    policy_route!(
+        "launch",
+        Post,
+        "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
+        WorkerInvoke
+    ),
+    policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
@@ -751,6 +793,9 @@ mod tests {
         ("memory", include_str!("memory.rs")),
         ("connected_apps", include_str!("connected_apps.rs")),
         ("settings", include_str!("settings.rs")),
+        ("environments", include_str!("environments.rs")),
+        ("launch", include_str!("launch.rs")),
+        ("agent_sessions", include_str!("agent_sessions.rs")),
         ("secrets", include_str!("secrets.rs")),
         ("metrics", include_str!("metrics.rs")),
     ];

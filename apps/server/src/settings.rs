@@ -113,6 +113,10 @@ pub enum SettingType {
         max_chars: usize,
         optional: bool,
     },
+    /// Multi-line Markdown up to `max_chars`, such as a prompt template.
+    Markdown {
+        max_chars: usize,
+    },
     /// An identifier such as a harness, model or environment id: letters,
     /// digits and `._:/-`. Adapters say which ones exist; the setting only
     /// checks the shape.
@@ -162,6 +166,14 @@ impl SettingDef {
             | (SettingType::Identifier { optional }, Value::Null) => optional,
             (SettingType::Text { max_chars, .. }, Value::String(text)) => {
                 text.chars().count() <= max_chars && !text.chars().any(char::is_control)
+            }
+            (SettingType::Markdown { max_chars }, Value::String(text)) => {
+                text.chars().count() <= max_chars
+                    && !text
+                        .chars()
+                        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+                    // Stored values are capped at 16 KiB of JSON.
+                    && serde_json::to_string(value).map_or(false, |json| json.len() <= 16_000)
             }
             (SettingType::Identifier { .. }, Value::String(text)) => {
                 (1..=200).contains(&text.len())
@@ -228,6 +240,15 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "\"default\"",
     },
     SettingDef {
+        key: "run.attempts",
+        label: "Attempts",
+        description: "How many attempts a run makes, where the harness can try several and keep the best (such as Codex Cloud).",
+        kind: SettingType::Integer { min: 1, max: 8 },
+        scopes: RUN_SCOPES,
+        launch_override: true,
+        default: "1",
+    },
+    SettingDef {
         key: "run.environment",
         label: "Environment",
         description: "Where new runs execute, such as a provider's cloud environment. Unset, this host.",
@@ -244,6 +265,15 @@ pub const REGISTRY: &[SettingDef] = &[
         scopes: &[Scope::Project],
         launch_override: true,
         default: "null",
+    },
+    SettingDef {
+        key: "launch.template",
+        label: "Launch prompt",
+        description: "The prompt Launch builds from a task, in Markdown. Fields such as {{task.title}}, {{task.criteria}} and {{project.guide}} are filled in; {{#if task.pages}}…{{/if}} keeps a part only when the field has a value, and {{#harness codex_cloud}}…{{/harness}} only for that harness.",
+        kind: SettingType::Markdown { max_chars: 12000 },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: r#""You're working on {{task.key}} in {{project.name}}: {{task.title}}\n{{#if task.description}}\n\n## What to do\n\n{{task.description}}\n{{/if}}\n{{#if task.criteria}}\n\n## Done when\n\n{{task.criteria}}\n{{/if}}\n{{#if task.pages}}\n\n## Linked pages\n\n{{task.pages}}\n{{/if}}\n{{#if project.guide}}\n\n## Project guide\n\n{{project.guide}}\n{{/if}}\n\nWhen you finish, say what you changed and how you checked it.\n""#,
     },
     SettingDef {
         key: "ai.auto_apply_suggestions",

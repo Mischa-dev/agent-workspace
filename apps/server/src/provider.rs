@@ -363,9 +363,45 @@ pub async fn start_run(
     outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
         .await?;
     transaction.commit().await?;
+    // A turn people can watch elsewhere (a cloud task) becomes the thread's
+    // agent session (A3).
+    if let Err(error) = crate::agent_sessions::record_run_turn(
+        state,
+        run_id,
+        &turn_id,
+        provider.turn_link(&turn_id).as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(error_category = error.log_category(), %run_id, "agent session not recorded");
+    }
 
+    spawn_drive(
+        state,
+        provider,
+        project_id,
+        run_id,
+        conversation_id,
+        provider_thread_id.clone(),
+        turn_id,
+    );
+
+    Ok(StartedProviderRun {
+        provider_session_id,
+        provider_thread_id,
+    })
+}
+
+fn spawn_drive(
+    state: &AppState,
+    provider: Box<dyn HarnessSession>,
+    project_id: Uuid,
+    run_id: Uuid,
+    conversation_id: Uuid,
+    thread_for_task: String,
+    turn_id: String,
+) {
     let background_state = state.clone();
-    let thread_for_task = provider_thread_id.clone();
     tokio::spawn(async move {
         if let Err(error) = drive_turn(
             background_state.clone(),
@@ -393,11 +429,74 @@ pub async fn start_run(
             .await;
         }
     });
+}
 
-    Ok(StartedProviderRun {
-        provider_session_id,
+/// After a restart, a turn still running where it runs (a cloud task) is
+/// followed again instead of being interrupted. Returns whether it was.
+pub(crate) async fn follow_recovered_run(
+    state: &AppState,
+    run_id: Uuid,
+    worktree: PathBuf,
+) -> Result<bool, AppError> {
+    let Some((project_id, conversation_id, provider_thread_id, execution_profile_id, turn_id)) =
+        sqlx::query_as::<_, (Uuid, Uuid, String, Uuid, String)>(
+            r#"
+            SELECT c.project_id, ar.conversation_id, ps.provider_thread_id,
+                   ar.execution_profile_id, ar.provider_turn_id
+            FROM agent_runs ar
+            JOIN conversations c ON c.id = ar.conversation_id
+            JOIN provider_sessions ps ON ps.id = ar.provider_session_id
+            WHERE ar.id = $1 AND ar.provider_turn_id IS NOT NULL
+            "#,
+        )
+        .bind(run_id)
+        .fetch_optional(&state.pool)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let account = ProfileAccount::for_profile(&state.pool, execution_profile_id).await?;
+    if state
+        .supervisors
+        .manifest(&account.adapter_kind)
+        .is_none_or(|found| found.runs_on != manifest::RunLocation::Cloud)
+    {
+        return Ok(false);
+    }
+    let config = run_config(state, run_id).await?;
+    let Ok(mut provider) = state
+        .supervisors
+        .acquire_run(&account.adapter_kind, account.handle())
+        .await
+    else {
+        return Ok(false);
+    };
+    if provider
+        .resume_thread(&provider_thread_id, &worktree, &config)
+        .await
+        .is_err()
+        || provider
+            .follow_turn(&provider_thread_id, &turn_id, &worktree, &config)
+            .await
+            .is_err()
+    {
+        return Ok(false);
+    }
+    let mut transaction = state.pool.begin().await?;
+    transition_run(&mut transaction, run_id, RunState::Working, None).await?;
+    outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
+        .await?;
+    transaction.commit().await?;
+    spawn_drive(
+        state,
+        provider,
+        project_id,
+        run_id,
+        conversation_id,
         provider_thread_id,
-    })
+        turn_id,
+    );
+    Ok(true)
 }
 
 pub(crate) async fn inspect_provider_for_recovery(
@@ -444,7 +543,9 @@ pub(crate) async fn inspect_provider_for_recovery(
     {
         return ProviderRecovery::Unavailable;
     }
-    let history = provider.read_latest_turn(&provider_thread_id).await;
+    let history = provider
+        .read_turn(&provider_thread_id, &provider_turn_id)
+        .await;
     let Ok(history) = history else {
         return ProviderRecovery::Unavailable;
     };

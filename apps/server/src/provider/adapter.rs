@@ -241,7 +241,11 @@ pub trait HarnessSession: Send {
         _cwd: &'a Path,
         _config: &'a RunConfig,
     ) -> HarnessFuture<'a, ()> {
-        Box::pin(async { Err(HarnessError::Unsupported("following a turn after a restart")) })
+        Box::pin(async {
+            Err(HarnessError::Unsupported(
+                "following a turn after a restart",
+            ))
+        })
     }
 
     /// A link people can open to watch the turn where it runs, such as a

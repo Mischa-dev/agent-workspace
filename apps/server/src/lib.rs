@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod account;
+pub mod agent_sessions;
 pub mod api;
 pub mod auth;
 pub mod bootstrap;
@@ -9,6 +10,7 @@ pub mod connected_apps;
 pub mod conversations;
 pub mod direct;
 pub mod domain;
+pub mod environments;
 pub mod error;
 pub mod execution;
 pub mod execution_setup;
@@ -21,6 +23,7 @@ pub mod health;
 pub mod idempotency;
 pub mod invitations;
 pub mod jobs;
+pub mod launch;
 pub mod mcp;
 pub mod memberships;
 pub mod memory;
@@ -103,6 +106,9 @@ pub fn router(state: AppState) -> Router {
         .merge(reactions::router())
         .merge(external_agents::router())
         .merge(repositories::router())
+        .merge(environments::router())
+        .merge(launch::router())
+        .merge(agent_sessions::router())
         .merge(github::router())
         .merge(invitations::router())
         .merge(memberships::router())
