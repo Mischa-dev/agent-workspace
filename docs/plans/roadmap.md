@@ -235,13 +235,13 @@ The plumbing everything else uses, and what keeps it safe to run: background
 jobs, encrypted secrets, settings that inherit, backups you can restore,
 metrics, and the two-workspace isolation tests.
 
-- [ ] [F9](#f9-background-jobs) Background jobs
-- [ ] [S1](#s1-encrypted-secrets) Encrypted secrets
-- [ ] [S2](#s2-settings-that-inherit) Settings that inherit
-- [ ] [O1](#o1-backups-you-can-restore) Backups you can restore
-- [ ] [O2](#o2-metrics-and-error-tracking) Metrics and error tracking
-- [ ] [O3](#o3-retention-on-a-schedule) Retention on a schedule
-- [ ] [O7](#o7-two-workspace-isolation-tests) Two-workspace isolation tests
+- [x] [F9](#f9-background-jobs) Background jobs
+- [x] [S1](#s1-encrypted-secrets) Encrypted secrets
+- [x] [S2](#s2-settings-that-inherit) Settings that inherit
+- [x] [O1](#o1-backups-you-can-restore) Backups you can restore
+- [x] [O2](#o2-metrics-and-error-tracking) Metrics and error tracking
+- [x] [O3](#o3-retention-on-a-schedule) Retention on a schedule
+- [x] [O7](#o7-two-workspace-isolation-tests) Two-workspace isolation tests
 
 **Owns:** New server modules for jobs, secrets and settings; scheduling in
 `retention.rs`; the metrics endpoint; the isolation suite under

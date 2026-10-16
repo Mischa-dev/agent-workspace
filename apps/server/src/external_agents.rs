@@ -244,16 +244,25 @@ async fn create_connection(
     let webhook_secret = match &webhook_url {
         Some(url) => {
             let secret = crate::replies::new_webhook_secret();
+            // The signing secret lives encrypted in the secrets store (S1).
+            let secret_id = crate::secrets::put_webhook_secret(
+                &mut transaction,
+                &state.config,
+                created.connection_id,
+                &crate::secrets::SecretValue::new(secret.clone()),
+            )
+            .await?;
             sqlx::query(
                 r#"
                 UPDATE external_agent_connections
-                SET webhook_url = $2, webhook_secret = $3, wakeup_format = 'typed'
+                SET webhook_url = $2, webhook_secret = NULL, webhook_secret_id = $3,
+                    wakeup_format = 'typed'
                 WHERE id = $1
                 "#,
             )
             .bind(created.connection_id)
             .bind(url)
-            .bind(&secret)
+            .bind(secret_id)
             .execute(&mut *transaction)
             .await?;
             insert_audit(
@@ -401,6 +410,7 @@ async fn insert_agent(
 /// new signing secret.
 pub async fn set_webhook_for_host(
     pool: &sqlx::PgPool,
+    config: &crate::config::AppConfig,
     connection_id: Uuid,
     url: &str,
     typed_wakeups: bool,
@@ -410,23 +420,33 @@ pub async fn set_webhook_for_host(
         return Err(AppError::Validation("webhook URL"));
     }
     let secret = crate::replies::new_webhook_secret();
+    let mut transaction = pool.begin().await?;
+    let secret_id = crate::secrets::put_webhook_secret(
+        &mut transaction,
+        config,
+        connection_id,
+        &crate::secrets::SecretValue::new(secret.clone()),
+    )
+    .await?;
     let updated = sqlx::query(
         r#"
         UPDATE external_agent_connections
-        SET webhook_url = $2, webhook_secret = $3, version = version + 1, updated_at = now(),
+        SET webhook_url = $2, webhook_secret = NULL, webhook_secret_id = $3,
+            version = version + 1, updated_at = now(),
             wakeup_format = CASE WHEN $4 THEN 'typed' ELSE 'inbox' END
         WHERE id = $1 AND status = 'active'
         "#,
     )
     .bind(connection_id)
     .bind(url)
-    .bind(&secret)
+    .bind(secret_id)
     .bind(typed_wakeups)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
     if updated.rows_affected() != 1 {
         return Err(AppError::NotFound("external agent connection"));
     }
+    transaction.commit().await?;
     Ok(secret)
 }
 
@@ -564,10 +584,34 @@ async fn set_webhook(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_management(&principal, &access, project_id)?;
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM external_agent_connections WHERE project_id = $1 AND id = $2 AND status <> 'removed')",
+    )
+    .bind(project_id)
+    .bind(connection_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !exists {
+        return Err(AppError::NotFound("external agent connection"));
+    }
+    // The signing secret lives encrypted in the secrets store (S1).
+    let secret_id = match &secret {
+        Some(secret) => Some(
+            crate::secrets::put_webhook_secret(
+                &mut transaction,
+                &state.config,
+                connection_id,
+                &crate::secrets::SecretValue::new(secret.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let updated = sqlx::query(
         r#"
         UPDATE external_agent_connections
-        SET webhook_url = $3, webhook_secret = $4, last_wakeup_error = NULL,
+        SET webhook_url = $3, webhook_secret = NULL, webhook_secret_id = $4,
+            last_wakeup_error = NULL,
             -- A new secret means the runner is set up again, so it gets
             -- typed wakeups from here on.
             wakeup_format = 'typed',
@@ -578,11 +622,14 @@ async fn set_webhook(
     .bind(project_id)
     .bind(connection_id)
     .bind(&url)
-    .bind(&secret)
+    .bind(secret_id)
     .execute(&mut *transaction)
     .await?;
     if updated.rows_affected() != 1 {
         return Err(AppError::NotFound("external agent connection"));
+    }
+    if secret_id.is_none() {
+        crate::secrets::delete_webhook_secret(&mut transaction, connection_id).await?;
     }
     insert_audit(
         &mut transaction,
