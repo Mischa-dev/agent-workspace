@@ -20,9 +20,10 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // in the lazily loaded conversation routes.
   // The app shell (command menu, shortcuts, toasts with Undo, skeletons, tab
   // titles and badges, the thread side panel, live task patches) and the
-  // Markdown renderer and editor measure 694,135 / 223,840; code highlighting
-  // loads only with a code block.
-  javascriptRawBytes: 680 * 1024,
+  // Markdown renderer and editor measure 696,486 / 223,840 after review fixes
+  // (task-key disambiguation, lookup errors); code highlighting loads only
+  // with a code block.
+  javascriptRawBytes: 684 * 1024,
   javascriptGzipBytes: 220 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
