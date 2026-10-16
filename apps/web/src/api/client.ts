@@ -14,7 +14,15 @@ function readCookie(name: string): string | null {
   for (const part of document.cookie.split(';')) {
     const [candidate, ...value] = part.trim().split('=')
     if (candidate === name) {
-      return decodeURIComponent(value.join('='))
+      try {
+        return decodeURIComponent(value.join('='))
+      } catch {
+        // Cookies are ambient, user-controlled input. A malformed percent
+        // escape must not prevent every state-changing API request from being
+        // sent; treat that cookie as absent and let the server reject a
+        // request that has no valid CSRF token.
+        return null
+      }
     }
   }
   return null
@@ -64,7 +72,8 @@ export async function requestJson<T>(
   })
   const requestId = response.headers.get('x-request-id')
   const contentType = response.headers.get('content-type') ?? ''
-  const payload = contentType.includes('application/json')
+  const isJson = contentType.includes('application/json')
+  const payload = isJson
     ? ((await response.json().catch(() => null)) as
         | { error?: ApiErrorBody }
         | T
@@ -90,5 +99,13 @@ export async function requestJson<T>(
   }
 
   if (response.status === 204) return undefined as T
+  if (!isJson || payload === null) {
+    throw new ApiError({
+      status: response.status,
+      code: 'invalid_response',
+      message: 'The server returned an invalid response.',
+      requestId,
+    })
+  }
   return payload as T
 }
