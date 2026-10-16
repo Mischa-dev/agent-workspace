@@ -33,7 +33,7 @@ const INVITATION_PREFIX_LENGTH: usize = 16;
 const MAX_EXPIRY_HOURS: i32 = 7 * 24;
 
 /// Where people open the app, so invitation links work outside the server host.
-fn public_origin(state: &AppState) -> String {
+pub(crate) fn public_origin(state: &AppState) -> String {
     state
         .config
         .public_origin
@@ -644,6 +644,12 @@ async fn accept_new_user(
             display_name,
             authentication_epoch: 1,
         },
+    )
+    .await?;
+    crate::account_security::record_sign_in_method(
+        &mut transaction,
+        established.principal.session_id,
+        "invitation",
     )
     .await?;
     insert_acceptance_audit(

@@ -364,6 +364,73 @@ fn aad(secret_id: Uuid, organization_id: Uuid) -> Vec<u8> {
     format!("aw-secret:v1:{secret_id}:{organization_id}").into_bytes()
 }
 
+/// A value sealed with the same envelope as a stored secret but kept in its
+/// owner's own table (a person's two-factor seed, which belongs to no
+/// workspace). `associated` binds it to its row, like a secret's id.
+pub struct DetachedSeal {
+    pub ciphertext: Vec<u8>,
+    pub nonce: [u8; NONCE_LEN],
+    pub wrapped: WrappedKey,
+}
+
+pub fn seal_detached(
+    keys: &dyn KeyEncryption,
+    associated: &[u8],
+    plaintext: &[u8],
+) -> Result<DetachedSeal, SecretError> {
+    let data_key = random_key();
+    let (nonce, ciphertext) = seal(&data_key, associated, plaintext)?;
+    let wrapped = keys.wrap(&data_key, associated)?;
+    Ok(DetachedSeal {
+        ciphertext,
+        nonce,
+        wrapped,
+    })
+}
+
+pub fn open_detached(
+    keys: &dyn KeyEncryption,
+    associated: &[u8],
+    sealed: &DetachedSeal,
+) -> Result<Zeroizing<Vec<u8>>, SecretError> {
+    let data_key = match keys.unwrap(&sealed.wrapped, associated) {
+        Err(SecretError::UnknownMasterKey) => match keys.reloaded() {
+            Some(fresh) => fresh.unwrap(&sealed.wrapped, associated)?,
+            None => return Err(SecretError::UnknownMasterKey),
+        },
+        result => result?,
+    };
+    open(&data_key, &sealed.nonce, associated, &sealed.ciphertext)
+}
+
+/// The associated data for a person's two-factor seed.
+pub fn totp_aad(user_id: Uuid) -> Vec<u8> {
+    format!("aw-totp:v1:{user_id}").into_bytes()
+}
+
+/// Refuse to seal under a master key a finished rotation retired. Hold the
+/// rotation lock shared for the rest of the transaction, as [`put`] does.
+pub async fn hold_off_rotation(
+    connection: &mut PgConnection,
+    keys: &dyn KeyEncryption,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock_shared($1, $2)")
+        .bind(ROTATION_LOCK.0)
+        .bind(ROTATION_LOCK.1)
+        .execute(&mut *connection)
+        .await?;
+    let retired = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM secret_master_keys_retired WHERE master_key_id = $1)",
+    )
+    .bind(keys.active_key_id())
+    .fetch_one(&mut *connection)
+    .await?;
+    if retired {
+        return Err(AppError::Conflict("secret", "master key rotated"));
+    }
+    Ok(())
+}
+
 /// The keyring this server uses: the configured file, read again when it
 /// changes; in development without one, a keyring created on first use.
 pub fn keyring(config: &AppConfig) -> Result<Arc<dyn KeyEncryption>, SecretError> {
@@ -893,7 +960,7 @@ pub async fn delete<'e, E: PgExecutor<'e>>(executor: E, secret_id: Uuid) -> Resu
 /// Re-seal every data key under `keys`' active master key. Values and their
 /// data keys don't change, so this is safe to run while the server serves.
 pub async fn rewrap_all(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
-    let mut rewrapped = 0;
+    let mut rewrapped = rewrap_totp_factors(pool, keys).await?;
     loop {
         let mut transaction = pool.begin().await?;
         let batch = sqlx::query_as::<_, StoredSecret>(
@@ -947,13 +1014,73 @@ async fn rewrap_rows(
     Ok(rows.len() as u64)
 }
 
+/// Every master key id something sealed still uses.
+const KEYS_IN_USE_SQL: &str = "SELECT master_key_id FROM secrets \
+     UNION SELECT master_key_id FROM user_totp_factors ORDER BY 1";
+
 /// The master key ids secrets still use.
 pub async fn master_keys_in_use(pool: &PgPool) -> Result<Vec<String>, AppError> {
-    Ok(
-        sqlx::query_scalar::<_, String>("SELECT DISTINCT master_key_id FROM secrets ORDER BY 1")
-            .fetch_all(pool)
-            .await?,
+    Ok(sqlx::query_scalar::<_, String>(KEYS_IN_USE_SQL)
+        .fetch_all(pool)
+        .await?)
+}
+
+#[derive(FromRow)]
+struct StoredTotp {
+    user_id: Uuid,
+    wrapped_key: Vec<u8>,
+    wrap_nonce: Option<Vec<u8>>,
+    master_key_id: String,
+}
+
+/// Re-seal two-factor seeds' data keys under the active master key, like
+/// [`rewrap_all`] does for secrets. Takes any connection, so the rotation's
+/// final pass runs it inside its own transaction.
+async fn rewrap_totp_rows(
+    connection: &mut PgConnection,
+    keys: &dyn KeyEncryption,
+) -> Result<u64, AppError> {
+    let rows = sqlx::query_as::<_, StoredTotp>(
+        r#"
+        SELECT user_id, wrapped_key, wrap_nonce, master_key_id
+        FROM user_totp_factors WHERE master_key_id <> $1
+        FOR UPDATE
+        "#,
     )
+    .bind(keys.active_key_id())
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in &rows {
+        let associated = totp_aad(row.user_id);
+        let wrapped = WrappedKey {
+            master_key_id: row.master_key_id.clone(),
+            nonce: row
+                .wrap_nonce
+                .as_deref()
+                .map(|nonce| nonce.try_into().map_err(|_| SecretError::Corrupt))
+                .transpose()?,
+            ciphertext: row.wrapped_key.clone(),
+        };
+        let data_key = keys.unwrap(&wrapped, &associated)?;
+        let rewrapped = keys.wrap(&data_key, &associated)?;
+        sqlx::query(
+            "UPDATE user_totp_factors SET wrapped_key = $2, wrap_nonce = $3, master_key_id = $4, updated_at = now() WHERE user_id = $1",
+        )
+        .bind(row.user_id)
+        .bind(&rewrapped.ciphertext)
+        .bind(rewrapped.nonce.as_ref().map(|nonce| nonce.as_slice()))
+        .bind(&rewrapped.master_key_id)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(rows.len() as u64)
+}
+
+async fn rewrap_totp_factors(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
+    let mut transaction = pool.begin().await?;
+    let rewrapped = rewrap_totp_rows(&mut transaction, keys).await?;
+    transaction.commit().await?;
+    Ok(rewrapped)
 }
 
 #[derive(Debug, Serialize)]
@@ -1007,10 +1134,10 @@ pub async fn rotate_master_key(
     .fetch_all(&mut *transaction)
     .await?;
     rewrapped_secrets += rewrap_rows(&mut transaction, &rotated, &stragglers).await?;
-    let in_use =
-        sqlx::query_scalar::<_, String>("SELECT DISTINCT master_key_id FROM secrets ORDER BY 1")
-            .fetch_all(&mut *transaction)
-            .await?;
+    rewrapped_secrets += rewrap_totp_rows(&mut transaction, &rotated).await?;
+    let in_use = sqlx::query_scalar::<_, String>(KEYS_IN_USE_SQL)
+        .fetch_all(&mut *transaction)
+        .await?;
     let trimmed = rotated.retain(&in_use);
     let retired_key_ids = rotated
         .key_ids()

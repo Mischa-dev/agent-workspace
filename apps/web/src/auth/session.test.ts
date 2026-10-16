@@ -9,10 +9,11 @@ import {
   clearAuthenticatedQueryCache,
   getSession,
   installAuthenticatedSession,
-  login,
+  isAuthenticatedSession,
   normalizeSessionResponse,
   type AuthenticatedSession,
 } from './session'
+import { isTwoFactorChallenge, login, normalizeLoginResponse } from './login'
 
 const userId = '019fb600-0000-7000-8000-000000000010'
 const actorId = '019fb600-0000-7000-8000-000000000011'
@@ -157,6 +158,25 @@ describe('session wire normalization', () => {
         authenticated: true,
         user: { capabilities: { createProject: false } },
       })
+  })
+})
+
+describe('two-factor login responses', () => {
+  it('never treats a pending second step as signed in, even if the response also claims a user', () => {
+    const pending = normalizeLoginResponse({ authenticated: false, twoFactorRequired: true, challenge: 'opaque' })
+    expect(isAuthenticatedSession(pending)).toBe(false)
+    expect(isTwoFactorChallenge(pending)).toBe(true)
+    expect(pending).toMatchObject({ user: null, organizations: [], challenge: 'opaque' })
+
+    const confused = normalizeLoginResponse({ ...sessionWire(), twoFactorRequired: true, challenge: 'opaque' })
+    expect(isAuthenticatedSession(confused)).toBe(false)
+    expect(isTwoFactorChallenge(confused)).toBe(true)
+  })
+
+  it('treats a challenge without a usable value as signed out', () => {
+    const broken = normalizeLoginResponse({ authenticated: false, twoFactorRequired: true, challenge: '' })
+    expect(isAuthenticatedSession(broken)).toBe(false)
+    expect(isTwoFactorChallenge(broken)).toBe(false)
   })
 })
 

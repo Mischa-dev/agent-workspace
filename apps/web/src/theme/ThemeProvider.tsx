@@ -41,22 +41,29 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [preferences, preset])
 
   const value = useMemo<ThemeContextValue>(() => {
-    const update = (next: AppearancePreferences) => {
-      setPreferences(next)
-      try {
-        writeAppearancePreferences(next)
-      } catch {
-        // Appearance persistence is best effort and never blocks the workspace.
-      }
+    // Functional updates, so two changes in one event (a pasted theme code
+    // sets the preset and then the colors) both land.
+    const update = (change: (current: AppearancePreferences) => AppearancePreferences) => {
+      setPreferences((current) => {
+        const next = change(current)
+        try {
+          writeAppearancePreferences(next)
+        } catch {
+          // Appearance persistence is best effort and never blocks the workspace.
+        }
+        return next
+      })
     }
     return {
       ...preferences,
       preset,
-      setTheme: (theme) => update({ ...preferences, theme, overrides: theme === preferences.theme ? preferences.overrides : {} }),
-      setOverrides: (overrides) => update({ ...preferences, overrides }),
-      setDensity: (density) => update({ ...preferences, density }),
-      setTextSize: (textSize) => update({ ...preferences, textSize }),
-      resetAppearance: () => update(DEFAULT_APPEARANCE),
+      setTheme: (theme) =>
+        update((current) => ({ ...current, theme, overrides: theme === current.theme ? current.overrides : {} })),
+      setOverrides: (overrides) => update((current) => ({ ...current, overrides })),
+      setDensity: (density) => update((current) => ({ ...current, density })),
+      setTextSize: (textSize) => update((current) => ({ ...current, textSize })),
+      resetAppearance: () => update(() => DEFAULT_APPEARANCE),
+      replaceAppearance: (next) => update(() => next),
     }
   }, [preferences, preset])
 
