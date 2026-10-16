@@ -21,16 +21,63 @@
 pub mod detect;
 pub mod gateway;
 pub mod http;
-pub mod prompts;
 pub mod plans;
+pub mod prompts;
 pub mod providers;
 pub mod ready;
 pub mod schema;
-pub mod summaries;
 pub mod suggestions;
+pub mod summaries;
 
 /// The AI jobs, for `jobs::default_registry`.
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
     detect::register_jobs(registry);
     plans::register_jobs(registry);
+}
+
+/// Tells one person in their inbox that AI work they asked for finished
+/// (roadmap N2's notifications). The row holds the project, a title and a
+/// link; reads recheck that they can still see the project.
+pub(crate) async fn notify(
+    pool: &sqlx::PgPool,
+    project_id: uuid::Uuid,
+    recipient: uuid::Uuid,
+    kind: &'static str,
+    subject_id: uuid::Uuid,
+    title: String,
+    href: String,
+) -> Result<(), crate::error::AppError> {
+    let mut transaction = pool.begin().await?;
+    let notification = crate::notifications::NewNotification {
+        project_id,
+        recipient_actor_id: recipient,
+        kind,
+        subject_kind: "project",
+        subject_id,
+        actor_id: None,
+        conversation_id: None,
+        message_id: None,
+        work_item_id: None,
+        comment_id: None,
+        agent_run_id: None,
+        approval_id: None,
+        pull_request_id: None,
+        detail: serde_json::json!({"title": title, "href": href}),
+        group_key: format!("{kind}:{project_id}"),
+        dedupe_key: format!("{kind}:{subject_id}"),
+    };
+    if crate::notifications::deliver(&mut transaction, &notification).await? {
+        crate::outbox::enqueue_typed(
+            &mut transaction,
+            project_id,
+            crate::outbox::OutboxEventPayload::NotificationsUpdated(
+                crate::outbox::NotificationsUpdatedPayload {
+                    actor_id: recipient,
+                },
+            ),
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
 }

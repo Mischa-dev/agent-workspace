@@ -48,9 +48,8 @@ use crate::{
     idempotency::{IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope},
     work_item_commands::{
         ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, CommandActor, LockedWorkItem,
-        TaskFieldChanges,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_items, set_archived,
-        update_locked_work_item,
+        TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_items,
+        set_archived, update_locked_work_item,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
 };
@@ -750,9 +749,15 @@ pub(crate) async fn create_for_import(
     }
     if problems.is_empty() {
         let workflow = Workflow::load(transaction, actor.project_id).await?;
-        let prepared =
-            task_drafts::prepare(transaction, &principal, &workflow, &drafts, true, &mut problems)
-                .await?;
+        let prepared = task_drafts::prepare(
+            transaction,
+            &principal,
+            &workflow,
+            &drafts,
+            true,
+            &mut problems,
+        )
+        .await?;
         if problems.is_empty() {
             return Ok(
                 match task_drafts::create(transaction, actor, &prepared.tasks).await? {

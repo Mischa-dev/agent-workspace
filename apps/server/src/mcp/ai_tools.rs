@@ -149,7 +149,12 @@ pub(super) async fn ai_suggestions_list(
         };
         let kinds = match parse_kinds(arguments.kind.as_deref()) {
             Ok(kinds) => kinds,
-            Err(_) => return Ok(ToolResult::invalid("kind", "Use the kinds listed in kind's description.")),
+            Err(_) => {
+                return Ok(ToolResult::invalid(
+                    "kind",
+                    "Use the kinds listed in kind's description.",
+                ));
+            }
         };
         let mut connection = state.pool.acquire().await?;
         let page = suggestions::list(
@@ -201,14 +206,21 @@ pub(super) async fn ai_suggestion_decide(
     };
     let result = async {
         let mut transaction = state.pool.begin().await?;
-        if let Some(refusal) = access_refusal(check_write_access(&mut transaction, principal).await?)
+        if let Some(refusal) =
+            access_refusal(check_write_access(&mut transaction, principal).await?)
         {
             return Ok(refusal);
         }
         let actor = command_actor(principal, principal.project_id);
         let outcome = if accept {
-            suggestions::accept(&mut transaction, &actor, reader(principal), suggestion_id, "accepted")
-                .await?
+            suggestions::accept(
+                &mut transaction,
+                &actor,
+                reader(principal),
+                suggestion_id,
+                "accepted",
+            )
+            .await?
         } else {
             suggestions::dismiss(&mut transaction, &actor, reader(principal), suggestion_id).await?
         };
@@ -222,9 +234,13 @@ pub(super) async fn ai_suggestion_decide(
         }
         transaction.commit().await?;
         let mut connection = state.pool.acquire().await?;
-        let view =
-            suggestions::get(&mut connection, reader(principal), principal.project_id, suggestion_id)
-                .await?;
+        let view = suggestions::get(
+            &mut connection,
+            reader(principal),
+            principal.project_id,
+            suggestion_id,
+        )
+        .await?;
         Ok::<_, AppError>(value(json!({"suggestion": view})))
     }
     .await;
@@ -355,9 +371,13 @@ pub(super) async fn task_ready_list(
             let Some(task_id) = task_in_project(state, principal, reference).await? else {
                 return Ok(ToolResult::not_found("That task"));
             };
-            let readiness =
-                ready::readiness_of(&state.pool, reader(principal), principal.project_id, task_id)
-                    .await?;
+            let readiness = ready::readiness_of(
+                &state.pool,
+                reader(principal),
+                principal.project_id,
+                task_id,
+            )
+            .await?;
             return Ok(match readiness {
                 Some(readiness) => value(json!({"readiness": readiness})),
                 None => ToolResult::not_found("That task"),

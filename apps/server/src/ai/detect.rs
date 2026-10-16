@@ -60,7 +60,8 @@ const MAX_TASKS: i64 = 3000;
 const MAX_MESSAGES: i64 = 80;
 /// Phrases that say someone is waiting on something (case-insensitive,
 /// PostgreSQL regular expression).
-const WAITING_PATTERN: &str = r"waiting (on|for)|blocked (by|on)|depends on|can.?t start until|need[s]? .{0,40} first";
+const WAITING_PATTERN: &str =
+    r"waiting (on|for)|blocked (by|on)|depends on|can.?t start until|need[s]? .{0,40} first";
 
 /// What started a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -108,7 +109,10 @@ struct DetectPayload {
 }
 
 pub fn register_jobs(registry: &mut JobRegistry) {
-    registry.register(DETECT_KIND, |context| async move { detect_job(context).await });
+    registry.register(
+        DETECT_KIND,
+        |context| async move { detect_job(context).await },
+    );
     registry.register(SWEEP_KIND, |context| async move {
         sweep(&context.state).await?;
         Ok(())
@@ -361,9 +365,7 @@ async fn detect_job(context: JobContext) -> Result<(), JobError> {
     let last_attempt = context.job.attempts >= context.job.max_attempts;
     match run(&context.state, &payload).await {
         Ok(()) => Ok(()),
-        Err(error) if error.retryable() && !last_attempt => {
-            Err(JobError::retry(error.message()))
-        }
+        Err(error) if error.retryable() && !last_attempt => Err(JobError::retry(error.message())),
         Err(error) => {
             finish_failed(&context.state.pool, payload.run_id, &error.message()).await?;
             Ok(())
@@ -483,7 +485,9 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     .fetch_optional(&state.pool)
     .await?
     else {
-        return Err(AiError::NotConfigured("The project no longer exists.".to_owned()));
+        return Err(AiError::NotConfigured(
+            "The project no longer exists.".to_owned(),
+        ));
     };
     if !project.standard || project.archived {
         return Err(AiError::NotConfigured(
@@ -533,6 +537,24 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     .bind(i32::try_from(applied).unwrap_or(i32::MAX))
     .execute(&state.pool)
     .await?;
+    if let Some(actor_id) = payload.actor_id
+        && !created.is_empty()
+    {
+        super::notify(
+            &state.pool,
+            payload.project_id,
+            actor_id,
+            "ai_suggestions",
+            payload.run_id,
+            format!(
+                "AI found {} suggestion{} to review",
+                created.len(),
+                if created.len() == 1 { "" } else { "s" }
+            ),
+            format!("/projects/{}/suggestions", payload.project_id),
+        )
+        .await?;
+    }
     // Background runs move the project's mark; a person's run doesn't, as
     // it read with that person's eyes.
     if payload.actor_id.is_none() && payload.mode != Mode::Triage {
@@ -556,7 +578,11 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     Ok(())
 }
 
-async fn actor_can_access(pool: &PgPool, actor_id: Uuid, project_id: Uuid) -> Result<bool, AppError> {
+async fn actor_can_access(
+    pool: &PgPool,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<bool, AppError> {
     Ok(
         sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
             .bind(actor_id)
@@ -674,7 +700,11 @@ impl RunContext<'_> {
             confidence,
             reason: reason.to_owned(),
             sources,
-            audience: if cross_project { self.payload.actor_id } else { None },
+            audience: if cross_project {
+                self.payload.actor_id
+            } else {
+                None
+            },
             origin: self.payload.mode.origin(),
             provenance: provenance.clone(),
             requested_by: self.payload.actor_id,
@@ -857,7 +887,8 @@ impl RunContext<'_> {
         // Strongest signals first.
         candidates.sort_by_key(|candidate| {
             std::cmp::Reverse(
-                candidate.signals.len() * 10 + usize::from(candidate.signals.contains(&"references")) * 5,
+                candidate.signals.len() * 10
+                    + usize::from(candidate.signals.contains(&"references")) * 5,
             )
         });
         candidates.truncate(limit);
@@ -887,7 +918,10 @@ impl RunContext<'_> {
         if wanted.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
-        let keys = wanted.iter().map(|(_, key)| key.clone()).collect::<Vec<_>>();
+        let keys = wanted
+            .iter()
+            .map(|(_, key)| key.clone())
+            .collect::<Vec<_>>();
         let others = sqlx::query_as::<_, TaskRow>(&format!(
             r#"
             SELECT {TASK_COLUMNS}
@@ -1309,8 +1343,9 @@ impl RunContext<'_> {
                     ));
                 }
                 if let Some(name) = triaged.task_type.as_deref()
-                    && let Some((type_id, type_name)) =
-                        types.iter().find(|(_, kind)| kind.eq_ignore_ascii_case(name))
+                    && let Some((type_id, type_name)) = types
+                        .iter()
+                        .find(|(_, kind)| kind.eq_ignore_ascii_case(name))
                     && *type_id != task.type_id
                 {
                     found.suggestions.push(self.suggestion(
@@ -1401,8 +1436,7 @@ pub fn task_keys(text: &str) -> Vec<String> {
                     digits_end += 1;
                 }
                 let digits = digits_end - end - 1;
-                let ends_word =
-                    digits_end == bytes.len() || !word_byte(bytes[digits_end]);
+                let ends_word = digits_end == bytes.len() || !word_byte(bytes[digits_end]);
                 if (1..=12).contains(&digits) && ends_word {
                     let key = &text[index..digits_end];
                     if !keys.iter().any(|known: &String| known == key) {
@@ -1530,7 +1564,8 @@ async fn auto_apply(
             continue;
         }
         let mut transaction = state.pool.begin().await?;
-        match suggestions::accept(&mut transaction, &actor, reader, suggestion_id, "applied").await?
+        match suggestions::accept(&mut transaction, &actor, reader, suggestion_id, "applied")
+            .await?
         {
             Ok(()) => {
                 transaction.commit().await?;
@@ -1554,7 +1589,10 @@ mod tests {
             task_keys("After ACME-12 and (WEB-3), not xACME-4 or ACME-5x; ACME-12 again. A-1 AB-"),
             vec!["ACME-12".to_owned(), "WEB-3".to_owned()]
         );
-        assert_eq!(task_keys("W10-7 é ÉACME-1 R2D2-99"), vec!["W10-7", "R2D2-99"]);
+        assert_eq!(
+            task_keys("W10-7 é ÉACME-1 R2D2-99"),
+            vec!["W10-7", "R2D2-99"]
+        );
     }
 
     #[test]

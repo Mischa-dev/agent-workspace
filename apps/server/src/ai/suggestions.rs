@@ -236,7 +236,14 @@ pub async fn insert<'e, E: PgExecutor<'e>>(
     .bind(suggestion.audience)
     .bind(suggestion.origin)
     .bind(&suggestion.provenance.provider)
-    .bind(suggestion.provenance.model.chars().take(200).collect::<String>())
+    .bind(
+        suggestion
+            .provenance
+            .model
+            .chars()
+            .take(200)
+            .collect::<String>(),
+    )
     .bind(suggestion.provenance.prompt_id)
     .bind(suggestion.provenance.prompt_version)
     .bind(suggestion.requested_by)
@@ -377,7 +384,10 @@ pub async fn list(
     filter: &Filter,
 ) -> Result<Page, AppError> {
     let limit = filter.limit.clamp(1, MAX_PAGE);
-    let status = filter.status.clone().unwrap_or_else(|| "pending".to_owned());
+    let status = filter
+        .status
+        .clone()
+        .unwrap_or_else(|| "pending".to_owned());
     if !matches!(
         status.as_str(),
         "pending" | "accepted" | "dismissed" | "applied" | "all"
@@ -430,7 +440,10 @@ pub async fn list(
     let has_more = rows.len() as i64 > limit;
     let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
     let next_cursor = has_more
-        .then(|| rows.last().map(|row| format!("{}_{}", row.confidence, row.id)))
+        .then(|| {
+            rows.last()
+                .map(|row| format!("{}_{}", row.confidence, row.id))
+        })
         .flatten();
     let pending_count = sqlx::query_scalar::<_, i64>(&format!(
         r#"
@@ -523,8 +536,8 @@ async fn views(
     for row in &rows {
         task_ids.push(row.work_item_id);
         task_ids.extend(row.other_work_item_id);
-        let sources = serde_json::from_value::<Vec<SourceRef>>(row.sources.clone())
-            .unwrap_or_default();
+        let sources =
+            serde_json::from_value::<Vec<SourceRef>>(row.sources.clone()).unwrap_or_default();
         for source in &sources {
             match source {
                 SourceRef::Task { id } => task_ids.push(*id),
@@ -863,8 +876,16 @@ async fn apply(
             } else {
                 RelationKind::Duplicates
             };
-            match planning::change_relation(transaction, actor, task_id, other, relation, false, false)
-                .await?
+            match planning::change_relation(
+                transaction,
+                actor,
+                task_id,
+                other,
+                relation,
+                false,
+                false,
+            )
+            .await?
             {
                 Ok(_) => Ok(Ok(())),
                 Err(refusal) => refused(refusal.message("the other task")),
@@ -994,7 +1015,8 @@ async fn apply(
             if criteria.is_empty() {
                 return refused("The suggestion has no criteria to add.");
             }
-            let Some(current) = lock_work_item(transaction, actor.project_id, task_id).await? else {
+            let Some(current) = lock_work_item(transaction, actor.project_id, task_id).await?
+            else {
                 return Ok(Err(Refusal::NotFound));
             };
             let operations = criteria

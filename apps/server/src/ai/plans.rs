@@ -121,7 +121,8 @@ pub fn check(draft: &Draft) -> Vec<String> {
     }
     let mut milestones = HashSet::new();
     for milestone in &draft.milestones {
-        if !valid_reference(&milestone.reference) || !milestones.insert(milestone.reference.as_str())
+        if !valid_reference(&milestone.reference)
+            || !milestones.insert(milestone.reference.as_str())
         {
             problems.push(format!(
                 "Milestone ref \"{}\" must be unique and use only letters, digits, dashes, dots or underscores.",
@@ -151,7 +152,8 @@ pub fn check(draft: &Draft) -> Vec<String> {
     }
     let mut tasks = HashMap::new();
     for (index, task) in draft.tasks.iter().enumerate() {
-        if !valid_reference(&task.reference) || tasks.insert(task.reference.as_str(), index).is_some()
+        if !valid_reference(&task.reference)
+            || tasks.insert(task.reference.as_str(), index).is_some()
         {
             problems.push(format!(
                 "Task ref \"{}\" must be unique and use only letters, digits, dashes, dots or underscores.",
@@ -160,10 +162,16 @@ pub fn check(draft: &Draft) -> Vec<String> {
         }
         let title = task.title.trim().chars().count();
         if !(1..=240).contains(&title) {
-            problems.push(format!("Task {} needs a title of 1 to 240 characters.", task.reference));
+            problems.push(format!(
+                "Task {} needs a title of 1 to 240 characters.",
+                task.reference
+            ));
         }
         if task.description.chars().count() > 100_000 {
-            problems.push(format!("Task {}'s description is too long.", task.reference));
+            problems.push(format!(
+                "Task {}'s description is too long.",
+                task.reference
+            ));
         }
         if task.criteria.len() > 50
             || task
@@ -191,7 +199,10 @@ pub fn check(draft: &Draft) -> Vec<String> {
             task.priority.as_str(),
             "no_priority" | "low" | "medium" | "high" | "urgent"
         ) {
-            problems.push(format!("Task {}'s priority isn't one tasks use.", task.reference));
+            problems.push(format!(
+                "Task {}'s priority isn't one tasks use.",
+                task.reference
+            ));
         }
         if let Some(milestone) = &task.milestone
             && !milestones.contains(milestone.as_str())
@@ -251,7 +262,10 @@ fn parent_order(draft: &Draft) -> Option<Vec<usize>> {
             _ => {}
         }
         state[at] = 1;
-        if let Some(parent) = draft.tasks[at].parent.as_deref().and_then(|parent| index.get(parent))
+        if let Some(parent) = draft.tasks[at]
+            .parent
+            .as_deref()
+            .and_then(|parent| index.get(parent))
             && !visit(*parent, draft, index, state, order)
         {
             return false;
@@ -311,7 +325,8 @@ pub fn read_structured(value: &Value) -> Option<Draft> {
 }
 
 fn read_roadmap(value: &Value) -> Draft {
-    let text = |item: &Value, field: &str| item[field].as_str().unwrap_or_default().trim().to_owned();
+    let text =
+        |item: &Value, field: &str| item[field].as_str().unwrap_or_default().trim().to_owned();
     let areas = value["areas"]
         .as_array()
         .into_iter()
@@ -330,7 +345,12 @@ fn read_roadmap(value: &Value) -> Draft {
             milestone_of.insert(id.clone(), reference.clone());
             DraftMilestone {
                 reference,
-                name: truncate(&format!("{id} {}", text(workstream, "name")).trim().to_owned(), 120),
+                name: truncate(
+                    &format!("{id} {}", text(workstream, "name"))
+                        .trim()
+                        .to_owned(),
+                    120,
+                ),
                 description: truncate(&text(workstream, "goal"), 2000),
                 target_date: None,
             }
@@ -354,7 +374,10 @@ fn read_roadmap(value: &Value) -> Draft {
             }
             DraftTask {
                 reference: task_of[&id].clone(),
-                title: truncate(&format!("{id} {}", text(item, "title")).trim().to_owned(), 240),
+                title: truncate(
+                    &format!("{id} {}", text(item, "title")).trim().to_owned(),
+                    240,
+                ),
                 description,
                 criteria: if done.is_empty() {
                     Vec::new()
@@ -476,10 +499,8 @@ fn merge_parts(parts: Vec<Draft>) -> Draft {
                     .filter(|label| !label.is_empty())
                     .take(20)
                     .collect(),
-                priority: if matches!(
-                    task.priority.as_str(),
-                    "low" | "medium" | "high" | "urgent"
-                ) {
+                priority: if matches!(task.priority.as_str(), "low" | "medium" | "high" | "urgent")
+                {
                     task.priority
                 } else {
                     no_priority()
@@ -657,7 +678,11 @@ pub async fn create(
         .unwrap_or(Err(CreateRefusal::NotFound("That plan wasn't found."))))
 }
 
-pub async fn get(pool: &PgPool, project_id: Uuid, id: Uuid) -> Result<Option<ImportView>, AppError> {
+pub async fn get(
+    pool: &PgPool,
+    project_id: Uuid,
+    id: Uuid,
+) -> Result<Option<ImportView>, AppError> {
     Ok(sqlx::query_as::<_, ImportView>(&format!(
         "SELECT {IMPORT_COLUMNS} FROM ai_plan_imports import WHERE import.id = $1 AND import.project_id = $2"
     ))
@@ -834,8 +859,14 @@ pub async fn commit(
 // Jobs
 
 pub fn register_jobs(registry: &mut JobRegistry) {
-    registry.register(DRAFT_KIND, |context| async move { draft_job(context).await });
-    registry.register(COMMIT_KIND, |context| async move { commit_job(context).await });
+    registry.register(
+        DRAFT_KIND,
+        |context| async move { draft_job(context).await },
+    );
+    registry.register(
+        COMMIT_KIND,
+        |context| async move { commit_job(context).await },
+    );
 }
 
 #[derive(Deserialize)]
@@ -952,9 +983,13 @@ async fn commit_job(context: JobContext) -> Result<(), JobError> {
     loop {
         match commit_next_step(&context.state.pool, payload.import_id).await {
             Ok(Step::Progress) => continue,
-            Ok(Step::Done) => return Ok(()),
+            Ok(Step::Done) => {
+                announce(&context.state.pool, payload.import_id).await?;
+                return Ok(());
+            }
             Ok(Step::Failed(message)) => {
                 fail(&context.state.pool, payload.import_id, &message).await?;
+                announce(&context.state.pool, payload.import_id).await?;
                 return Ok(());
             }
             Err(error) => {
@@ -971,6 +1006,40 @@ async fn commit_job(context: JobContext) -> Result<(), JobError> {
             }
         }
     }
+}
+
+/// Tells the person who committed a plan that it was created, or stopped.
+async fn announce(pool: &PgPool, import_id: Uuid) -> Result<(), AppError> {
+    let Some((project_id, actor_id, title, state)) = sqlx::query_as::<
+        _,
+        (Uuid, Option<Uuid>, String, String),
+    >(
+        "SELECT project_id, committed_by_actor_id, title, state FROM ai_plan_imports WHERE id = $1",
+    )
+    .bind(import_id)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(());
+    };
+    let Some(actor_id) = actor_id else {
+        return Ok(());
+    };
+    let message = if state == "committed" {
+        format!("Your plan \"{title}\" is now tasks")
+    } else {
+        format!("Creating your plan \"{title}\" stopped")
+    };
+    super::notify(
+        pool,
+        project_id,
+        actor_id,
+        "ai_plan_import",
+        import_id,
+        message,
+        format!("/projects/{project_id}/plan-import?plan={import_id}"),
+    )
+    .await
 }
 
 /// What one commit step did.
@@ -992,10 +1061,11 @@ struct Committing {
 /// Does the next step of committing an import in one transaction, and says
 /// whether there's more. Public for the tests, which stop and resume.
 pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
-    let project_id = sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM ai_plan_imports WHERE id = $1")
-        .bind(import_id)
-        .fetch_optional(pool)
-        .await?;
+    let project_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM ai_plan_imports WHERE id = $1")
+            .bind(import_id)
+            .fetch_optional(pool)
+            .await?;
     let Some(project_id) = project_id else {
         return Ok(Step::Done);
     };
@@ -1084,8 +1154,15 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
                     .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()),
             )
             .await?;
-            record(&mut transaction, import_id, "milestone", &milestone.reference, None, Some(id))
-                .await?;
+            record(
+                &mut transaction,
+                import_id,
+                "milestone",
+                &milestone.reference,
+                None,
+                Some(id),
+            )
+            .await?;
         }
         transaction.commit().await?;
         return Ok(Step::Progress);
@@ -1120,8 +1197,16 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
                 title: task.title.trim().to_owned(),
                 description: task.description.clone(),
                 priority: Some(task.priority.clone()),
-                labels: task.labels.iter().map(|label| label.trim().to_owned()).collect(),
-                criteria: task.criteria.iter().map(|criterion| criterion.trim().to_owned()).collect(),
+                labels: task
+                    .labels
+                    .iter()
+                    .map(|label| label.trim().to_owned())
+                    .collect(),
+                criteria: task
+                    .criteria
+                    .iter()
+                    .map(|criterion| criterion.trim().to_owned())
+                    .collect(),
                 parent_in_batch: task
                     .parent
                     .clone()
@@ -1136,12 +1221,22 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
             Ok(created) => created,
             Err(message) => {
                 transaction.rollback().await?;
-                return Ok(Step::Failed(format!("Some tasks couldn't be created. {message}")));
+                return Ok(Step::Failed(format!(
+                    "Some tasks couldn't be created. {message}"
+                )));
             }
         };
         let mut by_milestone: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
         for (task, id) in batch.iter().zip(&created) {
-            record(&mut transaction, import_id, "task", &task.reference, Some(*id), None).await?;
+            record(
+                &mut transaction,
+                import_id,
+                "task",
+                &task.reference,
+                Some(*id),
+                None,
+            )
+            .await?;
             if let Some(milestone) = task
                 .milestone
                 .as_ref()
@@ -1151,8 +1246,14 @@ pub async fn commit_next_step(pool: &PgPool, import_id: Uuid) -> Result<Step, Ap
             }
         }
         for (milestone, ids) in by_milestone {
-            planning::move_tasks_to_milestone(&mut transaction, &actor, &ids, Some(milestone), None)
-                .await?;
+            planning::move_tasks_to_milestone(
+                &mut transaction,
+                &actor,
+                &ids,
+                Some(milestone),
+                None,
+            )
+            .await?;
         }
         transaction.commit().await?;
         return Ok(Step::Progress);
@@ -1255,12 +1356,19 @@ mod tests {
     #[test]
     fn the_roadmap_reads_as_a_valid_draft() {
         let roadmap: Value =
-            serde_json::from_str(include_str!("../../../../docs/plans/roadmap.json")).expect("json");
+            serde_json::from_str(include_str!("../../../../docs/plans/roadmap.json"))
+                .expect("json");
         let draft = read_structured(&roadmap).expect("a plan");
-        assert_eq!(draft.tasks.len(), roadmap["items"].as_array().expect("items").len());
+        assert_eq!(
+            draft.tasks.len(),
+            roadmap["items"].as_array().expect("items").len()
+        );
         assert_eq!(
             draft.milestones.len(),
-            roadmap["workstreams"].as_array().expect("workstreams").len()
+            roadmap["workstreams"]
+                .as_array()
+                .expect("workstreams")
+                .len()
         );
         assert_eq!(check(&draft), Vec::<String>::new());
         assert!(draft.tasks.iter().any(|task| !task.blocked_by.is_empty()));
@@ -1329,7 +1437,11 @@ mod tests {
         assert_eq!(merged.tasks[0].priority, "no_priority");
         assert_eq!(merged.milestones[0].target_date, None);
         assert_eq!(check(&merged), Vec::<String>::new());
-        let text = format!("# One\n{}\n# Two\n{}\n", "a".repeat(30_000), "b".repeat(30_000));
+        let text = format!(
+            "# One\n{}\n# Two\n{}\n",
+            "a".repeat(30_000),
+            "b".repeat(30_000)
+        );
         assert_eq!(split_parts(&text).len(), 2);
     }
 }

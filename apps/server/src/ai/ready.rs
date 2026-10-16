@@ -284,12 +284,7 @@ fn not_started(category: &str) -> bool {
     matches!(category, "backlog" | "unstarted")
 }
 
-fn readiness(
-    row: &Row,
-    open_blockers: &[&Row],
-    hidden: usize,
-    place: &RunPlace,
-) -> Readiness {
+fn readiness(row: &Row, open_blockers: &[&Row], hidden: usize, place: &RunPlace) -> Readiness {
     let blockers_done = open_blockers.is_empty() && hidden == 0;
     let mut checks = vec![
         Check {
@@ -372,7 +367,10 @@ fn readiness(
     let ready = !row.finished && blockers_done && row.blocked_reason.is_none();
     let ready_for_agents = ready
         && !row.claimed
-        && checks.iter().filter(|check| check.for_agents).all(|check| check.ok);
+        && checks
+            .iter()
+            .filter(|check| check.for_agents)
+            .all(|check| check.ok);
     Readiness {
         ready,
         ready_for_agents,
@@ -389,10 +387,7 @@ fn truncate(text: &str, max: usize) -> String {
 }
 
 /// How many open tasks wait on each task, directly or further down.
-fn unblock_counts(
-    rows: &HashMap<Uuid, &Row>,
-    edges: &[(Uuid, Uuid)],
-) -> HashMap<Uuid, usize> {
+fn unblock_counts(rows: &HashMap<Uuid, &Row>, edges: &[(Uuid, Uuid)]) -> HashMap<Uuid, usize> {
     let mut downstream: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for (blocking, blocked) in edges {
         if rows.get(blocked).is_some_and(|row| !row.finished) {
@@ -417,7 +412,8 @@ fn unblock_counts(
 
 /// Days until the nearer of the task's due date and its milestone's date.
 fn days_left(row: &Row, today: NaiveDate) -> Option<(i64, String)> {
-    let mut nearest: Option<(NaiveDate, String)> = row.due_date.map(|date| (date, "Due".to_owned()));
+    let mut nearest: Option<(NaiveDate, String)> =
+        row.due_date.map(|date| (date, "Due".to_owned()));
     if let (Some(date), Some(name)) = (row.milestone_date, &row.milestone_name)
         && nearest.as_ref().is_none_or(|(due, _)| date < *due)
     {
@@ -494,7 +490,11 @@ pub async fn rank(
         .rows
         .iter()
         .filter(|row| row.project_id == project_id && !row.finished)
-        .filter(|row| filter.milestone_id.is_none_or(|id| row.milestone_id == Some(id)))
+        .filter(|row| {
+            filter
+                .milestone_id
+                .is_none_or(|id| row.milestone_id == Some(id))
+        })
         .map(|row| {
             let readiness = readiness(
                 row,
@@ -726,7 +726,9 @@ pub async fn graph(
     let in_scope = |row: &Row| {
         row.project_id == project_id
             && (!row.finished || filter.include_finished)
-            && filter.milestone_id.is_none_or(|id| row.milestone_id == Some(id))
+            && filter
+                .milestone_id
+                .is_none_or(|id| row.milestone_id == Some(id))
     };
     let mut shown = loaded
         .rows
@@ -749,13 +751,20 @@ pub async fn graph(
     let truncated = shown.len() > MAX_NODES;
     if truncated {
         // Keep open tasks first, then by key.
-        let mut ordered = shown.iter().filter_map(|id| by_id.get(id)).collect::<Vec<_>>();
+        let mut ordered = shown
+            .iter()
+            .filter_map(|id| by_id.get(id))
+            .collect::<Vec<_>>();
         ordered.sort_by(|a, b| {
             a.finished
                 .cmp(&b.finished)
                 .then_with(|| natural_key(&a.key).cmp(&natural_key(&b.key)))
         });
-        shown = ordered.into_iter().take(MAX_NODES).map(|row| row.id).collect();
+        shown = ordered
+            .into_iter()
+            .take(MAX_NODES)
+            .map(|row| row.id)
+            .collect();
     }
     let edges = loaded
         .edges
@@ -804,7 +813,10 @@ pub async fn graph(
         .filter(|node| node.ready && !node.external && not_started(&node.status_category))
         .map(|node| {
             let row = by_id[&node.id];
-            (score(row, unblocks.get(&node.id).copied().unwrap_or(0), today).0, node.id)
+            (
+                score(row, unblocks.get(&node.id).copied().unwrap_or(0), today).0,
+                node.id,
+            )
         })
         .collect::<Vec<_>>();
     frontier.sort_by(|a, b| b.0.cmp(&a.0));
@@ -821,7 +833,9 @@ pub async fn graph(
     graph_edges.extend(
         suggested
             .into_iter()
-            .filter(|edge| shown.contains(&edge.work_item_id) && shown.contains(&edge.other_work_item_id))
+            .filter(|edge| {
+                shown.contains(&edge.work_item_id) && shown.contains(&edge.other_work_item_id)
+            })
             .map(|edge| GraphEdge {
                 from: edge.other_work_item_id,
                 to: edge.work_item_id,
@@ -848,14 +862,23 @@ fn critical_path(
 ) -> Vec<Uuid> {
     let open = |id: &Uuid| shown.contains(id) && rows.get(id).is_some_and(|row| !row.finished);
     let mut next: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-    let mut incoming: HashMap<Uuid, usize> = shown.iter().filter(|id| open(id)).map(|id| (*id, 0)).collect();
+    let mut incoming: HashMap<Uuid, usize> = shown
+        .iter()
+        .filter(|id| open(id))
+        .map(|id| (*id, 0))
+        .collect();
     for (from, to) in edges {
         if open(from) && open(to) {
             next.entry(*from).or_default().push(*to);
             *incoming.entry(*to).or_default() += 1;
         }
     }
-    let weight = |id: &Uuid| rows[id].estimate.filter(|estimate| *estimate > 0.0).unwrap_or(1.0);
+    let weight = |id: &Uuid| {
+        rows[id]
+            .estimate
+            .filter(|estimate| *estimate > 0.0)
+            .unwrap_or(1.0)
+    };
     let mut queue = incoming
         .iter()
         .filter(|(_, count)| **count == 0)
@@ -940,7 +963,10 @@ mod tests {
             row(ids[3], None, false),
             row(ids[4], None, true),
         ];
-        let by_id = rows.iter().map(|row| (row.id, row)).collect::<HashMap<_, _>>();
+        let by_id = rows
+            .iter()
+            .map(|row| (row.id, row))
+            .collect::<HashMap<_, _>>();
         let shown = ids.iter().copied().collect::<HashSet<_>>();
         // 1 -> 2 (5 points) and 1 -> 3 -> 4; 5 is finished.
         let edges = vec![

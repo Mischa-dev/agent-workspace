@@ -31,9 +31,7 @@ use crate::{
     error::{ApiJson, ApiPath, ApiQuery, AppError},
     policy::Action,
     settings::{self, SettingsContext},
-    work_item_commands::{
-        AuditAttribution, CommandActor, ProjectMembership, authorize_mutation,
-    },
+    work_item_commands::{AuditAttribution, CommandActor, ProjectMembership, authorize_mutation},
     work_item_planning::Reader,
 };
 
@@ -418,7 +416,14 @@ async fn test_project(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    let member = writer(&state, &headers, &principal, project_id, Action::WorkItemEdit).await?;
+    let member = writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemEdit,
+    )
+    .await?;
     Ok(ping(&state, member.scope()).await)
 }
 
@@ -431,7 +436,14 @@ async fn analyze(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    let member = writer(&state, &headers, &principal, project_id, Action::WorkItemEdit).await?;
+    let member = writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemEdit,
+    )
+    .await?;
     if let Err(error) = gateway::resolve(&state, member.scope(), Tier::Quick).await {
         return Ok(error.into_response());
     }
@@ -501,9 +513,11 @@ fn decision_refusal(refusal: Refusal) -> Response {
             refusal_response(StatusCode::CONFLICT, "already_decided", &refusal)
         }
         Refusal::Forbidden => refusal_response(StatusCode::FORBIDDEN, "forbidden", &refusal),
-        Refusal::Refused(_) => {
-            refusal_response(StatusCode::UNPROCESSABLE_ENTITY, "suggestion_refused", &refusal)
-        }
+        Refusal::Refused(_) => refusal_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "suggestion_refused",
+            &refusal,
+        ),
     }
 }
 
@@ -531,8 +545,14 @@ async fn decide(
     };
     let mut transaction = state.pool.begin().await?;
     let outcome = if accept {
-        suggestions::accept(&mut transaction, &actor, member.reader(), suggestion_id, "accepted")
-            .await?
+        suggestions::accept(
+            &mut transaction,
+            &actor,
+            member.reader(),
+            suggestion_id,
+            "accepted",
+        )
+        .await?
     } else {
         suggestions::dismiss(&mut transaction, &actor, member.reader(), suggestion_id).await?
     };
@@ -542,7 +562,8 @@ async fn decide(
     }
     transaction.commit().await?;
     let mut connection = state.pool.acquire().await?;
-    let view = suggestions::get(&mut connection, member.reader(), project_id, suggestion_id).await?;
+    let view =
+        suggestions::get(&mut connection, member.reader(), project_id, suggestion_id).await?;
     Ok(Json(json!({"suggestion": view})).into_response())
 }
 
@@ -552,7 +573,15 @@ async fn accept(
     principal: AuthenticatedActor,
     ApiPath((project_id, suggestion_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    decide(&state, &headers, &principal, project_id, suggestion_id, true).await
+    decide(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        suggestion_id,
+        true,
+    )
+    .await
 }
 
 async fn dismiss(
@@ -561,7 +590,15 @@ async fn dismiss(
     principal: AuthenticatedActor,
     ApiPath((project_id, suggestion_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    decide(&state, &headers, &principal, project_id, suggestion_id, false).await
+    decide(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        suggestion_id,
+        false,
+    )
+    .await
 }
 
 async fn task_in_project(
@@ -584,7 +621,14 @@ async fn triage(
     principal: AuthenticatedActor,
     ApiPath((project_id, task_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    let member = writer(&state, &headers, &principal, project_id, Action::WorkItemEdit).await?;
+    let member = writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemEdit,
+    )
+    .await?;
     if !task_in_project(&state, project_id, task_id).await? {
         return Err(AppError::NotFound("work_item"));
     }
@@ -720,7 +764,14 @@ async fn criteria(
     principal: AuthenticatedActor,
     ApiPath((project_id, task_id)): ApiPath<(Uuid, Uuid)>,
 ) -> Result<Response, AppError> {
-    let member = writer(&state, &headers, &principal, project_id, Action::WorkItemEdit).await?;
+    let member = writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemEdit,
+    )
+    .await?;
     let id = match draft_criteria(
         &state,
         member.organization_id,
@@ -850,10 +901,14 @@ struct CreatePlanRequest {
 
 fn create_refusal(refusal: CreateRefusal) -> Response {
     match refusal {
-        CreateRefusal::Invalid(message) => {
-            error_response(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed", message)
+        CreateRefusal::Invalid(message) => error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_failed",
+            message,
+        ),
+        CreateRefusal::NotFound(message) => {
+            error_response(StatusCode::NOT_FOUND, "not_found", message)
         }
-        CreateRefusal::NotFound(message) => error_response(StatusCode::NOT_FOUND, "not_found", message),
         CreateRefusal::Ai(error) => error.into_response(),
     }
 }
@@ -865,7 +920,14 @@ async fn create_plan(
     ApiPath(project_id): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreatePlanRequest>,
 ) -> Result<Response, AppError> {
-    let member = writer(&state, &headers, &principal, project_id, Action::WorkItemCreate).await?;
+    let member = writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemCreate,
+    )
+    .await?;
     match plans::create(
         &state,
         member.organization_id,
@@ -912,7 +974,14 @@ async fn save_plan(
     ApiPath((project_id, import_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<SavePlanRequest>,
 ) -> Result<Response, AppError> {
-    writer(&state, &headers, &principal, project_id, Action::WorkItemCreate).await?;
+    writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemCreate,
+    )
+    .await?;
     if let Err(refusal) = plans::update_draft(
         &state.pool,
         project_id,
@@ -942,7 +1011,14 @@ async fn commit_plan(
     ApiPath((project_id, import_id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<CommitPlanRequest>,
 ) -> Result<Response, AppError> {
-    let member = writer(&state, &headers, &principal, project_id, Action::WorkItemCreate).await?;
+    let member = writer(
+        &state,
+        &headers,
+        &principal,
+        project_id,
+        Action::WorkItemCreate,
+    )
+    .await?;
     if !member.can_edit {
         return Err(AppError::Forbidden);
     }
@@ -968,9 +1044,11 @@ async fn commit_plan(
 fn summary_response(outcome: Result<summaries::Summary, SummaryRefusal>) -> Response {
     match outcome {
         Ok(summary) => Json(json!({"summary": summary})).into_response(),
-        Err(SummaryRefusal::NotFound) => {
-            error_response(StatusCode::NOT_FOUND, "not_found", "That wasn't found, or you can't see it.")
-        }
+        Err(SummaryRefusal::NotFound) => error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "That wasn't found, or you can't see it.",
+        ),
         Err(SummaryRefusal::Empty) => Json(json!({"summary": {
             "lines": ["Nothing has happened here yet."],
             "outcome": null,
