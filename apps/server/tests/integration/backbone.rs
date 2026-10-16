@@ -1247,6 +1247,36 @@ async fn retention_runs_as_scheduled_jobs() {
     let Some(setup) = backbone("backbone_retention").await else {
         return;
     };
+    // More expired agent events than one cleanup batch holds.
+    let space = send(
+        &setup.app,
+        setup
+            .browser
+            .request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await
+    .1["projectId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
+    let (agent, _) = create_agent(&setup.app, &setup.browser, &space, "Wren", "wren").await;
+    sqlx::query(
+        r#"
+        INSERT INTO external_agent_events (
+            id, project_id, connection_id, sequence, kind, summary, resource_kind,
+            resource_id, canonical_path, created_at, expires_at
+        )
+        SELECT gen_random_uuid(), connection.project_id, connection.id, 1000000 + n, 'test.expired',
+               'expired', 'message', gen_random_uuid(), '/expired',
+               now() - interval '40 days', now() - interval '1 day'
+        FROM external_agent_connections connection, generate_series(1, 10050) n
+        WHERE connection.actor_id = $1
+        "#,
+    )
+    .bind(agent)
+    .execute(&setup.pool)
+    .await
+    .expect("expired events");
     let registry = jobs::default_registry();
     jobs::ensure_recurring(&setup.pool, &registry)
         .await
@@ -1275,6 +1305,13 @@ async fn retention_runs_as_scheduled_jobs() {
             ("retention.worktrees".to_owned(), "succeeded".to_owned()),
         ]
     );
+    let left = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM external_agent_events WHERE expires_at <= now()",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("left");
+    assert_eq!(left, 0, "one run drains every expired event");
     // Each queued its next run for later.
     let later = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM background_jobs WHERE kind LIKE 'retention.%' AND state = 'queued' AND run_at > now() + interval '5 hours'",

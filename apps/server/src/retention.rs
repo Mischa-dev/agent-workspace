@@ -257,12 +257,30 @@ fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> boo
 /// instead of by hand. The host commands still work for a dry run.
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
     registry.register(EXTERNAL_EVENTS_JOB, |context| async move {
-        let result = clean_external_events(&context.state.pool, true).await?;
-        tracing::info!(
-            removed = result.removed_events,
-            remaining = result.remaining_expired_events,
-            "trimmed expired agent events"
-        );
+        // Each pass deletes one bounded batch; keep going until nothing
+        // expired is left, so a busy server never falls behind for good.
+        let started = std::time::Instant::now();
+        let mut removed = 0;
+        let remaining = loop {
+            let result = clean_external_events(&context.state.pool, true).await?;
+            removed += result.removed_events;
+            if result.remaining_expired_events == 0
+                || result.removed_events == 0
+                || started.elapsed() > std::time::Duration::from_secs(8 * 60)
+            {
+                break result.remaining_expired_events;
+            }
+        };
+        tracing::info!(removed, remaining, "trimmed expired agent events");
+        if remaining > 0 {
+            crate::metrics::alert(crate::metrics::Alert {
+                key: "retention_behind",
+                subject: EXTERNAL_EVENTS_JOB.to_owned(),
+                detail: format!(
+                    "Agent event retention removed {removed} rows and still has {remaining} expired rows left."
+                ),
+            });
+        }
         Ok(())
     });
     registry.every(

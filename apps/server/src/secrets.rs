@@ -190,7 +190,8 @@ impl FileKeyring {
 
     /// The same keyring with a new active key in front.
     pub fn with_new_active_key(&self) -> Self {
-        let mut keys = vec![(new_key_id(), random_key())];
+        let id = fresh_key_id(&self.key_ids(), new_key_id);
+        let mut keys = vec![(id, random_key())];
         keys.extend(
             self.keys
                 .iter()
@@ -282,8 +283,18 @@ fn valid_key_id(id: &str) -> bool {
 }
 
 fn new_key_id() -> String {
-    format!("k{}", Utc::now().format("%Y%m%d%H%M%S"))
-        + &format!("-{:04x}", OsRng.next_u32() & 0xffff)
+    format!("k{}", Utc::now().format("%Y%m%d%H%M%S")) + &format!("-{:016x}", OsRng.next_u64())
+}
+
+/// A key id none of `existing` uses: a repeat would make the keyring
+/// unreadable and stop rotation from re-sealing under the new key.
+fn fresh_key_id(existing: &[String], mut generate: impl FnMut() -> String) -> String {
+    loop {
+        let id = generate();
+        if !existing.contains(&id) {
+            return id;
+        }
+    }
 }
 
 fn random_key() -> Zeroizing<[u8; 32]> {
@@ -1471,6 +1482,18 @@ async fn delete_from_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_key_id_never_repeats_one_in_the_keyring() {
+        let existing = vec!["k1".to_owned(), "k2".to_owned()];
+        let mut tries = ["k1", "k2", "k3"].into_iter();
+        let id = fresh_key_id(&existing, || tries.next().expect("a try").to_owned());
+        assert_eq!(id, "k3");
+        let keyring = FileKeyring::generate();
+        let rotated = keyring.with_new_active_key();
+        assert_ne!(rotated.key_ids()[0], keyring.key_ids()[0]);
+        assert!(valid_key_id(&rotated.key_ids()[0]));
+    }
 
     #[test]
     fn values_round_trip_and_bind_their_identity() {
