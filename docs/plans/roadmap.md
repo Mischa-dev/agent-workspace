@@ -468,6 +468,8 @@ Launch button and dialog.
 - The Environments page and run defaults are settings pages that W8's settings
   area links to; until W8 is on main they sit in today's project settings.
 - 'Start when a window resets' uses W9's usage windows once they're on main.
+- W9's capacity alerts and push notifications have a Launch action. Whichever
+  of W7 and W9 merges second points it at the Launch dialog.
 
 **Done when:** One click on a task starts a Codex Cloud task in the project's
 default environment with its defaults, and its status and pull request show in
@@ -524,8 +526,9 @@ page.
 
 **Seams:**
 
-- The alert's Launch action opens W7's Launch dialog; the one-tap batch comes
-  in W13.
+- The alert's Launch action opens W7's Launch dialog. Until that's on main it
+  opens the project's ready tasks, and whichever of W7 and W9 merges second
+  points it at the dialog. The one-tap batch comes in W13.
 - Notification and alert settings go into W8's settings area once it's on
   main.
 
@@ -673,7 +676,7 @@ delivery log, and the automation rules and builder.
 
 **Done when:** A script with a personal token can do what the web app does; an
 external service hears about every finished run; and 'when a PR's checks fail,
-launch Fixer on it' works with nobody watching.
+launch an agent on it' works with nobody watching.
 
 ### Later: Opening up
 
@@ -1283,13 +1286,15 @@ inbox and on your phone.
 *In [W13](#w13-payoff-and-finish) Payoff and finish · Needs U3, C5, AI5*
 
 The alert carries a suggested batch: ready tasks across your projects
-(dependencies done, criteria written, repository and default environment set),
-ranked by priority and by how much they unblock, sized to the capacity left.
-One tap launches the batch, each task in its own project's environment with
-its defaults; Review opens the batch to edit first.
+(dependencies done, criteria written, repository and default environment set)
+whose project can run on the alert's account: a harness that account serves
+and an environment it can reach. They're ranked by priority and by how much
+they unblock, and sized to that account's capacity left. One tap launches the
+batch, each task in its own project's environment with its defaults but on the
+alert's account; Review opens the batch to edit first.
 
 **Done when:** Tapping Launch on the alert starts the batch in the right
-environments.
+environments, every run on the account whose window is about to reset.
 
 #### U5. Usage page
 
@@ -1672,11 +1677,13 @@ open). A badge on the rail.
 
 #### N3. Push to phone and desktop
 
-*In [W9](#w9-capacity-and-push) Capacity and push · Needs N1, S1 · Migration*
+*In [W9](#w9-capacity-and-push) Capacity and push · Needs N1, S1 · Better with
+C4 · Migration*
 
 Web Push with keys from S1, a subscription per device, push and
-notification-click handlers in `sw.js` with actions (Open, Launch), and a test
-button per device. Works for the installed app on iOS.
+notification-click handlers in `sw.js` with actions (Open, and Launch, which
+opens the Launch dialog from C4, or the project's ready tasks until C4 is on
+main), and a test button per device. Works for the installed app on iOS.
 
 **Done when:** Your phone shows the capacity alert with a Launch button.
 
@@ -1973,16 +1980,17 @@ about a message in a conversation its subscription's owner can't see.
 Better with A9 · Migration*
 
 Rules with a trigger (an event, a schedule, a capacity window), conditions (a
-saved view's filters) and actions (launch an agent profile, set a field,
-notify, post a message). For example: launch when a task labelled agent
-becomes Ready; launch a fixer when a PR's checks fail; post a standup every
-weekday at 9. A builder in project settings plus MCP tools. Each rule acts as
-the person or app that made it, and before every action it checks that actor's
-current access to the project and to any account, environment or conversation
-the action uses (principle 9). A rule that fails the check is turned off, and
-its owner, or a project admin if the owner has left, is told why.
+saved view's filters) and actions (launch an agent with the project's run
+defaults, or an agent profile once A9 is on main; set a field; notify; post a
+message). For example: launch when a task labelled agent becomes Ready; launch
+an agent on a PR whose checks fail; post a standup every weekday at 9. A
+builder in project settings plus MCP tools. Each rule acts as the person or
+app that made it, and before every action it checks that actor's current
+access to the project and to any account, environment or conversation the
+action uses (principle 9). A rule that fails the check is turned off, and its
+owner, or a project admin if the owner has left, is told why.
 
-**Done when:** 'When a PR's checks fail, launch Fixer on it' works without
+**Done when:** 'When a PR's checks fail, launch an agent on it' works without
 anyone watching, and a rule whose maker left the project stops instead of
 acting for them.
 
