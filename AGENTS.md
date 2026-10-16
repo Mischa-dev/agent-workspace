@@ -1,10 +1,13 @@
 # Repository guidance
 
-The current direction is in `docs/plans/workspace-merge-plan.md`: this app
-becomes the one workspace (DMs, groups, agents answering on their own, plus
-projects, work items, Codex runs and GitHub). `PROJECT_SOURCE_OF_TRUTH.md` is
-history and a reference for how existing code behaves; don't add to it for
-ordinary changes.
+The current direction is in `docs/plans/roadmap.md`: the pieces, in order,
+that make this app the platform for whole projects and for agents of any
+make, including your own harnesses. Pick a piece from there and follow its
+"How a thread picks up a piece" section. It builds on
+`docs/plans/workspace-merge-plan.md`, which made this app the one workspace
+(DMs, groups, agents answering on their own, plus projects, work items, Codex
+runs and GitHub). `PROJECT_SOURCE_OF_TRUTH.md` is history and a reference for
+how existing code behaves; don't add to it for ordinary changes.
 
 ## Commands
 
