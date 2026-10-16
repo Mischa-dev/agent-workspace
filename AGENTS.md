@@ -17,12 +17,13 @@ ordinary changes.
 - Rotate one User password and revoke their sessions: `cargo run -p agent-workspace-server -- user-password-rotate --login-name <name>` (interactive terminal only)
 
 In a cloud session (a Claude Code cloud session or a Codex Cloud task),
-`tools/cloud/setup.sh` starts PostgreSQL, creates a test database, exports
-`AGENT_WORKSPACE_DATABASE_URL`, installs the web dependencies and warms the
-cargo build. Use it as the Codex Cloud environment's setup script. Run it again
-if integration tests skip or can't reach the database. Cloud images ship Node
-22 rather than the pinned 24; the web checks pass on both, so keep it that way
-(stub `fetch` and `WebSocket` in tests instead of letting jsdom connect).
+`tools/cloud/setup.sh` starts PostgreSQL, creates a test database, saves
+`AGENT_WORKSPACE_DATABASE_URL` for later commands, installs the Node in
+`.node-version` and the pinned pnpm, installs the web dependencies and warms
+the cargo build. Use it as the Codex Cloud environment's setup script. Run it
+again if integration tests skip or can't reach the database. Where Node can't
+be downloaded the image's Node 22 is used, so keep the web checks passing on
+it (stub `fetch` and `WebSocket` in tests instead of letting jsdom connect).
 
 Builds and tests don't run on the Mac (it's short on disk). `tools/ci/run.sh`
 runs the full CI on the best machine that's free: Mischa's NixOS laptop when it

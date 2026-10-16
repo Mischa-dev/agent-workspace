@@ -6,9 +6,11 @@
 #
 #   tools/cloud/setup.sh [--warm wait|background|skip] [--db-only]
 #
-# It starts PostgreSQL, creates a test database, exports
-# AGENT_WORKSPACE_DATABASE_URL, installs the web dependencies with the pinned
-# pnpm and warms the cargo build. Every step is safe to run again; run it again
+# It starts PostgreSQL, creates a test database, saves
+# AGENT_WORKSPACE_DATABASE_URL where later commands see it (CLAUDE_ENV_FILE
+# and the shell profile), installs the Node in .node-version when the image
+# has another, installs the web dependencies with the pinned pnpm and warms
+# the cargo build. Every step is safe to run again; run it again
 # whenever integration tests say the database is unreachable (a resumed
 # container doesn't always keep PostgreSQL running).
 #
@@ -23,7 +25,7 @@ while [ $# -gt 0 ]; do
     --warm) warm="${2:?--warm needs wait, background or skip}"; shift 2 ;;
     --warm=*) warm="${1#--warm=}"; shift ;;
     --db-only) db_only=1; shift ;;
-    -h | --help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -140,16 +142,55 @@ elif start_postgres && create_database; then
 fi
 [ -n "${db_only}" ] && { [ -n "${database_ok}" ]; exit $?; }
 
+# Make a directory's binaries first on PATH here and in later commands.
+prepend_path() {
+  export PATH="$1:${PATH}"
+  local line="export PATH=\"$1:\${PATH}\""
+  if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    grep -qxF "${line}" "${CLAUDE_ENV_FILE}" 2>/dev/null || echo "${line}" >> "${CLAUDE_ENV_FILE}"
+  fi
+  for rc in "${HOME}/.bashrc" "${HOME}/.profile"; do
+    grep -qxF "${line}" "${rc}" 2>/dev/null || echo "${line}" >> "${rc}"
+  done
+}
+
+# The Node in .node-version, when the image has another and the download is
+# allowed. Without it the web checks still pass on the image's Node 22.
+install_node() {
+  local wanted="$1" os arch
+  case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) return 1 ;; esac
+  case "$(uname -m)" in x86_64 | amd64) arch=x64 ;; aarch64 | arm64) arch=arm64 ;; *) return 1 ;; esac
+  local name="node-v${wanted}-${os}-${arch}"
+  local root="${XDG_DATA_HOME:-${HOME}/.local/share}/agent-workspace"
+  if [ ! -x "${root}/${name}/bin/node" ]; then
+    local base="https://nodejs.org/dist/v${wanted}" work
+    work="$(mktemp -d)"
+    log "installing Node ${wanted}"
+    if ! curl -fsSL --retry 2 -o "${work}/SHASUMS256.txt" "${base}/SHASUMS256.txt" ||
+      ! curl -fsSL --retry 2 -o "${work}/${name}.tar.gz" "${base}/${name}.tar.gz" ||
+      ! (cd "${work}" && grep " ${name}.tar.gz\$" SHASUMS256.txt | sha256sum -c --status -); then
+      rm -rf "${work}"
+      return 1
+    fi
+    mkdir -p "${root}"
+    tar -xzf "${work}/${name}.tar.gz" -C "${root}"
+    rm -rf "${work}"
+  fi
+  prepend_path "${root}/${name}/bin"
+}
+wanted_node="$(tr -d ' v\n' < .node-version 2>/dev/null || true)"
+if [ -n "${wanted_node}" ] && [ "$(node --version 2>/dev/null)" != "v${wanted_node}" ]; then
+  install_node "${wanted_node}" ||
+    log "couldn't install Node ${wanted_node}; using $(node --version 2>/dev/null || echo 'no Node') (the web checks pass on Node 22 too)"
+fi
+
 # Web dependencies with the pnpm that package.json pins.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-if ! type -P pnpm >/dev/null || [ "$(pnpm --version 2>/dev/null)" != "$(sed -n 's/.*"packageManager": "pnpm@\([^"]*\)".*/\1/p' package.json)" ]; then
-  mkdir -p "${HOME}/.local/bin"
-  corepack enable --install-directory "${HOME}/.local/bin" pnpm
-  export PATH="${HOME}/.local/bin:${PATH}"
-  if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-    echo "export PATH=\"${HOME}/.local/bin:\${PATH}\"" >> "${CLAUDE_ENV_FILE}"
-  fi
-fi
+# Images often carry another global pnpm, so the corepack shim goes first.
+shims="${XDG_DATA_HOME:-${HOME}/.local/share}/agent-workspace/bin"
+mkdir -p "${shims}"
+corepack enable --install-directory "${shims}" pnpm
+prepend_path "${shims}"
 log "installing web dependencies"
 pnpm install --frozen-lockfile --reporter=silent
 
