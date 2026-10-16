@@ -103,7 +103,7 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
       {accounts.data.length > 0 ? addForm : null}
       {add.isError && <Banner tone="danger">{errorMessage(add.error)}</Banner>}
       {harnesses.data
-        .filter((harness) => harness.canEditCatalog && harness.catalog.models.length > 0)
+        .filter((harness) => harness.canEditCatalog && (harness.catalog.models.length > 0 || harness.features.modelListing))
         .map((harness) => (
           <ModelCatalog harness={harness} key={harness.kind} projectId={projectId} />
         ))}
@@ -464,6 +464,10 @@ function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: str
         ) : null}
       </header>
       {failure ? <Banner tone="danger">{errorMessage(failure)}</Banner> : null}
+      {harness.catalog.models.length === 0 ? (
+        <p className="aw-quiet">No models listed yet. Refresh the list to fetch them from the provider with your signed-in account.</p>
+      ) : null}
+      {harness.catalog.models.length > 0 ? (
       <ul className="aw-rows">
         {harness.catalog.models.map((model) => (
           <li className="aw-row" key={model.id}>
@@ -489,6 +493,7 @@ function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: str
           </li>
         ))}
       </ul>
+      ) : null}
     </section>
   )
 }

@@ -91,7 +91,8 @@ impl RunConfig {
     /// Resolves the launch overrides (`self`) over the account defaults for
     /// one adapter, checking every value against its manifest and catalog.
     /// `catalog` holds the models people can pick (hidden ones excluded); an
-    /// empty catalog means the adapter's own default model is used.
+    /// empty catalog means the adapter's own default model is used, and a
+    /// named model is refused until the catalog lists it.
     pub fn resolve(
         &self,
         account_defaults: &RunConfig,
@@ -116,14 +117,16 @@ impl RunConfig {
                     .or_else(|| catalog.first())
                     .map(|model| model.id.clone())
             });
+        // A named model must be in the catalog; with an empty catalog only
+        // the adapter's own default (no model named) can run.
         let model = match &model_id {
-            Some(id) if !catalog.is_empty() => Some(
+            Some(id) => Some(
                 catalog
                     .iter()
                     .find(|model| &model.id == id)
                     .ok_or(InvalidRunConfig("model"))?,
             ),
-            _ => None,
+            None => None,
         };
         // Account defaults for reasoning and speed only apply when the model
         // they were chosen for is still the one in use.
@@ -320,6 +323,26 @@ mod tests {
                 ..RunConfig::default()
             }),
             InvalidRunConfig("options")
+        );
+        // Before the catalog lists any model, only the adapter's default runs.
+        let named = RunConfig {
+            model: Some("fast-model".to_owned()),
+            ..RunConfig::default()
+        };
+        assert_eq!(
+            named.resolve(&RunConfig::default(), &manifest, &[]),
+            Err(InvalidRunConfig("model"))
+        );
+        assert!(
+            RunConfig::default()
+                .resolve(&named, &manifest, &[])
+                .is_err(),
+            "an account default is checked too"
+        );
+        assert!(
+            RunConfig::default()
+                .resolve(&RunConfig::default(), &manifest, &[])
+                .is_ok_and(|config| config.model.is_none())
         );
         assert!(
             serde_json::from_value::<RunConfig>(json!({"model": "x", "secret": "y"})).is_err(),
