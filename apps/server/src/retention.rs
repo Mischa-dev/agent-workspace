@@ -291,8 +291,16 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
         WORKTREES_JOB,
         std::time::Duration::from_secs(30 * 60),
         |context| async move {
+            // Run the cleanup as its own task: if the job times out, only
+            // this wait is dropped. A removal in progress keeps its
+            // transaction and locks until git is done, so a retry waits
+            // for it instead of racing it.
+            let pool = context.state.pool.clone();
+            let data_root = context.state.config.data_root.clone();
             let result =
-                clean_worktrees(&context.state.pool, &context.state.config.data_root, true).await?;
+                tokio::spawn(async move { clean_worktrees(&pool, &data_root, true).await })
+                    .await
+                    .map_err(|_| AppError::Internal("join worktree retention"))??;
             tracing::info!(
                 removed = result.removed_worktrees,
                 preserved = result.preserved_worktrees,

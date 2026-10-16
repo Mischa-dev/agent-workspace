@@ -2,9 +2,10 @@
 # Back up the secrets master key (keyring) on its own: a different age
 # recipient and a different off-host place from the database backups, because
 # a dump together with its key defeats the encryption. Runs after the daily
-# backup and uploads only when the key file, its recipients or its
-# destination changed. Key sets are never pruned: an old dump may need the
-# key that was current when it was made.
+# backup and uploads when the key file, its recipients or its destination
+# changed, or when its last upload is no longer listed there. Key sets are
+# never pruned: an old dump may need the key that was current when it was
+# made.
 #
 # usage: agent-workspace-backup-key [--config FILE] [--force]
 set -euo pipefail
@@ -65,11 +66,20 @@ state_file="${BACKUP_STATE_DIR}/secrets-key.sha256"
 current="$(sha256sum -- "${BACKUP_SECRETS_KEY_FILE}" | cut -d' ' -f1)"
 current+=" $(sha256sum -- "${BACKUP_KEY_AGE_RECIPIENTS_FILE}" | cut -d' ' -f1)"
 current+=" $(printf '%s' "${BACKUP_KEY_REMOTE}" | sha256sum | cut -d' ' -f1)"
+# The state is two lines: those hashes, then the set name that was uploaded.
+# Skipping also needs that set to still be listed at the destination, so an
+# emptied or rebuilt destination gets the key again on the next run.
 previous=""
-[[ -f "${state_file}" ]] && previous="$(<"${state_file}")"
-if [[ "${current}" == "${previous}" && "${force}" == false ]]; then
-  log "secrets key, recipients and destination unchanged since the last upload; nothing to do"
-  exit 0
+uploaded=""
+if [[ -f "${state_file}" ]]; then
+  { read -r previous || true; read -r uploaded || true; } <"${state_file}"
+fi
+if [[ "${current}" == "${previous}" && -n "${uploaded}" && "${force}" == false ]]; then
+  if grep -qxF -- "${uploaded}" <<<"$(remote_list "${BACKUP_KEY_REMOTE}")"; then
+    log "secrets key ${uploaded} is already off-host and unchanged; nothing to do"
+    exit 0
+  fi
+  log "secrets key ${uploaded} is missing off-host; uploading it again"
 fi
 
 work="$(mktemp -d -p "${BACKUP_WORK_DIR}" agent-workspace-key.XXXXXX)"
@@ -85,6 +95,8 @@ test -s "${work}/${name}/secrets-key.age" || die "encrypted key is empty"
 (cd -- "${work}/${name}" && sha256sum -- secrets-key.age >SHA256SUMS)
 
 remote_put_set "${BACKUP_KEY_REMOTE}" "${work}/${name}"
-printf '%s\n' "${current}" >"${state_file}.next"
+grep -qxF -- "${name}" <<<"$(remote_list "${BACKUP_KEY_REMOTE}")" ||
+  die "secrets key ${name} is not listed off-host after upload"
+printf '%s\n%s\n' "${current}" "${name}" >"${state_file}.next"
 mv -T -- "${state_file}.next" "${state_file}"
 log "secrets key ${name} copied off-host"
