@@ -21,3 +21,4 @@ auth.json
 .sqlx/
 playwright-report/
 test-results/
+.agent-workspace-secrets/

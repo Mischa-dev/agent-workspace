@@ -1,0 +1,135 @@
+#!/usr/bin/bash
+# Back up the secrets master key (keyring) on its own: a different age
+# recipient and a different off-host place from the database backups, because
+# a dump together with its key defeats the encryption. Runs before the daily
+# backup (see agent-workspace-daily-backup) and uploads when the key file,
+# its recipients or its destination changed, or when its last upload no
+# longer reads back intact. Key sets are never pruned: an old dump may need
+# the key that was current when it was made.
+#
+# usage: agent-workspace-backup-key [--config FILE] [--force]
+set -euo pipefail
+
+script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# shellcheck source=agent-workspace-backup-lib.sh
+source "${script_dir}/agent-workspace-backup-lib.sh"
+
+config="${BACKUP_DEFAULT_CONFIG}"
+force=false
+while (($# > 0)); do
+  case "$1" in
+    --config)
+      config="${2:?--config needs a path}"
+      shift 2
+      ;;
+    --force)
+      force=true
+      shift
+      ;;
+    *)
+      echo "usage: agent-workspace-backup-key [--config FILE] [--force]" >&2
+      exit 64
+      ;;
+  esac
+done
+
+load_config "${config}"
+apply_common_defaults
+
+if [[ -z "${BACKUP_SECRETS_KEY_FILE:-}" ]]; then
+  # Fine only while nothing is encrypted: once the database holds secrets,
+  # the dump is useless without the key, so a missing setting is an error.
+  [[ -x "${BACKUP_PSQL}" ]] || die "BACKUP_PSQL (${BACKUP_PSQL}) is not executable"
+  stored="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public' AND tablename = 'secrets'")"
+  if [[ "${stored}" == 1 ]]; then
+    stored="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1 \
+      -c 'SELECT count(*) FROM secrets')"
+  fi
+  [[ "${stored}" =~ ^[0-9]+$ ]] || die "could not count stored secrets"
+  ((stored == 0)) || die "the database holds ${stored} encrypted secrets but BACKUP_SECRETS_KEY_FILE is not set; without the key they can't be restored"
+  log "BACKUP_SECRETS_KEY_FILE is not set and no secrets are stored; nothing to back up"
+  exit 0
+fi
+require_setting BACKUP_KEY_AGE_RECIPIENTS_FILE
+require_setting BACKUP_KEY_REMOTE
+require_file BACKUP_SECRETS_KEY_FILE "${BACKUP_SECRETS_KEY_FILE}"
+require_file BACKUP_KEY_AGE_RECIPIENTS_FILE "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+if [[ -n "${BACKUP_AGE_RECIPIENTS_FILE:-}" ]]; then
+  require_file BACKUP_AGE_RECIPIENTS_FILE "${BACKUP_AGE_RECIPIENTS_FILE}"
+  require_separate_recipients "${BACKUP_AGE_RECIPIENTS_FILE}" "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+fi
+if [[ -n "${BACKUP_REMOTE:-}" ]]; then
+  require_separate_remotes "${BACKUP_REMOTE}" "${BACKUP_KEY_REMOTE}"
+else
+  parse_remote "${BACKUP_KEY_REMOTE}"
+fi
+key_mode="$(stat -c '%a' -- "${BACKUP_SECRETS_KEY_FILE}")"
+(((8#${key_mode} & 8#077) == 0)) || die "the secrets key file must be owner-only"
+require_tools age sha256sum flock
+require_transport_tools "${BACKUP_KEY_REMOTE}"
+
+take_lock backup-key
+umask 0077
+state_file="${BACKUP_STATE_DIR}/secrets-key.sha256"
+# The saved state names what was uploaded and where it went: a new key, a new
+# destination or new recipients each need a fresh upload.
+current="$(sha256sum -- "${BACKUP_SECRETS_KEY_FILE}" | cut -d' ' -f1)"
+current+=" $(sha256sum -- "${BACKUP_KEY_AGE_RECIPIENTS_FILE}" | cut -d' ' -f1)"
+current+=" $(printf '%s' "${BACKUP_KEY_REMOTE}" | sha256sum | cut -d' ' -f1)"
+# The state is three lines: those hashes, the set name that was uploaded and
+# the checksum of its encrypted key. A run skips only when it can fetch that
+# set back and the payload still matches, so a destination that was emptied,
+# rebuilt or damaged gets the key again on the next run.
+work="$(mktemp -d -p "${BACKUP_WORK_DIR}" agent-workspace-key.XXXXXX)"
+cleanup() {
+  rm -rf -- "${work:?}"
+}
+trap cleanup EXIT
+
+# Fetch set $1 back and check it holds the encrypted key with checksum $2.
+remote_key_set_matches() {
+  local name="$1" expected="$2" fetched
+  grep -qxF -- "${name}" <<<"$(remote_list "${BACKUP_KEY_REMOTE}")" || return 1
+  fetched="$(mktemp -d -p "${work}" fetched.XXXXXX)"
+  remote_get_set "${BACKUP_KEY_REMOTE}" "${name}" "${fetched}" || return 1
+  [[ -s "${fetched}/secrets-key.age" ]] || return 1
+  (cd -- "${fetched}" && sha256sum --status -c SHA256SUMS) || return 1
+  [[ "$(sha256sum -- "${fetched}/secrets-key.age" | cut -d' ' -f1)" == "${expected}" ]]
+}
+
+previous=""
+uploaded=""
+uploaded_sum=""
+if [[ -f "${state_file}" ]]; then
+  { read -r previous || true; read -r uploaded || true; read -r uploaded_sum || true; } <"${state_file}"
+fi
+if [[ "${current}" == "${previous}" && -n "${uploaded}" && -n "${uploaded_sum}" && "${force}" == false ]]; then
+  if remote_key_set_matches "${uploaded}" "${uploaded_sum}"; then
+    log "secrets key ${uploaded} is off-host, intact and unchanged; nothing to do"
+    exit 0
+  fi
+  log "secrets key ${uploaded} is missing or damaged off-host; uploading it again"
+fi
+
+# The daily unit runs this twice, so a second pass can land in the same
+# second as the first; never reuse a name that already exists off-host.
+existing="$(remote_list "${BACKUP_KEY_REMOTE}")"
+name="$(new_set_name)"
+while [[ "${name}" == "${uploaded}" ]] || grep -qxF -- "${name}" <<<"${existing}"; do
+  sleep 1
+  name="$(new_set_name)"
+done
+install -d -m 0700 "${work}/${name}"
+encrypt_stream "${BACKUP_KEY_AGE_RECIPIENTS_FILE}" "${work}/${name}/secrets-key.age" \
+  <"${BACKUP_SECRETS_KEY_FILE}"
+test -s "${work}/${name}/secrets-key.age" || die "encrypted key is empty"
+(cd -- "${work}/${name}" && sha256sum -- secrets-key.age >SHA256SUMS)
+sum="$(sha256sum -- "${work}/${name}/secrets-key.age" | cut -d' ' -f1)"
+
+remote_put_set "${BACKUP_KEY_REMOTE}" "${work}/${name}"
+remote_key_set_matches "${name}" "${sum}" ||
+  die "secrets key ${name} did not read back intact after upload"
+printf '%s\n%s\n%s\n' "${current}" "${name}" "${sum}" >"${state_file}.next"
+mv -T -- "${state_file}.next" "${state_file}"
+log "secrets key ${name} copied off-host"
