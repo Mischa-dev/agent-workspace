@@ -568,7 +568,8 @@ pub(super) async fn list_labels(
     .into_iter()
     .map(LabelView::from)
     .collect::<Vec<_>>();
-    Ok(Json(json!({ "labels": labels })))
+    let can_edit = capabilities(&membership)?.edit && membership.project_archived_at.is_none();
+    Ok(Json(json!({ "labels": labels, "canEdit": can_edit })))
 }
 
 fn label_limit_message(limit: LabelLimit) -> String {
@@ -806,7 +807,10 @@ pub(super) async fn list_milestones(
         query.include_archived.unwrap_or(false),
     )
     .await?;
-    Ok(Json(json!({ "milestones": milestones })))
+    let can_edit = capabilities(&membership)?.edit && membership.project_archived_at.is_none();
+    Ok(Json(
+        json!({ "milestones": milestones, "canEdit": can_edit }),
+    ))
 }
 
 #[derive(Debug, Deserialize, Serialize)]

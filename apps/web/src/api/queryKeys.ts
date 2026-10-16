@@ -33,6 +33,18 @@ export const queryKeys = {
     ['project', projectId, 'work-items', 'assignees', query] as const,
   workItemTimeline: (projectId: string, workItemId: string) =>
     ['project', projectId, 'work-items', 'timeline', workItemId] as const,
+  workItemPages: (projectId: string, filters: Record<string, unknown>) =>
+    ['project', projectId, 'work-items', 'pages', filters] as const,
+  workItemGroups: (projectId: string, filters: Record<string, unknown>) =>
+    ['project', projectId, 'work-items', 'groups', filters] as const,
+  workItemBoard: (projectId: string, filters: Record<string, unknown>) =>
+    ['project', projectId, 'work-items', 'board', filters] as const,
+  workItemLabels: (projectId: string, includeArchived = false) =>
+    ['project', projectId, 'work-items', 'labels', includeArchived ? 'all' : 'active'] as const,
+  workItemMilestones: (projectId: string, includeArchived = false) =>
+    ['project', projectId, 'work-items', 'milestones', includeArchived ? 'all' : 'active'] as const,
+  workItemReferences: (projectId: string, query: string) =>
+    ['project', projectId, 'work-items', 'references', query] as const,
   timeline: (
     projectId: string,
     conversationId: string,

@@ -328,15 +328,18 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     // Dates must be in order.
     let (status, _) = owner
         .patch(
-            &format!("{base}/work-items/{}", design["id"].as_str().unwrap()),
+            &format!(
+                "{base}/work-items/{}",
+                design["id"].as_str().expect("test value")
+            ),
             json!({ "expectedVersion": design["version"], "startDate": "2026-11-05" }),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // Build waits on design; the reverse link would close a cycle.
-    let build_id = build["id"].as_str().unwrap();
-    let design_id = design["id"].as_str().unwrap();
+    let build_id = build["id"].as_str().expect("test value");
+    let design_id = design["id"].as_str().expect("test value");
     let (status, linked) = owner
         .post(
             &format!("{base}/work-items/{build_id}/dependencies"),
@@ -367,7 +370,7 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     assert_eq!(status, StatusCode::OK, "{ready}");
     let ready_keys = ready["items"]
         .as_array()
-        .unwrap()
+        .expect("test value")
         .iter()
         .map(|item| item["key"].clone())
         .collect::<Vec<_>>();
@@ -397,7 +400,7 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
         .await;
     let changes = timeline["entries"]
         .as_array()
-        .unwrap()
+        .expect("test value")
         .iter()
         .find_map(|entry| entry["activity"]["payload"].get("changes"))
         .expect("an entry with field changes")
@@ -440,10 +443,14 @@ async fn links_to_other_projects_respect_membership() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{side}");
-    let side_id: Uuid = side["id"].as_str().unwrap().parse().unwrap();
+    let side_id: Uuid = side["id"]
+        .as_str()
+        .expect("test value")
+        .parse()
+        .expect("test value");
     let secret = create_task(owner, side_id, json!({ "title": "Private groundwork" })).await;
     let main = create_task(owner, project, json!({ "title": "Ship it" })).await;
-    let main_id = main["id"].as_str().unwrap();
+    let main_id = main["id"].as_str().expect("test value");
     let base = format!("/api/v1/projects/{project}");
 
     // The member can't link to a task they can't see, by key or by ID.
@@ -514,7 +521,7 @@ async fn bulk_changes_are_all_or_nothing() {
     let (_, unchanged) = owner
         .get(&format!(
             "{base}/work-items/{}",
-            first["id"].as_str().unwrap()
+            first["id"].as_str().expect("test value")
         ))
         .await;
     assert_eq!(unchanged["priority"], "no_priority");
@@ -536,7 +543,7 @@ async fn bulk_changes_are_all_or_nothing() {
     assert!(
         applied["items"]
             .as_array()
-            .unwrap()
+            .expect("test value")
             .iter()
             .all(|item| item["priority"] == "high" && item["dueDate"] == "2026-11-01")
     );
@@ -581,14 +588,14 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
     let review = drafts
         .iter()
         .position(|status| status["name"] == "Review")
-        .unwrap();
+        .expect("test value");
     drafts.insert(
         review + 1,
         json!({ "key": "qa", "name": "QA", "semanticCategory": "review", "isDefault": false }),
     );
     let types = workflow["types"]
         .as_array()
-        .unwrap()
+        .expect("test value")
         .iter()
         .map(|kind| json!({ "id": kind["id"], "name": kind["name"], "isDefault": kind["isDefault"] }))
         .collect::<Vec<_>>();
@@ -605,12 +612,12 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
     let qa = status_named(&updated, "QA");
     assert_eq!(
         updated["version"],
-        workflow["version"].as_i64().unwrap() + 1
+        workflow["version"].as_i64().expect("test value") + 1
     );
 
     // A task goes to QA, then QA is retired and its task moves to Review.
     let task = create_task(owner, project, json!({ "title": "Check the release" })).await;
-    let task_id = task["id"].as_str().unwrap();
+    let task_id = task["id"].as_str().expect("test value");
     let (status, moved) = owner
         .patch(
             &format!("/api/v1/projects/{project}/work-items/{task_id}"),
@@ -687,7 +694,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
         WHERE seed.id = $1
         "#,
     )
-    .bind(Uuid::parse_str(first["id"].as_str().unwrap()).unwrap())
+    .bind(Uuid::parse_str(first["id"].as_str().expect("test value")).expect("test value"))
     .execute(&fixture.pool)
     .await
     .expect("insert 10,000 tasks");
@@ -699,7 +706,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
         "#,
     )
     .bind(project)
-    .bind(Uuid::parse_str(label["id"].as_str().unwrap()).unwrap())
+    .bind(Uuid::parse_str(label["id"].as_str().expect("test value")).expect("test value"))
     .execute(&fixture.pool)
     .await
     .expect("label every fifth task");
@@ -726,7 +733,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
             };
             let (status, page) = owner.get(&uri).await;
             assert_eq!(status, StatusCode::OK, "{query}: {page}");
-            for item in page["items"].as_array().unwrap() {
+            for item in page["items"].as_array().expect("test value") {
                 let group = item["group"]["key"].as_str().unwrap_or("");
                 assert!(
                     seen.insert(format!("{group}:{}", item["id"])),
@@ -741,7 +748,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
 
     // A cursor is refused under other filters.
     let (_, page) = owner.get(&format!("{base}?sort=due&limit=10")).await;
-    let cursor = page["nextCursor"].as_str().unwrap();
+    let cursor = page["nextCursor"].as_str().expect("test value");
     let (status, _) = owner
         .get(&format!("{base}?sort=title&limit=10&cursor={cursor}"))
         .await;
@@ -762,13 +769,13 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
     assert_eq!(column["key"], "urgent");
     assert_eq!(column["items"].as_array().map(Vec::len), Some(20));
     let mut next = String::new();
-    for (key, value) in column["filter"].as_object().unwrap() {
-        next.push_str(&format!("{key}={}&", value.as_str().unwrap()));
+    for (key, value) in column["filter"].as_object().expect("test value") {
+        next.push_str(&format!("{key}={}&", value.as_str().expect("test value")));
     }
     let (status, more) = owner
         .get(&format!(
             "{base}?{next}limit=20&cursor={}",
-            column["nextCursor"].as_str().unwrap()
+            column["nextCursor"].as_str().expect("test value")
         ))
         .await;
     assert_eq!(status, StatusCode::OK, "{more}");

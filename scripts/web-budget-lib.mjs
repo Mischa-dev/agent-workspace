@@ -18,11 +18,20 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // Editing and removing messages, their history, reactions, live updates of
   // older pages and mark-unread (MCP Phase 3) measure 642,380 / 206,161, all
   // in the lazily loaded conversation routes.
-  javascriptRawBytes: 632 * 1024,
-  javascriptGzipBytes: 203 * 1024,
+  // Tasks at scale (W3: windowed list with grouping and bulk edits, board with
+  // drag and swimlanes, the task panel's per-field editing, milestones,
+  // workflow settings, and the popover, combobox, date picker and table kit)
+  // measure 762,524 raw / 243,021 gzip bytes, up 118,744 / 36,457. Nearly all
+  // of it is in the lazily loaded WorkItemsPage, TaskDetail, Milestones and
+  // Project settings chunks; the entry chunk gains only a route and a link.
+  javascriptRawBytes: 748 * 1024,
+  javascriptGzipBytes: 240 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
-  cssRawBytes: 100 * 1024,
+  // Tasks at scale (W3) add two lazily loaded stylesheets, work items
+  // (16,875 bytes) and the picker kit (5,487), measuring 124,287; index.css is
+  // unchanged.
+  cssRawBytes: 123 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {

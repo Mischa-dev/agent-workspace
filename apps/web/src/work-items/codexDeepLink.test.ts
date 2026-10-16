@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { WorkItem } from './types'
 import { buildOpenInCodexLink } from './codexDeepLink'
+import { EMPTY_PLANNING } from './testFixtures'
 
 function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -12,6 +13,7 @@ function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
     createdAt: '', updatedAt: '', labels: [], acceptanceCriteria: [], linkedThreads: [],
     linkedPullRequests: [], capabilities: { view: true, edit: true, archive: true },
     linkedRepositories: [{ id: 'repo', owner: 'owner', name: 'repo', cloneUrl: 'https://github.com/owner/repo.git', role: 'primary', preparationState: 'ready', trusted: true, available: true, archivedAt: null, href: '' }],
+    ...EMPTY_PLANNING,
     ...overrides,
   }
 }

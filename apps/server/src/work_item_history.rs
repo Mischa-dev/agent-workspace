@@ -345,7 +345,7 @@ mod tests {
         changes.text("blockedReason", None, Some(&long));
         let to = changes.into_map()["blockedReason"]["to"]
             .as_str()
-            .unwrap()
+            .expect("cut text")
             .to_owned();
         assert_eq!(to.chars().count(), 300);
         assert!(to.ends_with('…'));

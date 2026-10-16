@@ -2,10 +2,33 @@ import { requestJson } from '../api/client'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import type { MessageContentV1 } from '../conversations/types'
 import { parseMessageContent } from '../conversations/messageContentModel'
+import {
+  activityChanges,
+  actorRef,
+  actorRefs,
+  boolean,
+  claim,
+  color,
+  date,
+  estimateUnit,
+  list,
+  milestoneRef,
+  nullableNumber,
+  nullableString,
+  number,
+  priority,
+  record,
+  relations,
+  string,
+  taskRef,
+  taskRefs,
+} from './wire'
 import type {
   AssignableActor,
   WorkItem,
+  BoardColumnsBy,
   WorkItemCard,
+  WorkItemGroup,
   WorkItemLabel,
   WorkItemFilters,
   WorkItemListResponse,
@@ -17,52 +40,10 @@ import type {
   WorkWithWorkerResponse,
 } from './types'
 
-type WireRecord = Record<string, unknown>
-
-function record(value: unknown): WireRecord {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as WireRecord)
-    : {}
-}
-
-function string(value: unknown, fallback = '') {
-  return typeof value === 'string' ? value : fallback
-}
-
-function nullableString(value: unknown) {
-  return typeof value === 'string' ? value : null
-}
-
-function number(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function boolean(value: unknown) {
-  return value === true
-}
-
-function priority(value: unknown): WorkItemPriority {
-  return value === 'low' ||
-    value === 'medium' ||
-    value === 'high' ||
-    value === 'urgent'
-    ? value
-    : 'no_priority'
-}
-
-const LABEL_COLOR = /^#[0-9a-f]{6}$/
-const FALLBACK_LABEL_COLOR = '#8b8d98'
-
 function labels(value: unknown): WorkItemLabel[] {
-  return (Array.isArray(value) ? value : []).map((entry) => {
+  return list(value).map((entry) => {
     const label = record(entry)
-    const color = string(label.color)
-    return {
-      id: string(label.id),
-      name: string(label.name),
-      // The color goes into an inline style, so only a plain hex color is used.
-      color: LABEL_COLOR.test(color) ? color : FALLBACK_LABEL_COLOR,
-    }
+    return { id: string(label.id), name: string(label.name), color: color(label.color) }
   })
 }
 
@@ -188,11 +169,37 @@ export function normalizeWorkItem(value: unknown): WorkItem {
       edit: boolean(capabilities.edit),
       archive: boolean(capabilities.archive),
     },
+    parent: taskRef(item.parent),
+    milestone: milestoneRef(item.milestone),
+    startDate: date(item.startDate),
+    dueDate: date(item.dueDate),
+    estimate: nullableNumber(item.estimate),
+    blocked: blockedFlag(item.blocked),
+    blockedBy: taskRefs(item.blockedBy),
+    blocks: taskRefs(item.blocks),
+    ready: boolean(item.ready),
+    relations: relations(item.relations),
+    subtasks: list(item.subtasks).flatMap((value) => {
+      const task = taskRef(value)
+      return task ? [{ ...task, assignee: actorRef(record(value).assignee) }] : []
+    }),
+    claim: claim(item.claim),
+    watchers: actorRefs(item.watchers),
+    watching: boolean(item.watching),
+    estimateUnit: estimateUnit(item.estimateUnit),
   }
 }
 
-function normalizeCard(value: unknown): WorkItemCard {
+function blockedFlag(value: unknown): WorkItem['blocked'] {
+  if (!value || typeof value !== 'object') return null
+  const blocked = record(value)
+  return { reason: string(blocked.reason), at: string(blocked.at), by: actorRef(blocked.by) }
+}
+
+export function normalizeCard(value: unknown): WorkItemCard {
   const item = normalizeWorkItem(value)
+  const wire = record(value)
+  const group = wire.group ? record(wire.group) : null
   return {
     id: item.id,
     projectId: item.projectId,
@@ -208,6 +215,19 @@ function normalizeCard(value: unknown): WorkItemCard {
     updatedAt: item.updatedAt,
     labels: item.labels,
     capabilities: item.capabilities,
+    createdAt: item.createdAt,
+    milestone: item.milestone,
+    startDate: item.startDate,
+    dueDate: item.dueDate,
+    estimate: item.estimate,
+    ready: item.ready,
+    parentId: nullableString(wire.parentId),
+    blockedReason: nullableString(wire.blockedReason),
+    openBlockerCount: number(wire.openBlockerCount),
+    subtaskCount: number(wire.subtaskCount),
+    subtasksDone: number(wire.subtasksDone),
+    claimedBy: actorRef(wire.claimedBy),
+    ...(group ? { group: { key: string(group.key), label: string(group.label) } } : {}),
   }
 }
 
@@ -287,52 +307,85 @@ export async function workWithWorker(input: {
   }
 }
 
+/** The non-empty filters as query parameters, in a stable order. */
+export function filterParameters(filters: Record<string, unknown>) {
+  const parameters = new URLSearchParams()
+  for (const key of Object.keys(filters).sort()) {
+    const value = filters[key]
+    if (value === undefined || value === null || value === '' || value === false) continue
+    parameters.set(key, String(value))
+  }
+  return parameters
+}
+
+function projectPath(projectId: string, path: string) {
+  return `/api/v1/projects/${encodeURIComponent(projectId)}/${path}`
+}
+
 export async function listWorkItems(
   projectId: string,
-  filters: WorkItemFilters,
+  filters: WorkItemFilters | Record<string, unknown>,
 ): Promise<WorkItemListResponse> {
-  const parameters = new URLSearchParams()
-  for (const [key, value] of Object.entries(filters)) {
-    if (value !== undefined && value !== '' && value !== false) {
-      parameters.set(key, String(value))
-    }
-  }
-  const payload = record(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items?${parameters}`,
-    ),
-  )
+  const payload = record(await requestJson<unknown>(projectPath(projectId, `work-items?${filterParameters(filters)}`)))
+  const items = list(payload.items).map(normalizeCard)
   return {
-    items: Array.isArray(payload.items)
-      ? payload.items.map(normalizeCard)
-      : [],
+    items,
     nextCursor: nullableString(payload.nextCursor),
+    total: typeof payload.total === 'number' ? payload.total : items.length,
   }
 }
 
+export async function getWorkItemGroups(projectId: string, filters: WorkItemFilters): Promise<WorkItemGroup[]> {
+  const rest: Record<string, unknown> = { ...filters }
+  delete rest.cursor
+  delete rest.limit
+  delete rest.sort
+  const payload = record(await requestJson<unknown>(projectPath(projectId, `work-items/groups?${filterParameters(rest)}`)))
+  return list(payload.groups).map((value) => {
+    const group = record(value)
+    const groupColor = nullableString(group.color)
+    return {
+      key: string(group.key),
+      label: string(group.label),
+      count: number(group.count),
+      ...(groupColor ? { color: color(groupColor) } : {}),
+    }
+  })
+}
+
+const COLUMNS_BY = new Set(['status', 'assignee', 'priority', 'milestone', 'type', 'label'])
+
 export async function getWorkItemBoard(
   projectId: string,
-  filters: WorkItemFilters,
+  filters: WorkItemFilters & { columnsBy?: BoardColumnsBy },
 ): Promise<WorkItemBoardResponse> {
-  const parameters = new URLSearchParams()
-  for (const [key, value] of Object.entries({ ...filters, cursor: undefined })) {
-    if (value !== undefined && value !== '' && value !== false) parameters.set(key, String(value))
-  }
-  const payload = record(await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/board?${parameters}`,
-  ))
+  const rest: Record<string, unknown> = { ...filters }
+  delete rest.cursor
+  delete rest.groupBy
+  delete rest.sort
+  const payload = record(await requestJson<unknown>(projectPath(projectId, `work-items/board?${filterParameters(rest)}`)))
+  const columnsBy = string(payload.columnsBy)
   return {
-    columns: (Array.isArray(payload.columns) ? payload.columns : []).map((value) => {
+    columnsBy: (COLUMNS_BY.has(columnsBy) ? columnsBy : 'status') as BoardColumnsBy,
+    columns: list(payload.columns).map((value) => {
       const column = record(value)
-      const status = record(column.status)
+      const status = column.status ? record(column.status) : null
+      const items = list(column.items).map(normalizeCard)
+      const filter: Record<string, string> = {}
+      for (const [key, entry] of Object.entries(record(column.filter))) {
+        if (typeof entry === 'string') filter[key] = entry
+      }
       return {
-        status: {
-          id: string(status.id),
-          name: string(status.name),
-          semanticCategory: string(status.semanticCategory),
-        },
-        items: (Array.isArray(column.items) ? column.items : []).map(normalizeCard),
+        key: string(column.key) || string(status?.id),
+        label: string(column.label) || string(status?.name),
+        status: status
+          ? { id: string(status.id), name: string(status.name), semanticCategory: string(status.semanticCategory) }
+          : null,
+        items,
         hasMore: boolean(column.hasMore),
+        total: typeof column.total === 'number' ? column.total : items.length,
+        nextCursor: nullableString(column.nextCursor),
+        filter,
       }
     }),
   }
@@ -369,7 +422,9 @@ export async function moveWorkItem(input: {
   workItemId: string
   expectedVersion: number
   targetStatusId: string
-  targetPosition: number
+  targetPosition?: number
+  beforeId?: string
+  afterId?: string
   idempotencyKey: string
 }) {
   const { projectId, workItemId, idempotencyKey, ...json } = input
@@ -387,14 +442,14 @@ export async function getWorkItem(projectId: string, workItemId: string) {
   )
 }
 
-export async function getWorkItemWorkflow(
-  projectId: string,
-): Promise<WorkItemWorkflow> {
-  const payload = record(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/work-item-workflow`,
-    ),
+export async function getWorkItemWorkflow(projectId: string): Promise<WorkItemWorkflow> {
+  return normalizeWorkflow(
+    await requestJson<unknown>(`/api/v1/projects/${encodeURIComponent(projectId)}/work-item-workflow`),
   )
+}
+
+export function normalizeWorkflow(value: unknown): WorkItemWorkflow {
+  const payload = record(value)
   return {
     types: (Array.isArray(payload.types) ? payload.types : []).map((value) => {
       const item = record(value)
@@ -403,6 +458,7 @@ export async function getWorkItemWorkflow(
         name: string(item.name),
         position: number(item.position),
         isDefault: boolean(item.isDefault),
+        taskCount: number(item.taskCount),
       }
     }),
     statuses: (Array.isArray(payload.statuses) ? payload.statuses : []).map(
@@ -414,6 +470,7 @@ export async function getWorkItemWorkflow(
           semanticCategory: string(item.semanticCategory),
           position: number(item.position),
           isDefault: boolean(item.isDefault),
+          taskCount: number(item.taskCount),
         }
       },
     ),
@@ -427,6 +484,9 @@ export async function getWorkItemWorkflow(
         toStatusId: string(item.toStatusId),
       }
     }),
+    canEdit: boolean(payload.canEdit),
+    version: number(payload.version),
+    estimateUnit: estimateUnit(payload.estimateUnit),
   }
 }
 
@@ -438,6 +498,13 @@ export async function createWorkItem(input: {
   statusId?: string
   priority: WorkItemPriority
   assigneeActorId?: string
+  parentWorkItemId?: string
+  milestoneId?: string
+  labelIds?: string[]
+  startDate?: string
+  dueDate?: string
+  estimate?: number
+  acceptanceCriteria?: string[]
   idempotencyKey: string
 }) {
   const { projectId, idempotencyKey, ...json } = input
@@ -612,6 +679,7 @@ export async function getWorkItemTimeline(
               kind: string(activity.kind),
               summary: string(activity.summary),
               via: typeof activity.via === 'string' ? activity.via.slice(0, 80) : null,
+              changes: activityChanges(record(activity.payload).changes),
             }
           : null,
       comment:

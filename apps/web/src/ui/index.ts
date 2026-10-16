@@ -23,3 +23,9 @@ export {
   MessageSkeleton,
   type BannerTone,
 } from './feedback'
+export { Popover } from './Popover'
+export { popoverPosition, type PopoverPlacement } from './popoverModel'
+export { Combobox, ComboboxList, type ComboboxOption } from './Combobox'
+export { Calendar, DatePicker } from './DatePicker'
+export { formatDateLabel, fromIsoDate, monthGrid, toIsoDate } from './dateModel'
+export { Table, type TableColumn, type TableRow } from './Table'

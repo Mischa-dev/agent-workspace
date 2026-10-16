@@ -627,15 +627,12 @@ impl Filters {
                 " AND NOT ({FINISHED}) AND item.blocked_reason IS NULL AND NOT {HAS_OPEN_BLOCKER}"
             ));
         }
-        match self.claimed {
-            Some(claimed) => {
-                builder.push(if claimed { " AND " } else { " AND NOT " });
-                builder.push(
-                    "EXISTS (SELECT 1 FROM work_item_claims claim \
-                       WHERE claim.work_item_id = item.id AND claim.expires_at > now())",
-                );
-            }
-            None => {}
+        if let Some(claimed) = self.claimed {
+            builder.push(if claimed { " AND " } else { " AND NOT " });
+            builder.push(
+                "EXISTS (SELECT 1 FROM work_item_claims claim \
+                   WHERE claim.work_item_id = item.id AND claim.expires_at > now())",
+            );
         }
         if let Some(value) = self.due_before {
             builder.push(" AND item.due_date <= ").push_bind(value);
@@ -1461,7 +1458,8 @@ mod tests {
             sort: Sort::Due,
             grouping: Some(Grouping::Assignee),
         };
-        let cursor = encode_cursor(spec.fingerprint(project), vec!["1".into(); 7]).unwrap();
+        let cursor =
+            encode_cursor(spec.fingerprint(project), vec!["1".into(); 7]).expect("test value");
         assert!(decode_cursor(&cursor, &spec.fingerprint(project), spec.keys().len()).is_ok());
         let mut narrower = spec.clone();
         narrower.filters.hide_done = true;
@@ -1481,13 +1479,16 @@ mod tests {
             labels: Some(LabelFilter::All(vec![Uuid::nil()])),
             ..Filters::default()
         };
-        let column = filters.with_group(Grouping::Assignee, "none").unwrap();
+        let column = filters
+            .with_group(Grouping::Assignee, "none")
+            .expect("test value");
         let params = column.to_params();
         assert_eq!(params.get("unassigned").map(String::as_str), Some("true"));
         assert_eq!(params.get("includeDone").map(String::as_str), Some("false"));
         let query: TaskListQuery =
-            serde_urlencoded::from_str(&serde_urlencoded::to_string(&params).unwrap()).unwrap();
-        let parsed = Filters::parse(&query).unwrap();
+            serde_urlencoded::from_str(&serde_urlencoded::to_string(&params).expect("test value"))
+                .expect("test value");
+        let parsed = Filters::parse(&query).expect("test value");
         assert_eq!(format!("{:?}", parsed.to_params()), format!("{params:?}"));
     }
 }

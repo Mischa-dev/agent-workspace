@@ -225,10 +225,14 @@ struct Resolved {
     is_default: bool,
 }
 
+/// One status or type as drafted: ID, new key, name, semantic category
+/// (statuses only) and whether it's the default.
+type DraftEntry = (Option<Uuid>, Option<String>, String, Option<String>, bool);
+
 /// Checks the document against itself and the project's current rows and
 /// gives every entry an ID. Pure, so the rules are unit-tested.
 fn resolve_entries(
-    entries: &[(Option<Uuid>, Option<String>, String, Option<String>, bool)],
+    entries: &[DraftEntry],
     existing: &HashMap<Uuid, DefinitionRow>,
     keys: &mut HashMap<String, Uuid>,
     field: &'static str,

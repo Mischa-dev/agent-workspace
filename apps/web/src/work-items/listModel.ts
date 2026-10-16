@@ -1,0 +1,190 @@
+import { workItemPriorities } from './constants'
+import type { BoardColumnsBy, WorkItemFilters, WorkItemGroupBy, WorkItemSort } from './types'
+
+/**
+ * The task list's state lives in the URL: filters, sort, grouping, the view,
+ * the board's columns and lanes, and the task open in the side panel. This
+ * module is the one place that reads and writes it, so a link always reopens
+ * the same view.
+ */
+
+export type ViewMode = 'list' | 'board'
+export type LaneBy = 'none' | 'assignee' | 'priority' | 'milestone' | 'type'
+
+/** Filters that go to the server unchanged, keyed by their query parameter. */
+export type FilterValues = Omit<WorkItemFilters, 'cursor' | 'limit' | 'sort' | 'groupBy'>
+
+export type ListState = {
+  view: ViewMode
+  filters: FilterValues
+  sort: WorkItemSort
+  groupBy: WorkItemGroupBy | null
+  columnsBy: BoardColumnsBy
+  lanes: LaneBy
+  /** The task open in the side panel: its id or key. */
+  task: string | null
+}
+
+export const SORTS: Array<{ value: WorkItemSort; label: string }> = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'updated', label: 'Recently updated' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'due', label: 'Due date' },
+  { value: 'title', label: 'Title' },
+  { value: 'manual', label: 'Manual (board order)' },
+]
+
+export const GROUPINGS: Array<{ value: WorkItemGroupBy; label: string }> = [
+  { value: 'status', label: 'Status' },
+  { value: 'assignee', label: 'Assignee' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'label', label: 'Label' },
+  { value: 'milestone', label: 'Milestone' },
+  { value: 'parent', label: 'Parent' },
+  { value: 'type', label: 'Type' },
+]
+
+export const COLUMN_FIELDS: Array<{ value: BoardColumnsBy; label: string }> = [
+  { value: 'status', label: 'Status' },
+  { value: 'assignee', label: 'Assignee' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'milestone', label: 'Milestone' },
+  { value: 'type', label: 'Type' },
+  { value: 'label', label: 'Label' },
+]
+
+export const LANE_FIELDS: Array<{ value: LaneBy; label: string }> = [
+  { value: 'none', label: 'No swimlanes' },
+  { value: 'assignee', label: 'Assignee' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'milestone', label: 'Milestone' },
+  { value: 'type', label: 'Type' },
+]
+
+export const SEMANTIC_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled']
+
+const ID = /^[A-Za-z0-9_.:-]{1,100}$/
+const DATE = /^\d{4}-\d{2}-\d{2}$/
+
+type Rule = (value: string) => boolean
+
+const id: Rule = (value) => ID.test(value)
+const idOrNone: Rule = (value) => value === 'none' || ID.test(value)
+const isTrue: Rule = (value) => value === 'true'
+const isBoolean: Rule = (value) => value === 'true' || value === 'false'
+const isDate: Rule = (value) => DATE.test(value)
+
+/** Every filter the URL can carry, in the order chips show them. */
+export const FILTER_RULES: Record<keyof FilterValues, Rule> = {
+  q: (value) => value.trim().length > 0 && value.length <= 120,
+  statusId: id,
+  semanticCategory: (value) => SEMANTIC_CATEGORIES.includes(value),
+  priority: (value) => workItemPriorities.some((priority) => priority.value === value),
+  assigneeActorId: id,
+  unassigned: isTrue,
+  labelIds: (value) => value === 'none' || value.split(',').every((part) => ID.test(part)),
+  milestoneId: idOrNone,
+  parentId: idOrNone,
+  typeId: id,
+  blocked: isBoolean,
+  ready: isTrue,
+  claimed: isBoolean,
+  dueAfter: isDate,
+  dueBefore: isDate,
+  overdue: isTrue,
+  includeDone: (value) => value === 'false',
+  archived: isTrue,
+}
+
+export const FILTER_KEYS = Object.keys(FILTER_RULES) as Array<keyof FilterValues>
+
+function oneOf<T extends string>(value: string | null, options: Array<{ value: T }>, fallback: T): T {
+  return options.some((option) => option.value === value) ? (value as T) : fallback
+}
+
+export function readListState(parameters: URLSearchParams): ListState {
+  const filters: Record<string, unknown> = {}
+  for (const key of FILTER_KEYS) {
+    const value = parameters.get(key)
+    if (value === null || !FILTER_RULES[key](value)) continue
+    filters[key] = value === 'true' && key !== 'blocked' && key !== 'claimed' ? true : value
+  }
+  // An assignee and "unassigned" contradict each other; the explicit person wins.
+  if (filters.assigneeActorId) delete filters.unassigned
+  const groupBy = parameters.get('groupBy')
+  const task = parameters.get('task')
+  return {
+    view: parameters.get('view') === 'board' ? 'board' : 'list',
+    filters: filters as FilterValues,
+    sort: oneOf(parameters.get('sort'), SORTS, 'newest'),
+    groupBy: GROUPINGS.some((option) => option.value === groupBy) ? (groupBy as WorkItemGroupBy) : null,
+    columnsBy: oneOf(parameters.get('columnsBy'), COLUMN_FIELDS, 'status'),
+    lanes: oneOf(parameters.get('lanes'), LANE_FIELDS, 'none'),
+    task: task && task.length <= 100 ? task : null,
+  }
+}
+
+/** The URL for a state. Defaults are left out, so the plain page has no query at all. */
+export function writeListState(state: ListState): URLSearchParams {
+  const parameters = new URLSearchParams()
+  if (state.view !== 'list') parameters.set('view', state.view)
+  for (const key of FILTER_KEYS) {
+    const value = state.filters[key]
+    if (value === undefined || value === '' || value === false) continue
+    parameters.set(key, String(value))
+  }
+  if (state.sort !== 'newest') parameters.set('sort', state.sort)
+  if (state.groupBy) parameters.set('groupBy', state.groupBy)
+  if (state.columnsBy !== 'status') parameters.set('columnsBy', state.columnsBy)
+  if (state.lanes !== 'none') parameters.set('lanes', state.lanes)
+  if (state.task) parameters.set('task', state.task)
+  return parameters
+}
+
+export function withFilter<K extends keyof FilterValues>(state: ListState, key: K, value: FilterValues[K] | undefined): ListState {
+  const filters = { ...state.filters }
+  if (value === undefined || value === '' || value === false) delete filters[key]
+  else filters[key] = value
+  if (key === 'assigneeActorId' && filters.assigneeActorId) delete filters.unassigned
+  if (key === 'unassigned' && filters.unassigned) delete filters.assigneeActorId
+  return { ...state, filters }
+}
+
+export function clearFilters(state: ListState): ListState {
+  return { ...state, filters: {} }
+}
+
+export function activeFilterKeys(state: ListState) {
+  return FILTER_KEYS.filter((key) => key !== 'q' && state.filters[key] !== undefined)
+}
+
+/** What GET /work-items gets for the list view. */
+export function listQuery(state: ListState): WorkItemFilters {
+  return {
+    ...state.filters,
+    sort: state.sort,
+    ...(state.groupBy ? { groupBy: state.groupBy } : {}),
+  }
+}
+
+/** What GET /work-items/board gets. */
+export function boardQuery(state: ListState): WorkItemFilters & { columnsBy: BoardColumnsBy } {
+  return { ...state.filters, columnsBy: state.columnsBy }
+}
+
+/** What the Project remembers so the page reopens the same way: everything but the open task. */
+export function rememberedState(state: ListState): Record<string, string> {
+  const parameters = writeListState({ ...state, task: null })
+  return Object.fromEntries(parameters.entries())
+}
+
+/** Saved navigation filters back into URL parameters, dropping anything no longer valid. */
+export function parametersFromRemembered(saved: Record<string, unknown>): URLSearchParams {
+  const raw = new URLSearchParams()
+  for (const [key, value] of Object.entries(saved)) {
+    if (typeof value === 'string') raw.set(key, value)
+    else if (value === true) raw.set(key, 'true')
+  }
+  return writeListState({ ...readListState(raw), task: null })
+}
