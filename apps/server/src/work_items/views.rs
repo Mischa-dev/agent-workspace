@@ -252,28 +252,28 @@ pub(crate) fn view_href(row: &ViewRow, reader: Uuid) -> String {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SavedViewView {
-    id: Uuid,
-    name: String,
+pub(crate) struct SavedViewView {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
     /// my_tasks, ready_for_agents, blocked or recently_changed.
-    builtin: Option<String>,
+    pub(crate) builtin: Option<String>,
     /// Shared with everyone in the project, rather than yours alone.
-    shared: bool,
+    pub(crate) shared: bool,
     /// As saved; "me" stands for whoever opens it.
-    query: BTreeMap<String, String>,
+    pub(crate) query: BTreeMap<String, String>,
     /// With "me" replaced by you.
-    resolved_query: BTreeMap<String, String>,
-    layout: String,
-    fields: Option<Vec<String>>,
-    pinned: bool,
-    position: i32,
-    can_edit: bool,
-    can_delete: bool,
-    version: i64,
-    href: String,
+    pub(crate) resolved_query: BTreeMap<String, String>,
+    pub(crate) layout: String,
+    pub(crate) fields: Option<Vec<String>>,
+    pub(crate) pinned: bool,
+    pub(crate) position: i32,
+    pub(crate) can_edit: bool,
+    pub(crate) can_delete: bool,
+    pub(crate) version: i64,
+    pub(crate) href: String,
 }
 
-fn saved_view(row: ViewRow, reader: Uuid, can_share: bool) -> SavedViewView {
+pub(crate) fn saved_view(row: ViewRow, reader: Uuid, can_share: bool) -> SavedViewView {
     let params = query_params(&row.query);
     let shared = row.owner_actor_id.is_none();
     let can_edit = if shared { can_share } else { true };

@@ -740,18 +740,25 @@ pub(super) async fn get_import(
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CreateImportRequest {
-    source: String,
+pub(crate) struct CreateImportRequest {
+    pub source: String,
     #[serde(default)]
-    text: Option<String>,
+    pub text: Option<String>,
     #[serde(default)]
-    file_name: Option<String>,
+    pub file_name: Option<String>,
     #[serde(default)]
-    repository_id: Option<Uuid>,
+    pub repository_id: Option<Uuid>,
     #[serde(default)]
-    options: Option<ImportOptions>,
+    pub options: Option<ImportOptions>,
     #[serde(default)]
-    mapping: Option<BTreeMap<String, String>>,
+    pub mapping: Option<BTreeMap<String, String>>,
+}
+
+/// A refusal: the field and what to change.
+pub(crate) type Refusal = (&'static str, String);
+
+fn refuse<T>(field: &'static str, message: impl Into<String>) -> Result<T, Refusal> {
+    Err((field, message.into()))
 }
 
 /// Rows read from text, with the mapping used for CSV.
@@ -760,12 +767,12 @@ fn read_text(
     text: &str,
     mapping: Option<BTreeMap<String, String>>,
     options: &ImportOptions,
-) -> Result<(Vec<ImportRow>, BTreeMap<String, String>), Response> {
+) -> Result<(Vec<ImportRow>, BTreeMap<String, String>), Refusal> {
     match source {
         "csv" => {
-            let records = parse_csv(text).map_err(|message| invalid("text", message))?;
+            let records = parse_csv(text).map_err(|message| ("text", message))?;
             let Some(headers) = records.first() else {
-                return Err(invalid("text", "The file is empty."));
+                return refuse("text", "The file is empty.");
             };
             let mapping = match mapping {
                 Some(mapping) => {
@@ -773,119 +780,130 @@ fn read_text(
                         .keys()
                         .find(|field| !FIELDS.contains(&field.as_str()))
                     {
-                        return Err(invalid("mapping", format!("“{field}” isn't a task field.")));
+                        return refuse("mapping", format!("“{field}” isn't a task field."));
                     }
                     if let Some(column) = mapping.values().find(|column| {
                         !headers
                             .iter()
                             .any(|header| header.trim().eq_ignore_ascii_case(column.trim()))
                     }) {
-                        return Err(invalid(
-                            "mapping",
-                            format!("The file has no column “{column}”."),
-                        ));
+                        return refuse("mapping", format!("The file has no column “{column}”."));
                     }
                     mapping
                 }
                 None => auto_mapping(headers),
             };
-            let rows =
-                csv_rows(&records, &mapping).map_err(|message| invalid("mapping", message))?;
+            let rows = csv_rows(&records, &mapping).map_err(|message| ("mapping", message))?;
             Ok((rows, mapping))
         }
         "markdown" => {
             let rows = markdown_rows(text, options.headings_as_milestones)
-                .map_err(|message| invalid("text", message))?;
+                .map_err(|message| ("text", message))?;
             if rows.is_empty() {
-                return Err(invalid(
+                return refuse(
                     "text",
                     "No tasks found. Write each task as a list item, such as “- [ ] Ship it”.",
-                ));
+                );
             }
             Ok((rows, BTreeMap::new()))
         }
-        _ => Err(invalid("source", "Use markdown, csv or github.")),
+        _ => refuse("source", "Use markdown, csv or github."),
     }
 }
 
-fn check_options(options: &ImportOptions) -> Option<Response> {
+fn check_options(options: &ImportOptions) -> Result<(), Refusal> {
     if let Some(state) = &options.github_state
         && !matches!(state.as_str(), "open" | "all")
     {
-        return Some(invalid("options.githubState", "Use open or all."));
+        return refuse("options.githubState", "Use open or all.");
     }
     if options.excluded_rows.len() > MAX_ROWS {
-        return Some(invalid("options.excludedRows", "Too many rows left out."));
+        return refuse("options.excludedRows", "Too many rows left out.");
     }
-    None
+    Ok(())
 }
 
-pub(super) async fn create_import(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateImportRequest>,
-) -> Result<Response, AppError> {
+/// What an import will start with, read and checked before anything is
+/// locked.
+pub(crate) struct Prepared {
+    options: ImportOptions,
+    source_name: String,
+    rows: Vec<ImportRow>,
+    mapping: BTreeMap<String, String>,
+    text: Option<String>,
+}
+
+pub(crate) fn prepare(request: &CreateImportRequest) -> Result<Prepared, Refusal> {
     let options = request.options.clone().unwrap_or(ImportOptions {
         create_labels: true,
         create_milestones: true,
         ..ImportOptions::default()
     });
-    if let Some(refused) = check_options(&options) {
-        return Ok(refused);
-    }
+    check_options(&options)?;
     let source_name = request
         .file_name
         .as_deref()
         .map(|name| name.trim().chars().take(200).collect::<String>())
         .unwrap_or_default();
-    let (rows, mapping, text) = match request.source.as_str() {
-        "github" => {
-            if request.repository_id.is_none() {
-                return Ok(invalid(
-                    "repositoryId",
-                    "Pick a repository to import issues from.",
-                ));
-            }
-            (Vec::new(), BTreeMap::new(), None)
+    if request.source == "github" {
+        if request.repository_id.is_none() {
+            return refuse("repositoryId", "Pick a repository to import issues from.");
         }
-        source => {
-            let Some(text) = request.text.as_deref() else {
-                return Ok(invalid("text", "Paste or upload what to import."));
-            };
-            if text.len() > MAX_TEXT_BYTES {
-                return Ok(invalid("text", "Import at most 4 MB at a time."));
-            }
-            match read_text(source, text, request.mapping.clone(), &options) {
-                Ok((rows, mapping)) => (rows, mapping, Some(text.to_owned())),
-                Err(refused) => return Ok(refused),
-            }
-        }
+        return Ok(Prepared {
+            options,
+            source_name,
+            rows: Vec::new(),
+            mapping: BTreeMap::new(),
+            text: None,
+        });
+    }
+    let Some(text) = request.text.as_deref() else {
+        return refuse("text", "Paste or upload what to import.");
     };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemCreate,
-            None,
-            resource_bound_scope("projects", project_id, "task_import_create")?,
-            &request,
-        )
-        .await
-    );
+    if text.len() > MAX_TEXT_BYTES {
+        return refuse("text", "Import at most 4 MB at a time.");
+    }
+    let (rows, mapping) = read_text(&request.source, text, request.mapping.clone(), &options)?;
+    Ok(Prepared {
+        options,
+        source_name,
+        rows,
+        mapping,
+        text: Some(text.to_owned()),
+    })
+}
+
+async fn organization_of(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+) -> Result<Uuid, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(&mut *connection)
+            .await?,
+    )
+}
+
+/// Records a new import. A GitHub one starts fetching its issues. The
+/// caller has locked the project and checked the actor may create tasks.
+pub(crate) async fn insert_import(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    request: &CreateImportRequest,
+    prepared: Prepared,
+) -> Result<Result<Uuid, Refusal>, AppError> {
+    let project_id = actor.project_id;
     let status = if request.source == "github" {
         let usable = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM repositories WHERE project_id = $1 AND id = $2 AND enabled AND archived_at IS NULL)",
         )
         .bind(project_id)
         .bind(request.repository_id)
-        .fetch_one(&mut *write.transaction)
+        .fetch_one(&mut **transaction)
         .await?;
         if !usable {
-            return Ok(invalid(
+            return Ok(refuse(
                 "repositoryId",
                 "Pick one of the project's repositories.",
             ));
@@ -905,26 +923,22 @@ pub(super) async fn create_import(
     )
     .bind(id)
     .bind(project_id)
-    .bind(principal.actor_id)
+    .bind(actor.actor_id)
     .bind(&request.source)
-    .bind(&source_name)
+    .bind(&prepared.source_name)
     .bind(request.repository_id)
-    .bind(text)
-    .bind(json!(mapping))
-    .bind(json!(options))
-    .bind(json!(rows))
+    .bind(&prepared.text)
+    .bind(json!(prepared.mapping))
+    .bind(json!(prepared.options))
+    .bind(json!(prepared.rows))
     .bind(status)
-    .bind(rows.len() as i32)
-    .execute(&mut *write.transaction)
+    .bind(prepared.rows.len() as i32)
+    .execute(&mut **transaction)
     .await?;
     if status == "fetching" {
-        let organization_id =
-            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-                .bind(project_id)
-                .fetch_one(&mut *write.transaction)
-                .await?;
+        let organization_id = organization_of(transaction, project_id).await?;
         enqueue(
-            &mut *write.transaction,
+            &mut **transaction,
             NewJob::new(FETCH_KIND)
                 .project(organization_id, project_id)
                 .payload(ImportJob { import_id: id })
@@ -932,20 +946,63 @@ pub(super) async fn create_import(
         )
         .await?;
     }
-    let actor = write.actor.clone();
     record_audit_for(
-        &mut write.transaction,
-        &actor,
+        transaction,
+        actor,
         "task_import",
         "task_import.created",
         id,
-        json!({ "source": request.source, "rows": rows.len() }),
+        json!({ "source": request.source, "rows": prepared.rows.len() }),
     )
     .await?;
-    let record = import_row(&mut write.transaction, project_id, id, false)
+    Ok(Ok(id))
+}
+
+/// One import as callers see it, with a preview while it's a draft.
+pub(crate) async fn import_by_id(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    import_id: Uuid,
+    with_preview: bool,
+) -> Result<Option<ImportView>, AppError> {
+    match import_row(connection, project_id, import_id, false).await? {
+        Some(record) => Ok(Some(import_view(connection, record, with_preview).await?)),
+        None => Ok(None),
+    }
+}
+
+pub(super) async fn create_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<CreateImportRequest>,
+) -> Result<Response, AppError> {
+    let prepared = match prepare(&request) {
+        Ok(prepared) => prepared,
+        Err((field, message)) => return Ok(invalid(field, message)),
+    };
+    let mut write = begin!(
+        start_write(
+            &state,
+            &headers,
+            &principal,
+            project_id,
+            Action::WorkItemCreate,
+            None,
+            resource_bound_scope("projects", project_id, "task_import_create")?,
+            &request,
+        )
+        .await
+    );
+    let actor = write.actor.clone();
+    let id = match insert_import(&mut write.transaction, &actor, &request, prepared).await? {
+        Ok(id) => id,
+        Err((field, message)) => return Ok(invalid(field, message)),
+    };
+    let view = import_by_id(&mut write.transaction, project_id, id, true)
         .await?
         .ok_or(AppError::Internal("import vanished"))?;
-    let view = import_view(&mut write.transaction, record, true).await?;
     write.finish(StatusCode::CREATED, &view).await
 }
 
@@ -1031,8 +1088,8 @@ pub(super) async fn update_import(
             ));
         }
         let options = request.options.clone().unwrap_or_else(|| record.options());
-        if let Some(refused) = check_options(&options) {
-            return Ok(refused);
+        if let Err((field, message)) = check_options(&options) {
+            return Ok(invalid(field, message));
         }
         let reread = record.source != "github"
             && (request.mapping.is_some()
@@ -1055,7 +1112,7 @@ pub(super) async fn update_import(
                 &options,
             ) {
                 Ok(read) => read,
-                Err(refused) => return Ok(refused),
+                Err((field, message)) => return Ok(invalid(field, message)),
             }
         } else {
             (record.rows(), record.mapping())
@@ -1095,6 +1152,68 @@ struct ImportJob {
     import_id: Uuid,
 }
 
+/// Why an import can't be committed.
+pub(crate) enum CommitRefusal {
+    NotFound,
+    VersionConflict(i64),
+    NotDraft(String),
+    Empty,
+}
+
+/// Queues the job that creates an import's tasks, as `actor`. The caller
+/// has locked the project and checked the actor may create tasks.
+pub(crate) async fn queue_commit(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    import_id: Uuid,
+    expected_version: Option<i64>,
+) -> Result<Result<(), CommitRefusal>, AppError> {
+    let project_id = actor.project_id;
+    let Some(record) = import_row(transaction, project_id, import_id, true).await? else {
+        return Ok(Err(CommitRefusal::NotFound));
+    };
+    if expected_version.is_some_and(|expected| expected != record.version) {
+        return Ok(Err(CommitRefusal::VersionConflict(record.version)));
+    }
+    if record.status != "draft" {
+        return Ok(Err(CommitRefusal::NotDraft(record.status)));
+    }
+    if record.row_count == 0 {
+        return Ok(Err(CommitRefusal::Empty));
+    }
+    // Whoever commits is who the tasks are made by.
+    sqlx::query(
+        r#"
+        UPDATE task_imports
+        SET status = 'queued', created_by_actor_id = $2, version = version + 1, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(import_id)
+    .bind(actor.actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    let organization_id = organization_of(transaction, project_id).await?;
+    enqueue(
+        &mut **transaction,
+        NewJob::new(COMMIT_KIND)
+            .project(organization_id, project_id)
+            .payload(ImportJob { import_id })
+            .unique(format!("task-import-commit:{import_id}")),
+    )
+    .await?;
+    record_audit_for(
+        transaction,
+        actor,
+        "task_import",
+        "task_import.committed",
+        import_id,
+        json!({ "rows": record.row_count }),
+    )
+    .await?;
+    Ok(Ok(()))
+}
+
 pub(super) async fn commit_import(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1115,62 +1234,31 @@ pub(super) async fn commit_import(
         )
         .await
     );
-    let record = import_row(&mut write.transaction, project_id, import_id, true)
-        .await?
-        .ok_or(AppError::NotFound("import"))?;
-    if record.version != request.expected_version {
-        return Ok(version_conflict(record.version));
-    }
-    if record.status != "draft" {
-        return Ok(refusal(
-            StatusCode::CONFLICT,
-            "import_not_draft",
-            "This import has already started.".to_owned(),
-            json!({ "status": record.status }),
-        ));
-    }
-    if record.row_count == 0 {
-        return Ok(invalid("rows", "There's nothing to import."));
-    }
-    // Whoever commits is who the tasks are made by.
-    sqlx::query(
-        r#"
-        UPDATE task_imports
-        SET status = 'queued', created_by_actor_id = $2, version = version + 1, updated_at = now()
-        WHERE id = $1
-        "#,
-    )
-    .bind(import_id)
-    .bind(principal.actor_id)
-    .execute(&mut *write.transaction)
-    .await?;
-    let organization_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_one(&mut *write.transaction)
-            .await?;
-    enqueue(
-        &mut *write.transaction,
-        NewJob::new(COMMIT_KIND)
-            .project(organization_id, project_id)
-            .payload(ImportJob { import_id })
-            .unique(format!("task-import-commit:{import_id}")),
-    )
-    .await?;
     let actor = write.actor.clone();
-    record_audit_for(
+    match queue_commit(
         &mut write.transaction,
         &actor,
-        "task_import",
-        "task_import.committed",
         import_id,
-        json!({ "rows": record.row_count }),
+        Some(request.expected_version),
     )
-    .await?;
-    let record = import_row(&mut write.transaction, project_id, import_id, false)
+    .await?
+    {
+        Ok(()) => {}
+        Err(CommitRefusal::NotFound) => return Err(AppError::NotFound("import")),
+        Err(CommitRefusal::VersionConflict(current)) => return Ok(version_conflict(current)),
+        Err(CommitRefusal::NotDraft(status)) => {
+            return Ok(refusal(
+                StatusCode::CONFLICT,
+                "import_not_draft",
+                "This import has already started.".to_owned(),
+                json!({ "status": status }),
+            ));
+        }
+        Err(CommitRefusal::Empty) => return Ok(invalid("rows", "There's nothing to import.")),
+    }
+    let view = import_by_id(&mut write.transaction, project_id, import_id, false)
         .await?
         .ok_or(AppError::Internal("import vanished"))?;
-    let view = import_view(&mut write.transaction, record, false).await?;
     write.finish(StatusCode::OK, &view).await
 }
 

@@ -1903,10 +1903,12 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "label_list",
     "message_history",
     "milestone_list",
+    "my_work",
     "notification_list",
     "page_get",
     "page_list",
     "people_search",
+    "project_export",
     "project_members",
     "project_open",
     "projects_list",
@@ -1920,6 +1922,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "settings_get",
     "task_list",
     "task_open",
+    "template_list",
+    "view_list",
     "workflow_get",
 ];
 
@@ -1981,6 +1985,15 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("decision_list"),
         by_project("milestone_list"),
+        by_project("view_list"),
+        by_project("template_list"),
+        by_project("project_export"),
+        case(
+            "my_work",
+            vec![json!({}), json!({"projectId": "WORK"})],
+            vec![json!({"projectId": b.project})],
+            vec![],
+        ),
         by_project("settings_get"),
         case(
             "conversation_list",
@@ -2079,7 +2092,10 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
                 json!({"projectId": b.project}),
                 json!({"projectIds": [b.project]}),
             ],
-            vec![json!({"projectId": "WORK", "assignee": b.rook.to_string()})],
+            vec![
+                json!({"projectId": "WORK", "assignee": b.rook.to_string()}),
+                json!({"projectId": "WORK", "view": "My tasks"}),
+            ],
         ),
         case(
             "task_open",
