@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { parseTaskKey } from '../shell/shortcuts'
+import { useProjectByKey } from '../shell/useProjectByKey'
 import { Button, EmptyState, PageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 
@@ -14,10 +14,7 @@ export function TaskKeyRedirect() {
   const navigate = useNavigate()
   const { taskKey = '' } = useParams()
   const parsed = parseTaskKey(taskKey)
-  const projects = useProjects()
-  const project = parsed
-    ? (projects.data?.projects ?? []).find((candidate) => candidate.key.toUpperCase() === parsed.projectKey) ?? null
-    : null
+  const { project, pending: projectPending } = useProjectByKey(parsed?.projectKey ?? null)
   const lookup = useQuery({
     queryKey: ['project', project?.id ?? '', 'task-key', parsed?.key ?? ''],
     queryFn: async () => {
@@ -31,7 +28,7 @@ export function TaskKeyRedirect() {
 
   if (lookup.data) return <Navigate replace to={lookup.data.href} />
 
-  const loading = Boolean(parsed) && (projects.isPending || (Boolean(project) && lookup.isPending))
+  const loading = Boolean(parsed) && (projectPending || (Boolean(project) && lookup.isPending))
   return (
     <AppShell mainClassName="aw-main--page" project={project} user={session.user}>
       <div className="aw-page" role={loading ? undefined : 'alert'}>

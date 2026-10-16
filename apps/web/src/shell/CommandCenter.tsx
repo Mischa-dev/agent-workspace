@@ -15,6 +15,7 @@ import { Avatar, Button, CommandMenu, Dialog, showToast, type CommandItem } from
 import { searchWorkItemReferences } from '../work-items/api'
 import { closeCommandMenu, openCommandMenu, openShortcutSheet, pageCommands, useCommandState } from './commandStore'
 import { SHORTCUTS, createShortcutMatcher, parseTaskKey, type ShortcutAction } from './shortcuts'
+import { useProjectByKey } from './useProjectByKey'
 
 const projectPath = (projectId: string, rest = '') => `/projects/${encodeURIComponent(projectId)}${rest}`
 
@@ -36,10 +37,10 @@ function useSettled(value: string, delay = 150) {
 }
 
 /** Task search for the menu: by key across Projects, by words in the current one. */
-function useTaskResults(query: string, projects: Project[], current: Project | null) {
+function useTaskResults(query: string, current: Project | null) {
   const settled = useSettled(query.trim())
   const key = parseTaskKey(settled)
-  const keyProject = key ? projects.find((project) => project.key.toUpperCase() === key.projectKey) ?? null : null
+  const { project: keyProject } = useProjectByKey(key?.projectKey ?? null)
   const target = keyProject ?? current
   const enabled = Boolean(target && settled.length >= 2)
   return useQuery({
@@ -76,7 +77,7 @@ export function CommandCenter() {
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const sidebar = useProjectConversationSidebar(state.open === 'commands' ? current?.id ?? '' : '')
   const [query, setQuery] = useState('')
-  const tasks = useTaskResults(state.open === 'commands' ? query : '', projects, current)
+  const tasks = useTaskResults(state.open === 'commands' ? query : '', current)
   // The rail lists the first 100 Projects; the server finds the rest by name.
   const projectSearch = useProjectSearch(state.open === 'commands' ? query : '')
   const currentRef = useRef(current)
@@ -189,7 +190,8 @@ export function CommandCenter() {
       })
     }
     const typedKey = parseTaskKey(query)
-    if (typedKey && projects.some((project) => project.key.toUpperCase() === typedKey.projectKey) && !(tasks.data ?? []).some((task) => task.key === typedKey.key)) {
+    // The task page resolves Projects beyond the rail's first 100 and says when a key isn't found.
+    if (typedKey && !(tasks.data ?? []).some((task) => task.key === typedKey.key)) {
       list.push({ id: `k:${typedKey.key}`, group: 'Tasks', label: `Open ${typedKey.key}`, icon: 'checklist', matched: true, onSelect: go(`/${typedKey.key}`) })
     }
 

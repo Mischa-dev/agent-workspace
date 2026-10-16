@@ -111,6 +111,28 @@ describe('work item live patches', () => {
     expect(shown.version).toBe(3)
   })
 
+  it('leaves the card where a newer event put it', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const detailKey = queryKeys.workItem(projectId, id(1))
+    const boardKey = [...queryKeys.workItems(projectId, { cursor: undefined }), 'board']
+    // Version 3 already placed it after task 3; version 2's event said before task 2.
+    queryClient.setQueryData(boardKey, {
+      columns: [{ status: todo, items: [card(2), card(3), card(1, todo, 3)], hasMore: false }],
+    })
+    queryClient.setQueryData(detailKey, { ...card(1, todo, 3), description: '', createdAt: '2026-10-16T09:00:00Z' })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await applyWorkItemChange(queryClient, projectId, {
+      workItemId: id(1),
+      version: 2,
+      placement: { statusId: todo.id, archived: false, afterId: null, beforeId: id(2) },
+    })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(ids(queryClient.getQueryData<WorkItemBoardResponse>(boardKey)!)).toEqual([[2, 3, 1]])
+  })
+
   it('moves a card on an open board without refetching the board', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const boardKey = [...queryKeys.workItems(projectId, { cursor: undefined }), 'board']

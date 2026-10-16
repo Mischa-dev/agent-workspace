@@ -251,6 +251,9 @@ export async function applyWorkItemChange(
     void queryClient.invalidateQueries({ queryKey: detailKey, exact: true })
   }
 
+  // A newer version outran this event: its neighbours are stale, and the newer
+  // event places the card itself.
+  if (item && item.version > change.version) return
   const card = item ? toCard(item) : null
   for (const query of views) {
     const data = query.state.data
