@@ -832,56 +832,12 @@ pub async fn ensure_default_workflow(
         return Ok(true);
     }
 
-    let types_match = types.len() == DEFAULT_TYPES.len()
-        && types.iter().zip(DEFAULT_TYPES).all(|(row, expected)| {
-            row.name == expected.0
-                && row.position == expected.1
-                && row.is_default == expected.2
-                && row.enabled
-        });
-    let statuses_match = statuses.len() == DEFAULT_STATUSES.len()
-        && statuses
-            .iter()
-            .zip(DEFAULT_STATUSES)
-            .all(|(row, expected)| {
-                row.name == expected.0
-                    && row.semantic_category == expected.1
-                    && row.position == expected.2
-                    && row.is_default == expected.3
-                    && row.enabled
-            });
-    if !types_match || !statuses_match || transition_count != DEFAULT_TRANSITIONS.len() as i64 {
+    // A project that has a workflow keeps it: owners change statuses, types
+    // and transitions (work_item_workflow), so it needn't match the default.
+    if types.iter().all(|row| !row.enabled) || statuses.iter().all(|row| !row.enabled) {
         return Err(AppError::Conflict(
             "work_item_workflow",
-            "existing workflow does not match the M4 default",
-        ));
-    }
-    let transition_names = sqlx::query_as::<_, (String, String)>(
-        r#"
-        SELECT source.name, target.name
-        FROM work_item_status_transitions transition
-        JOIN work_item_statuses source
-          ON source.project_id = transition.project_id
-         AND source.id = transition.from_status_id
-        JOIN work_item_statuses target
-          ON target.project_id = transition.project_id
-         AND target.id = transition.to_status_id
-        WHERE transition.project_id = $1
-        ORDER BY source.name, target.name
-        "#,
-    )
-    .bind(project_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    let mut expected = DEFAULT_TRANSITIONS
-        .into_iter()
-        .map(|(from, to)| (from.to_owned(), to.to_owned()))
-        .collect::<Vec<_>>();
-    expected.sort();
-    if transition_names != expected {
-        return Err(AppError::Conflict(
-            "work_item_workflow",
-            "existing transitions do not match the M4 default",
+            "the project's workflow has no active status or type",
         ));
     }
     Ok(false)
@@ -1362,6 +1318,7 @@ async fn update_work_item(
             parent_work_item_id: None,
             board_placement: None,
             labels: None,
+            fields: Default::default(),
             summary: "Work Item updated",
             audit_action: "work_item.updated",
             audit_version_metadata: AuditVersionMetadata::Omit,
@@ -1373,6 +1330,10 @@ async fn update_work_item(
         UpdateWorkItemOutcome::InvalidAssignee => {
             return Err(AppError::Validation("assigneeActorId"));
         }
+        UpdateWorkItemOutcome::InvalidMilestone => {
+            return Err(AppError::Validation("milestoneId"));
+        }
+        UpdateWorkItemOutcome::InvalidDates => return Err(AppError::Validation("dueDate")),
         UpdateWorkItemOutcome::InvalidTransition { .. } => {
             return Err(AppError::Conflict("work_item_status", "transition"));
         }
@@ -2440,6 +2401,7 @@ async fn create_work_item(
                     label_ids: &[],
                     acceptance_criteria: &[],
                     board_placement: None,
+                    fields: Default::default(),
                     activity_summary: "Work Item created",
                     activity_metadata: serde_json::json!({}),
                     activity_number_metadata: AllocatedNumberMetadata::Omit,
@@ -2452,6 +2414,12 @@ async fn create_work_item(
                 CreateWorkItemOutcome::Created { work_item_id, .. } => work_item_id,
                 CreateWorkItemOutcome::InvalidAssignee => {
                     return Err(AppError::Validation("assigneeActorId"));
+                }
+                CreateWorkItemOutcome::InvalidMilestone => {
+                    return Err(AppError::Validation("milestoneId"));
+                }
+                CreateWorkItemOutcome::InvalidDates => {
+                    return Err(AppError::Validation("dueDate"));
                 }
                 CreateWorkItemOutcome::ParentNotFound
                 | CreateWorkItemOutcome::ParentArchived(_)

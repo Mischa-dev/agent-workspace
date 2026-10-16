@@ -57,6 +57,9 @@ const ASSIGNEE_MESSAGE: &str =
 pub(super) const STATUS_MESSAGE: &str =
     "Pass a status name, such as \"In Progress\" (see workflow_get).";
 pub(super) const TYPE_MESSAGE: &str = "Pass a type name, such as \"Bug\" (see workflow_get).";
+pub(super) const MILESTONE_MESSAGE: &str =
+    "Pass an active milestone of this project by name or ID (see milestone_list), or \"none\".";
+pub(super) const DATES_MESSAGE: &str = "The start date must be on or before the due date.";
 const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
 pub(super) const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
 const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, or archived.";
@@ -596,6 +599,7 @@ async fn create_task(
             label_ids: &label_ids,
             acceptance_criteria: &criteria,
             board_placement: placement,
+            fields: Default::default(),
             activity_summary: summary,
             activity_metadata: metadata.clone(),
             activity_number_metadata: number_metadata,
@@ -612,6 +616,12 @@ async fn create_task(
         } => (work_item_id, finalized),
         CreateWorkItemOutcome::InvalidAssignee => {
             return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE));
+        }
+        CreateWorkItemOutcome::InvalidMilestone => {
+            return Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE));
+        }
+        CreateWorkItemOutcome::InvalidDates => {
+            return Ok(WriteResult::invalid("dueDate", DATES_MESSAGE));
         }
         CreateWorkItemOutcome::ParentNotFound => {
             return Ok(WriteResult::not_found(
@@ -740,6 +750,7 @@ async fn set_status_inner(
             parent_work_item_id: None,
             board_placement: None,
             labels: None,
+            fields: Default::default(),
             summary: "Work Item status updated through MCP",
             audit_action: "work_item.mcp_status_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
@@ -1016,6 +1027,7 @@ async fn update_work_item_inner(
                 add: &add,
                 remove: &remove,
             }),
+            fields: Default::default(),
             summary: "Work Item updated through MCP",
             audit_action: "work_item.mcp_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
@@ -2083,6 +2095,10 @@ async fn finish_update_outcome(
         UpdateWorkItemOutcome::InvalidAssignee => {
             Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE))
         }
+        UpdateWorkItemOutcome::InvalidMilestone => {
+            Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE))
+        }
+        UpdateWorkItemOutcome::InvalidDates => Ok(WriteResult::invalid("dueDate", DATES_MESSAGE)),
         UpdateWorkItemOutcome::InvalidTransition {
             current_status_id,
             requested_status_id,

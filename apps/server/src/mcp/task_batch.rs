@@ -1497,6 +1497,7 @@ async fn update_many(
                         parent_work_item_id: None,
                         board_placement: None,
                         labels: (!delta.is_empty()).then_some(delta),
+                        fields: Default::default(),
                         summary: "Work Item updated through MCP",
                         audit_action: "work_item.mcp_bulk_updated",
                         audit_version_metadata: AuditVersionMetadata::Include,
@@ -1786,6 +1787,12 @@ async fn apply_update(
                 "A task can have at most {limit} labels; this change would give {key} {would_have}. Remove some with removeLabels first, or leave it out."
             ),
         ),
+        UpdateWorkItemOutcome::InvalidMilestone => {
+            problem("milestone", super::writes::MILESTONE_MESSAGE.to_owned())
+        }
+        UpdateWorkItemOutcome::InvalidDates => {
+            problem("dueDate", super::writes::DATES_MESSAGE.to_owned())
+        }
         UpdateWorkItemOutcome::NotFound
         | UpdateWorkItemOutcome::InvalidParent(_)
         | UpdateWorkItemOutcome::InvalidPlacement(_) => {

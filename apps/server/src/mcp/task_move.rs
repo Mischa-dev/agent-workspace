@@ -335,6 +335,7 @@ pub(super) async fn task_move(
                     label_ids: &labels.ids,
                     acceptance_criteria: &[],
                     board_placement: None,
+                    fields: Default::default(),
                     activity_summary: &summary,
                     activity_metadata: serde_json::json!({ "movedFrom": task.key }),
                     activity_number_metadata: AllocatedNumberMetadata::Include,
