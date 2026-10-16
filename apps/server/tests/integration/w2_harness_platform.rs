@@ -510,6 +510,17 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     )
     .await;
     assert!(signed_out.0.is_success(), "sign out: {}", signed_out.1);
+    // A retry (say, after a lost response) still tells the harness.
+    let signed_out_again = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{account}/logout"),
+        "sign-out-again",
+        json!({}),
+    )
+    .await;
+    assert!(signed_out_again.0.is_success(), "{}", signed_out_again.1);
     let status = send_get(&application, owner, &account).await;
     assert_eq!(status.0, StatusCode::OK, "{}", status.1);
     assert_ne!(status.2["accountState"], "authenticated");

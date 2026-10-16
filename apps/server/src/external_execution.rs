@@ -903,29 +903,16 @@ async fn launch_sponsored_run(
     .execute(&mut **transaction)
     .await?;
     // Settings freeze when the run is created, as for every other start:
-    // the sponsor's account defaults, or the harness's own if those no longer
-    // fit the catalog.
-    let config = match crate::provider::resolve_run_config(
+    // the sponsor's account defaults, each one that no longer fits the
+    // catalog falling back to the harness's own.
+    let config = crate::provider::resolve_stored_run_config(
         state,
         setup.organization_id,
         &setup.adapter_kind,
         &setup.run_defaults,
         &RunConfig::default(),
     )
-    .await
-    {
-        Ok(config) => config,
-        Err(_) => {
-            crate::provider::resolve_run_config(
-                state,
-                setup.organization_id,
-                &setup.adapter_kind,
-                &serde_json::Value::Object(Default::default()),
-                &RunConfig::default(),
-            )
-            .await?
-        }
-    };
+    .await?;
     let run_id = Uuid::now_v7();
     sqlx::query(
         r#"

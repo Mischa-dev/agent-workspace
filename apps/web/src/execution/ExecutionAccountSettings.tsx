@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
@@ -142,6 +142,15 @@ function ProviderAccountCard({
     queryFn: () => getAccountStatus(projectId, account.id),
     refetchInterval: (query) => (query.state.data?.ceremony?.state === 'pending' ? 2_000 : false),
   })
+  // A sign-in finishing while polling changes the account (and its version)
+  // on the server; reload the list so the defaults form saves against it.
+  const polledState = status.data?.accountState
+  const lastPolledState = useRef(polledState)
+  useEffect(() => {
+    const previous = lastPolledState.current
+    lastPolledState.current = polledState
+    if (previous !== undefined && polledState !== undefined && previous !== polledState) onChange()
+  }, [polledState, onChange])
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const update = (value: AccountStatus) => {

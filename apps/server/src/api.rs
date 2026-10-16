@@ -548,7 +548,8 @@ async fn retry_agent_run(
         ));
     }
     // A retry asks for the same settings again; whatever the account or the
-    // catalog no longer offers falls back to their current defaults.
+    // catalog no longer offers falls back on its own, and a sandbox or
+    // approval policy that is gone refuses the retry rather than loosening.
     let predecessor_config = RunConfig::from_value(&predecessor_config);
     let setup = select_run_setup_for(
         &mut transaction,
@@ -559,27 +560,14 @@ async fn retry_agent_run(
         predecessor_config.harness.as_deref(),
     )
     .await?;
-    let config = match crate::provider::resolve_run_config(
+    let config = crate::provider::resolve_stored_run_config(
         &state,
         setup.organization_id,
         &setup.adapter_kind,
         &setup.run_defaults,
         &predecessor_config,
     )
-    .await
-    {
-        Ok(config) => config,
-        Err(_) => {
-            crate::provider::resolve_run_config(
-                &state,
-                setup.organization_id,
-                &setup.adapter_kind,
-                &setup.run_defaults,
-                &RunConfig::default(),
-            )
-            .await?
-        }
-    };
+    .await?;
     let run_id = Uuid::now_v7();
     sqlx::query(
         r#"

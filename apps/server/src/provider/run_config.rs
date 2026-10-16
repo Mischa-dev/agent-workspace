@@ -225,6 +225,52 @@ impl RunConfig {
     }
 }
 
+impl RunConfig {
+    /// Like `resolve`, for settings that were valid once (a retry's
+    /// predecessor, an account's saved defaults): a value the harness or
+    /// catalog no longer offers falls back on its own, keeping every other
+    /// setting. Isolation settings never fall back to something looser; a
+    /// sandbox or approval policy that is no longer offered is refused.
+    pub fn resolve_keeping_what_still_fits(
+        &self,
+        account_defaults: &RunConfig,
+        manifest: &AdapterManifest,
+        catalog: &[ModelEntry],
+    ) -> Result<RunConfig, InvalidRunConfig> {
+        let mut launch = self.clone();
+        let mut account = account_defaults.clone();
+        loop {
+            let error = match launch.resolve(&account, manifest, catalog) {
+                Ok(resolved) => return Ok(resolved),
+                Err(error) => error,
+            };
+            let cleared = [&mut launch, &mut account]
+                .into_iter()
+                .any(|config| config.clear(error.0));
+            if !cleared {
+                return Err(error);
+            }
+        }
+    }
+
+    /// Drops one stale setting; false when it isn't set or mustn't drop.
+    fn clear(&mut self, field: &str) -> bool {
+        match field {
+            "harness" => self.harness.take().is_some(),
+            "model" => self.model.take().is_some(),
+            "reasoning" => self.reasoning.take().is_some(),
+            "speed" => self.speed.take().is_some(),
+            "attempts" => self.attempts.take().is_some(),
+            "options" => {
+                let had = !self.options.is_empty();
+                self.options.clear();
+                had
+            }
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -431,6 +477,31 @@ mod tests {
             RunConfig::default().resolve(&RunConfig::default(), &manifest, &hidden),
             Err(InvalidRunConfig("model")),
             "with every model hidden nothing runs"
+        );
+    }
+
+    #[test]
+    fn stale_settings_fall_back_one_at_a_time_but_isolation_never_loosens() {
+        let mut manifest = demo_manifest();
+        manifest.run_options.sandbox_modes =
+            vec!["workspace_write".to_owned(), "read_only".to_owned()];
+        let predecessor = RunConfig {
+            model: Some("gone-model".to_owned()),
+            sandbox: Some("read_only".to_owned()),
+            ..RunConfig::default()
+        };
+        let resolved = predecessor
+            .resolve_keeping_what_still_fits(&RunConfig::default(), &manifest, &catalog())
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(resolved.model.as_deref(), Some("deep-model"));
+        assert_eq!(resolved.sandbox, predecessor.sandbox, "sandbox kept");
+        let loosened = RunConfig {
+            sandbox: Some("no-longer-offered".to_owned()),
+            ..RunConfig::default()
+        };
+        assert_eq!(
+            loosened.resolve_keeping_what_still_fits(&RunConfig::default(), &manifest, &catalog()),
+            Err(InvalidRunConfig("sandbox"))
         );
     }
 }

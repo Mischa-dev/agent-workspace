@@ -143,6 +143,33 @@ pub(crate) async fn resolve_run_config(
         .map_err(|error| AppError::Validation(error.0))
 }
 
+/// `resolve_run_config` for settings that were valid once: whatever the
+/// harness or catalog stopped offering falls back on its own, and the rest
+/// (isolation above all) is kept.
+pub(crate) async fn resolve_stored_run_config(
+    state: &AppState,
+    organization_id: Uuid,
+    adapter_kind: &str,
+    account_defaults: &Value,
+    launch: &RunConfig,
+) -> Result<RunConfig, AppError> {
+    let manifest = state
+        .supervisors
+        .manifest(adapter_kind)
+        .ok_or(AppError::Conflict(
+            "agent_run",
+            "this harness is not installed",
+        ))?;
+    let catalog = catalog::run_catalog(&state.pool, organization_id, manifest).await?;
+    launch
+        .resolve_keeping_what_still_fits(
+            &RunConfig::from_value(account_defaults),
+            manifest,
+            &catalog,
+        )
+        .map_err(|error| AppError::Validation(error.0))
+}
+
 /// The run's frozen settings. Runs created without them (by paths that
 /// predate H4) get their account's defaults once, here, and keep them.
 async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppError> {
@@ -162,28 +189,15 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
     .bind(run_id)
     .fetch_one(&state.pool)
     .await?;
-    // Defaults that stopped matching the catalog fall back to the adapter's.
-    let resolved = match resolve_run_config(
+    // Defaults that stopped matching the catalog fall back one by one.
+    let resolved = resolve_stored_run_config(
         state,
         organization_id,
         &adapter_kind,
         &run_defaults,
         &RunConfig::default(),
     )
-    .await
-    {
-        Ok(resolved) => resolved,
-        Err(_) => {
-            resolve_run_config(
-                state,
-                organization_id,
-                &adapter_kind,
-                &Value::Object(Default::default()),
-                &RunConfig::default(),
-            )
-            .await?
-        }
-    };
+    .await?;
     let value = serde_json::to_value(&resolved)
         .map_err(|_| AppError::Internal("serialize run settings"))?;
     sqlx::query("UPDATE agent_runs SET config = $2 WHERE id = $1 AND config = '{}'::jsonb")

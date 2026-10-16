@@ -1225,9 +1225,9 @@ async fn logout(
         .shutdown_account(&access.adapter_kind, account_id)
         .await;
     state.supervisors.clear_login(account_id, None).await;
-    if access.account_state == "logged_out" {
-        return Ok(Json(status_response(&access, "logged_out")));
-    }
+    // Always tell the harness, even when the account already reads logged
+    // out: a retry after a failed or lost first attempt must still revoke
+    // the harness's credentials.
     let mut provider = state
         .supervisors
         .acquire_control(&access.adapter_kind, access.handle())
