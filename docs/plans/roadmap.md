@@ -34,7 +34,7 @@ themes.
 - Every push to main since October 5 has failed CI.
 
 **How we get there.**
-The plan is 100 pieces (23 small, 61 medium, 16 large);
+The plan is 103 pieces (23 small, 64 medium, 16 large);
 36 of them add a migration.
 They're grouped into 13 areas and five phases. Each says what it
 needs first and how you'll know it's done, so several threads can build at
@@ -58,9 +58,12 @@ once along the tracks in [Order of work](#order-of-work).
    dialog with its own models and options, and takes a task to a pull
    request. *(Phase 3)*
 
-**What it needs from you.** One decision, D1 below (who it's for). And
-merging or closing the six open PRs, so Phase 0 can finish. The other
-decisions have defaults; change any you disagree with.
+**Who it's for.** You decided (D1): private for now, then open source and
+a SaaS later. So nothing public gets built yet, but everything is built so
+that opening up needs no rewrite (principle 8).
+
+**What it needs from you.** Merging or closing the six open PRs, so Phase 0
+can finish. The other decisions have defaults; change any you disagree with.
 
 ## Words used here
 
@@ -112,6 +115,23 @@ records or child environments.
 7. **Polish is part of every piece.** A piece isn't done while it's missing
    a loading state, an empty state, a useful error, a keyboard path or a phone
    layout.
+8. **Private now, ready to open up.** The app stays private for now, but it
+   will become open source (so it must be easy to deploy) and a SaaS (so it
+   must hold many workspaces safely). Every piece follows these rules so
+   neither needs a rewrite:
+   - Every new table belongs to a workspace, directly or through its project,
+     and every query is scoped to it. Nothing that should be per workspace is
+     global. The two-workspace isolation tests (O7) grow with each feature.
+   - No new state lives only in one process. Background work goes through the
+     job queue (F9), so a second server can be added later (O6).
+   - Nothing in the code names your machines. Hostnames, paths, addresses and
+     the Red Hat setup are configuration.
+   - What a SaaS would swap sits behind a small interface: the secrets master
+     key (a file now, a key service later), email, file storage, push.
+   - Usage is recorded per workspace from the start (U2, AI1), so plans and
+     billing can come later without new tracking.
+   - Other people's code never runs loose on a host you share: hosted runs go
+     to provider clouds or containers (C7) before the SaaS opens.
 
 ## Where it stands today
 
@@ -613,7 +633,8 @@ versioned setting, plus additions per harness.
 Run any command-line harness in an isolated container on the host (rootless
 Podman, no host files, network only to allowed hosts) or at a sandbox
 provider, built from a project setup script. Needed once other people's code
-runs on your host or a harness needs its own toolchain. See decision D3.
+runs on your host or a harness needs its own toolchain. Required before the
+SaaS runs anyone's code on your servers (D1); until then, see D3.
 
 **Done when:** A custom harness runs in a container that can't read the host's
 files or credentials.
@@ -1328,9 +1349,11 @@ weekday at 9. A builder in project settings plus MCP tools.
 anyone watching.
 
 
-### O. Operations and SaaS readiness
+### O. Operations, open source and SaaS
 
-O4 to O6 wait on decision D1.
+O7 starts now, because leaks between workspaces are cheap to catch early and
+expensive to find later. O4 to O6, O8 and O9 are for when you open it up
+(D1); principle 8 keeps that path short.
 
 #### O1. Backups you can restore
 
@@ -1367,9 +1390,9 @@ Run the existing retention commands as jobs instead of by hand.
 
 *Size M (one PR) · Phase 4 · Needs S7 · Migration*
 
-Only if D1 says so. Email on accounts, verification, password reset,
+For the SaaS later (D1). Email on accounts, verification, password reset,
 invitation emails and digests through an SMTP or provider adapter, and public
-sign-up.
+sign-up, switched off by default for self-hosted installs.
 
 **Done when:** A stranger can sign up, verify and reset a password alone.
 
@@ -1377,8 +1400,9 @@ sign-up.
 
 *Size L (two or three PRs) · Phase 4 · Needs O4, U2 · Migration*
 
-Only if D1 says so. Plans, seats or usage pricing, a payment provider, and
-limits enforced per workspace.
+For the SaaS later (D1). Plans, seats or usage pricing, a payment provider,
+and limits enforced per workspace, built on the usage that U2 and AI1 already
+record per workspace. Absent from self-hosted installs.
 
 **Done when:** A workspace can upgrade and its limits change.
 
@@ -1386,11 +1410,54 @@ limits enforced per workspace.
 
 *Size L (two or three PRs) · Phase 4 · Needs F9*
 
-Only if D1 says so. The realtime hub, rate limits, MCP sessions and background
-loops live in one process (`realtime.rs`, `rate_limit.rs`, `mcp.rs:1646`).
-Share what must be shared through PostgreSQL LISTEN/NOTIFY or a small broker.
+For the SaaS later (D1). The realtime hub, rate limits, MCP sessions and
+background loops live in one process (`realtime.rs`, `rate_limit.rs`,
+`mcp.rs:1646`). Share what must be shared through PostgreSQL LISTEN/NOTIFY or
+a small broker.
 
 **Done when:** Two server processes behind one address behave like one.
+
+#### O7. Two-workspace isolation tests
+
+*Size M (one PR) · Phase 1 · Needs nothing*
+
+The SaaS will hold many workspaces in one database, so leaks between them must
+be caught from now on, not audited later. A test fixture builds two workspaces
+with look-alike people, agents, projects, tasks, DMs and pages, and a suite
+checks that every list, search, task view, MCP tool and realtime event in one
+never shows the other's. Each new feature adds its cases (see 'How a thread
+picks up a piece').
+
+**Done when:** The suite covers every existing list and search route and MCP
+read tool, and fails if one leaks across workspaces.
+
+#### O8. Self-host in one command
+
+*Size M (one PR) · Phase 4 · Needs S1, S3*
+
+For the open-source release (D1). There's no container image today, and the
+first admin comes from an interactive command (`bootstrap-admin`). Add a
+container image and a compose file (the app plus PostgreSQL) that start a
+working install, first-run setup in the browser that creates the first admin
+and generates the secrets master key, a configuration reference with safe
+defaults, and upgrade notes. The Red Hat scripts stay in `deploy/redhat` as
+one example of a host.
+
+**Done when:** On a fresh machine, `docker compose up` and a browser get you
+to a working workspace.
+
+#### O9. Open-source release
+
+*Size M (one PR) · Phase 4 · Needs O8*
+
+Choose a license (D8), move what's specific to your machines out of the code
+(hostnames and Tailscale addresses in `tools/ci/run.sh` and `deploy/redhat`,
+paths under `/home/bot`) into configuration or a private deploy repository,
+check the git history for anything private, and add a README for strangers,
+CONTRIBUTING, a security policy and public docs.
+
+**Done when:** A stranger can clone the repository, follow the README and run
+it, and nothing in it points at your machines.
 
 
 ## Order of work
@@ -1405,7 +1472,7 @@ phase. The phases say what to aim for together.
   don't collide; F8 Free Codex supervisor slots; F10 Docs that match the code.
 - Agents in conversations: A1 Progress and interim messages.
 
-**Phase 1: Foundations, in parallel** (19 pieces)
+**Phase 1: Foundations, in parallel** (20 pieces)
 
 - Foundations: F5 Web groundwork; F9 Background jobs; F6 UI kit additions; F7
   Live updates that patch instead of refetch.
@@ -1420,7 +1487,8 @@ phase. The phases say what to aim for together.
 - Agents in conversations: A2 Follow-ups stick to the thread.
 - Polish: P8 Smoke tests in a real browser; P2 Instant changes, undo and clear
   errors.
-- Operations and SaaS readiness: O1 Backups you can restore.
+- Operations, open source and SaaS: O1 Backups you can restore; O7
+  Two-workspace isolation tests.
 
 **Phase 2: The launch loop and real task views** (31 pieces)
 
@@ -1441,7 +1509,7 @@ phase. The phases say what to aim for together.
 - Agents in conversations: A4 Tags in a channel open a thread; A3 Agent
   sessions; A5 Stop; A6 Typed wakeups; A7 Runner contract and presets.
 - Polish: P1 Command palette and shortcuts; P4 Markdown; P7 Finish each area.
-- Operations and SaaS readiness: O3 Retention on a schedule; O2 Metrics and
+- Operations, open source and SaaS: O3 Retention on a schedule; O2 Metrics and
   error tracking.
 
 **Phase 3: Capacity, planning and your harnesses** (27 pieces)
@@ -1462,7 +1530,7 @@ phase. The phases say what to aim for together.
 - Polish: P3 Home; P6 Threads beside the channel; P5 Onboarding.
 - Extensibility: X1 Runner SDKs and the harness guide; X2 Register a harness.
 
-**Phase 4: Breadth, and SaaS if you want it** (16 pieces)
+**Phase 4: Breadth, open source and SaaS** (18 pieces)
 
 - Settings, secrets and accounts: S9 Appearance follows you.
 - Environments and launching: C7 Containers you control; C3 Claude Code cloud
@@ -1474,8 +1542,9 @@ phase. The phases say what to aim for together.
 - AI planning: AI6 Summaries; AI7 Semantic search.
 - Agents in conversations: A10 Agent presence.
 - Extensibility: X4 Outgoing webhooks; X3 Public API; X5 Automations.
-- Operations and SaaS readiness: O6 More than one server; O4 Sign-up and
-  email; O5 Billing and plans.
+- Operations, open source and SaaS: O6 More than one server; O8 Self-host in
+  one command; O4 Sign-up and email; O9 Open-source release; O5 Billing and
+  plans.
 
 
 **What each phase ends with:**
@@ -1490,7 +1559,8 @@ phase. The phases say what to aim for together.
   suggestions in a review queue.
 - **Phase 3:** moments 2, 3 and 4, the Claude Code adapter, run logs and
   diffs, onboarding.
-- **Phase 4:** breadth. The SaaS pieces only if D1 says so.
+- **Phase 4:** breadth, then the open-source release and the SaaS pieces
+  when you're ready to open up.
 
 ### Tracks
 
@@ -1500,7 +1570,7 @@ and P*n* is the phase.
 
 | Track | Pieces, in order |
 |---|---|
-| Runway and plumbing | F1 (P0), F2 (P0), F3 (P0), F4 (P0), F8 (P0), F10 (P0), F9 (P1), O1 (P1), O3 (P2), O2 (P2) |
+| Runway and plumbing | F1 (P0), F2 (P0), F3 (P0), F4 (P0), F8 (P0), F10 (P0), F9 (P1), O7 (P1), O1 (P1), O3 (P2), O2 (P2) |
 | Settings and accounts | S1 (P1), S2 (P1), S5 (P1), S3 (P2), S6 (P2), S4 (P3), S7 (P3), S8 (P3), S9 (P4) |
 | Harnesses and launching | H1 (P1), H2 (P1), H3 (P2), H4 (P2), C1 (P2), C2 (P2), C4 (P2), C5 (P3), C6 (P3), H5 (P3), H8 (P3), H6 (P3), H7 (P3), C3 (P4), C7 (P4) |
 | Tasks on the server | T1 (P1), T2 (P1), T6 (P1), T8 (P1), T4 (P2), T5 (P2), T7 (P2), T9 (P3), T3 (P4), T10 (P4) |
@@ -1509,7 +1579,7 @@ and P*n* is the phase.
 | Notifications and usage | N1 (P1), N2 (P2), N3 (P2), U1 (P2), U3 (P2), U2 (P3), U4 (P3), U5 (P3), N4 (P3), U6 (P4) |
 | AI planning | AI1 (P2), AI5 (P2), AI2 (P2), AI3 (P3), AI4 (P3), AI6 (P4), AI7 (P4) |
 | Agents and extensibility | A1 (P0), A2 (P1), A4 (P2), A3 (P2), A5 (P2), A6 (P2), A7 (P2), A8 (P3), A9 (P3), X1 (P3), X2 (P3), A10 (P4), X3 (P4), X4 (P4), X5 (P4) |
-| SaaS (only if D1 says so) | O4 (P4), O5 (P4), O6 (P4) |
+| Open source and SaaS (later) | O8 (P4), O9 (P4), O4 (P4), O5 (P4), O6 (P4) |
 
 ### The path to your Codex example
 
@@ -1519,14 +1589,15 @@ batch. Everything else can run beside it.
 
 ## Decisions
 
-**D1. Who it's for.** This is the one only you can make.
+**D1. Who it's for** (decided October 16). Private for now: you, your
+agents and people you invite. Later it becomes both open source, so it must
+be easy to deploy (O8, O9), and a SaaS, so it must not need a rewrite to hold
+many workspaces (principle 8, O4 to O7, C7).
 
-- **You, your agents and people you invite** (recommended): SaaS-grade
-  polish and clean tenancy, while public sign-up, email, billing, several
-  servers and tenant-isolated execution stay parked (O4 to O6, C7).
-- **A public SaaS**: those pieces move into phases 2 and 3 and become
-  conditions for opening up, and GitHub, execution and secrets get a
-  multi-tenant security review first.
+**D8. License** (later, before O9). For example, AGPL-3.0 keeps anyone who
+runs a modified copy as a service sharing their changes, which protects the
+SaaS; Apache-2.0 or MIT makes adoption easiest. Nothing needs it until the
+release.
 
 Defaults for the rest. Say if any is wrong:
 
@@ -1564,12 +1635,15 @@ Defaults for the rest. Say if any is wrong:
    and phone states.
 6. Test where AGENTS.md says bugs are silent and costly, plus: secrets never
    leak (S1), settings resolve in the right order (S2), every adapter passes
-   the same contract tests (H2), and AI suggestions never cite anything the
-   reader can't see (AI2).
-7. Provider CLIs and APIs (Codex Cloud, Claude Code, rate-limit reads)
+   the same contract tests (H2), AI suggestions never cite anything the
+   reader can't see (AI2), and the feature's lists and tools are in the
+   two-workspace isolation tests (O7).
+7. Follow principle 8: new tables belong to a workspace, background work
+   uses the job queue, and nothing in the code names a machine.
+8. Provider CLIs and APIs (Codex Cloud, Claude Code, rate-limit reads)
    change often. Check the current version when building, and keep their JSON
    inside the adapter.
-8. Run `tools/ci/run.sh`, or the cloud setup from F3, before pushing. When
+9. Run `tools/ci/run.sh`, or the cloud setup from F3, before pushing. When
    the PR merges, add its number after the piece's title here.
 
 `roadmap-pieces.json`, next to this file, is a snapshot of every piece with

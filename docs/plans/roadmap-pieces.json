@@ -20,7 +20,7 @@
     },
     {
       "phase": 4,
-      "name": "Breadth, and SaaS if you want it"
+      "name": "Breadth, open source and SaaS"
     }
   ],
   "areas": [
@@ -86,8 +86,8 @@
     },
     {
       "code": "O",
-      "name": "Operations and SaaS readiness",
-      "goal": "Keep it running, and open it up if you want"
+      "name": "Operations, open source and SaaS",
+      "goal": "Keep it running, and ready to open up"
     }
   ],
   "tracks": [
@@ -101,6 +101,7 @@
         "F8",
         "F10",
         "F9",
+        "O7",
         "O1",
         "O3",
         "O2"
@@ -234,8 +235,10 @@
       ]
     },
     {
-      "name": "SaaS (only if D1 says so)",
+      "name": "Open source and SaaS (later)",
       "pieces": [
+        "O8",
+        "O9",
         "O4",
         "O5",
         "O6"
@@ -711,7 +714,7 @@
       "phase": 4,
       "size": "L",
       "title": "Containers you control",
-      "what": "Run any command-line harness in an isolated container on the host (rootless Podman, no host files, network only to allowed hosts) or at a sandbox provider, built from a project setup script. Needed once other people's code runs on your host or a harness needs its own toolchain. See decision D3.",
+      "what": "Run any command-line harness in an isolated container on the host (rootless Podman, no host files, network only to allowed hosts) or at a sandbox provider, built from a project setup script. Needed once other people's code runs on your host or a harness needs its own toolchain. Required before the SaaS runs anyone's code on your servers (D1); until then, see D3.",
       "done": "A custom harness runs in a container that can't read the host's files or credentials.",
       "deps": [
         "C1",
@@ -1640,7 +1643,7 @@
       "phase": 4,
       "size": "M",
       "title": "Sign-up and email",
-      "what": "Only if D1 says so. Email on accounts, verification, password reset, invitation emails and digests through an SMTP or provider adapter, and public sign-up.",
+      "what": "For the SaaS later (D1). Email on accounts, verification, password reset, invitation emails and digests through an SMTP or provider adapter, and public sign-up, switched off by default for self-hosted installs.",
       "done": "A stranger can sign up, verify and reset a password alone.",
       "deps": [
         "S7"
@@ -1654,7 +1657,7 @@
       "phase": 4,
       "size": "L",
       "title": "Billing and plans",
-      "what": "Only if D1 says so. Plans, seats or usage pricing, a payment provider, and limits enforced per workspace.",
+      "what": "For the SaaS later (D1). Plans, seats or usage pricing, a payment provider, and limits enforced per workspace, built on the usage that U2 and AI1 already record per workspace. Absent from self-hosted installs.",
       "done": "A workspace can upgrade and its limits change.",
       "deps": [
         "O4",
@@ -1669,10 +1672,51 @@
       "phase": 4,
       "size": "L",
       "title": "More than one server",
-      "what": "Only if D1 says so. The realtime hub, rate limits, MCP sessions and background loops live in one process (realtime.rs, rate_limit.rs, mcp.rs:1646). Share what must be shared through PostgreSQL LISTEN/NOTIFY or a small broker.",
+      "what": "For the SaaS later (D1). The realtime hub, rate limits, MCP sessions and background loops live in one process (realtime.rs, rate_limit.rs, mcp.rs:1646). Share what must be shared through PostgreSQL LISTEN/NOTIFY or a small broker.",
       "done": "Two server processes behind one address behave like one.",
       "deps": [
         "F9"
+      ],
+      "migration": false,
+      "note": null
+    },
+    {
+      "id": "O7",
+      "area": "O",
+      "phase": 1,
+      "size": "M",
+      "title": "Two-workspace isolation tests",
+      "what": "The SaaS will hold many workspaces in one database, so leaks between them must be caught from now on, not audited later. A test fixture builds two workspaces with look-alike people, agents, projects, tasks, DMs and pages, and a suite checks that every list, search, task view, MCP tool and realtime event in one never shows the other's. Each new feature adds its cases (see 'How a thread picks up a piece').",
+      "done": "The suite covers every existing list and search route and MCP read tool, and fails if one leaks across workspaces.",
+      "deps": [],
+      "migration": false,
+      "note": null
+    },
+    {
+      "id": "O8",
+      "area": "O",
+      "phase": 4,
+      "size": "M",
+      "title": "Self-host in one command",
+      "what": "For the open-source release (D1). There's no container image today, and the first admin comes from an interactive command (bootstrap-admin). Add a container image and a compose file (the app plus PostgreSQL) that start a working install, first-run setup in the browser that creates the first admin and generates the secrets master key, a configuration reference with safe defaults, and upgrade notes. The Red Hat scripts stay in deploy/redhat as one example of a host.",
+      "done": "On a fresh machine, docker compose up and a browser get you to a working workspace.",
+      "deps": [
+        "S1",
+        "S3"
+      ],
+      "migration": false,
+      "note": null
+    },
+    {
+      "id": "O9",
+      "area": "O",
+      "phase": 4,
+      "size": "M",
+      "title": "Open-source release",
+      "what": "Choose a license (D8), move what's specific to your machines out of the code (hostnames and Tailscale addresses in tools/ci/run.sh and deploy/redhat, paths under /home/bot) into configuration or a private deploy repository, check the git history for anything private, and add a README for strangers, CONTRIBUTING, a security policy and public docs.",
+      "done": "A stranger can clone the repository, follow the README and run it, and nothing in it points at your machines.",
+      "deps": [
+        "O8"
       ],
       "migration": false,
       "note": null
