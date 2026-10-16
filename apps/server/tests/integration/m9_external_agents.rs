@@ -1161,6 +1161,14 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
     assert_eq!(run_attribution.0, actor_id);
     assert_eq!(run_attribution.1, Some(seed.human_actor_id));
     assert_eq!(run_attribution.2, Some(sponsored_request_id));
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT config <> '{}'::jsonb FROM agent_runs WHERE id = $1")
+            .bind(sponsored_run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("sponsored run settings"),
+        "a sponsored run's settings freeze when it is created"
+    );
     let mut terminal_transaction = pool.begin().await.expect("begin terminal transition");
     let sponsored_state =
         sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1 FOR UPDATE")

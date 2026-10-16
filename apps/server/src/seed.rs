@@ -243,36 +243,128 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .await?;
 
     crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
-    let provider_connection_id =
-        crate::execution_setup::ensure_local_provider(&mut transaction, project_id).await?;
-
-    let execution_profile_id = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO execution_profiles (
-            id, project_id, provider_connection_id, owner_actor_id, name,
-            codex_home_path, status
+    let codex_manifest = crate::provider::codex_manifest();
+    // Upgrade tests seed schemas from before provider accounts (S6), where
+    // the profile itself held the private home directory, and from before
+    // connections recorded a binary version.
+    let has_provider_accounts =
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass('provider_accounts') IS NOT NULL")
+            .fetch_one(&mut *transaction)
+            .await?;
+    let provider_connection_id = if has_provider_accounts {
+        crate::execution_setup::ensure_provider_connection(
+            &mut transaction,
+            project_id,
+            &codex_manifest,
         )
-        VALUES ($1, $2, $3, $4, 'M0 retained profile', $5, 'available')
-        ON CONFLICT (project_id, name)
-        DO UPDATE SET id = execution_profiles.id
-        RETURNING id
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(provider_connection_id)
-    .bind(human_actor_id)
-    .bind(runtime_path_text(&retained_profile)?)
-    .fetch_one(&mut *transaction)
-    .await?;
-
-    let stored_profile_path = sqlx::query_scalar::<_, String>(
-        "SELECT codex_home_path FROM execution_profiles WHERE id = $1",
-    )
-    .bind(execution_profile_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if stored_profile_path != runtime_path_text(&retained_profile)? {
+        .await?
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO provider_connections (id, project_id, kind, host, capabilities)
+            VALUES ($1, $2, 'codex_app_server', 'local_project_host', $3)
+            ON CONFLICT (project_id, kind, host)
+            DO UPDATE SET id = provider_connections.id
+            RETURNING id
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(serde_json::json!({
+            "supports_streaming": true,
+            "supports_commands": true,
+            "supports_file_changes": true,
+            "supports_approvals": true,
+            "supports_questions": true,
+            "supports_resume": true,
+            "supports_interrupt": true,
+            "supports_pull_request_creation": false,
+            "supports_remote_execution": false
+        }))
+        .fetch_one(&mut *transaction)
+        .await?
+    };
+    let profile_path = runtime_path_text(&retained_profile)?;
+    let (execution_profile_id, stored_profile_path) = if has_provider_accounts {
+        let account_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO provider_accounts (
+                id, organization_id, owner_actor_id, adapter_kind, name,
+                home_path, status
+            )
+            VALUES ($1, $2, $3, $4, 'M0 retained account', $5, 'available')
+            ON CONFLICT (home_path)
+            DO UPDATE SET id = provider_accounts.id
+            RETURNING id
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(organization_id)
+        .bind(human_actor_id)
+        .bind(&codex_manifest.kind)
+        .bind(profile_path)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let profile_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO execution_profiles (
+                id, project_id, provider_connection_id, owner_actor_id, name,
+                provider_account_id, status, preferred
+            )
+            VALUES ($1, $2, $3, $4, 'M0 retained profile', $5, 'available', true)
+            ON CONFLICT (project_id, name)
+            DO UPDATE SET id = execution_profiles.id
+            RETURNING id
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(provider_connection_id)
+        .bind(human_actor_id)
+        .bind(account_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let stored = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT account.home_path
+            FROM execution_profiles profile
+            JOIN provider_accounts account ON account.id = profile.provider_account_id
+            WHERE profile.id = $1
+            "#,
+        )
+        .bind(profile_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        (profile_id, stored)
+    } else {
+        let profile_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO execution_profiles (
+                id, project_id, provider_connection_id, owner_actor_id, name,
+                codex_home_path, status
+            )
+            VALUES ($1, $2, $3, $4, 'M0 retained profile', $5, 'available')
+            ON CONFLICT (project_id, name)
+            DO UPDATE SET id = execution_profiles.id
+            RETURNING id
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(provider_connection_id)
+        .bind(human_actor_id)
+        .bind(profile_path)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let stored = sqlx::query_scalar::<_, String>(
+            "SELECT codex_home_path FROM execution_profiles WHERE id = $1",
+        )
+        .bind(profile_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        (profile_id, stored)
+    };
+    if stored_profile_path != profile_path {
         return Err(AppError::Conflict(
             "execution_profile",
             "stored profile path does not match the configured data root",
