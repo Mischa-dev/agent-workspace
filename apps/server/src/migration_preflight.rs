@@ -368,7 +368,11 @@ mod tests {
                 );
             } else {
                 assert_eq!(version.len(), 14, "{name}: use YYYYMMDDHHMMSS");
-                let field = |at: usize| version[at..at + 2].parse::<u32>().unwrap();
+                let field = |at: usize| {
+                    version[at..at + 2]
+                        .parse::<u32>()
+                        .expect("timestamp digits")
+                };
                 let year = number / 10_000_000_000;
                 let (month, day, hour, minute, second) =
                     (field(4), field(6), field(8), field(10), field(12));
