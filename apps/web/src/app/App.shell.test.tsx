@@ -267,7 +267,7 @@ describe('App shell and Project navigation', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'Project settings' }),
+      await screen.findByRole('heading', { level: 1, name: 'General' }),
     ).toBeVisible()
     await waitFor(() => expect(navigationWrites).toHaveLength(2))
     expect(navigationWrites.map((write) => write.expectedVersion)).toEqual([

@@ -18,7 +18,8 @@ use uuid::Uuid;
 
 use super::{
     agent_interface::{
-        PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send, test_app, tool,
+        Browser, PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send,
+        test_app, tool,
     },
     mcp_admin::{Setup, create_project, setup},
     mcp_task_board::seed_pull_request,
@@ -98,7 +99,16 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
     .await
     .expect("authenticate profile");
     let app = test_app(pool.clone(), &database_url);
-    let browser = login(&app).await;
+    // Signing in needs the current schema (sessions, two-factor), so a
+    // database held at an older migration gets no browser session.
+    let browser = if version == i64::MAX {
+        login(&app).await
+    } else {
+        Browser {
+            cookie: String::new(),
+            csrf: String::new(),
+        }
+    };
     Some((
         Setup {
             app,
@@ -1089,6 +1099,123 @@ async fn people_start_and_follow_runs_and_answer_approvals() {
     .expect("audit");
     assert!(audited, "the answer records the app it came through");
     let _ = dana;
+}
+
+/// The browser's run controls follow the thread: a project member outside
+/// a private channel can't interrupt a run in one of its threads or answer
+/// its approval (the response would show the run and its pull request), and
+/// the refusal reads like a run that doesn't exist.
+#[tokio::test]
+async fn run_controls_stay_inside_a_private_thread() {
+    let Some((setup, seed, _temporary)) = seeded("web_run_visibility").await else {
+        return;
+    };
+    let app = &setup.app;
+    let pool = &setup.pool;
+    let aw = seed.project_id.to_string();
+    let (dana, dana_browser) = add_person(&setup, &[&aw], "dana").await;
+    execute(
+        pool,
+        "UPDATE repositories SET preparation_state = 'ready', prepared_at = now(), trusted = true WHERE id = $1",
+        &[seed.repository_id],
+    )
+    .await;
+
+    let secret_channel = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO conversations (id, project_id, kind, name, visibility) VALUES ($1, $2, 'channel', 'secret', 'members')",
+    )
+    .bind(secret_channel)
+    .bind(seed.project_id)
+    .execute(pool)
+    .await
+    .expect("secret channel");
+    let join = "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES ($1, $2, $3, $3)";
+    execute(
+        pool,
+        join,
+        &[seed.project_id, secret_channel, seed.human_actor_id],
+    )
+    .await;
+    let secret = thread(pool, &seed, secret_channel, "Secret plan").await;
+    let (blocked_run, _) = run(pool, &seed, secret, "codex/secret").await;
+    for next in ["starting", "working", "blocked"] {
+        sqlx::query("UPDATE agent_runs SET state = $2 WHERE id = $1")
+            .bind(blocked_run)
+            .bind(next)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|error| panic!("run to {next}: {error}"));
+    }
+    let approval = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, eligible_role, human_required,
+            kind, summary, options, provider_request_id
+        ) VALUES ($1, $2, $3, 'member', false, 'question', 'Which branch?',
+                  '["main", "develop"]'::jsonb, 'test-' || $1::text)
+        "#,
+    )
+    .bind(approval)
+    .bind(blocked_run)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("approval");
+
+    let interrupt = |browser: &Browser, key: &str| {
+        browser.request(
+            "POST",
+            &format!("/api/v1/agent-runs/{blocked_run}/interrupt"),
+            Some(key),
+            Value::Null,
+        )
+    };
+    let respond = |browser: &Browser, key: &str| {
+        browser.request(
+            "POST",
+            &format!("/api/v1/agent-approvals/{approval}/respond"),
+            Some(key),
+            json!({"answer": "main"}),
+        )
+    };
+
+    // Dana is in the project but not the channel: both read as missing.
+    let (status, body) = send(app, interrupt(&dana_browser, "dana-interrupt-1")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (missing_status, missing) = send(
+        app,
+        dana_browser.request(
+            "POST",
+            &format!("/api/v1/agent-runs/{}/interrupt", Uuid::now_v7()),
+            Some("dana-interrupt-missing"),
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(missing_status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(body["error"], missing["error"], "{body} vs {missing}");
+    let (status, body) = send(app, respond(&dana_browser, "dana-respond-1")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (state, approval_status) = sqlx::query_as::<_, (String, String)>(
+        "SELECT run.state, approval.status FROM agent_runs run JOIN agent_approvals approval ON approval.agent_run_id = run.id WHERE approval.id = $1",
+    )
+    .bind(approval)
+    .fetch_one(pool)
+    .await
+    .expect("run and approval");
+    assert_eq!(
+        (state.as_str(), approval_status.as_str()),
+        ("blocked", "pending")
+    );
+
+    // Once Dana is in the channel, the same calls reach the run.
+    execute(pool, join, &[seed.project_id, secret_channel, dana]).await;
+    let (status, body) = send(app, respond(&dana_browser, "dana-respond-2")).await;
+    assert_ne!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, body) = send(app, interrupt(&dana_browser, "dana-interrupt-2")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 fn ids_of(list: &Value) -> Vec<String> {

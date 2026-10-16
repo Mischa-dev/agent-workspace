@@ -187,4 +187,47 @@ describe('App sign-in and session boundary', () => {
     ).not.toBeInTheDocument()
     expect(projectListReads).toBeGreaterThanOrEqual(2)
   })
+
+  it('asks for a two-factor code before treating the person as signed in', async () => {
+    window.history.replaceState({}, '', '/sign-in?returnTo=%2Fhome')
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input)
+        if (path.endsWith('/auth/session')) return jsonResponse(signedOutSession)
+        if (path.endsWith('/auth/login')) {
+          return jsonResponse({ authenticated: false, twoFactorRequired: true, challenge: 'challenge-abc' })
+        }
+        if (path.endsWith('/auth/login/two-factor')) {
+          const body = JSON.parse(String(init?.body)) as { code: string }
+          if (body.code !== 'abcde-12345') {
+            return jsonResponse({ error: { code: 'invalid_credentials', message: 'Wrong code.' } }, 401)
+          }
+          return jsonResponse(authenticatedSession)
+        }
+        if (path.startsWith('/api/v1/projects?')) return jsonResponse({ projects: [projectA] })
+        throw new Error(`Unexpected request: ${String(init?.method)} ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('Login name'), { target: { value: 'mischa' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByRole('heading', { name: 'Two-factor authentication' })).toBeVisible()
+    expect(window.location.pathname).toBe('/sign-in')
+    expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/v1/projects?'))).toBe(false)
+
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: '000000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    expect(await screen.findByText(/That code didn’t work/)).toBeVisible()
+
+    // A recovery code works in the same field.
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'abcde-12345' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    expect(await screen.findByRole('heading', { name: /Welcome back/ })).toBeVisible()
+    const second = fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/auth/login/two-factor'))
+    expect(JSON.parse(String(second[1]?.[1]?.body))).toEqual({ challenge: 'challenge-abc', code: 'abcde-12345' })
+  })
 })

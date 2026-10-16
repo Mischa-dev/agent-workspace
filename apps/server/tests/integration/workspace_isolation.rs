@@ -86,6 +86,10 @@ const ORIGIN: &str = "http://127.0.0.1:3100";
 const HTTP_ROUTES: &[&str] = &[
     "/api/v1/account/connected-apps",
     "/api/v1/account/profile",
+    "/api/v1/account/api-tokens",
+    "/api/v1/account/appearance",
+    "/api/v1/account/security",
+    "/api/v1/account/sessions",
     "/api/v1/auth/session",
     "/api/v1/auth/workos",
     "/api/v1/conversations/{id}/messages/{message_id}",
@@ -95,6 +99,13 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/inbox",
+    "/api/v1/inbox/summary",
+    "/api/v1/organizations/{organization_id}",
+    "/api/v1/organizations/{organization_id}/audit-events",
+    "/api/v1/organizations/{organization_id}/audit-events/facets",
+    "/api/v1/organizations/{organization_id}/invitations",
+    "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/pages/{id}",
@@ -116,6 +127,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/external-execution-requests",
     "/api/v1/projects/{project_id}/integrations/github",
     "/api/v1/projects/{project_id}/integrations/github/automation",
+    "/api/v1/projects/{project_id}/integrations/github/available-repositories",
+    "/api/v1/projects/{project_id}/integrations/github/connection",
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/member-candidates",
@@ -146,11 +159,18 @@ const HTTP_ROUTES: &[&str] = &[
 /// `/metrics` is a token-gated operator endpoint with process-wide counters,
 /// `/health/*`, `/auth.md`, `/connect.md`, OAuth and the WorkOS callback are
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
-const HTTP_EXCLUSIONS: &[(&str, &str)] = &[(
-    "/api/v1/realtime",
-    "WebSocket upgrade; covered by the realtime part of the fixture test, which \
-     subscribes as A and checks no B event arrives",
-)];
+const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "/api/v1/realtime",
+        "WebSocket upgrade; covered by the realtime part of the fixture test, which \
+         subscribes as A and checks no B event arrives",
+    ),
+    (
+        "/api/v1/integrations/github/callback",
+        "GitHub's redirect back after sign-in: returns a redirect, never data, and \
+         only for a state bound to the caller's browser; covered in settings_accounts",
+    ),
+];
 
 /// Read-only MCP tools this suite deliberately doesn't call, and why.
 /// (Every read-only tool currently has a case.)
@@ -1276,6 +1296,30 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/account/api-tokens",
+            vec!["/api/v1/account/api-tokens".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/account/appearance",
+            vec!["/api/v1/account/appearance".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/account/security",
+            vec!["/api/v1/account/security".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/account/sessions",
+            vec!["/api/v1/account/sessions".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
             "/api/v1/auth/session",
             vec!["/api/v1/auth/session".to_owned()],
             vec![],
@@ -1296,6 +1340,22 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         case(
             "/api/v1/direct",
             vec!["/api/v1/direct".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/inbox",
+            vec![
+                "/api/v1/inbox".to_owned(),
+                "/api/v1/inbox?view=archived&category=mentions".to_owned(),
+                format!("/api/v1/inbox?projectId={}", a.project),
+            ],
+            vec![],
+            vec![format!("/api/v1/inbox?projectId={}", b.project)],
+        ),
+        case(
+            "/api/v1/inbox/summary",
+            vec!["/api/v1/inbox/summary".to_owned()],
             vec![],
             vec![],
         ),
@@ -1351,6 +1411,14 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/projects/{project_id}/integrations/github/automation",
             "/integrations/github/automation",
         ),
+        project_route(
+            "/api/v1/projects/{project_id}/integrations/github/connection",
+            "/integrations/github/connection",
+        ),
+        project_route(
+            "/api/v1/projects/{project_id}/integrations/github/available-repositories",
+            "/integrations/github/available-repositories",
+        ),
         project_route("/api/v1/projects/{project_id}/invitations", "/invitations"),
         project_route(
             "/api/v1/projects/{project_id}/member-candidates",
@@ -1361,6 +1429,66 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         project_route(
             "/api/v1/projects/{project_id}/repositories",
             "/repositories",
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}",
+            vec![format!("/api/v1/organizations/{}", a.organization)],
+            vec![format!("/api/v1/organizations/{}", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/members",
+            vec![format!("/api/v1/organizations/{}/members", a.organization)],
+            vec![format!("/api/v1/organizations/{}/members", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/invitations",
+            vec![format!(
+                "/api/v1/organizations/{}/invitations",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/invitations",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/audit-events/facets",
+            vec![format!(
+                "/api/v1/organizations/{}/audit-events/facets",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/audit-events/facets",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/audit-events",
+            vec![
+                format!("/api/v1/organizations/{}/audit-events", a.organization),
+                format!(
+                    "/api/v1/organizations/{}/audit-events?projectId={}",
+                    a.organization, a.project
+                ),
+            ],
+            vec![format!(
+                "/api/v1/organizations/{}/audit-events",
+                b.organization
+            )],
+            vec![
+                format!(
+                    "/api/v1/organizations/{}/audit-events?projectId={}",
+                    a.organization, b.project
+                ),
+                format!(
+                    "/api/v1/organizations/{}/audit-events?actorId={}",
+                    a.organization, b.rook
+                ),
+            ],
         ),
         case(
             "/api/v1/organizations/{organization_id}/secrets",
@@ -1788,6 +1916,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "label_list",
     "message_history",
     "milestone_list",
+    "notification_list",
     "page_get",
     "page_list",
     "people_search",
@@ -1945,6 +2074,16 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({})],
             vec![json!({"projectId": b.project})],
             vec![],
+        ),
+        case(
+            "notification_list",
+            vec![
+                json!({}),
+                json!({"view": "archived"}),
+                json!({"projectId": a.project}),
+            ],
+            vec![],
+            vec![json!({"projectId": b.project})],
         ),
         case(
             "task_list",

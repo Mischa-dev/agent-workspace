@@ -205,13 +205,43 @@ async fn register_repository(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    let repository_id = insert_repository(&state, &mut transaction, project_id, &request).await?;
+    let reference = RepositoryCommandReference { repository_id };
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::CREATED,
+        &reference,
+    )
+    .await?;
+    transaction.commit().await?;
+
+    let mut transaction = state.pool.begin().await?;
+    let row = fetch_repository(&mut transaction, project_id, repository_id)
+        .await?
+        .ok_or(AppError::NotFound("repository"))?;
+    transaction.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(repository_view(row, role_allows_manage(role))?),
+    ))
+}
+
+/// Add a trusted repository row to a project. The caller has checked the
+/// person may manage repositories and validated the request.
+async fn insert_repository(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    request: &RegisterRepositoryRequest,
+) -> Result<Uuid, AppError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!(
             "repository:{project_id}:{}:{}",
             request.owner.to_ascii_lowercase(),
             request.name.to_ascii_lowercase()
         ))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     if sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM repositories WHERE project_id = $1 AND (lower(owner) = lower($2) AND lower(name) = lower($3) OR github_repository_id = $4))",
@@ -220,7 +250,7 @@ async fn register_repository(
     .bind(&request.owner)
     .bind(&request.name)
     .bind(request.github_repository_id)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?
     {
         return Err(AppError::Conflict(
@@ -248,27 +278,31 @@ async fn register_repository(
     .bind(&request.clone_url)
     .bind(&request.default_branch)
     .bind(mirror_path.to_string_lossy().as_ref())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    let reference = RepositoryCommandReference { repository_id };
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::CREATED,
-        &reference,
-    )
-    .await?;
-    transaction.commit().await?;
+    Ok(repository_id)
+}
 
-    let mut transaction = state.pool.begin().await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(repository_view(row, role_allows_manage(role))?),
-    ))
+/// Register a GitHub repository picked from an installation the workspace
+/// claimed. Same checks as typing it in, with the clone URL derived.
+pub(crate) async fn register_picked_repository(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    github_repository_id: i64,
+    owner: &str,
+    name: &str,
+    default_branch: &str,
+) -> Result<Uuid, AppError> {
+    let request = validate_registration(RegisterRepositoryRequest {
+        github_repository_id,
+        owner: owner.to_owned(),
+        name: name.to_owned(),
+        clone_url: format!("https://github.com/{owner}/{name}.git"),
+        default_branch: default_branch.to_owned(),
+        trust_acknowledged: true,
+    })?;
+    insert_repository(state, transaction, project_id, &request).await
 }
 
 async fn prepare_registered_repository(
@@ -329,6 +363,16 @@ async fn prepare_registered_repository(
     )
     .await?;
     transaction.commit().await?;
+    let row = run_preparation(&state, project_id, repository_id, row).await?;
+    Ok(Json(repository_view(row, role_allows_manage(role))?))
+}
+
+async fn run_preparation(
+    state: &AppState,
+    project_id: Uuid,
+    repository_id: Uuid,
+    row: RepositoryRow,
+) -> Result<RepositoryRow, AppError> {
     let registered = RegisteredRepository {
         id: repository_id,
         clone_url: row.clone_url,
@@ -352,7 +396,7 @@ async fn prepare_registered_repository(
             )
         }
         RepositoryPreparationMode::RefreshOrClone => {
-            match repository_git_token(&state, project_id, repository_id).await {
+            match repository_git_token(state, project_id, repository_id).await {
                 Ok(token) => matches!(
                     tokio::task::spawn_blocking(move || {
                         prepare_repository_with_token(
@@ -376,7 +420,58 @@ async fn prepare_registered_repository(
     let row =
         apply_preparation_result(&mut transaction, project_id, repository_id, prepared).await?;
     transaction.commit().await?;
-    Ok(Json(repository_view(row, role_allows_manage(role))?))
+    Ok(row)
+}
+
+/// Clone or refresh a repository without holding up the request that added
+/// it; the repository list shows how it went.
+pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repository_id: Uuid) {
+    tokio::spawn(async move {
+        let result = async {
+            let admission_root = state.config.data_root.clone();
+            let admission_quota = state.config.data_quota_bytes;
+            let admission_free = state.config.minimum_free_bytes;
+            tokio::task::spawn_blocking(move || {
+                crate::storage_admission::require_growth(
+                    &admission_root,
+                    admission_quota,
+                    admission_free,
+                )
+            })
+            .await
+            .map_err(|_| AppError::Internal("join storage admission"))??;
+            let mut transaction = state.pool.begin().await?;
+            let row = fetch_repository(&mut transaction, project_id, repository_id)
+                .await?
+                .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
+                .ok_or(AppError::NotFound("repository"))?;
+            transaction.commit().await?;
+            run_preparation(&state, project_id, repository_id, row).await
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(
+                %project_id,
+                %repository_id,
+                error_category = error.log_category(),
+                "background repository preparation failed"
+            );
+        }
+    });
+}
+
+/// A repository as the repositories API shows it.
+pub(crate) async fn repository_json(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    repository_id: Uuid,
+    manage: bool,
+) -> Result<serde_json::Value, AppError> {
+    let row = fetch_repository(transaction, project_id, repository_id)
+        .await?
+        .ok_or(AppError::NotFound("repository"))?;
+    serde_json::to_value(repository_view(row, manage)?)
+        .map_err(|_| AppError::Internal("repository view"))
 }
 
 async fn archive_repository(

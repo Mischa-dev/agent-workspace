@@ -6,7 +6,13 @@ import { isApiError } from '../api/errors'
 import { Banner, Button, TextField } from '../ui'
 import { startWorkOs, workOsStatus } from './workos'
 import { AuthLayout } from './AuthLayout'
-import { installAuthenticatedSession, isAuthenticatedSession, login, useSession } from './session'
+import {
+  installAuthenticatedSession,
+  isAuthenticatedSession,
+  type SessionResponse,
+  useSession,
+} from './session'
+import { isTwoFactorChallenge, login, loginTwoFactor } from './login'
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')
@@ -33,6 +39,9 @@ export function SignInPage() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Set once the password was right and the account asks for a second step.
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const [code, setCode] = useState('')
   const returnTo = safeReturnTo(location.search)
   const goBack = useCallback(() => {
     // An app's connect screen is served by the server, not this app.
@@ -55,29 +64,116 @@ export function SignInPage() {
     catch { setError('Could not open secure sign-in. Try again.'); setSubmitting(false) }
   }
 
+  const finish = (nextSession: SessionResponse) => {
+    if (!isAuthenticatedSession(nextSession)) {
+      throw new Error('Sign-in completed without an authenticated session.')
+    }
+    installAuthenticatedSession(queryClient, nextSession)
+    goBack()
+  }
+
+  const describeFailure = (reason: unknown) => {
+    if (isApiError(reason) && reason.code === 'rate_limited') return 'Too many attempts. Wait a moment, then try again.'
+    return isApiError(reason) ? reason.message : 'Sign-in didn’t go through. Try again.'
+  }
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!loginName.trim() || password.length < 12) return
     setSubmitting(true)
     setError(null)
     try {
-      const nextSession = await login(loginName.trim(), password)
-      if (!isAuthenticatedSession(nextSession)) {
-        throw new Error('Sign-in completed without an authenticated session.')
-      }
-      installAuthenticatedSession(queryClient, nextSession)
+      const response = await login(loginName.trim(), password)
       setPassword('')
-      goBack()
+      if (isTwoFactorChallenge(response)) {
+        setCode('')
+        setChallenge(response.challenge)
+        return
+      }
+      finish(response)
     } catch (reason) {
       setPassword('')
-      if (isApiError(reason) && reason.code === 'rate_limited') {
-        setError('Too many attempts. Wait a moment, then try again.')
+      setError(describeFailure(reason))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const submitCode = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const trimmed = code.trim()
+    if (!challenge || !trimmed) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      finish(await loginTwoFactor(challenge, trimmed))
+    } catch (reason) {
+      setCode('')
+      if (isApiError(reason) && reason.status === 404) {
+        // Too many wrong codes, or five minutes went by: start again.
+        setChallenge(null)
+        setError('That sign-in expired. Enter your password again.')
+      } else if (isApiError(reason) && reason.code === 'invalid_credentials') {
+        setError('That code didn’t work. Check your authenticator app and try again.')
       } else {
-        setError(isApiError(reason) ? reason.message : 'Sign-in didn’t go through. Try again.')
+        setError(describeFailure(reason))
       }
     } finally {
       setSubmitting(false)
     }
+  }
+
+  if (challenge) {
+    return (
+      <AuthLayout
+        intro="Enter the 6-digit code from your authenticator app, or one of your recovery codes."
+        title="Two-factor authentication"
+        titleId="two-factor-heading"
+      >
+        {error && (
+          <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
+            <Banner tone="danger">{error}</Banner>
+          </div>
+        )}
+        <form className="aw-auth__form" onSubmit={submitCode}>
+          <TextField
+            autoComplete="one-time-code"
+            autoFocus
+            disabled={submitting}
+            hint="Recovery codes look like xxxxx-xxxxx and work once."
+            id="two-factor-code"
+            label="Code"
+            maxLength={32}
+            mono
+            onChange={(event) => setCode(event.target.value)}
+            required
+            spellCheck={false}
+            value={code}
+          />
+          <Button
+            busy={submitting}
+            className="aw-auth__submit"
+            disabled={!code.trim()}
+            size="lg"
+            type="submit"
+            variant="primary"
+          >
+            {submitting ? 'Checking…' : 'Verify'}
+          </Button>
+          <Button
+            disabled={submitting}
+            onClick={() => {
+              setChallenge(null)
+              setCode('')
+              setError(null)
+            }}
+            variant="ghost"
+          >
+            Use a different account
+          </Button>
+        </form>
+      </AuthLayout>
+    )
   }
 
   return (

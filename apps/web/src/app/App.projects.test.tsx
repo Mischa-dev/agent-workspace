@@ -303,7 +303,7 @@ describe('App Project creation and settings', () => {
     )
     await waitFor(() => expect(alert).toHaveFocus())
     expect(window.location.pathname).toBe(
-      `/projects/${projectBId}/settings`,
+      `/settings/projects/${projectBId}/general`,
     )
     expect(
       screen.getByRole('link', { name: 'Beta Project' }),
@@ -382,16 +382,17 @@ describe('App Project creation and settings', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: 'Project settings' }),
+      await screen.findByRole('heading', { level: 1, name: 'General' }),
     ).toBeVisible()
     expect(
       screen.queryByRole('button', { name: 'Archive Project' }),
     ).not.toBeInTheDocument()
     expect(screen.getByText('Viewer')).toBeVisible()
     expect(screen.getByRole('note')).toHaveTextContent('Viewer access is read-only')
-    const sections = screen.getByRole('navigation', { name: 'Settings sections' })
-    expect(within(sections).queryByRole('link', { name: 'Codex' })).not.toBeInTheDocument()
-    expect(within(sections).queryByRole('link', { name: 'GitHub' })).not.toBeInTheDocument()
+    const sections = screen.getByRole('list', { name: 'Project settings' })
+    expect(within(sections).queryByRole('link', { name: 'Codex runs' })).not.toBeInTheDocument()
+    expect(within(sections).queryByRole('link', { name: 'Automation' })).not.toBeInTheDocument()
+    expect(within(sections).queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument()
     expect(within(sections).queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
     fireEvent.click(within(sections).getByRole('link', { name: 'Repositories' }))
     expect(await screen.findByRole('heading', { name: 'Repositories' })).toBeVisible()

@@ -74,8 +74,10 @@ const PERMITTED_EVENTS: [&str; 6] = [
     "repository",
 ];
 
+mod connect;
+
 pub fn router() -> Router<AppState> {
-    Router::new()
+    connect::routes(Router::new())
         .route(
             "/api/v1/projects/{project_id}/integrations/github",
             get(github_status),
@@ -1227,6 +1229,20 @@ async fn sync_installation(
     let repositories =
         load_requested_repositories(&mut transaction, project_id, &requested_repository_ids)
             .await?;
+    let typed_installation_id = i64::try_from(request.installation_id)
+        .map_err(|_| AppError::Validation("installationId"))?;
+    // Where people can sign in to GitHub, only installations the workspace
+    // proved access to can be linked; knowing the number is not enough.
+    if github_config.connect.is_some()
+        && !connect::workspace_claims_installation(
+            &mut transaction,
+            project_id,
+            typed_installation_id,
+        )
+        .await?
+    {
+        return Err(AppError::NotFound("github_installation"));
+    }
     transaction.commit().await?;
     if repositories.len() != requested_repository_ids.len() {
         return Err(AppError::NotFound("repository"));
@@ -1273,6 +1289,15 @@ async fn sync_installation(
             .await?;
     if current_repositories != repositories {
         return Err(AppError::Conflict("repository", "changed_during_sync"));
+    }
+    if github_config.connect.is_none() {
+        connect::record_operator_claim(
+            &mut transaction,
+            project_id,
+            principal.actor_id,
+            &installation,
+        )
+        .await?;
     }
     let actor_id = ensure_github_actor(&mut transaction, project_id).await?;
     let installation_id = persist_installation(
@@ -1438,6 +1463,7 @@ async fn publish_agent_run(
          AND worktree.state IN ('ready', 'dirty')
         WHERE run.project_id = $1
           AND run.id = $2
+          AND conversation_visible_to(run.conversation_id, $3)
           AND repository.enabled
           AND repository.trusted
           AND repository.archived_at IS NULL
@@ -1447,6 +1473,7 @@ async fn publish_agent_run(
     )
     .bind(project_id)
     .bind(run_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_run"))?;
@@ -1736,6 +1763,7 @@ async fn create_pull_request(
          AND installation.state = 'available'
         WHERE run.project_id = $1
           AND run.id = $2
+          AND conversation_visible_to(run.conversation_id, $3)
           AND run.state IN ('completed', 'failed', 'canceled', 'interrupted')
           AND NOT EXISTS (
               SELECT 1 FROM agent_runs active
@@ -1747,6 +1775,7 @@ async fn create_pull_request(
     )
     .bind(project_id)
     .bind(run_id)
+    .bind(principal.actor_id)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Conflict("agent_run", "branch_not_published"))?;
@@ -5238,6 +5267,7 @@ mod tests {
             webhook_previous_secret_path: None,
             api_base_url: "https://api.github.com".to_owned(),
             api_version: GITHUB_API_VERSION.to_owned(),
+            connect: None,
         };
         let mut installation = GitHubInstallation {
             id: 150_232_852,

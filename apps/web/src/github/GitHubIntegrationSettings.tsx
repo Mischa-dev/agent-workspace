@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
@@ -17,7 +17,6 @@ import {
   SettingsSkeleton,
   StatusChip,
   Switch,
-  TextField,
 } from '../ui'
 import { getGitHubAutomationSettings, getGitHubStatus, syncGitHubInstallation, updateGitHubAutomationSettings } from './api'
 
@@ -60,7 +59,11 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
   }
   const installation = status.data.installation
   if (!installation) {
-    return <GitHubInstallationSetup onVerified={(current) => queryClient.setQueryData(queryKey, current)} projectId={projectId} />
+    return (
+      <p className="aw-quiet">
+        No GitHub installation is linked to this Project yet. Connect GitHub and add a repository above, and it appears here.
+      </p>
+    )
   }
   const connected = installation.state === 'available'
 
@@ -140,7 +143,6 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
         <p className="aw-quiet">Credential files, installation tokens and host paths never reach this page.</p>
       </div>
 
-      <GitHubAutomationSettings projectId={projectId} />
       <GitHubReverify
         installationId={installation.installationId}
         onVerified={(current) => queryClient.setQueryData(queryKey, current)}
@@ -151,7 +153,8 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
   )
 }
 
-function GitHubAutomationSettings({ projectId }: { projectId: string }) {
+/** Moving linked work items when pull requests open and merge. */
+export function GitHubAutomationSettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
   const queryKey = queryKeys.githubAutomation(projectId)
   const settings = useQuery({
@@ -208,7 +211,7 @@ function RepositoryChoices({
   selected: string[]
 }) {
   if (!available.length) {
-    return <p className="aw-quiet">No trusted repositories are registered yet. Add one on the Repositories tab first.</p>
+    return <p className="aw-quiet">No trusted repositories are registered yet. Add one on the Repositories page first.</p>
   }
   return (
     <fieldset className="aw-choices" disabled={disabled}>
@@ -224,77 +227,6 @@ function RepositoryChoices({
         />
       ))}
     </fieldset>
-  )
-}
-
-function GitHubInstallationSetup({ onVerified, projectId }: { onVerified: (status: GitHubStatus) => void; projectId: string }) {
-  const repositories = useQuery({
-    queryKey: queryKeys.repositories(projectId),
-    queryFn: () => listRepositories(projectId),
-  })
-  const [installationId, setInstallationId] = useState('')
-  const [selected, setSelected] = useState<string[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const verify = useMutation({
-    mutationFn: () => syncGitHubInstallation(projectId, { installationId: Number(installationId), repositoryIds: selected }),
-    onSuccess: onVerified,
-    onError: (reason) => setError(integrationError(reason)),
-  })
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setError(null)
-    verify.mutate()
-  }
-  const available =
-    repositories.data?.repositories.filter((repository) => repository.enabled && repository.trusted && !repository.archivedAt) ?? []
-
-  return (
-    <form aria-labelledby="github-setup-heading" className="aw-card aw-formcard aw-form" onSubmit={submit}>
-      <header className="aw-profile__head">
-        <span className="aw-row__tile">
-          <Icon name="pull-request" size={16} />
-        </span>
-        <div className="aw-profile__titles">
-          <h3 className="aw-profile__name" id="github-setup-heading">
-            Connect a GitHub installation
-          </h3>
-          <p className="aw-profile__sub">
-            The GitHub App is ready on the server. Enter its installation ID and choose which registered repositories it may reach.
-          </p>
-        </div>
-        <StatusChip icon="clock" tone="warning">
-          Ready to connect
-        </StatusChip>
-      </header>
-      {repositories.isPending && <SettingsSkeleton label="Loading registered repositories" />}
-      {repositories.isError && <Banner tone="danger">Registered repositories didn’t load.</Banner>}
-      {repositories.isSuccess && (
-        <>
-          <TextField
-            hint="The number at the end of the installation’s URL on GitHub."
-            id="github-installation-id"
-            inputMode="numeric"
-            label="GitHub installation ID"
-            mono
-            onChange={(event) => setInstallationId(event.target.value)}
-            value={installationId}
-          />
-          <RepositoryChoices available={available} onChange={setSelected} selected={selected} />
-          {error && <Banner tone="danger">{error}</Banner>}
-          <div className="aw-form__actions">
-            <Button
-              busy={verify.isPending}
-              disabled={Number(installationId) <= 0 || selected.length === 0}
-              icon="shield-check"
-              type="submit"
-              variant="primary"
-            >
-              Verify installation
-            </Button>
-          </div>
-        </>
-      )}
-    </form>
   )
 }
 
@@ -351,5 +283,5 @@ function GitHubReverify({
 }
 
 function integrationError(reason: unknown) {
-  return isApiError(reason) ? reason.message : 'GitHub couldn’t verify the installation. Check the ID and try again.'
+  return isApiError(reason) ? reason.message : 'GitHub couldn’t verify the installation. Try again.'
 }
