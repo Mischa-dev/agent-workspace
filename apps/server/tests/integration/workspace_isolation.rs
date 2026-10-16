@@ -106,6 +106,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{id}/decisions",
     "/api/v1/projects/{id}/execution-profiles",
     "/api/v1/projects/{id}/execution-workers",
+    "/api/v1/projects/{id}/harnesses",
     "/api/v1/projects/{id}/mentionable-actors",
     "/api/v1/projects/{id}/navigation",
     "/api/v1/projects/{id}/pages",
@@ -118,6 +119,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/member-candidates",
     "/api/v1/projects/{project_id}/members",
+    "/api/v1/projects/{project_id}/provider-accounts",
+    "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "/api/v1/projects/{project_id}/repositories",
     "/api/v1/projects/{project_id}/secrets",
     "/api/v1/projects/{project_id}/work-item-assignees",
@@ -357,6 +360,7 @@ struct World {
     pull_request: Uuid,
     pull_request_url: String,
     profile: Uuid,
+    provider_account: Uuid,
     run_thread: Uuid,
     run: Uuid,
     approval: Uuid,
@@ -972,6 +976,13 @@ async fn build_workspace(
     .fetch_one(pool)
     .await
     .expect("profile");
+    let provider_account = sqlx::query_scalar::<_, Uuid>(
+        "SELECT provider_account_id FROM execution_profiles WHERE id = $1",
+    )
+    .bind(profile)
+    .fetch_one(pool)
+    .await
+    .expect("provider account");
     sqlx::query("UPDATE execution_profiles SET status = 'available' WHERE id = $1")
         .bind(profile)
         .execute(pool)
@@ -1113,6 +1124,7 @@ async fn build_workspace(
         pull_request,
         pull_request_url,
         profile,
+        provider_account,
         run_thread,
         run,
         approval,
@@ -1316,6 +1328,11 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         project_route(
             "/api/v1/projects/{id}/execution-workers",
             "/execution-workers",
+        ),
+        project_route("/api/v1/projects/{id}/harnesses", "/harnesses"),
+        project_route(
+            "/api/v1/projects/{project_id}/provider-accounts",
+            "/provider-accounts",
         ),
         project_route("/api/v1/projects/{id}/navigation", "/navigation"),
         project_route("/api/v1/projects/{id}/pages", "/pages"),
@@ -1521,6 +1538,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
     });
     cases.push(case(
         "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account",
+        own,
+        foreign,
+        vec![],
+    ));
+    let (own, foreign) = pair(&|outer, inner| {
+        format!(
+            "/api/v1/projects/{}/provider-accounts/{}",
+            outer.project, inner.provider_account
+        )
+    });
+    cases.push(case(
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
         own,
         foreign,
         vec![],
