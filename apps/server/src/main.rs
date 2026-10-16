@@ -205,7 +205,14 @@ async fn main() -> anyhow::Result<()> {
             let options = parse_options(arguments)?;
             reject_unknown_options(
                 &options,
-                &["owner-login", "name", "handle", "token-file", "webhook-url"],
+                &[
+                    "owner-login",
+                    "name",
+                    "handle",
+                    "token-file",
+                    "webhook-url",
+                    "wakeup-format",
+                ],
             )?;
             let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
             let (project_id, owner_actor_id) = agent_workspace_server::direct::space_for_login(
@@ -225,13 +232,21 @@ async fn main() -> anyhow::Result<()> {
             .context("create agent")?;
             write_private_file(&token_file, &agent.token)?;
             // With --webhook-url, the signing secret goes to "<token-file>.webhook".
+            // Wakeups are typed (docs/agent-runner.md) unless
+            // --wakeup-format inbox asks for the old inbox.available body.
             if let Some(url) = options.get("webhook-url") {
+                let typed = match options.get("wakeup-format").map(String::as_str) {
+                    None | Some("typed") => true,
+                    Some("inbox") => false,
+                    Some(_) => anyhow::bail!("--wakeup-format is typed or inbox"),
+                };
                 let secret = agent_workspace_server::external_agents::set_webhook_for_host(
                     &pool,
                     &config,
                     agent.connection_id,
                     url,
                     &config.webhook_trusted_origins,
+                    typed,
                 )
                 .await
                 .context("set wakeup webhook")?;
