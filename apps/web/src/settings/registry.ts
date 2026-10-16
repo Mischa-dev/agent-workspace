@@ -67,6 +67,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('project', 'environments', 'Environments and defaults', 'settings', ['harness', 'model', 'reasoning', 'speed', 'repository'], () => import('./project/EnvironmentsPage'), { settings: ['run.'] }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials'], () => import('./project/AgentsPage'), { visible: manageProject }),
   page('project', 'automation', 'Automation', 'checklist', ['pull requests', 'work items', 'review', 'github'], () => import('./project/AutomationPage'), { visible: manageProject }),
+  page('project', 'workflow', 'Workflow', 'work', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
   page('project', 'codex-runs', 'Codex runs', 'play', ['run requests', 'sponsored', 'approve'], () => import('./project/CodexRunsPage'), { visible: projectMember }),
 ]
 

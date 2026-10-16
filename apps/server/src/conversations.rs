@@ -1534,6 +1534,9 @@ pub(crate) struct MessageMcpCredential {
 pub(crate) struct ReplyCompletion {
     pub(crate) request_id: Uuid,
     pub(crate) generation: i32,
+    /// False for an interim message: the request stays claimed (its lease
+    /// renewed) so the agent can keep working and reply again.
+    pub(crate) final_reply: bool,
 }
 
 pub(crate) struct MessageAppendOutcome {
@@ -1727,15 +1730,26 @@ pub(crate) async fn append_message_command(
         },
     };
     if let Some(reply) = reply {
-        replies::complete_with_reply(
-            &mut transaction,
-            reply.request_id,
-            reply.generation,
-            actor.actor_id,
-            conversation.id,
-            message_id,
-        )
-        .await?;
+        if reply.final_reply {
+            replies::complete_with_reply(
+                &mut transaction,
+                reply.request_id,
+                reply.generation,
+                actor.actor_id,
+                conversation.id,
+                message_id,
+            )
+            .await?;
+        } else {
+            replies::renew_claim(
+                &mut transaction,
+                reply.request_id,
+                reply.generation,
+                actor.actor_id,
+                conversation.id,
+            )
+            .await?;
+        }
     }
     enqueue_external_message_events(
         &mut transaction,
@@ -2317,14 +2331,11 @@ async fn conversation_timeline(
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
-    let (reply_requests, agent_turns_remaining) =
-        if matches!(conversation.effective_kind(), "dm" | "group") {
-            let (requests, remaining) =
-                replies::timeline_requests(&state.pool, conversation.id).await?;
-            (requests, Some(remaining))
-        } else {
-            (Vec::new(), None)
-        };
+    let (reply_requests, remaining) =
+        replies::timeline_requests(&state.pool, conversation.id).await?;
+    // Only groups (and threads under them) have turns.
+    let agent_turns_remaining =
+        matches!(conversation.effective_kind(), "dm" | "group").then_some(remaining);
     Ok(Json(TimelineResponse {
         conversation: ConversationView::from(&conversation),
         linked_work_items,

@@ -128,8 +128,10 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/integrations/github/available-repositories",
     "/api/v1/projects/{project_id}/integrations/github/connection",
     "/api/v1/projects/{project_id}/invitations",
+    "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/member-candidates",
     "/api/v1/projects/{project_id}/members",
+    "/api/v1/projects/{project_id}/milestones",
     "/api/v1/projects/{project_id}/provider-accounts",
     "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "/api/v1/projects/{project_id}/repositories",
@@ -140,6 +142,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items",
     "/api/v1/projects/{project_id}/work-items/board",
     "/api/v1/projects/{project_id}/work-items/by-key/{key}",
+    "/api/v1/projects/{project_id}/work-items/groups",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
@@ -1600,6 +1603,24 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![format!("{}/work-items/by-key/WORK-1", p(a))],
             vec![format!("{}/work-items/by-key/WORK-1", p(b))],
             vec![],
+        ),
+        project_route("/api/v1/projects/{project_id}/labels", "/labels"),
+        project_route("/api/v1/projects/{project_id}/milestones", "/milestones"),
+        case(
+            "/api/v1/projects/{project_id}/work-items/groups",
+            ["status", "assignee", "label", "milestone", "parent"]
+                .iter()
+                .map(|by| format!("{}/work-items/groups?groupBy={by}", p(a)))
+                .collect(),
+            vec![format!("{}/work-items/groups?groupBy=label", p(b))],
+            vec![
+                format!("{}/work-items/groups?groupBy=label&q={MARKER}", p(a)),
+                format!(
+                    "{}/work-items/groups?groupBy=assignee&assigneeActorId={}",
+                    p(a),
+                    b.rook
+                ),
+            ],
         ),
     ];
 

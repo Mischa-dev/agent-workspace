@@ -384,12 +384,12 @@ Finish `docs/plans/agent-tag.md`: a tagged agent shows progress, takes
 follow-ups in its thread, answers a channel tag in a new thread and stops when
 told, and adding a runner is one form.
 
-- [ ] [A1](#a1-progress-and-interim-messages) Progress and interim messages
-- [ ] [A2](#a2-follow-ups-stick-to-the-thread) Follow-ups stick to the thread
-- [ ] [A4](#a4-tags-in-a-channel-open-a-thread) Tags in a channel open a thread
-- [ ] [A5](#a5-stop) Stop
-- [ ] [A6](#a6-typed-wakeups) Typed wakeups
-- [ ] [A7](#a7-runner-contract-and-presets) Runner contract and presets
+- [x] [A1](#a1-progress-and-interim-messages) Progress and interim messages
+- [x] [A2](#a2-follow-ups-stick-to-the-thread) Follow-ups stick to the thread
+- [x] [A4](#a4-tags-in-a-channel-open-a-thread) Tags in a channel open a thread
+- [x] [A5](#a5-stop) Stop
+- [x] [A6](#a6-typed-wakeups) Typed wakeups
+- [x] [A7](#a7-runner-contract-and-presets) Runner contract and presets
 
 **Owns:** `replies.rs`, `external_agents.rs`, `external_events.rs`,
 `external_execution.rs`, `mcp/replies.rs`, `mcp/agents.rs`,

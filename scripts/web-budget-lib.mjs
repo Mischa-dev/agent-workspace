@@ -12,7 +12,10 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // the budget moved to per-chunk limits (October 2026). The app shell (command
   // menu, shortcuts, toasts with Undo, tab titles and badges, live task
   // patches) brings it to 423,687 / 130,474; Markdown loads with its routes.
-  initialJavascriptRawBytes: 420 * 1024,
+  // Tasks at scale (W3) brought it to 429,938 / 132,369, and the settings area
+  // (W8: Settings in the rail and the command menu, the account's saved theme,
+  // settings links) to 431,560: its pages, sign-in and icons load lazily.
+  initialJavascriptRawBytes: 424 * 1024,
   initialJavascriptGzipBytes: 132 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
@@ -21,8 +24,11 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   initialCssRawBytes: 112 * 1024,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
   // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
-  chunkJavascriptRawBytes: 48 * 1024,
-  chunkJavascriptGzipBytes: 16 * 1024,
+  // Tasks at scale (W3) made the task list page (list, board, filters, bulk
+  // edits) and the task panel the largest lazy routes: 54,755 raw / 17,390
+  // gzip and 54,619 / 15,346 bytes.
+  chunkJavascriptRawBytes: 56 * 1024,
+  chunkJavascriptGzipBytes: 18 * 1024,
   // Any stylesheet a lazy chunk loads.
   chunkCssRawBytes: 32 * 1024,
 })

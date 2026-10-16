@@ -8,6 +8,7 @@ import {
   continueConversation,
   getConversationTimeline,
   retryReplyRequest,
+  stopReplyRequest,
   sendConversationMessage,
 } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
@@ -322,6 +323,7 @@ export function DirectConversationPage() {
                 {entry.message.removed ? null : (
                   <ReplyStatusList
                     onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                    onStop={page?.capabilities.sendMessage ? (requestId) => stopReplyRequest(requestId).then(() => timeline.refetch()) : undefined}
                     requests={requestsByMessage.get(entry.message.id) ?? []}
                   />
                 )}

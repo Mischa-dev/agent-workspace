@@ -674,7 +674,10 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     assert_eq!(entries[1]["text"], "Moved from Backlog to Ready");
     assert_eq!(entries[1]["via"], "Codex");
     assert_eq!(entries[2]["changedFields"], json!(["description"]));
-    assert_eq!(entries[2]["text"], "Changed description");
+    assert_eq!(
+        entries[2]["text"],
+        "Edited the description:\n+Works with no network"
+    );
     assert!(entries[2].get("via").is_none(), "{entries}");
     assert_eq!(entries[3]["fromStatus"], "Ready");
     assert_eq!(entries[3]["toStatus"], "In Progress");

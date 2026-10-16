@@ -56,6 +56,7 @@ export function ProjectSidebar({
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
         <SidebarLink icon="work" label="Work items" onNavigate={onNavigate} to={`${base}/work-items`} />
+        <SidebarLink icon="checklist" label="Milestones" onNavigate={onNavigate} to={`${base}/milestones`} />
         <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
         <SidebarLink icon="check" label="Decisions" onNavigate={onNavigate} to={`${base}/decisions`} />
         <SidebarLink icon="search" label="Search" onNavigate={onNavigate} to={`/search?projectId=${encodeURIComponent(project.id)}`} />

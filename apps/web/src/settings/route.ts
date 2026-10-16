@@ -13,6 +13,7 @@ const LEGACY_PROJECT_TABS: Record<string, string> = {
   members: 'members',
   agents: 'agents',
   codex: 'codex-runs',
+  workflow: 'workflow',
   repositories: 'repositories',
   github: 'repositories',
 }

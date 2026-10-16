@@ -52,7 +52,10 @@ pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
 pub mod work_item_commands;
+pub mod work_item_history;
 pub mod work_item_labels;
+pub mod work_item_planning;
+pub mod work_item_workflow;
 pub mod work_items;
 pub mod workspace;
 
