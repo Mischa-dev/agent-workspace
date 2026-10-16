@@ -144,6 +144,7 @@ CREATE UNIQUE INDEX work_item_relations_pair_unique
 CREATE UNIQUE INDEX work_item_relations_one_original
     ON work_item_relations (work_item_id) WHERE kind = 'duplicates';
 CREATE INDEX work_item_relations_other ON work_item_relations (other_work_item_id);
+CREATE INDEX work_item_relations_task ON work_item_relations (work_item_id);
 
 CREATE TRIGGER work_item_relations_same_workspace
 BEFORE INSERT OR UPDATE ON work_item_relations
