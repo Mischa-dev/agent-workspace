@@ -22,6 +22,7 @@ import {
   type AccountStatus,
   type Harness,
   type LoginCeremony,
+  type ModelOverrides,
   type ProviderAccount,
   type RunSettings,
 } from './api'
@@ -434,7 +435,7 @@ function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: str
       current?.map((entry) => (entry.kind === updated.kind ? updated : entry)),
     )
   const edit = useMutation({
-    mutationFn: ({ modelId, change }: { modelId: string; change: { hidden?: boolean; isDefault?: boolean } }) =>
+    mutationFn: ({ modelId, change }: { modelId: string; change: ModelOverrides }) =>
       saveModel(projectId, harness.kind, modelId, change, crypto.randomUUID()),
     onSuccess: saved,
   })
@@ -473,13 +474,13 @@ function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: str
               </span>
             </span>
             {!model.isDefault && !model.hidden ? (
-              <Button disabled={edit.isPending} onClick={() => edit.mutate({ modelId: model.id, change: { isDefault: true } })} size="sm" variant="ghost">
+              <Button disabled={edit.isPending} onClick={() => edit.mutate({ modelId: model.id, change: { ...model.overrides, isDefault: true } })} size="sm" variant="ghost">
                 Make default
               </Button>
             ) : null}
             <Button
               disabled={edit.isPending || (model.isDefault && !model.hidden)}
-              onClick={() => edit.mutate({ modelId: model.id, change: { hidden: !model.hidden } })}
+              onClick={() => edit.mutate({ modelId: model.id, change: { ...model.overrides, hidden: !model.hidden } })}
               size="sm"
               variant="ghost"
             >

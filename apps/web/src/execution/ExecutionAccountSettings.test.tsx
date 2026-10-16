@@ -120,13 +120,18 @@ describe('ExecutionAccountSettings', () => {
     expect(screen.getByLabelText('Model')).toHaveTextContent('Demo large')
   })
 
-  it('lets a workspace admin hide a model from everyone', async () => {
+  it('lets a workspace admin hide a model from everyone, keeping its other edits', async () => {
+    const edited = () => {
+      const value = harness({ canEditCatalog: true })
+      value.catalog.models[0] = { ...value.catalog.models[0], edited: true, overrides: { contextWindow: 64_000 } }
+      return value
+    }
     stubFetch((method, path, body) => {
-      if (path === `${base}/harnesses`) return { harnesses: [harness({ canEditCatalog: true })] }
+      if (path === `${base}/harnesses`) return { harnesses: [edited()] }
       if (path === `${base}/provider-accounts`) return { accounts: [] }
       if (path === `${base}/harnesses/demo/models/demo-small` && method === 'PUT') {
-        expect(body).toEqual({ hidden: true })
-        const updated = harness({ canEditCatalog: true })
+        expect(body).toEqual({ contextWindow: 64_000, hidden: true })
+        const updated = edited()
         updated.catalog.models[0] = { ...updated.catalog.models[0], hidden: true }
         return updated
       }

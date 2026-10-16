@@ -111,8 +111,20 @@ pub async fn catalog(
             overrides,
         });
     }
-    // Exactly one default when there is any model at all.
-    if !models.iter().any(|model| model.model.is_default)
+    // Exactly one default when there is any model at all: one a person chose
+    // wins over the harness's, and among several the first one counts.
+    let chosen = models
+        .iter()
+        .position(|model| model.overrides.is_default == Some(true) && !model.model.hidden)
+        .or_else(|| {
+            models
+                .iter()
+                .position(|model| model.model.is_default && !model.model.hidden)
+        });
+    for (index, model) in models.iter_mut().enumerate() {
+        model.model.is_default = Some(index) == chosen;
+    }
+    if chosen.is_none()
         && let Some(first) = models.iter_mut().find(|model| !model.model.hidden)
     {
         first.model.is_default = true;
@@ -246,8 +258,31 @@ pub async fn save_overrides(
     .bind(adapter_kind)
     .fetch_one(pool)
     .await?;
+    let choose_default = overrides.is_default == Some(true);
     let overrides = serde_json::to_value(overrides)
         .map_err(|_| AppError::Internal("serialize catalog overrides"))?;
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("harness_models:{organization_id}:{adapter_kind}"))
+        .execute(&mut *transaction)
+        .await?;
+    if choose_default {
+        // A new default replaces whichever model a person chose before.
+        sqlx::query(
+            r#"
+            UPDATE harness_models
+               SET overrides = overrides - 'isDefault', updated_at = now(),
+                   version = version + 1
+             WHERE organization_id = $1 AND adapter_kind = $2 AND model_id <> $3
+               AND overrides ? 'isDefault'
+            "#,
+        )
+        .bind(organization_id)
+        .bind(adapter_kind)
+        .bind(model_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     let saved = sqlx::query(
         r#"
         INSERT INTO harness_models (
@@ -274,7 +309,7 @@ pub async fn save_overrides(
     .bind(i32::try_from(count).unwrap_or(i32::MAX))
     .bind(actor_id)
     .bind(usize::try_from(count).unwrap_or(usize::MAX) < MAX_CATALOG_MODELS)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await?;
     if saved.rows_affected() == 0 {
         return Err(AppError::Conflict(
@@ -282,6 +317,7 @@ pub async fn save_overrides(
             "the catalog is full; hide or remove a model first",
         ));
     }
+    transaction.commit().await?;
     Ok(())
 }
 

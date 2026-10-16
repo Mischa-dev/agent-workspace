@@ -338,6 +338,34 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         .and_then(|list| list.iter().find(|harness| harness["kind"] == "demo"))
         .expect("demo harness listed");
     assert_eq!(demo["canEditCatalog"], false);
+    // Choosing a default replaces the previous choice: one default at a time.
+    for (chosen, key) in [
+        ("demo-small", "default-small"),
+        ("demo-large", "default-large"),
+    ] {
+        let path = format!(
+            "/api/v1/projects/{}/harnesses/demo/models/{chosen}",
+            seed.project_id
+        );
+        let saved = send(
+            &application,
+            owner,
+            "PUT",
+            &path,
+            key,
+            json!({"isDefault": true}),
+        )
+        .await;
+        assert_eq!(saved.0, StatusCode::OK, "{}", saved.1);
+        let defaults = saved.2["catalog"]["models"]
+            .as_array()
+            .expect("catalog models")
+            .iter()
+            .filter(|model| model["isDefault"] == true)
+            .map(|model| model["id"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(defaults, vec![json!(chosen)]);
+    }
     let hidden = send(
         &application,
         owner,
@@ -359,6 +387,21 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     )
     .await;
     assert_eq!(refused.0, StatusCode::BAD_REQUEST, "{}", refused.1);
+
+    // Signing out sticks, even though it stops the account's harness sessions.
+    let signed_out = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{account}/logout"),
+        "sign-out",
+        json!({}),
+    )
+    .await;
+    assert!(signed_out.0.is_success(), "sign out: {}", signed_out.1);
+    let status = send_get(&application, owner, &account).await;
+    assert_eq!(status.0, StatusCode::OK, "{}", status.1);
+    assert_ne!(status.2["accountState"], "authenticated");
 
     supervisors.shutdown_all().await;
     pool.close().await;

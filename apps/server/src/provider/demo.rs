@@ -261,8 +261,11 @@ impl HarnessAdapter for DemoHarness {
     }
 
     fn shutdown_account(&self, account_id: Uuid) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        if let Some(account) = lock(&self.0.accounts).remove(&account_id) {
+        // Stops the account's sessions; its sign-in state stays, as a real
+        // harness keeps it on disk.
+        if let Some(account) = lock(&self.0.accounts).get_mut(&account_id) {
             account.stopping.store(true, Ordering::Release);
+            account.stopping = Default::default();
         }
         Box::pin(async {})
     }
