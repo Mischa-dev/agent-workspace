@@ -4,26 +4,56 @@ use agent_workspace_server::{
     AppState, config::AppConfig, domain::allocate_conversation_sequence, rate_limit::RateLimiters,
     realtime::RealtimeHub, recovery, seed::dev_seed,
 };
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{Executor, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 /// sqlx accepts two files with the same version at compile time, and the live
 /// server runs unmerged branches: a second 0046 would only show up as a
-/// startup failure there ("previously applied but has been modified"). Every
-/// migration takes the next number, with no duplicates and no gaps.
+/// startup failure there ("previously applied but has been modified").
+/// Numbered migrations run 1 to 0054 with no gaps. Every later one is named by
+/// UTC timestamp (`20261020143000_settings.sql`), so branches that each add
+/// one merge in either order: sqlx sorts them after 0054 and applies any
+/// version it hasn't run, whichever merged first.
 #[test]
-fn migration_versions_are_unique_and_contiguous() {
+fn migration_versions_are_unique_and_new_ones_are_timestamps() {
+    const LAST_NUMBERED: i64 = 54;
     let versions: Vec<i64> = sqlx::migrate!("./migrations")
         .iter()
         .filter(|migration| !migration.migration_type.is_down_migration())
         .map(|migration| migration.version)
         .collect();
-    let expected: Vec<i64> =
-        (1..=i64::try_from(versions.len()).expect("migration count")).collect();
+    let numbered: Vec<i64> = versions
+        .iter()
+        .copied()
+        .filter(|version| *version <= LAST_NUMBERED)
+        .collect();
     assert_eq!(
-        versions, expected,
-        "migration versions must run 1, 2, 3, ... with no duplicates or gaps; check `ls apps/server/migrations` for the next free number"
+        numbered,
+        (1..=LAST_NUMBERED).collect::<Vec<_>>(),
+        "migrations 0001 to 0054 must all exist, once each"
     );
+    let mut timestamps = versions
+        .iter()
+        .copied()
+        .filter(|version| *version > LAST_NUMBERED)
+        .collect::<Vec<_>>();
+    for version in &timestamps {
+        let text = version.to_string();
+        let field = |at: usize| text[at..at + 2].parse::<u32>().expect("digits");
+        assert!(
+            text.len() == 14
+                && (2026..2100).contains(&(version / 10_000_000_000))
+                && (1..=12).contains(&field(4))
+                && (1..=31).contains(&field(6))
+                && field(8) < 24
+                && field(10) < 60
+                && field(12) < 60,
+            "migration {version}: name new migrations by UTC timestamp, such as 20261020143000_settings.sql"
+        );
+    }
+    let count = timestamps.len();
+    timestamps.dedup();
+    assert_eq!(timestamps.len(), count, "two migrations share a timestamp");
 }
 
 #[tokio::test]
@@ -32,8 +62,30 @@ async fn walking_skeleton_schema_enforces_core_invariants() {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return;
     };
+    // Its own schema, so the test runs again on the same database (a cloud
+    // session keeps one) without meeting the last run's seed.
+    let schema = format!("m0_database_{}", Uuid::now_v7().simple());
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect to PostgreSQL");
+    admin
+        .execute(format!("CREATE SCHEMA {schema}").as_str())
+        .await
+        .expect("create schema");
     let pool = PgPoolOptions::new()
         .max_connections(4)
+        .after_connect(move |connection, _| {
+            let schema = schema.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(schema)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&database_url)
         .await
         .expect("connect to PostgreSQL");
