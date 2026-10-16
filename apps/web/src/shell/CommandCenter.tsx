@@ -45,7 +45,7 @@ function useSettled(value: string, delay = 150) {
 function useTaskResults(query: string, current: Project | null) {
   const settled = useSettled(query.trim())
   const key = parseTaskKey(settled)
-  const { project: keyProject } = useProjectByKey(key?.projectKey ?? null)
+  const { project: keyProject } = useProjectByKey(key?.projectKey ?? null, current?.id)
   const target = keyProject ?? current
   const enabled = Boolean(target && settled.length >= 2)
   const results = useQuery({

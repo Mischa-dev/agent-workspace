@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 
@@ -5,7 +6,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import { parseTaskKey } from '../shell/shortcuts'
 import { useProjectByKey } from '../shell/useProjectByKey'
-import { Button, EmptyState, PageSkeleton } from '../ui'
+import { Button, EmptyState, ErrorState, PageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 
 /** `/AWD-12` opens task 12 of the Project whose key is AWD. */
@@ -14,7 +15,10 @@ export function TaskKeyRedirect() {
   const navigate = useNavigate()
   const { taskKey = '' } = useParams()
   const parsed = parseTaskKey(taskKey)
-  const { project, pending: projectPending } = useProjectByKey(parsed?.projectKey ?? null)
+  // Keys repeat across organizations: when they do, the person picks one.
+  const [chosenId, setChosenId] = useState<string | null>(null)
+  const byKey = useProjectByKey(parsed?.projectKey ?? null, chosenId)
+  const { project } = byKey
   const lookup = useQuery({
     queryKey: ['project', project?.id ?? '', 'task-key', parsed?.key ?? ''],
     queryFn: async () => {
@@ -28,12 +32,42 @@ export function TaskKeyRedirect() {
 
   if (lookup.data) return <Navigate replace to={lookup.data.href} />
 
-  const loading = Boolean(parsed) && (projectPending || (Boolean(project) && lookup.isPending))
+  const loading = Boolean(parsed) && (byKey.pending || (Boolean(project) && lookup.isPending))
+  const failed = Boolean(parsed) && !loading && Boolean(byKey.error || lookup.isError)
+  const choosing = Boolean(parsed) && !loading && !failed && !project && byKey.matches.length > 1
   return (
     <AppShell mainClassName="aw-main--page" project={project} user={session.user}>
-      <div className="aw-page" role={loading ? undefined : 'alert'}>
+      <div className="aw-page" role={loading || failed ? undefined : 'alert'}>
         {loading ? (
           <PageSkeleton label={`Opening ${parsed?.key ?? 'task'}`} />
+        ) : failed ? (
+          <ErrorState
+            action={
+              <Button
+                onClick={() => {
+                  byKey.retry()
+                  if (project) void lookup.refetch()
+                }}
+                variant="primary"
+              >
+                Try again
+              </Button>
+            }
+            title={`Couldn’t open ${parsed?.key}`}
+          >
+            Check your connection and try again.
+          </ErrorState>
+        ) : choosing ? (
+          <EmptyState icon="search" title={`Which ${parsed?.projectKey} Project?`}>
+            <p>More than one Project you can see uses this key.</p>
+            <div className="aw-stack">
+              {byKey.matches.map((match) => (
+                <Button key={match.id} onClick={() => setChosenId(match.id)}>
+                  {`Open ${parsed?.key} in ${match.name}`}
+                </Button>
+              ))}
+            </div>
+          </EmptyState>
         ) : (
           <EmptyState
             action={
