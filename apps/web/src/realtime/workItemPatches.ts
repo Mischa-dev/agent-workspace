@@ -131,7 +131,10 @@ export function patchList(
   // Only the first page knows where newer tasks go; later pages refetch.
   if (filters.cursor) return 'refetch'
   const last = list.items.at(-1)
-  if (list.nextCursor !== null && last && card.number < last.number) return 'unchanged'
+  if (list.nextCursor !== null) {
+    // Belongs on a later page, or pushes this page's last task onto one.
+    return last && card.number < last.number ? 'unchanged' : 'refetch'
+  }
   const at = list.items.findIndex((item) => item.number < card.number)
   const items = [...list.items]
   items.splice(at < 0 ? items.length : at, 0, card)
@@ -191,6 +194,8 @@ export function patchBoard(
     return 'refetch'
   }
   if (source && source.status.id !== column.status.id && source.hasMore) return 'refetch'
+  // A card joining a long column pushes its last loaded card past the cutoff.
+  if (column.hasMore && source?.status.id !== column.status.id) return 'refetch'
   column.items = [...items.slice(0, at), card, ...items.slice(at)]
   return { data: { columns } }
 }

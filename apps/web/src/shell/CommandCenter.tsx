@@ -48,7 +48,7 @@ function useTaskResults(query: string, current: Project | null) {
   const { project: keyProject } = useProjectByKey(key?.projectKey ?? null)
   const target = keyProject ?? current
   const enabled = Boolean(target && settled.length >= 2)
-  return useQuery({
+  const results = useQuery({
     queryKey: ['project', target?.id ?? '', 'command-menu', 'tasks', settled],
     queryFn: async () => {
       if (!target) return []
@@ -59,6 +59,8 @@ function useTaskResults(query: string, current: Project | null) {
     staleTime: 15_000,
     retry: false,
   })
+  // While the text is still settling, the results answer older text: hide them.
+  return { data: settled === query.trim() ? results.data : undefined, isFetching: results.isFetching }
 }
 
 /**

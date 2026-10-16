@@ -169,6 +169,16 @@ describe('work item live patches', () => {
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(false)
     expect(queryClient.getQueryData(queryKeys.workItem(projectId, id(1)))).toMatchObject({ version: 2 })
   })
+  it('refetches a long page or column that gains a card', () => {
+    expect(patchList({ items: [card(3), card(1)], nextCursor: 'next' }, card(2), id(2), {})).toBe('refetch')
+    expect(patchList({ items: [card(5), card(4)], nextCursor: 'next' }, card(2), id(2), {})).toBe('unchanged')
+    const long = board()
+    long.columns[1].hasMore = true
+    expect(patchBoard(long, card(2, doing, 2), id(2), {
+      statusId: doing.id, archived: false, afterId: id(4), beforeId: id(5),
+    }, {})).toBe('refetch')
+  })
+
   it('refetches a wildcard search, which only the server can match', () => {
     const list: WorkItemListResponse = { items: [card(2)], nextCursor: null }
     expect(patchList(list, card(2, todo, 2), id(2), { q: '100%' })).toBe('refetch')
