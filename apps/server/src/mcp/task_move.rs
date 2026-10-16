@@ -284,6 +284,12 @@ pub(super) async fn task_move(
         let mut new_ids = std::collections::HashMap::new();
         for task in &tasks {
             let status_id = matching_status(&mut transaction, target_project_id, task).await?;
+            if status_id.is_none() {
+                notes.push(format!(
+                    "{target_key} has no status named {} and none in its group ({}), so {} starts in {target_key}'s default status.",
+                    task.status_name, task.status_category, task.key
+                ));
+            }
             let type_id = sqlx::query_scalar::<_, Uuid>(
                 "SELECT id FROM work_item_types WHERE project_id = $1 AND enabled AND lower(name) = lower($2)",
             )
@@ -456,13 +462,22 @@ pub(super) async fn task_move(
                  AND author.actor_id = comment.author_actor_id
                 WHERE comment.project_id = $1 AND comment.work_item_id = $2
                 ORDER BY comment.created_at, comment.id
+                LIMIT $3
                 "#,
             )
             .bind(source_project_id)
             .bind(task.id)
+            .bind(MAX_COMMENTS as i64)
             .fetch_all(&mut *transaction)
             .await?;
-            for comment in comments.iter().take(MAX_COMMENTS) {
+            let comment_count = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM work_item_comments WHERE project_id = $1 AND work_item_id = $2",
+            )
+            .bind(source_project_id)
+            .bind(task.id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            for comment in &comments {
                 let text = comment.plain_text.chars().take(MAX_QUOTED_CHARACTERS).collect::<String>();
                 let quoted = format!(
                     "{} wrote on {} (on {}):\n\n{}",
@@ -470,11 +485,10 @@ pub(super) async fn task_move(
                 );
                 add_comment(&mut transaction, &target_actor, new_id, &quoted, Notify::No).await?;
             }
-            if comments.len() > MAX_COMMENTS {
+            if comment_count > MAX_COMMENTS as i64 {
                 notes.push(format!(
                     "{} has {} comments; the first {MAX_COMMENTS} were carried over and the rest are on the original.",
-                    task.key,
-                    comments.len()
+                    task.key, comment_count
                 ));
             }
 

@@ -1068,6 +1068,10 @@ pub const MILESTONE_SELECT: &str = r#"
       ON status.project_id = item.project_id AND status.id = item.status_id
 "#;
 
+/// The most milestones a project has, archived ones included; every list
+/// shows them all.
+pub const MAX_MILESTONES: i64 = 500;
+
 pub async fn list_milestones(
     connection: &mut PgConnection,
     project_id: Uuid,
@@ -1079,10 +1083,11 @@ pub async fn list_milestones(
         GROUP BY milestone.id
         ORDER BY milestone.archived_at IS NOT NULL, milestone.target_date NULLS LAST,
                  lower(milestone.name), milestone.id
-        LIMIT 500"#
+        LIMIT $3"#
     ))
     .bind(project_id)
     .bind(include_archived)
+    .bind(MAX_MILESTONES)
     .fetch_all(&mut *connection)
     .await?)
 }
@@ -1145,6 +1150,20 @@ pub async fn create_milestone(
     .await?
     {
         return Ok((id, false));
+    }
+    // Lists show every milestone at once, so a project keeps at most that
+    // many rather than have some go missing from them.
+    let existing = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM project_milestones WHERE project_id = $1",
+    )
+    .bind(actor.project_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if existing >= MAX_MILESTONES {
+        return Err(AppError::Conflict(
+            "milestone",
+            "A project can have at most 500 milestones, archived ones included.",
+        ));
     }
     let id = Uuid::now_v7();
     sqlx::query(

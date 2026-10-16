@@ -807,6 +807,81 @@ pub(super) async fn page(
     })
 }
 
+/// The first page of every board column in one query: tasks ranked within
+/// their column in manual order. Each page and cursor is the one `page`
+/// returns for that column's own filters, so "load more" carries on from it.
+async fn first_pages(
+    pool: &PgPool,
+    project_id: Uuid,
+    filters: &Filters,
+    grouping: Grouping,
+    limit: i64,
+) -> Result<HashMap<String, Page>, AppError> {
+    let keys = ListSpec {
+        filters: filters.clone(),
+        sort: Sort::Manual,
+        grouping: None,
+    }
+    .keys();
+    let (group_key, _, _) = grouping.columns();
+    let key_array = keys
+        .iter()
+        .map(|key| format!("({})::text", key.expr))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let order = keys
+        .iter()
+        .map(|key| format!("{} {}", key.expr, if key.desc { "DESC" } else { "ASC" }))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT id, group_key, keys FROM (SELECT item.id, {group_key} AS group_key, \
+         ARRAY[{key_array}] AS keys, \
+         row_number() OVER (PARTITION BY {group_key} ORDER BY {order}) AS rank \
+         {BASE_FROM} {} WHERE item.project_id = ",
+        grouping.join()
+    ));
+    builder.push_bind(project_id);
+    filters.push_where(&mut builder);
+    builder.push(") ranked WHERE rank <= ");
+    builder.push_bind(limit + 1);
+    builder.push(" ORDER BY group_key, rank");
+    let rows = builder
+        .build_query_as::<(Uuid, Option<String>, Vec<String>)>()
+        .fetch_all(pool)
+        .await?;
+    let mut ranked: HashMap<String, Vec<(Uuid, Vec<String>)>> = HashMap::new();
+    for (id, key, keys) in rows {
+        ranked
+            .entry(key.unwrap_or_else(|| "none".into()))
+            .or_default()
+            .push((id, keys));
+    }
+    let mut pages = HashMap::with_capacity(ranked.len());
+    for (key, mut rows) in ranked {
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let fingerprint = ListSpec {
+            filters: filters.with_group(grouping, &key)?,
+            sort: Sort::Manual,
+            grouping: None,
+        }
+        .fingerprint(project_id);
+        let next_cursor = match (has_more, rows.last()) {
+            (true, Some((_, last))) => Some(encode_cursor(fingerprint, last.clone())?),
+            _ => None,
+        };
+        pages.insert(
+            key,
+            Page {
+                rows: rows.into_iter().map(|(id, _)| (id, None)).collect(),
+                next_cursor,
+            },
+        );
+    }
+    Ok(pages)
+}
+
 /// Rows strictly after `after` in the order of `keys`: the lexicographic
 /// comparison spelt out, since the directions can differ.
 fn push_after(builder: &mut QueryBuilder<'_, Postgres>, keys: &[Key], after: Vec<String>) {
@@ -1475,6 +1550,7 @@ pub(super) async fn get_work_item_board(
         columns
     };
 
+    let mut first = first_pages(&state.pool, project_id, &filters, grouping, limit).await?;
     let mut pages = Vec::with_capacity(columns.len());
     let mut all_rows = Vec::new();
     for (group, _) in &columns {
@@ -1483,14 +1559,10 @@ pub(super) async fn get_work_item_board(
             sort: Sort::Manual,
             grouping: None,
         };
-        let page = if group.count == 0 {
-            Page {
-                rows: Vec::new(),
-                next_cursor: None,
-            }
-        } else {
-            page(&state.pool, project_id, &spec, None, limit).await?
-        };
+        let page = first.remove(&group.key).unwrap_or(Page {
+            rows: Vec::new(),
+            next_cursor: None,
+        });
         all_rows.extend(page.rows.iter().cloned());
         let mut filter = spec.filters.to_params();
         filter.insert("sort".into(), "manual".into());
