@@ -892,6 +892,57 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .await
             .expect("opens after concurrent rotations");
     }
+
+    // The daily backup holds the one-rotation lock while it dumps, so a
+    // rotation waits and the dump never mixes old and new master keys.
+    let mut dump = setup.pool.acquire().await.expect("dump connection");
+    sqlx::query("SELECT pg_advisory_lock(470127786, 3)")
+        .execute(&mut *dump)
+        .await
+        .expect("backup takes the rotation lock");
+    let before_dump =
+        sqlx::query_scalar::<_, String>("SELECT DISTINCT master_key_id FROM secrets ORDER BY 1")
+            .fetch_all(&setup.pool)
+            .await
+            .expect("keys before");
+    let rotation = tokio::spawn({
+        let pool = setup.pool.clone();
+        let config = setup.state.config.clone();
+        async move { secrets::rotate_master_key(&pool, &config).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!rotation.is_finished(), "the rotation waits for the dump");
+    assert_eq!(
+        secrets::read_keyring(
+            setup
+                .state
+                .config
+                .secrets_key_path
+                .as_deref()
+                .expect("key path"),
+        )
+        .expect("keyring")
+        .key_ids(),
+        last.key_ids(),
+        "the keyring is untouched while the dump runs"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT DISTINCT master_key_id FROM secrets ORDER BY 1")
+            .fetch_all(&setup.pool)
+            .await
+            .expect("keys during"),
+        before_dump,
+        "no secret is re-sealed while the dump runs"
+    );
+    sqlx::query("SELECT pg_advisory_unlock(470127786, 3)")
+        .execute(&mut *dump)
+        .await
+        .expect("dump finishes");
+    drop(dump);
+    rotation
+        .await
+        .expect("join")
+        .expect("rotation after the dump");
 }
 
 /// A person who owns another workspace, made directly (bootstrap only

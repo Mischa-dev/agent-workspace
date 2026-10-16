@@ -69,7 +69,9 @@ All in `deploy/redhat/`:
   the daily backup, then the key backup again (so a key rotated during the
   dump is off-host too), attempting each step even when another fails.
 - `agent-workspace-backup`: the daily backup. It refuses to run when the
-  database and key recipient files share a recipient.
+  database and key recipient files share a recipient. It holds the key
+  rotation lock while it dumps, so a dump is wholly before or after a
+  `secret-key-rotate` and one of the key sets around it opens it.
 - `agent-workspace-backup-key`: the secrets key backup.
 - `agent-workspace-restore-drill`: the restore drill.
 - `agent-workspace-backup-lib.sh`: shared helpers, including the transport.

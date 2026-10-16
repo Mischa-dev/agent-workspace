@@ -58,7 +58,9 @@ pub const MAX_SECRET_BYTES: usize = 64 * 1024;
 /// Secret writes hold this advisory lock shared; key rotation takes it
 /// exclusively while it retires old master keys.
 const ROTATION_LOCK: (i32, i32) = (470127786, 2);
-/// Held for a whole rotation, so two rotations never interleave.
+/// Held for a whole rotation, so two rotations never interleave. The daily
+/// backup (deploy/redhat/agent-workspace-backup) holds it during the dump,
+/// so a dump never catches a rotation halfway.
 const ONE_ROTATION_LOCK: (i32, i32) = (470127786, 3);
 
 // ---------------------------------------------------------------------------

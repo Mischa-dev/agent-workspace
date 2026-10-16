@@ -86,9 +86,28 @@ migration_version="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -
   -v ON_ERROR_STOP=1 -c 'SELECT coalesce(max(version), 0) FROM _sqlx_migrations')"
 [[ "${migration_version}" =~ ^[0-9]+$ ]] || die "could not read the migration version"
 
+# A master key rotation re-seals secrets in batches, so a dump taken while one
+# runs could hold secrets under both the old and the new key, and no single
+# backed-up keyring would open it. The dump holds the server's one-rotation
+# lock (secrets.rs ONE_ROTATION_LOCK) on a session of its own, so it sees the
+# secrets entirely before or entirely after a rotation; the key backups on
+# either side of it hold the matching keyring.
+coproc rotation_lock {
+  PGDATABASE="${BACKUP_DATABASE}" exec "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1
+}
+printf '%s\n' "SELECT 'locked' FROM (SELECT pg_advisory_lock(470127786, 3)) AS held;" \
+  >&"${rotation_lock[1]}"
+IFS= read -r locked <&"${rotation_lock[0]}" || true
+[[ "${locked}" == locked ]] || die "could not take the key rotation lock"
+
 # The dump is streamed straight into age; no plaintext copy touches the disk.
 PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PG_DUMP}" --format=custom \
   | encrypt_stream "${BACKUP_AGE_RECIPIENTS_FILE}" "${work}/database.dump.age"
+# Closing the session releases the lock.
+lock_pid="${rotation_lock_PID:?}"
+lock_input="${rotation_lock[1]}"
+exec {lock_input}>&-
+wait "${lock_pid}" || true
 test -s "${work}/database.dump.age" || die "database dump is empty"
 log "database dump encrypted ($(stat -c %s "${work}/database.dump.age") bytes)"
 
