@@ -8,9 +8,13 @@ use chrono_tz::Tz;
 pub enum Cadence {
     Daily,
     /// 1 is Monday, 7 is Sunday.
-    Weekly { weekday: u8 },
+    Weekly {
+        weekday: u8,
+    },
     /// 1..=28, so every month has the day.
-    Monthly { day: u8 },
+    Monthly {
+        day: u8,
+    },
 }
 
 impl Cadence {
@@ -102,7 +106,10 @@ mod tests {
             resets_around(Cadence::Weekly { weekday: 1 }, 9 * 60, zone, now).expect("resets");
         // Monday 2026-10-19 09:00 CEST is 07:00 UTC.
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 10, 19, 7, 0, 0).unwrap());
-        assert_eq!(previous, Utc.with_ymd_and_hms(2026, 10, 12, 7, 0, 0).unwrap());
+        assert_eq!(
+            previous,
+            Utc.with_ymd_and_hms(2026, 10, 12, 7, 0, 0).unwrap()
+        );
     }
 
     #[test]
@@ -111,7 +118,10 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 10, 31, 23, 30, 0).unwrap();
         let (next, previous) = resets_around(Cadence::Daily, 23 * 60, zone, now).expect("daily");
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 11, 1, 23, 0, 0).unwrap());
-        assert_eq!(previous, Utc.with_ymd_and_hms(2026, 10, 31, 23, 0, 0).unwrap());
+        assert_eq!(
+            previous,
+            Utc.with_ymd_and_hms(2026, 10, 31, 23, 0, 0).unwrap()
+        );
         let (next, _) = resets_around(Cadence::Monthly { day: 1 }, 0, zone, now).expect("monthly");
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap());
     }

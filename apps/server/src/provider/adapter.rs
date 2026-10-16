@@ -109,7 +109,9 @@ pub enum HarnessEvent {
     MessageDelta(String),
     ItemStarted(HarnessItem),
     ItemCompleted(HarnessItem),
-    TurnCompleted { completed: bool },
+    TurnCompleted {
+        completed: bool,
+    },
     Request(HarnessRequest),
     /// The harness reported fresh usage while running (U1). Sparse: windows
     /// it leaves out keep their last reading.

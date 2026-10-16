@@ -25,8 +25,7 @@ use super::{
         AccountHandle, AccountSummary, HarnessAdapter, HarnessAnswer, HarnessError, HarnessEvent,
         HarnessFuture, HarnessItem, HarnessRequest, HarnessSession, ItemKind, LoginKind,
         LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, RecoveredTurn, RequestKind,
-        ResetOutcome, UsageReport,
-        RequestOption,
+        RequestOption, ResetOutcome, UsageReport,
     },
     manifest::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,

@@ -1805,7 +1805,10 @@ mod tests {
             .map(|window| window.key.as_str())
             .collect::<Vec<_>>();
         keys.sort_unstable();
-        assert_eq!(keys, ["codex.primary", "codex.secondary", "othermodel.secondary"]);
+        assert_eq!(
+            keys,
+            ["codex.primary", "codex.secondary", "othermodel.secondary"]
+        );
         let weekly = report
             .windows
             .iter()

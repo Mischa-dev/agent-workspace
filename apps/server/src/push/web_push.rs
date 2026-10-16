@@ -43,10 +43,11 @@ pub struct Subscription<'a> {
 
 pub fn decode_key(value: &str) -> Option<Vec<u8>> {
     let trimmed = value.trim_end_matches('=');
-    URL_SAFE_NO_PAD
-        .decode(trimmed)
-        .ok()
-        .or_else(|| base64::engine::general_purpose::STANDARD_NO_PAD.decode(trimmed).ok())
+    URL_SAFE_NO_PAD.decode(trimmed).ok().or_else(|| {
+        base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(trimmed)
+            .ok()
+    })
 }
 
 pub fn valid_device_keys(p256dh: &[u8], auth: &[u8]) -> bool {
@@ -54,7 +55,13 @@ pub fn valid_device_keys(p256dh: &[u8], auth: &[u8]) -> bool {
         && p256dh[0] == 4
         && auth.len() == 16
         && PrivateKey::generate(&ECDH_P256).is_ok_and(|probe| {
-            agree(&probe, UnparsedPublicKey::new(&ECDH_P256, p256dh), (), |_| Ok(())).is_ok()
+            agree(
+                &probe,
+                UnparsedPublicKey::new(&ECDH_P256, p256dh),
+                (),
+                |_| Ok(()),
+            )
+            .is_ok()
         })
 }
 
@@ -66,7 +73,12 @@ impl KeyType for Length {
     }
 }
 
-fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8], length: usize) -> Result<Zeroizing<Vec<u8>>, WebPushError> {
+fn hkdf(
+    salt: &[u8],
+    ikm: &[u8],
+    info: &[u8],
+    length: usize,
+) -> Result<Zeroizing<Vec<u8>>, WebPushError> {
     let prk = Salt::new(HKDF_SHA256, salt).extract(ikm);
     let info = [info];
     let okm = prk
@@ -119,13 +131,20 @@ fn encrypt_with(
     let key = LessSafeKey::new(
         UnboundKey::new(&AES_128_GCM, &content_key).map_err(|_| WebPushError::Crypto)?,
     );
-    let nonce: [u8; 12] = nonce.as_slice().try_into().map_err(|_| WebPushError::Crypto)?;
+    let nonce: [u8; 12] = nonce
+        .as_slice()
+        .try_into()
+        .map_err(|_| WebPushError::Crypto)?;
     // One record: the payload, then the last-record delimiter.
     let mut record = Vec::with_capacity(payload.len() + 17);
     record.extend_from_slice(payload);
     record.push(2);
-    key.seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::empty(), &mut record)
-        .map_err(|_| WebPushError::Crypto)?;
+    key.seal_in_place_append_tag(
+        Nonce::assume_unique_for_key(nonce),
+        Aad::empty(),
+        &mut record,
+    )
+    .map_err(|_| WebPushError::Crypto)?;
     let mut body = Vec::with_capacity(16 + 4 + 1 + sender_public.len() + record.len());
     body.extend_from_slice(&salt);
     body.extend_from_slice(&RECORD_SIZE.to_be_bytes());
@@ -258,9 +277,8 @@ mod tests {
         let key = generate_vapid_key().expect("vapid key");
         let public = b64(&vapid_public_key(&key).expect("public key"));
         let endpoint = url::Url::parse("https://fcm.googleapis.com/fcm/send/abc").expect("url");
-        let header =
-            vapid_authorization(&key, &endpoint, "mailto:ops@example.com", 1_800_000_000)
-                .expect("authorization");
+        let header = vapid_authorization(&key, &endpoint, "mailto:ops@example.com", 1_800_000_000)
+            .expect("authorization");
         let token = header
             .strip_prefix("vapid t=")
             .and_then(|rest| rest.split(", k=").next())

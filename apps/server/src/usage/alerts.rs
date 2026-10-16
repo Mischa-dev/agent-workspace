@@ -158,7 +158,9 @@ pub(crate) async fn set_rule(
     {
         return Err(AppError::Validation("alert rule threshold"));
     }
-    if change.hours.is_some_and(|hours| !(1..=168).contains(&hours))
+    if change
+        .hours
+        .is_some_and(|hours| !(1..=168).contains(&hours))
         || change
             .percent
             .is_some_and(|percent| !(1..=100).contains(&percent))
@@ -224,7 +226,11 @@ pub fn candidates(
     credits: &[super::ResetCreditView],
     now: DateTime<Utc>,
 ) -> Vec<Candidate> {
-    let rule = |wanted: Rule| rules.iter().find(|view| view.rule == wanted && view.enabled);
+    let rule = |wanted: Rule| {
+        rules
+            .iter()
+            .find(|view| view.rule == wanted && view.enabled)
+    };
     let mut found = Vec::new();
     for window in windows {
         let phrase = window_phrase(account_name, window);
@@ -238,7 +244,10 @@ pub fn candidates(
             if at <= now + Duration::hours(hours) && unused_enough && !window.limit_reached {
                 let title = match window.unused_percent {
                     Some(unused) => {
-                        format!("{phrase} resets in {} · {unused}% unused", countdown(now, at))
+                        format!(
+                            "{phrase} resets in {} · {unused}% unused",
+                            countdown(now, at)
+                        )
                     }
                     None => format!("{phrase} resets in {}", countdown(now, at)),
                 };
@@ -270,7 +279,10 @@ pub fn candidates(
         } else if let (Some(view), Some(used)) = (rule(Rule::HighUsage), window.used_percent) {
             if i16::try_from(used).unwrap_or(100) >= view.percent.unwrap_or(90) {
                 let title = match resets {
-                    Some(at) => format!("{phrase} is {used}% used · resets in {}", countdown(now, at)),
+                    Some(at) => format!(
+                        "{phrase} is {used}% used · resets in {}",
+                        countdown(now, at)
+                    ),
                     None => format!("{phrase} is {used}% used"),
                 };
                 found.push(Candidate {
@@ -393,9 +405,13 @@ pub async fn evaluate(
         .execute(&mut *transaction)
         .await?;
         let preview = if candidate.rule == Rule::ResetSoon {
-            let ready =
-                ready::ready_tasks(&mut *transaction, account.owner_actor_id, account.id, Some(100))
-                    .await?;
+            let ready = ready::ready_tasks(
+                &mut *transaction,
+                account.owner_actor_id,
+                account.id,
+                Some(100),
+            )
+            .await?;
             match ready.tasks.len() {
                 0 => None,
                 1 => Some("1 ready task can use it.".to_owned()),
@@ -510,7 +526,10 @@ mod tests {
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, kind::RESET_SOON);
-        assert_eq!(found[0].title, "Codex weekly limit resets in 2 h · 38% unused");
+        assert_eq!(
+            found[0].title,
+            "Codex weekly limit resets in 2 h · 38% unused"
+        );
     }
 
     #[test]
@@ -585,7 +604,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             keys,
-            ["credit:a:available", "credit:b:expiring", "credit:c:available"]
+            [
+                "credit:a:available",
+                "credit:b:expiring",
+                "credit:c:available"
+            ]
         );
         assert_eq!(found[1].title, "Codex banked reset expires in 5 h");
     }

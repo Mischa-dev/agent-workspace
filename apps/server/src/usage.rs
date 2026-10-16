@@ -204,9 +204,7 @@ fn failure_category(error: &HarnessError) -> &'static str {
         HarnessError::ControlCapacity => "busy",
         HarnessError::ShuttingDown => "shutting_down",
         HarnessError::CircuitOpen => "circuit_open",
-        HarnessError::ConfigurationChanged | HarnessError::InvalidConfiguration => {
-            "configuration"
-        }
+        HarnessError::ConfigurationChanged | HarnessError::InvalidConfiguration => "configuration",
         HarnessError::Transport(_) => "transport",
         HarnessError::MissingResult(_) | HarnessError::InvalidResponse => "invalid_response",
         HarnessError::Unsupported(_) => "unsupported",
@@ -220,9 +218,9 @@ fn valid_window_key(key: &str) -> bool {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && key.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
-        })
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
 }
 
 fn bounded_text(value: Option<&str>, maximum: usize) -> Option<String> {
@@ -588,52 +586,51 @@ pub(crate) async fn windows_at<'e, E: PgExecutor<'e> + Copy>(
         .iter()
         .map(|row| row.window_key.split('.').next().unwrap_or_default())
         .collect::<BTreeSet<_>>();
-    let mut windows = rows
-        .iter()
-        .map(|row| {
-            let duration = row.duration_minutes.map(i64::from);
-            let mut label = window_label(duration);
-            if buckets.len() > 1 {
-                let bucket = row
-                    .limit_name
-                    .clone()
-                    .unwrap_or_else(|| row.window_key.split('.').next().unwrap_or("").to_owned());
-                label = format!("{bucket} {}", label.to_lowercase());
-            }
-            let (mut used, mut resets_at, mut reached, mut rolled) = (
-                Some(u16::try_from(row.used_percent).unwrap_or(100)),
-                row.resets_at,
-                row.limit_reached,
-                false,
-            );
-            if let Some(at) = row.resets_at
-                && at <= now
-                && row.read_at < at
-            {
-                rolled = true;
-                used = Some(0);
-                reached = false;
-                resets_at = duration.filter(|minutes| *minutes > 0).map(|minutes| {
-                    let length = Duration::minutes(minutes);
-                    let missed = (now - at).num_minutes() / minutes + 1;
-                    at + length * i32::try_from(missed).unwrap_or(1)
-                });
-            }
-            WindowView {
-                key: row.window_key.clone(),
-                label,
-                source: WindowSource::Reported,
-                schedule_id: None,
-                duration_minutes: duration,
-                used_percent: used,
-                unused_percent: used.map(|used| 100 - used.min(100)),
-                resets_at,
-                limit_reached: reached,
-                read_at: Some(row.read_at),
-                rolled_over: rolled,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut windows =
+        rows.iter()
+            .map(|row| {
+                let duration = row.duration_minutes.map(i64::from);
+                let mut label = window_label(duration);
+                if buckets.len() > 1 {
+                    let bucket = row.limit_name.clone().unwrap_or_else(|| {
+                        row.window_key.split('.').next().unwrap_or("").to_owned()
+                    });
+                    label = format!("{bucket} {}", label.to_lowercase());
+                }
+                let (mut used, mut resets_at, mut reached, mut rolled) = (
+                    Some(u16::try_from(row.used_percent).unwrap_or(100)),
+                    row.resets_at,
+                    row.limit_reached,
+                    false,
+                );
+                if let Some(at) = row.resets_at
+                    && at <= now
+                    && row.read_at < at
+                {
+                    rolled = true;
+                    used = Some(0);
+                    reached = false;
+                    resets_at = duration.filter(|minutes| *minutes > 0).map(|minutes| {
+                        let length = Duration::minutes(minutes);
+                        let missed = (now - at).num_minutes() / minutes + 1;
+                        at + length * i32::try_from(missed).unwrap_or(1)
+                    });
+                }
+                WindowView {
+                    key: row.window_key.clone(),
+                    label,
+                    source: WindowSource::Reported,
+                    schedule_id: None,
+                    duration_minutes: duration,
+                    used_percent: used,
+                    unused_percent: used.map(|used| 100 - used.min(100)),
+                    resets_at,
+                    limit_reached: reached,
+                    read_at: Some(row.read_at),
+                    rolled_over: rolled,
+                }
+            })
+            .collect::<Vec<_>>();
     let schedules = sqlx::query_as::<_, ScheduleRow>(
         r#"
         SELECT id, label, cadence, weekday, month_day, minute_of_day, time_zone
@@ -713,12 +710,17 @@ async fn account_view(
     let harness_name = state
         .supervisors
         .manifest(&account.adapter_kind)
-        .map_or_else(|| account.adapter_kind.clone(), |manifest| manifest.display_name.clone());
+        .map_or_else(
+            || account.adapter_kind.clone(),
+            |manifest| manifest.display_name.clone(),
+        );
     let reset_credits = usage.as_ref().and_then(|usage| {
-        usage.reset_credits_available.map(|available| ResetCreditsView {
-            available,
-            credits: stored_credits(&usage.reset_credits),
-        })
+        usage
+            .reset_credits_available
+            .map(|available| ResetCreditsView {
+                available,
+                credits: stored_credits(&usage.reset_credits),
+            })
     });
     Ok(AccountUsageView {
         account_id: account.id,
@@ -931,12 +933,11 @@ pub async fn create_schedule(
         .bind(account.id)
         .execute(&mut *transaction)
         .await?;
-    let count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM usage_schedules WHERE account_id = $1",
-    )
-    .bind(account.id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let count =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM usage_schedules WHERE account_id = $1")
+            .bind(account.id)
+            .fetch_one(&mut *transaction)
+            .await?;
     if count >= MAX_SCHEDULES_PER_ACCOUNT {
         return Err(AppError::Conflict("usage_schedule", "too many schedules"));
     }

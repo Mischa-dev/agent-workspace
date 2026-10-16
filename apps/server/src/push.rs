@@ -141,8 +141,14 @@ async fn vapid_key(
 ) -> Result<Zeroizing<Vec<u8>>, AppError> {
     let keys = keyring(state)?;
     let owner = SecretOwner::Workspace { organization_id };
-    if let Some(value) =
-        secrets::reveal_named(&state.pool, keys.as_ref(), owner, VAPID_SECRET, "push.vapid").await?
+    if let Some(value) = secrets::reveal_named(
+        &state.pool,
+        keys.as_ref(),
+        owner,
+        VAPID_SECRET,
+        "push.vapid",
+    )
+    .await?
     {
         return decode_vapid(&value);
     }

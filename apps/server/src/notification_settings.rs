@@ -52,7 +52,9 @@ impl Channel {
     }
 
     fn parse(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|channel| channel.as_str() == value)
+        Self::ALL
+            .into_iter()
+            .find(|channel| channel.as_str() == value)
     }
 }
 
@@ -234,7 +236,10 @@ impl QuietHours {
         if wait <= 0 {
             wait += 24 * 60;
         }
-        Some(now + chrono::Duration::minutes(wait) - chrono::Duration::seconds(i64::from(local.second())))
+        Some(
+            now + chrono::Duration::minutes(wait)
+                - chrono::Duration::seconds(i64::from(local.second())),
+        )
     }
 }
 
@@ -556,12 +561,11 @@ async fn set_mute_http(
         change.muted,
     )
     .await?;
-    let organization_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT organization_id FROM projects WHERE id = $1",
-    )
-    .bind(change.project_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let organization_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(change.project_id)
+            .fetch_one(&state.pool)
+            .await?;
     Ok(Json(
         read(&state.pool, principal.actor_id, organization_id).await?,
     ))

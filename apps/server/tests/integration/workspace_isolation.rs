@@ -101,6 +101,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/direct",
     "/api/v1/inbox",
     "/api/v1/inbox/summary",
+    "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
     "/api/v1/organizations/{organization_id}/audit-events",
     "/api/v1/organizations/{organization_id}/audit-events/facets",
@@ -149,9 +150,14 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
+    "/api/v1/push/config",
+    "/api/v1/push/subscriptions",
     "/api/v1/search",
     "/api/v1/settings/effective",
     "/api/v1/settings/registry",
+    "/api/v1/usage",
+    "/api/v1/usage/accounts/{account_id}",
+    "/api/v1/usage/accounts/{account_id}/ready-tasks",
 ];
 
 /// GET routes under `/api/v1` this suite deliberately doesn't call as plain
@@ -1124,6 +1130,59 @@ async fn build_workspace(
         assert!(status.is_success(), "{label} PUT {uri}: {status} {written}");
     }
 
+    // Usage and push (W9): a reported window, a reset schedule, a device
+    // and a muted group, each carrying the marker where it has text.
+    sqlx::query(
+        r#"
+        INSERT INTO usage_windows (
+            account_id, organization_id, window_key, limit_name, duration_minutes,
+            used_percent, resets_at
+        ) VALUES ($1, $2, 'codex.secondary', $3, 10080, 40, now() + interval '2 days')
+        "#,
+    )
+    .bind(provider_account)
+    .bind(organization)
+    .bind(format!("Codex{m}"))
+    .execute(pool)
+    .await
+    .expect("usage window");
+    let device = aws_lc_rs::agreement::PrivateKey::generate(&aws_lc_rs::agreement::ECDH_P256)
+        .expect("device key");
+    let device_public = device.compute_public_key().expect("device public key");
+    let b64 = |bytes: &[u8]| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    };
+    for (method, uri, body) in [
+        (
+            "POST",
+            format!("/api/v1/usage/accounts/{provider_account}/schedules"),
+            json!({"label": format!("Weekly{m}"), "cadence": "weekly", "weekday": 1,
+                   "minuteOfDay": 540, "timeZone": "UTC"}),
+        ),
+        (
+            "POST",
+            "/api/v1/push/subscriptions".to_owned(),
+            json!({
+                "endpoint": format!("https://fcm.googleapis.com/fcm/send/{tag}-device"),
+                "keys": {"p256dh": b64(device_public.as_ref()), "auth": b64(&[7_u8; 16])},
+                "label": format!("Phone{m}"),
+                "organizationId": organization,
+            }),
+        ),
+        (
+            "PUT",
+            "/api/v1/notification-settings/mutes".to_owned(),
+            json!({"projectId": project, "group": "runs", "muted": true}),
+        ),
+    ] {
+        let (status, written) = send(app, browser.request(method, &uri, None, body)).await;
+        assert!(
+            status.is_success(),
+            "{label} {method} {uri}: {status} {written}"
+        );
+    }
+
     World {
         marker,
         browser,
@@ -1357,6 +1416,63 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/inbox/summary",
             vec!["/api/v1/inbox/summary".to_owned()],
             vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/notification-settings",
+            vec![
+                "/api/v1/notification-settings".to_owned(),
+                format!(
+                    "/api/v1/notification-settings?organizationId={}",
+                    a.organization
+                ),
+            ],
+            vec![format!(
+                "/api/v1/notification-settings?organizationId={}",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/push/config",
+            vec!["/api/v1/push/config".to_owned()],
+            vec![format!(
+                "/api/v1/push/config?organizationId={}",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/push/subscriptions",
+            vec!["/api/v1/push/subscriptions".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/usage",
+            vec![
+                "/api/v1/usage".to_owned(),
+                format!("/api/v1/usage?organizationId={}", a.organization),
+            ],
+            vec![],
+            vec![format!("/api/v1/usage?organizationId={}", b.organization)],
+        ),
+        case(
+            "/api/v1/usage/accounts/{account_id}",
+            vec![format!("/api/v1/usage/accounts/{}", a.provider_account)],
+            vec![format!("/api/v1/usage/accounts/{}", b.provider_account)],
+            vec![],
+        ),
+        case(
+            "/api/v1/usage/accounts/{account_id}/ready-tasks",
+            vec![format!(
+                "/api/v1/usage/accounts/{}/ready-tasks",
+                a.provider_account
+            )],
+            vec![format!(
+                "/api/v1/usage/accounts/{}/ready-tasks",
+                b.provider_account
+            )],
             vec![],
         ),
         case(
@@ -1933,6 +2049,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "settings_get",
     "task_list",
     "task_open",
+    "usage_windows",
     "workflow_get",
 ];
 
@@ -1995,6 +2112,12 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("decision_list"),
         by_project("milestone_list"),
         by_project("settings_get"),
+        case(
+            "usage_windows",
+            vec![json!({})],
+            vec![json!({"accountId": b.provider_account})],
+            vec![],
+        ),
         case(
             "conversation_list",
             vec![

@@ -321,8 +321,8 @@ impl AppConfig {
                 ),
             });
         }
-        let push_contact = Some(optional(values, "PUSH_CONTACT", ""))
-            .filter(|contact| !contact.is_empty());
+        let push_contact =
+            Some(optional(values, "PUSH_CONTACT", "")).filter(|contact| !contact.is_empty());
         if push_contact.as_deref().is_some_and(|contact| {
             !(contact.starts_with("mailto:") || contact.starts_with("https://"))
                 || contact.len() > 200
