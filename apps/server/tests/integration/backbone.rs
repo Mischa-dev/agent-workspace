@@ -324,6 +324,64 @@ async fn a_job_whose_worker_died_runs_again_and_recurring_jobs_queue_their_next_
     assert_eq!(job_state(&setup.pool, id).await.0, "succeeded");
     assert_eq!(job_state(&setup.pool, id).await.1, 2);
 
+    // A job on its last attempt whose lease lapses after the dead-letter pass
+    // and before the claim is not run again. The trigger stands in for that
+    // moment by making the dead-letter pass miss this one row.
+    let last = created(
+        jobs::enqueue(&setup.pool, NewJob::new("test.lease").max_attempts(1))
+            .await
+            .expect("enqueue last attempt"),
+    );
+    sqlx::query(
+        r#"
+        UPDATE background_jobs
+        SET state = 'running', attempts = 1, lease_token = gen_random_uuid(),
+            lease_owner = 'gone', lease_expires_at = now() - interval '1 second'
+        WHERE id = $1
+        "#,
+    )
+    .bind(last)
+    .execute(&setup.pool)
+    .await
+    .expect("lapse last lease");
+    sqlx::query(&format!(
+        r#"
+        CREATE FUNCTION skip_dead_letter() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.id = '{last}' AND NEW.state = 'dead' THEN RETURN NULL; END IF;
+            RETURN NEW;
+        END $$
+        "#
+    ))
+    .execute(&setup.pool)
+    .await
+    .expect("create trigger function");
+    sqlx::query(
+        "CREATE TRIGGER skip_dead_letter BEFORE UPDATE ON background_jobs \
+         FOR EACH ROW EXECUTE FUNCTION skip_dead_letter()",
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("create trigger");
+    assert_eq!(
+        jobs::run_due(&setup.state, &registry, &options())
+            .await
+            .expect("claim past the cap"),
+        0
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(job_state(&setup.pool, last).await.0, "running");
+    assert_eq!(job_state(&setup.pool, last).await.1, 1);
+    sqlx::query("DROP TRIGGER skip_dead_letter ON background_jobs")
+        .execute(&setup.pool)
+        .await
+        .expect("drop trigger");
+    jobs::run_due(&setup.state, &registry, &options())
+        .await
+        .expect("dead-letter pass");
+    assert_eq!(job_state(&setup.pool, last).await.0, "dead");
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+
     // The real worker loop picks up recurring system jobs and stops cleanly.
     let mut recurring = JobRegistry::new();
     let ticks = Arc::new(AtomicUsize::new(0));

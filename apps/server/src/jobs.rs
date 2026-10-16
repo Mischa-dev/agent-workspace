@@ -530,7 +530,9 @@ async fn claim(
     limit: usize,
     options: &WorkerOptions,
 ) -> Result<Vec<Job>, AppError> {
-    // A job whose lease ran out on its last attempt is dead, not retried.
+    // A job whose lease ran out on its last attempt is dead, not retried. The
+    // claim below also skips such rows, so one whose lease expires between the
+    // two statements waits for the next pass instead of running again.
     let expired = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         UPDATE background_jobs
@@ -555,7 +557,8 @@ async fn claim(
             SELECT id FROM background_jobs
             WHERE kind = ANY($1)
               AND ((state = 'queued' AND run_at <= now())
-                   OR (state = 'running' AND lease_expires_at < now()))
+                   OR (state = 'running' AND lease_expires_at < now()
+                       AND attempts < max_attempts))
             ORDER BY priority DESC, run_at, id
             LIMIT $2
             FOR UPDATE SKIP LOCKED
