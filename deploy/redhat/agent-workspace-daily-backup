@@ -1,8 +1,11 @@
 #!/usr/bin/bash
 # The daily backup unit's one command: back up the secrets key, then the
-# database and data. Each is attempted even when the other fails, so a broken
-# database backup never leaves a freshly rotated key only on this host. Exits
-# nonzero if either failed.
+# database and data, then the key again. Each step is attempted even when an
+# earlier one fails, so a broken database backup never leaves a freshly
+# rotated key only on this host. The second key pass covers a rotation that
+# lands while the dump runs: the dump may hold secrets under the new key, and
+# that pass uploads it (it does nothing when the key didn't change). Exits
+# nonzero if any step failed.
 #
 # usage: agent-workspace-daily-backup [--config FILE]
 set -uo pipefail
@@ -11,4 +14,5 @@ script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 status=0
 "${script_dir}/agent-workspace-backup-key" "$@" || status=1
 "${script_dir}/agent-workspace-backup" "$@" || status=1
+"${script_dir}/agent-workspace-backup-key" "$@" || status=1
 exit "${status}"

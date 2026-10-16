@@ -65,8 +65,9 @@ The newest `BACKUP_KEEP_MIN` sets (default 3) are always kept on both sides.
 
 All in `deploy/redhat/`:
 
-- `agent-workspace-daily-backup`: what the unit runs. It runs the key backup
-  and then the daily backup, attempting both even when one fails.
+- `agent-workspace-daily-backup`: what the unit runs. It runs the key backup,
+  the daily backup, then the key backup again (so a key rotated during the
+  dump is off-host too), attempting each step even when another fails.
 - `agent-workspace-backup`: the daily backup. It refuses to run when the
   database and key recipient files share a recipient.
 - `agent-workspace-backup-key`: the secrets key backup.
