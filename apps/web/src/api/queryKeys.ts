@@ -8,6 +8,11 @@ export const queryKeys = {
     ['project', projectId, 'execution-profiles'] as const,
   executionProfileAccount: (projectId: string, profileId: string) =>
     ['project', projectId, 'execution-profile', profileId, 'account'] as const,
+  harnesses: (projectId: string) => ['project', projectId, 'harnesses'] as const,
+  providerAccounts: (projectId: string) =>
+    ['project', projectId, 'provider-accounts'] as const,
+  providerAccountStatus: (projectId: string, accountId: string) =>
+    ['project', projectId, 'provider-accounts', accountId, 'status'] as const,
   repositories: (projectId: string) =>
     ['project', projectId, 'repositories'] as const,
   members: (projectId: string) => ['project', projectId, 'members'] as const,

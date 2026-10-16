@@ -359,6 +359,9 @@ export function WorkItemBoard({
     }
     if (event.key === ' ' && canMove && card.capabilities.edit && !card.archivedAt) {
       event.preventDefault()
+      // React commits the pick-up while this event is still bubbling, so the
+      // window listener for a held card would see this same Space and drop it.
+      event.stopPropagation()
       const { columnKey } = splitDragId(dragId)
       const column = columns.find((entry) => entry.key === columnKey)
       const laneKey = state.lanes === 'none' ? 'all' : laneOf(card, state.lanes).key

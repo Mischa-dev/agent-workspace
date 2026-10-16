@@ -786,7 +786,7 @@ async fn start_run_with_repository(
     .await
 }
 
-async fn start_run_body(
+pub(super) async fn start_run_body(
     application: &axum::Router,
     cookie: &str,
     csrf: &str,
@@ -817,7 +817,7 @@ async fn start_run_body(
     .await
 }
 
-async fn interrupt(
+pub(super) async fn interrupt(
     application: &axum::Router,
     cookie: &str,
     csrf: &str,
@@ -936,7 +936,7 @@ async fn acknowledge_failure(
     .await
 }
 
-async fn wait_for_state(pool: &PgPool, run_id: Uuid, expected: &str) {
+pub(super) async fn wait_for_state(pool: &PgPool, run_id: Uuid, expected: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
@@ -976,7 +976,7 @@ async fn wait_for_claim_release(pool: &PgPool, run_id: Uuid) {
     }
 }
 
-fn uuid_field(value: &Value, field: &str) -> Uuid {
+pub(super) fn uuid_field(value: &Value, field: &str) -> Uuid {
     value[field]
         .as_str()
         .expect("UUID response field")
@@ -984,7 +984,7 @@ fn uuid_field(value: &Value, field: &str) -> Uuid {
         .expect("valid UUID response field")
 }
 
-fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
+pub(super) fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
     let source = runtime_root.join("source");
     fs::create_dir(&source).expect("create scheduler source");
     git(&source, ["init", "-b", "main"]);
@@ -1085,7 +1085,9 @@ async fn login(application: &axum::Router) -> (String, String) {
     (cookie, csrf)
 }
 
-async fn response_json(response: axum::response::Response) -> (StatusCode, String, Value) {
+pub(super) async fn response_json(
+    response: axum::response::Response,
+) -> (StatusCode, String, Value) {
     let status = response.status();
     let text = String::from_utf8(
         to_bytes(response.into_body(), 1024 * 1024)
@@ -1098,7 +1100,7 @@ async fn response_json(response: axum::response::Response) -> (StatusCode, Strin
     (status, text, value)
 }
 
-async fn integration_pool() -> Option<(String, PgPool)> {
+pub(super) async fn integration_pool() -> Option<(String, PgPool)> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return None;
@@ -1111,7 +1113,7 @@ async fn integration_pool() -> Option<(String, PgPool)> {
     Some((database_url, pool))
 }
 
-async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
+pub(super) async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
     let schema = schema.to_owned();
     PgPoolOptions::new()
         .max_connections(12)

@@ -4,6 +4,7 @@
 mod agent_interface;
 mod backbone;
 mod direct_conversations;
+mod harness_support;
 mod m0_database;
 mod m1_api_policy_database;
 mod m1_bootstrap_database;
@@ -48,5 +49,6 @@ mod oauth_agent;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod reply_requests;
+mod w2_harness_platform;
 mod w3_tasks_http;
 mod workspace_isolation;

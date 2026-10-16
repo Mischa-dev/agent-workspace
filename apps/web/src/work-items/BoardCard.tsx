@@ -62,7 +62,14 @@ export const BoardCard = memo(function BoardCard({
           <DueDate card={card} />
         </span>
       </div>
-      <a className="aw-tcard__title" href={workItemHref(card.projectId, card.id)} onClick={(event) => event.preventDefault()} tabIndex={-1}>
+      {/* Not natively draggable: the browser's own link drag would cancel the pointer drag. */}
+      <a
+        className="aw-tcard__title"
+        draggable={false}
+        href={workItemHref(card.projectId, card.id)}
+        onClick={(event) => event.preventDefault()}
+        tabIndex={-1}
+      >
         {card.title}
       </a>
       <div className="aw-tcard__meta">
