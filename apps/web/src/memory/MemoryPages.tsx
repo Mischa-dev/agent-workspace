@@ -13,13 +13,14 @@ import {
   Button,
   Checkbox,
   EmptyState,
+  Markdown,
+  MarkdownEditor,
   MessageSkeleton,
   PageHeader,
   Row,
   RowList,
   Section,
   StatusChip,
-  TextArea,
   TextField,
 } from '../ui'
 import {
@@ -214,10 +215,14 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
           }
           title={`Version ${viewing.version}: ${viewing.title}`}
         >
-          <div className="aw-doc">{viewing.body || 'This version was empty.'}</div>
+          <Markdown className="aw-doc" empty="This version was empty." source={viewing.body} />
         </Section>
       ) : (
-        <div className="aw-doc">{current.body || (canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.')}</div>
+        <Markdown
+          className="aw-doc"
+          empty={canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.'}
+          source={current.body}
+        />
       )}
       <Section description="Every save is kept. Open an old version to read it or put it back." title="History">
         <RowList label="Versions">
@@ -297,10 +302,10 @@ function PageEditor({
     <form className="aw-page-editor" onSubmit={save}>
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <TextField label="Title" maxLength={200} onChange={(event) => setTitle(event.target.value)} value={title} />
-      <TextArea
-        hint="Plain text or Markdown."
+      <MarkdownEditor
+        hint="Markdown: headings, lists, - [ ] checklists, ``` code, links. Task keys like AWD-12 link to the task."
         label="Page"
-        onChange={(event) => setBody(event.target.value)}
+        onChange={setBody}
         rows={20}
         value={body}
       />
@@ -381,7 +386,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
               }
               title={<span id={decision.id}>{decision.title}</span>}
             >
-              {decision.detail ? <p className="aw-row__text">{decision.detail}</p> : null}
+              {decision.detail ? <Markdown className="aw-row__text" source={decision.detail} /> : null}
             </Row>
           ))}
         </RowList>
@@ -391,7 +396,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
           <form className="aw-page-editor" onSubmit={record}>
             {error ? <Banner tone="danger">{error}</Banner> : null}
             <TextField label="What was decided" maxLength={300} onChange={(event) => setTitle(event.target.value)} value={title} />
-            <TextArea label="Why (optional)" onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} />
+            <MarkdownEditor label="Why (optional)" onChange={setDetail} rows={3} value={detail} />
             <div className="aw-form__actions">
               <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">
                 Record decision
