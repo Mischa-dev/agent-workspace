@@ -347,8 +347,9 @@ pub async fn set_webhook_for_host(
     pool: &sqlx::PgPool,
     connection_id: Uuid,
     url: &str,
+    trusted_origins: &[String],
 ) -> Result<String, AppError> {
-    crate::replies::validate_webhook_url(url)?;
+    crate::replies::validate_webhook_url(url, trusted_origins)?;
     let secret = crate::replies::new_webhook_secret();
     let updated = sqlx::query(
         r#"
@@ -498,7 +499,7 @@ async fn set_webhook(
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
     if let Some(url) = &url {
-        crate::replies::validate_webhook_url(url)?;
+        crate::replies::validate_webhook_url(url, &state.config.webhook_trusted_origins)?;
     }
     let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
     let mut transaction = state.pool.begin().await?;

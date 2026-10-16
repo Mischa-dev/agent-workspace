@@ -148,6 +148,13 @@ reverse proxy), also set `AGENT_WORKSPACE_PUBLIC_ORIGIN` to that address, such a
 Invitation links, sign-in callbacks and connect instructions use it; without it
 they point at `SERVER_ADDR`, which only works on the host itself.
 
+Agent wakeup webhooks must be public `https` addresses. An agent host that
+listens on plain `http` on a private or tailnet address (such as the crew's
+wakeup listener on its Tailscale IP) works only once its exact origin is listed
+in `AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`, comma separated, such as
+`http://100.119.56.3:8732`. Set it before upgrading to a release with these
+checks, or those wakeups start failing and agents fall back to their timers.
+
 GitHub App settings are optional and must be installed as separate owner-only
 files before adding their paths to this environment. Never print those files.
 

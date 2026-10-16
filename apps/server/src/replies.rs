@@ -815,7 +815,9 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
         if let Err(error) = expire_leases(&state.pool).await {
             tracing::warn!(category = error.log_category(), "reply lease sweep failed");
         }
-        if let Err(error) = deliver_webhooks(&state.pool).await {
+        if let Err(error) =
+            deliver_webhooks(&state.pool, &state.config.webhook_trusted_origins).await
+        {
             tracing::warn!(category = error.log_category(), "webhook delivery failed");
         }
         tokio::select! {
@@ -863,7 +865,7 @@ struct DueDelivery {
     webhook_secret: Option<String>,
 }
 
-async fn deliver_webhooks(pool: &PgPool) -> Result<(), AppError> {
+async fn deliver_webhooks(pool: &PgPool, trusted_origins: &[String]) -> Result<(), AppError> {
     let mut transaction = pool.begin().await?;
     let due = sqlx::query_as::<_, DueDelivery>(
         r#"
@@ -898,7 +900,9 @@ async fn deliver_webhooks(pool: &PgPool) -> Result<(), AppError> {
                 .await?;
             continue;
         };
-        let error = post_wakeup(url, secret, &delivery).await.err();
+        let error = post_wakeup(url, secret, &delivery, trusted_origins)
+            .await
+            .err();
         let attempts = delivery.attempts + 1;
         let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
         sqlx::query(
@@ -933,8 +937,13 @@ async fn deliver_webhooks(pool: &PgPool) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn post_wakeup(url: &str, secret: &str, delivery: &DueDelivery) -> Result<(), &'static str> {
-    let (url, client) = webhook_client(url).await?;
+async fn post_wakeup(
+    url: &str,
+    secret: &str,
+    delivery: &DueDelivery,
+    trusted_origins: &[String],
+) -> Result<(), &'static str> {
+    let (url, client) = webhook_client(url, trusted_origins).await?;
     let body = serde_json::json!({
         "event": "inbox.available",
         "deliveryId": delivery.id,
@@ -961,20 +970,32 @@ async fn post_wakeup(url: &str, secret: &str, delivery: &DueDelivery) -> Result<
     }
 }
 
-/// Validate webhook destinations without making a network request.
-pub(crate) fn validate_webhook_url(value: &str) -> Result<reqwest::Url, AppError> {
+/// Validate webhook destinations without making a network request: public
+/// https only, unless the URL's origin is one the operator trusts
+/// (`AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`), which may also be http on a
+/// private or tailnet address. Credentials and fragments are never allowed.
+pub(crate) fn validate_webhook_url(
+    value: &str,
+    trusted_origins: &[String],
+) -> Result<reqwest::Url, AppError> {
     let url = reqwest::Url::parse(value).map_err(|_| AppError::Validation("webhook URL"))?;
     let host = url.host().ok_or(AppError::Validation("webhook URL"))?;
+    if value.len() > 500
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AppError::Validation("webhook URL"));
+    }
+    if is_trusted_origin(&url, trusted_origins) {
+        return Ok(url);
+    }
     let loopback = match host {
         url::Host::Ipv4(address) => address.is_loopback(),
         url::Host::Ipv6(address) => address.is_loopback(),
         url::Host::Domain(_) => false,
     };
-    if value.len() > 500
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || url.scheme() != "https"
+    if url.scheme() != "https"
         || matches!(host, url::Host::Domain(name) if name.eq_ignore_ascii_case("localhost") || name.ends_with(".localhost"))
         || matches!(host, url::Host::Ipv4(address) if !loopback && !public_ipv4(address))
         || matches!(host, url::Host::Ipv6(address) if !loopback && !public_ipv6(address))
@@ -985,8 +1006,18 @@ pub(crate) fn validate_webhook_url(value: &str) -> Result<reqwest::Url, AppError
     Ok(url)
 }
 
-async fn webhook_client(value: &str) -> Result<(reqwest::Url, reqwest::Client), &'static str> {
-    let url = validate_webhook_url(value).map_err(|_| "the webhook URL is unsafe")?;
+fn is_trusted_origin(url: &reqwest::Url, trusted_origins: &[String]) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && trusted_origins.contains(&url.origin().ascii_serialization())
+}
+
+async fn webhook_client(
+    value: &str,
+    trusted_origins: &[String],
+) -> Result<(reqwest::Url, reqwest::Client), &'static str> {
+    let url =
+        validate_webhook_url(value, trusted_origins).map_err(|_| "the webhook URL is unsafe")?;
+    let trusted = is_trusted_origin(&url, trusted_origins);
     let host = url
         .host_str()
         .ok_or("the webhook URL is unsafe")?
@@ -999,10 +1030,11 @@ async fn webhook_client(value: &str) -> Result<(reqwest::Url, reqwest::Client), 
         .map_err(|_| "the webhook host could not be resolved")?
         .collect::<Vec<_>>();
     if addresses.is_empty()
-        || addresses.iter().any(|address| match address.ip() {
-            std::net::IpAddr::V4(ip) => !public_ipv4(ip),
-            std::net::IpAddr::V6(ip) => !public_ipv6(ip),
-        })
+        || !trusted
+            && addresses.iter().any(|address| match address.ip() {
+                std::net::IpAddr::V4(ip) => !public_ipv4(ip),
+                std::net::IpAddr::V6(ip) => !public_ipv6(ip),
+            })
     {
         return Err("the webhook host resolved to an unsafe address");
     }
@@ -1100,8 +1132,34 @@ mod tests {
             "https://user:password@example.com/hook",
             "https://example.com/hook#secret",
         ] {
-            assert!(validate_webhook_url(value).is_err(), "accepted {value}");
+            assert!(
+                validate_webhook_url(value, &[]).is_err(),
+                "accepted {value}"
+            );
         }
-        assert!(validate_webhook_url("https://example.com/hook").is_ok());
+        assert!(validate_webhook_url("https://example.com/hook", &[]).is_ok());
+    }
+
+    #[test]
+    fn only_operator_trusted_origins_may_use_http_and_tailnet_addresses() {
+        let trusted = ["http://100.119.56.3:8732".to_owned()];
+        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &trusted).is_ok());
+        // Without the operator's say-so the same listener is refused.
+        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &[]).is_err());
+        for value in [
+            // Another port, scheme or host on the same network is not trusted.
+            "http://100.119.56.3:8733/wake",
+            "https://100.119.56.3:8732/wake",
+            "http://100.119.56.4:8732/wake",
+            "http://169.254.169.254/latest/meta-data",
+            // Credentials and fragments stay refused even for trusted origins.
+            "http://user:secret@100.119.56.3:8732/wake",
+            "http://100.119.56.3:8732/wake#secret",
+        ] {
+            assert!(
+                validate_webhook_url(value, &trusted).is_err(),
+                "accepted {value}"
+            );
+        }
     }
 }
