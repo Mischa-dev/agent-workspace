@@ -147,13 +147,25 @@ sealed with AES-256-GCM, and the data keys sealed under a master key from the
 keyring file named by `AGENT_WORKSPACE_SECRETS_KEY_PATH` (owner-only, outside
 the data and release roots).
 
-- Create it once: `agent-workspace-server secret-key-init --path /etc/agent-workspace/secrets.keyring`,
-  then set `AGENT_WORKSPACE_SECRETS_KEY_PATH` and restart. On start, agent
-  webhook secrets still stored in plaintext move into the store.
-- Rotate: `agent-workspace-server secret-key-rotate`. It writes a new first
-  key, re-seals every data key under it while the server keeps running, and
-  removes keys nothing uses. Back the keyring up again afterwards
-  (`agent-workspace-backup-key` does this when the file changes).
+- Create it once, in a directory only the service account owns (the
+  service reads the keyring, and rotation writes its replacement beside it):
+
+  ```bash
+  sudo install -d -o agent-workspace -g agent-workspace -m 0700 /etc/agent-workspace/secrets
+  sudo /opt/agent-workspace/current/bin/agent-workspace-service-command \
+    secret-key-init --path /etc/agent-workspace/secrets/keyring
+  ```
+
+  Then add `AGENT_WORKSPACE_SECRETS_KEY_PATH=/etc/agent-workspace/secrets/keyring`
+  to `agent-workspace.env` with `sudoedit` and restart. On start, agent webhook
+  secrets still stored in plaintext move into the store. Don't run
+  `secret-key-init` as root directly: the file would be root's and the service
+  couldn't read it.
+- Rotate: `sudo /opt/agent-workspace/current/bin/agent-workspace-service-command secret-key-rotate`.
+  It writes a new first key, re-seals every data key under it while the
+  server keeps running, and removes keys nothing uses. Back the keyring up
+  again afterwards (`agent-workspace-backup-key` does this when the file
+  changes).
 - Back it up apart from database dumps (docs/operations/backups.md): a dump
   and its keyring together are the plaintext.
 - In development without the variable, the server creates

@@ -407,10 +407,22 @@ pub fn write_new_keyring(path: &Path, keyring: &FileKeyring) -> std::io::Result<
             .open(&temporary)?;
         file.write_all(keyring.serialize().as_bytes())?;
         file.sync_all()?;
-        std::fs::hard_link(&temporary, path)
+        std::fs::hard_link(&temporary, path)?;
+        std::fs::remove_file(&temporary)?;
+        sync_parent(path)
     })();
     let _ = std::fs::remove_file(&temporary);
     result
+}
+
+/// Make a rename or link in `path`'s directory survive a power loss: the
+/// database must never hold data keys under a master key the file lost.
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    std::fs::File::open(parent)?.sync_all()
 }
 
 /// Replace an existing keyring file atomically (owner-only).
@@ -424,7 +436,8 @@ pub fn replace_keyring(path: &Path, keyring: &FileKeyring) -> std::io::Result<()
             .open(&temporary)?;
         file.write_all(keyring.serialize().as_bytes())?;
         file.sync_all()?;
-        std::fs::rename(&temporary, path)
+        std::fs::rename(&temporary, path)?;
+        sync_parent(path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
