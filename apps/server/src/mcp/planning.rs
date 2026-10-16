@@ -3,6 +3,8 @@
 //! inside one project; a dependency that would make a cycle is refused with
 //! the path that closes it.
 
+use std::collections::{HashMap, VecDeque};
+
 use chrono::NaiveDate;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -126,29 +128,45 @@ async fn path_between(
     from: Uuid,
     to: Uuid,
 ) -> Result<Option<Vec<String>>, AppError> {
-    let path = sqlx::query_scalar::<_, Vec<Uuid>>(
+    let edges = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
-        WITH RECURSIVE walk(id, path) AS (
-            SELECT $2::uuid, ARRAY[$2::uuid]
-            UNION ALL
-            SELECT dependency.blocked_work_item_id, walk.path || dependency.blocked_work_item_id
-            FROM walk
-            JOIN work_item_dependencies dependency
-              ON dependency.project_id = $1 AND dependency.blocking_work_item_id = walk.id
-            WHERE NOT dependency.blocked_work_item_id = ANY(walk.path)
-              AND cardinality(walk.path) < 200
-        )
-        SELECT path FROM walk WHERE id = $3 LIMIT 1
+        SELECT blocking_work_item_id, blocked_work_item_id
+        FROM work_item_dependencies WHERE project_id = $1
+        ORDER BY blocking_work_item_id, blocked_work_item_id
         "#,
     )
     .bind(project_id)
-    .bind(from)
-    .bind(to)
-    .fetch_optional(&mut **transaction)
+    .fetch_all(&mut **transaction)
     .await?;
-    let Some(path) = path else {
+    // Visit each task once. A depth cutoff can silently accept a long cycle;
+    // enumerating every possible path also explodes on branching graphs.
+    let mut graph: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for (blocking, blocked) in edges {
+        graph.entry(blocking).or_default().push(blocked);
+    }
+    let mut previous = HashMap::from([(from, from)]);
+    let mut queue = VecDeque::from([from]);
+    while let Some(node) = queue.pop_front() {
+        if node == to {
+            break;
+        }
+        for next in graph.get(&node).into_iter().flatten() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = previous.entry(*next) {
+                entry.insert(node);
+                queue.push_back(*next);
+            }
+        }
+    }
+    if !previous.contains_key(&to) {
         return Ok(None);
-    };
+    }
+    let mut path = vec![to];
+    let mut node = to;
+    while node != from {
+        node = previous[&node];
+        path.push(node);
+    }
+    path.reverse();
     let keys = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT item.id, project.project_key || '-' || item.number

@@ -110,9 +110,18 @@ Agents at any time. For short-lived tokens that refresh themselves, see
 3. Claim a task with `task_claim` before working on it, so nobody doubles up.
 4. Agents answering people: `inbox_list`, then `reply_claim` and `reply_send`,
    or `reply_pass` if it isn't yours to answer.
+5. Name things the way people do: project keys such as `AWD` and task keys
+   such as `AWD-12` work wherever an ID does.
 
 The server's instructions, sent when you connect, cover the rest. To check it
-worked, list the tools: there are about 40, including `briefing`.
+worked, list the tools: there are about 70, including `briefing`, `task_list`,
+`run_start` and `milestone_write`. There are also prompts (`triage`,
+`tidy_up`, `standup`, `plan_project`, `review_prs`), which show up as slash
+commands in Claude Code.
+
+Your client loads the tool list when it connects. When the server adds
+tools, reconnect to see them (in Claude Code: `/mcp`, pick
+**agent-workspace**, **Reconnect**).
 
 ## If something's wrong
 

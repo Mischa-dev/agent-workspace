@@ -544,6 +544,9 @@ async fn persist_account_state(
     .bind(profile_status)
     .execute(&state.pool)
     .await?;
+    if profile_status == "available" {
+        crate::execution_setup::activate_pending_worker(&state.pool, profile_id).await?;
+    }
     Ok(())
 }
 
