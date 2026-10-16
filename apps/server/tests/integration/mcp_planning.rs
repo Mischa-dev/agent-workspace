@@ -357,8 +357,43 @@ async fn workflow_update_is_for_admins_and_retired_statuses_move_their_tasks() {
         "{unplaced}"
     );
 
+    // Mara watches FLOW-1, so the move reaches her as an event.
+    let watched = tool(
+        app,
+        &mara,
+        &mara_session,
+        "task_watch",
+        json!({"taskId": "FLOW-1"}),
+    )
+    .await;
+    assert_eq!(watched["outcome"], "ok", "{watched}");
+    let mara_events = || {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*)
+            FROM external_agent_events event
+            JOIN external_agent_connections connection ON connection.id = event.connection_id
+            JOIN actors actor ON actor.id = connection.actor_id
+            WHERE actor.kind = 'external_agent' AND event.kind = 'work_item.changed'
+              AND connection.actor_id IN (
+                  SELECT actor_id FROM work_item_watchers watcher
+                  JOIN work_items item ON item.id = watcher.work_item_id
+                  WHERE item.project_id = $1 AND item.number = 1
+              )
+            "#,
+        )
+        .bind(flow.parse::<Uuid>().expect("flow id"))
+        .fetch_one(&setup.pool)
+    };
+    let before = mara_events().await.expect("events before");
+
     let updated = tool(app, &codex, &session, "workflow_update", document.clone()).await;
     assert_eq!(updated["outcome"], "ok", "{updated}");
+    assert_eq!(
+        mara_events().await.expect("events after"),
+        before + 1,
+        "the watcher hears about the move"
+    );
     assert_eq!(updated["value"]["statusesRetired"], 1);
     assert_eq!(updated["value"]["tasksMoved"], 2);
     assert_eq!(updated["value"]["workflow"]["version"], version + 1);

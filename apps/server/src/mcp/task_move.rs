@@ -28,7 +28,8 @@ use crate::{
     work_item_commands::{
         AllocatedNumberMetadata, ChangeFinalization, CommandActor, CreateWorkItemCommand,
         CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, NewTaskFields, authorize_mutation,
-        create_work_item, finalize_change, finalize_comment, insert_criteria, lock_membership,
+        create_work_item, finalize_change, finalize_comment, finalize_copied_comment,
+        insert_criteria, lock_membership,
     },
     work_item_labels::{self, LabelLimit, MAX_LABELS_PER_TASK, SkipReason},
 };
@@ -443,7 +444,7 @@ pub(super) async fn task_move(
                 provenance.push_str(&format!("\n\nStill linked on {}:", task.key));
                 provenance.push_str(&links_left_behind_text(&links));
             }
-            add_comment(&mut transaction, &target_actor, new_id, &provenance).await?;
+            add_comment(&mut transaction, &target_actor, new_id, &provenance, Notify::Yes).await?;
             let comments = sqlx::query_as::<_, SourceComment>(
                 r#"
                 SELECT COALESCE(author.display_name, 'Someone') AS author,
@@ -467,7 +468,7 @@ pub(super) async fn task_move(
                     "{} wrote on {} (on {}):\n\n{}",
                     comment.author, comment.created_at, task.key, text
                 );
-                add_comment(&mut transaction, &target_actor, new_id, &quoted).await?;
+                add_comment(&mut transaction, &target_actor, new_id, &quoted, Notify::No).await?;
             }
             if comments.len() > MAX_COMMENTS {
                 notes.push(format!(
@@ -486,6 +487,7 @@ pub(super) async fn task_move(
                     "Moved to {new_key}: {}",
                     public_url(state, &format!("/projects/{target_project_id}/work-items/{new_id}"))
                 ),
+                Notify::Yes,
             )
             .await?;
             archive(&mut transaction, &source_actor, task, &new_key).await?;
@@ -726,11 +728,20 @@ async fn links_left_behind(
     .await?)
 }
 
+/// Whether adding a comment tells watchers and the assignee. Copied history
+/// doesn't: the move's own comment already did, once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Notify {
+    Yes,
+    No,
+}
+
 async fn add_comment(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     work_item_id: Uuid,
     text: &str,
+    notify: Notify,
 ) -> Result<(), AppError> {
     let validated = MessageContent::from_plain_text(text.to_owned())
         .map_err(|_| AppError::Validation("comment"))?;
@@ -760,6 +771,16 @@ async fn add_comment(
     .bind(text)
     .execute(&mut **transaction)
     .await?;
+    if notify == Notify::No {
+        return finalize_copied_comment(
+            transaction,
+            actor,
+            work_item_id,
+            comment_id,
+            "work_item.mcp_move_comment",
+        )
+        .await;
+    }
     finalize_comment(
         transaction,
         actor,

@@ -128,7 +128,7 @@ function TaskDetailBody({
       </h1>
       <TitleField disabled={disabled} onSave={(title) => save.save('Title', { title })} value={item.title} />
       <DescriptionField disabled={disabled} onSave={(description) => save.save('Description', { description })} value={item.description} />
-      <ClaimStatus item={item} />
+      <ClaimStatus item={item} projectArchived={projectArchived} />
       {item.archivedAt ? (
         <Banner icon="archive" title="This work item is archived.">
           It’s hidden from lists and can’t change until it’s restored.
@@ -192,12 +192,14 @@ function TaskDetailBody({
 }
 
 /** Who is working on this right now. Agents claim a task before starting it; the claim ends on its own. */
-function ClaimStatus({ item }: { item: WorkItem }) {
+function ClaimStatus({ item, projectArchived }: { item: WorkItem; projectArchived: boolean }) {
   const session = useAuthenticatedSession()
   const release = useReleaseClaim()
   const claim = item.claim
   if (!claim) return null
-  const canRelease = item.capabilities.archive || claim.actor.id === session.user.actorId
+  // Releasing is a task write: it needs edit rights and a project that isn't archived.
+  const canRelease =
+    !projectArchived && item.capabilities.edit && (item.capabilities.archive || claim.actor.id === session.user.actorId)
   return (
     <Banner
       action={

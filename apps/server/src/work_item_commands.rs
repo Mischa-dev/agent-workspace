@@ -2824,6 +2824,29 @@ pub async fn finalize_comment(
     Ok((sequence, audit_id))
 }
 
+/// Records a comment copied in bulk (a task move carrying its history over)
+/// without telling anyone about each one. The caller's own change, committed
+/// in the same transaction, already sends the update and the agent events.
+pub async fn finalize_copied_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+    audit_action: &str,
+) -> Result<(), AppError> {
+    let sequence =
+        insert_comment_timeline(transaction, actor.project_id, work_item_id, comment_id).await?;
+    record_audit(
+        transaction,
+        actor,
+        audit_action,
+        work_item_id,
+        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn insert_activity(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
