@@ -65,9 +65,9 @@ checklist, the files it owns and how it meets the others, so all six in wave
 a SaaS later. So nothing public gets built yet, but everything is built so
 that opening up needs no rewrite (principle 8).
 
-**What it needs from you.** Merging or closing the six open PRs and the CI
-fix in PR #131, saying go for wave 1, and merging each workstream's pull
-request when it's green. The decisions have defaults; change any you
+**What it needs from you.** Merging or closing the five older open PRs and
+the CI fix in PR #131, saying go for wave 1, and merging each workstream's
+pull request when it's green. The decisions have defaults; change any you
 disagree with.
 
 ## Words used here
@@ -206,8 +206,8 @@ script and `.claude/settings.json`, and the docs F10 names. `tools/ci/` and
 
 **Seams:**
 
-- F1 needs Mischa: merge or close the six open pull requests. If #125 is still
-  open when W5 starts, W5 takes it over.
+- F1 needs Mischa: merge or close the five older open pull requests. If #125
+  is still open when W5 starts, W5 takes it over.
 - F2 is PR #131, from making the Red Hat host the CI runner.
 - Wave 1 starts at the same time. Its workstreams name migrations by timestamp
   from day one and merge main once W0 lands.
@@ -717,12 +717,10 @@ them somewhere to test.
 
 *In [W0](#w0-runway) Runway · Needs nothing*
 
-Six PRs are open: #125 (agent progress and interim replies, item A1), #127
-(batched GitHub sync writes), #128 (webhook address checks and origin
-validation), #112 (run controls respect private threads), #123 (sidebar after
-archiving) and #108 (CI script fixes, draft). Bring each up to date with main,
-re-run the checks, then merge or close. #128 matters before agents get more
-webhooks, and #112 before runs get more controls.
+Five PRs from before this roadmap are open: #125 (agent progress and interim
+replies, item A1), #128 (webhook address checks and origin validation), #112
+(run controls respect private threads), #123 (sidebar after archiving) and #108 (CI script fixes, draft). Bring each up to date with main, re-run the
+checks, then merge or close. #128 matters before agents get more webhooks, and #112 before runs get more controls.
 
 **Done when:** No PR from before this roadmap is still open, and main contains #112 and #128.
 

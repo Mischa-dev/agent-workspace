@@ -110,7 +110,7 @@
       ],
       "owns": "The checks F4 changes (`tests/integration/m6_mcp_foundation.rs`, `scripts/web-budget-lib.mjs`, `migration_preflight.rs`), the cloud setup script and `.claude/settings.json`, and the docs F10 names. `tools/ci/` and `.github/workflows/` belong to PR #131 until it merges.",
       "seams": [
-        "F1 needs Mischa: merge or close the six open pull requests. If #125 is still open when W5 starts, W5 takes it over.",
+        "F1 needs Mischa: merge or close the five older open pull requests. If #125 is still open when W5 starts, W5 takes it over.",
         "F2 is PR #131, from making the Red Hat host the CI runner.",
         "Wave 1 starts at the same time. Its workstreams name migrations by timestamp from day one and merge main once W0 lands."
       ],
@@ -486,7 +486,7 @@
       "id": "F1",
       "area": "F",
       "title": "Land or close the open pull requests",
-      "what": "Six PRs are open: #125 (agent progress and interim replies, item A1), #127 (batched GitHub sync writes), #128 (webhook address checks and origin validation), #112 (run controls respect private threads), #123 (sidebar after archiving) and #108 (CI script fixes, draft). Bring each up to date with main, re-run the checks, then merge or close. #128 matters before agents get more webhooks, and #112 before runs get more controls.",
+      "what": "Five PRs from before this roadmap are open: #125 (agent progress and interim replies, item A1), #128 (webhook address checks and origin validation), #112 (run controls respect private threads), #123 (sidebar after archiving) and #108 (CI script fixes, draft). Bring each up to date with main, re-run the checks, then merge or close. #128 matters before agents get more webhooks, and #112 before runs get more controls.",
       "done": "No PR from before this roadmap is still open, and main contains #112 and #128.",
       "deps": [],
       "migration": false,
