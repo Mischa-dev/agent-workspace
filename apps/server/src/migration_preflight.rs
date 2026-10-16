@@ -337,3 +337,58 @@ fn require_contained_exact_path(data_root: &Path, stored: &Path) -> Result<(), A
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    /// Numbered migrations stop at 0054. Later ones are named by UTC
+    /// timestamp (`20261020143000_settings.sql`), so branches that each add
+    /// one merge in either order: sqlx orders them after 0054 and applies any
+    /// version it hasn't run, whichever merged first. The preflight checks
+    /// above name exact versions below 0054, so they still hold.
+    #[test]
+    fn migration_versions_are_unique_and_new_ones_are_timestamps() {
+        const LAST_NUMBERED: i64 = 54;
+        let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+        let mut versions = BTreeMap::new();
+        for entry in std::fs::read_dir(directory).expect("migrations directory") {
+            let name = entry.expect("migration entry").file_name();
+            let name = name.to_str().expect("UTF-8 migration name").to_owned();
+            let (version, rest) = name.split_once('_').expect("version_description.sql");
+            assert!(
+                rest.ends_with(".sql") && !rest.ends_with(".down.sql"),
+                "{name}: migrations are forward-only .sql files"
+            );
+            let number: i64 = version.parse().expect("numeric migration version");
+            if version.len() == 4 {
+                assert!(
+                    number <= LAST_NUMBERED,
+                    "{name}: name new migrations by timestamp, such as 20261020143000_{rest}"
+                );
+            } else {
+                assert_eq!(version.len(), 14, "{name}: use YYYYMMDDHHMMSS");
+                let field = |at: usize| version[at..at + 2].parse::<u32>().unwrap();
+                let year = number / 10_000_000_000;
+                let (month, day, hour, minute, second) =
+                    (field(4), field(6), field(8), field(10), field(12));
+                assert!(
+                    (2026..2100).contains(&year)
+                        && (1..=12).contains(&month)
+                        && (1..=31).contains(&day)
+                        && hour < 24
+                        && minute < 60
+                        && second < 60,
+                    "{name}: {version} is not a YYYYMMDDHHMMSS timestamp"
+                );
+            }
+            if let Some(other) = versions.insert(number, name.clone()) {
+                panic!("{name} and {other} share version {number}");
+            }
+        }
+        assert!(
+            versions.contains_key(&LAST_NUMBERED),
+            "migration 0054 is missing"
+        );
+    }
+}
