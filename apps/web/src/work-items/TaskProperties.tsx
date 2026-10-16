@@ -48,6 +48,7 @@ export function TaskProperties({
   item,
   onManageLabels,
   onOpenTask,
+  projectArchived,
   save,
   workflow,
 }: {
@@ -55,6 +56,7 @@ export function TaskProperties({
   item: WorkItem
   onManageLabels: () => void
   onOpenTask: (task: { id: string; projectId: string; href: string }) => void
+  projectArchived: boolean
   save: TaskSave
   workflow: WorkItemWorkflow
 }) {
@@ -146,7 +148,7 @@ export function TaskProperties({
         <BlockedField disabled={disabled} item={item} save={save} />
       </Property>
       <Property label="Watchers">
-        <WatchField item={item} />
+        <WatchField item={item} readOnly={projectArchived} />
       </Property>
 
       {picker ? (
@@ -253,7 +255,8 @@ function BlockedField({ disabled, item, save }: { disabled: boolean; item: WorkI
   )
 }
 
-function WatchField({ item }: { item: WorkItem }) {
+/** Anyone who can see a task can watch it, but not while its project is archived. */
+function WatchField({ item, readOnly }: { item: WorkItem; readOnly: boolean }) {
   const watch = useSetWatching()
   return (
     <span className="aw-watch">
@@ -266,16 +269,18 @@ function WatchField({ item }: { item: WorkItem }) {
       ) : (
         <span className="aw-prop__empty">Nobody yet</span>
       )}
-      <Button
-        aria-pressed={item.watching}
-        busy={watch.isPending}
-        onClick={() => watch.mutate({ projectId: item.projectId, workItemId: item.id, watching: !item.watching, idempotencyKey: crypto.randomUUID() })}
-        size="sm"
-        variant="ghost"
-      >
-        <TaskGlyph name={item.watching ? 'unwatch' : 'watch'} />
-        {item.watching ? 'Unwatch' : 'Watch'}
-      </Button>
+      {readOnly ? null : (
+        <Button
+          aria-pressed={item.watching}
+          busy={watch.isPending}
+          onClick={() => watch.mutate({ projectId: item.projectId, workItemId: item.id, watching: !item.watching, idempotencyKey: crypto.randomUUID() })}
+          size="sm"
+          variant="ghost"
+        >
+          <TaskGlyph name={item.watching ? 'unwatch' : 'watch'} />
+          {item.watching ? 'Unwatch' : 'Watch'}
+        </Button>
+      )}
       {watch.isError ? <span role="alert" className="aw-prop__error">That didn’t save. Try again.</span> : null}
     </span>
   )

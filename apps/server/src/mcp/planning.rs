@@ -696,7 +696,7 @@ fn milestone_value(state: &AppState, project_id: Uuid, view: MilestoneView) -> M
         id: view.id.to_string(),
         url: public_url(
             state,
-            &format!("/projects/{project_id}/work-items?milestone={}", view.id),
+            &format!("/projects/{project_id}/work-items?milestoneId={}", view.id),
         ),
         name: view.name,
         description: view.description,

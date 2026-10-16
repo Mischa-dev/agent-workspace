@@ -157,6 +157,7 @@ function TaskDetailBody({
         item={item}
         onManageLabels={() => setManagingLabels(true)}
         onOpenTask={onOpenTask}
+        projectArchived={projectArchived}
         save={save}
         workflow={workflow}
       />
