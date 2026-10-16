@@ -86,6 +86,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 
 mod list;
 mod planning;
+pub(crate) mod views;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -172,6 +173,23 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/milestones/{milestone_id}",
             axum::routing::patch(planning::update_milestone),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/views",
+            get(views::list_views).post(views::create_view),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/views/{view_id}",
+            axum::routing::patch(views::update_view).delete(views::delete_view),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/views/{view_id}/pin",
+            axum::routing::post(views::pin_view),
+        )
+        .route("/api/v1/my-work", get(views::get_my_work))
+        .route(
+            "/api/v1/projects/{project_id}/timeline",
+            get(views::get_timeline),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
