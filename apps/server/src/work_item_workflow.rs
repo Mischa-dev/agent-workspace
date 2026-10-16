@@ -119,6 +119,9 @@ struct DefinitionRow {
     name: String,
     enabled: bool,
     open_tasks: i64,
+    /// Archived tasks included: they move too, so a restore never brings
+    /// back a task in a retired status or type.
+    all_tasks: i64,
 }
 
 /// The project's workflow version and estimate unit, with defaults when it
@@ -332,7 +335,10 @@ async fn definitions(
         SELECT definition.id, definition.name, definition.enabled,
                (SELECT count(*) FROM work_items item
                  WHERE item.project_id = definition.project_id
-                   AND item.{column} = definition.id AND item.archived_at IS NULL) AS open_tasks
+                   AND item.{column} = definition.id AND item.archived_at IS NULL) AS open_tasks,
+               (SELECT count(*) FROM work_items item
+                 WHERE item.project_id = definition.project_id
+                   AND item.{column} = definition.id) AS all_tasks
         FROM {table} definition
         WHERE definition.project_id = $1
         FOR UPDATE OF definition
@@ -444,17 +450,29 @@ pub async fn replace_workflow(
         .collect::<HashSet<_>>();
     let kept_types = types.iter().map(|kind| kind.id).collect::<HashSet<_>>();
 
-    // Where each retired status's and type's open tasks go.
+    let default_status = statuses
+        .iter()
+        .find(|status| status.is_default)
+        .map(|status| status.id)
+        .ok_or(AppError::Internal("checked workflow has no default status"))?;
+    let default_type = types
+        .iter()
+        .find(|kind| kind.is_default)
+        .map(|kind| kind.id)
+        .ok_or(AppError::Internal("checked workflow has no default type"))?;
+    // Where each retired status's and type's tasks go.
     let mut status_moves = Vec::new();
     for row in existing_statuses.values().filter(|row| row.enabled) {
-        if kept_statuses.contains(&row.id) || row.open_tasks == 0 {
+        if kept_statuses.contains(&row.id) || row.all_tasks == 0 {
             continue;
         }
         let target = document
             .replacements
             .get(&row.id.to_string())
             .and_then(|value| reference(value, &keys, &status_names))
-            .filter(|target| kept_statuses.contains(target));
+            .filter(|target| kept_statuses.contains(target))
+            // Only archived tasks left: they go to the default status.
+            .or_else(|| (row.open_tasks == 0).then_some(default_status));
         let Some(target) = target else {
             return Ok(Err(invalid(
                 "replacements",
@@ -470,14 +488,15 @@ pub async fn replace_workflow(
     }
     let mut type_moves = Vec::new();
     for row in existing_types.values().filter(|row| row.enabled) {
-        if kept_types.contains(&row.id) || row.open_tasks == 0 {
+        if kept_types.contains(&row.id) || row.all_tasks == 0 {
             continue;
         }
         let target = document
             .replacements
             .get(&row.id.to_string())
             .and_then(|value| reference(value, &type_keys, &type_names))
-            .filter(|target| kept_types.contains(target));
+            .filter(|target| kept_types.contains(target))
+            .or_else(|| (row.open_tasks == 0).then_some(default_type));
         let Some(target) = target else {
             return Ok(Err(invalid(
                 "replacements",
@@ -726,7 +745,7 @@ async fn move_tasks(
             UPDATE work_items
             SET {column} = $3, version = version + 1, updated_at = now(),
                 next_timeline_sequence = next_timeline_sequence + 1
-            WHERE project_id = $1 AND {column} = $2 AND archived_at IS NULL
+            WHERE project_id = $1 AND {column} = $2
             RETURNING id, version, next_timeline_sequence - 1 AS sequence
         ), activity AS (
             INSERT INTO work_item_activity (id, project_id, work_item_id, actor_id, kind, summary, payload)
@@ -773,6 +792,7 @@ mod tests {
                         name: "Old".to_owned(),
                         enabled: true,
                         open_tasks: 0,
+                        all_tasks: 0,
                     },
                 )
             })

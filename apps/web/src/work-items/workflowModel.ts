@@ -29,8 +29,9 @@ function allPairs(refs: string[]) {
 }
 
 /**
- * The editable copy of a workflow. The server doesn't say "any change", so an
- * empty list or a list with every pair both read as allowing any change.
+ * The editable copy of a workflow. The server doesn't say "any change", so a
+ * list with every pair reads as allowing any change. An empty list means no
+ * status changes are allowed.
  */
 export function draftFromWorkflow(workflow: WorkItemWorkflow): WorkflowDraft {
   const statuses = [...workflow.statuses]
@@ -41,7 +42,7 @@ export function draftFromWorkflow(workflow: WorkItemWorkflow): WorkflowDraft {
     .map((type) => ({ ref: type.id, id: type.id, name: type.name, isDefault: type.isDefault, taskCount: type.taskCount }))
   const pairs = workflow.transitions.map((transition) => pairKey(transition.fromStatusId, transition.toStatusId))
   const every = allPairs(statuses.map((status) => status.ref))
-  const allowAny = pairs.length === 0 || every.every((pair) => pairs.includes(pair))
+  const allowAny = every.every((pair) => pairs.includes(pair))
   return { statuses, types, allowAny, pairs: allowAny ? every : pairs, estimateUnit: workflow.estimateUnit, replacements: {} }
 }
 

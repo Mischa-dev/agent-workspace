@@ -132,10 +132,18 @@ describe('workflow drafts', () => {
     transitions: [],
   }
 
-  it('reads an empty transition list as any change allowed and saves it as "all"', () => {
+  it('reads an empty transition list as no changes allowed and keeps it', () => {
     const draft = draftFromWorkflow(saved)
+    expect(draft.allowAny).toBe(false)
+    expect(workflowUpdate(draft, saved)).toMatchObject({ expectedVersion: 4, transitions: [] })
+  })
+
+  it('reads every pair as any change allowed and saves it as "all"', () => {
+    const ids = saved.statuses.map((status) => status.id)
+    const every = ids.flatMap((from) => ids.filter((to) => to !== from).map((to) => ({ fromStatusId: from, toStatusId: to })))
+    const draft = draftFromWorkflow({ ...saved, transitions: every })
     expect(draft.allowAny).toBe(true)
-    expect(workflowUpdate(draft, saved)).toMatchObject({ expectedVersion: 4, transitions: 'all' })
+    expect(workflowUpdate(draft, saved)).toMatchObject({ transitions: 'all' })
   })
 
   it('requires a home for the tasks of a removed status, then sends it as a replacement', () => {

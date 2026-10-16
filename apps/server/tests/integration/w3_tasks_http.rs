@@ -425,6 +425,37 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     // Milestone progress counts its tasks.
     let (_, milestones) = owner.get(&format!("{base}/milestones")).await;
     assert_eq!(milestones["milestones"][0]["total"], 1);
+
+    // A task with two labels shows in both label columns.
+    let (_, frontend) = owner
+        .post(&format!("{base}/labels"), json!({ "name": "Frontend" }))
+        .await;
+    let both = create_task(
+        owner,
+        project,
+        json!({ "title": "Full stack", "labelIds": [label["id"], frontend["id"]] }),
+    )
+    .await;
+    let (status, board) = owner
+        .get(&format!("{base}/work-items/board?columnsBy=label"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    for name in ["Backend", "Frontend"] {
+        let column = board["columns"]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .find(|column| column["label"] == name)
+            .expect("label column");
+        assert!(
+            column["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .any(|item| item["id"] == both["id"]),
+            "{name} column lost the task"
+        );
+    }
 }
 
 #[tokio::test]
@@ -625,6 +656,22 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
+    // An archived task in QA moves too, so restoring it later works.
+    let shelved = create_task(owner, project, json!({ "title": "Old check" })).await;
+    let shelved_id = shelved["id"].as_str().expect("test value");
+    let (_, shelved) = owner
+        .patch(
+            &format!("/api/v1/projects/{project}/work-items/{shelved_id}"),
+            json!({ "expectedVersion": shelved["version"], "statusId": qa }),
+        )
+        .await;
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/projects/{project}/work-items/{shelved_id}/archive"),
+            json!({ "expectedVersion": shelved["version"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
     let without_qa = statuses(&updated)
         .iter()
         .filter(|status| status["name"] != "QA")
@@ -655,6 +702,12 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         .get(&format!("/api/v1/projects/{project}/work-items/{task_id}"))
         .await;
     assert_eq!(task_now["status"]["name"], "Review");
+    let (_, shelved_now) = owner
+        .get(&format!(
+            "/api/v1/projects/{project}/work-items/{shelved_id}"
+        ))
+        .await;
+    assert_eq!(shelved_now["status"]["name"], "Review");
 }
 
 #[tokio::test]

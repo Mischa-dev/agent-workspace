@@ -24,9 +24,9 @@ export function useDebouncedValue<T>(value: T, delay: number) {
   return debounced
 }
 
-/** Statuses a task in `fromStatusId` may move to. No listed transitions means any change is allowed. */
+/** Statuses a task in `fromStatusId` may move to, its own included. */
 export function allowedStatuses(workflow: WorkItemWorkflow, fromStatusId: string | undefined) {
-  if (!fromStatusId || workflow.transitions.length === 0) return workflow.statuses
+  if (!fromStatusId) return workflow.statuses
   const allowed = new Set(workflow.transitions.filter((transition) => transition.fromStatusId === fromStatusId).map((transition) => transition.toStatusId))
   allowed.add(fromStatusId)
   return workflow.statuses.filter((status) => allowed.has(status.id))

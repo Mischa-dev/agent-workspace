@@ -1403,7 +1403,7 @@ pub(super) async fn get_work_item_board(
         filter.insert("sort".into(), "manual".into());
         pages.push((page, filter));
     }
-    let mut cards = cards(
+    let cards = cards(
         &state.pool,
         project_id,
         &all_rows,
@@ -1420,7 +1420,7 @@ pub(super) async fn get_work_item_board(
             items: page
                 .rows
                 .iter()
-                .filter_map(|(id, _)| cards.remove(id))
+                .filter_map(|(id, _)| cards.get(id).cloned())
                 .collect(),
             has_more: page.next_cursor.is_some(),
             next_cursor: page.next_cursor,
