@@ -54,7 +54,7 @@ export default function SettingsArea() {
   const { '*': splat = '' } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-  const route = parseSettingsPath(splat)
+  const route = parseSettingsPath(splat, location.search)
   const projectList = useProjects()
   const projects = useMemo(() => projectList.data?.projects ?? [], [projectList.data])
   const workspace = defaultWorkspace(session)
@@ -112,7 +112,7 @@ export default function SettingsArea() {
     )
   } else if (group === 'workspace' && !workspace) {
     content = (
-      <EmptyState icon="building" title="You’re not in a workspace">
+      <EmptyState icon="users" title="You’re not in a workspace">
         Join a workspace with an invitation link to see its settings.
       </EmptyState>
     )

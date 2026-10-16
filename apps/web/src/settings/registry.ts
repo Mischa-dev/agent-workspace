@@ -44,14 +44,14 @@ const runsSomewhere = ({ projects }: SettingsVisibility) => projects.some((proje
 
 export const SETTINGS_PAGES: SettingsPage[] = [
   // Account
-  page('account', 'profile', 'Profile', 'user', ['name', 'display name', 'username', 'github username', 'workos', 'google', 'sign-in'], () => import('./account/ProfilePage')),
+  page('account', 'profile', 'Profile', 'at-sign', ['name', 'display name', 'username', 'github username', 'workos', 'google', 'sign-in'], () => import('./account/ProfilePage')),
   page('account', 'security', 'Security', 'shield-check', ['password', 'sessions', 'devices', 'sign out', 'two-factor', '2fa', 'authenticator', 'recovery codes'], () => import('./account/SecurityPage')),
   page('account', 'appearance', 'Appearance', 'palette', ['theme', 'dark', 'light', 'colors', 'density', 'text size'], () => import('../theme/AppearancePage')),
   page('account', 'provider-accounts', 'Provider accounts', 'terminal', ['codex', 'sign in', 'chatgpt', 'runs'], () => import('./account/ProviderAccountsPage'), { visible: runsSomewhere }),
   page('account', 'connected-apps', 'Connected apps', 'link', ['mcp', 'claude code', 'oauth', 'apps'], () => import('./account/ConnectedAppsPage')),
   page('account', 'api-tokens', 'API tokens', 'key', ['token', 'bearer', 'mcp', 'credential', 'scripts'], () => import('./account/ApiTokensPage')),
   // Workspace
-  page('workspace', 'general', 'General', 'building', ['rename', 'workspace name', 'leave', 'transfer ownership', 'owner'], () => import('./workspace/GeneralPage')),
+  page('workspace', 'general', 'General', 'settings', ['rename', 'workspace name', 'leave', 'transfer ownership', 'owner'], () => import('./workspace/GeneralPage')),
   page('workspace', 'members', 'Members', 'users', ['people', 'agents', 'roles', 'admin', 'invite', 'invitations', 'remove'], () => import('./workspace/MembersPage')),
   page('workspace', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
   page('workspace', 'keys', 'Keys', 'key', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),

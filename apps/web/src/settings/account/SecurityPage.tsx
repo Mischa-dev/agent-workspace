@@ -656,7 +656,7 @@ function SessionsSection() {
                 key={candidate.id}
                 leading={
                   <span className="aw-row__tile">
-                    <Icon name="monitor" size={16} />
+                    <Icon name="lock" size={16} />
                   </span>
                 }
                 meta={

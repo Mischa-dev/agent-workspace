@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 
 import { App } from '../app/App'
 import { installAppShellLifecycle, installStandardApi, jsonResponse, projectAId, projectBId } from '../test/appHarness'
-import { legacyProjectSettingsHref } from './paths'
 import { parseSettingsPath } from './route'
 
 describe('settings addresses', () => {
@@ -32,7 +31,10 @@ describe('settings addresses', () => {
       kind: 'redirect',
       to: `/settings/projects/${projectBId}/general`,
     })
-    expect(legacyProjectSettingsHref(projectBId, '?tab=unknown')).toBe(`/settings/projects/${projectBId}/general`)
+    expect(parseSettingsPath(`projects/${projectBId}`, '?tab=unknown')).toEqual({
+      kind: 'redirect',
+      to: `/settings/projects/${projectBId}/general`,
+    })
     expect(parseSettingsPath('nowhere/at/all')).toEqual({ kind: 'redirect', to: '/settings/account/profile' })
   })
 

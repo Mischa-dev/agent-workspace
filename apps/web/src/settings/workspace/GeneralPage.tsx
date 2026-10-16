@@ -44,7 +44,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
 
   return (
     <>
-      <PageHeader icon="building" title="General">
+      <PageHeader icon="settings" title="General">
         {summary.name}
       </PageHeader>
       {workspace.isPending ? (

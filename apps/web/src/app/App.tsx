@@ -13,7 +13,6 @@ import {
 import { SessionBoundary } from '../auth/SessionBoundary'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
-import { legacyProjectSettingsHref } from '../settings/paths'
 import { BrandMark } from '../auth/AuthLayout'
 import { AppShell } from '../shell/AppShell'
 import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
@@ -269,11 +268,11 @@ function AuthenticatedRouteFallback() {
   )
 }
 
-/** Project settings moved to /settings/projects/:projectId/:section; `?tab=` picks the page. */
+/** Project settings moved to /settings/projects/:projectId/:section; the settings area reads the old `?tab=`. */
 function LegacyProjectSettingsRedirect() {
   const { projectId = '' } = useParams()
   const location = useLocation()
-  return <Navigate replace to={legacyProjectSettingsHref(projectId, location.search)} />
+  return <Navigate replace to={`/settings/projects/${encodeURIComponent(projectId)}${location.search}`} />
 }
 
 function NotFoundPage() {

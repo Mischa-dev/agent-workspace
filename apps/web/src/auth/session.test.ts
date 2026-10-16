@@ -10,12 +10,10 @@ import {
   getSession,
   installAuthenticatedSession,
   isAuthenticatedSession,
-  isTwoFactorChallenge,
-  login,
-  normalizeLoginResponse,
   normalizeSessionResponse,
   type AuthenticatedSession,
 } from './session'
+import { isTwoFactorChallenge, login, normalizeLoginResponse } from './login'
 
 const userId = '019fb600-0000-7000-8000-000000000010'
 const actorId = '019fb600-0000-7000-8000-000000000011'

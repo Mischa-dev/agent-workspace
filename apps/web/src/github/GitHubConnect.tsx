@@ -77,7 +77,7 @@ export function GitHubInstallationList({ connection }: { connection: GitHubConne
           key={installation.installationId}
           leading={
             <span className="aw-row__tile">
-              <Icon name={installation.targetType === 'Organization' ? 'building' : 'user'} size={16} />
+              <Icon name={installation.targetType === 'Organization' ? 'users' : 'at-sign'} size={16} />
             </span>
           }
           meta={`${installation.targetType === 'Organization' ? 'Organization' : 'Personal account'} · connected by ${installation.claimedByDisplayName} on ${formatShortDate(installation.claimedAt)}`}

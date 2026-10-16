@@ -166,54 +166,6 @@ export async function getSession() {
   )
 }
 
-/**
- * A password sign-in that still needs a two-factor code. It is signed out in
- * every other respect: no user, no cookies, nothing cached.
- */
-export type TwoFactorChallenge = SessionResponse & {
-  authenticated: false
-  user: null
-  twoFactorRequired: true
-  challenge: string
-}
-
-export function isTwoFactorChallenge(value: unknown): value is TwoFactorChallenge {
-  return (
-    asRecord(value).twoFactorRequired === true &&
-    typeof asRecord(value).challenge === 'string'
-  )
-}
-
-/** A login response: a session, or a challenge for the second step. Never both. */
-export function normalizeLoginResponse(value: unknown): SessionResponse | TwoFactorChallenge {
-  const record = asRecord(value)
-  if (record.twoFactorRequired === true) {
-    const challenge = boundedText(record.challenge, 4096)
-    if (!challenge) return signedOutSession
-    return { authenticated: false, user: null, organizations: [], twoFactorRequired: true, challenge }
-  }
-  return normalizeSessionResponse(value)
-}
-
-export async function login(loginName: string, password: string) {
-  return normalizeLoginResponse(
-    await requestJson<unknown>('/api/v1/auth/login', {
-      method: 'POST',
-      json: { loginName, password },
-    }),
-  )
-}
-
-/** The second step: a 6-digit code from the authenticator app, or a recovery code. */
-export async function loginTwoFactor(challenge: string, code: string) {
-  return normalizeSessionResponse(
-    await requestJson<unknown>('/api/v1/auth/login/two-factor', {
-      method: 'POST',
-      json: { challenge, code },
-    }),
-  )
-}
-
 export function logout() {
   return requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
 }

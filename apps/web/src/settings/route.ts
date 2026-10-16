@@ -7,8 +7,18 @@ export type SettingsRoute =
   /** `projectId` is null at /settings/projects: the layout picks one. */
   | { kind: 'page'; group: 'project'; projectId: string | null; section: string }
 
-/** Reads the part of the address after /settings/. */
-export function parseSettingsPath(splat: string): SettingsRoute {
+/** The old Project settings tabs (`/projects/:id/settings?tab=`) and the pages that replaced them. */
+const LEGACY_PROJECT_TABS: Record<string, string> = {
+  general: 'general',
+  members: 'members',
+  agents: 'agents',
+  codex: 'codex-runs',
+  repositories: 'repositories',
+  github: 'repositories',
+}
+
+/** Reads the part of the address after /settings/; `search` carries an old link's `?tab=`. */
+export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
   const segments = splat.split('/').filter(Boolean)
   let decoded: string[]
   try {
@@ -29,7 +39,10 @@ export function parseSettingsPath(splat: string): SettingsRoute {
   }
   if (group === 'projects') {
     if (decoded.length === 1) return { kind: 'page', group: 'project', projectId: null, section: 'general' }
-    if (decoded.length === 2) return { kind: 'redirect', to: projectSettingsHref(second) }
+    if (decoded.length === 2) {
+      const tab = new URLSearchParams(search).get('tab') ?? 'general'
+      return { kind: 'redirect', to: projectSettingsHref(second, LEGACY_PROJECT_TABS[tab] ?? 'general') }
+    }
     if (decoded.length === 3) return { kind: 'page', group: 'project', projectId: second, section: third }
   }
   return { kind: 'redirect', to: ACCOUNT_HOME }

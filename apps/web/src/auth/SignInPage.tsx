@@ -9,12 +9,10 @@ import { AuthLayout } from './AuthLayout'
 import {
   installAuthenticatedSession,
   isAuthenticatedSession,
-  isTwoFactorChallenge,
-  login,
-  loginTwoFactor,
   type SessionResponse,
   useSession,
 } from './session'
+import { isTwoFactorChallenge, login, loginTwoFactor } from './login'
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')

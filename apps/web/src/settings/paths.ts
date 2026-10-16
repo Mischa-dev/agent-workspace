@@ -13,18 +13,3 @@ export function workspaceSettingsHref(section: string) {
 export function projectSettingsHref(projectId: string, section = 'general') {
   return `/settings/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(section)}`
 }
-
-/** The old Project settings tabs (`/projects/:id/settings?tab=`) and the pages that replaced them. */
-const LEGACY_PROJECT_TABS: Record<string, string> = {
-  general: 'general',
-  members: 'members',
-  agents: 'agents',
-  codex: 'codex-runs',
-  repositories: 'repositories',
-  github: 'repositories',
-}
-
-export function legacyProjectSettingsHref(projectId: string, search: string) {
-  const tab = new URLSearchParams(search).get('tab') ?? 'general'
-  return projectSettingsHref(projectId, LEGACY_PROJECT_TABS[tab] ?? 'general')
-}

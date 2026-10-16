@@ -6,12 +6,10 @@ import { isApiError } from '../api/errors'
 import {
   installAuthenticatedSession,
   isAuthenticatedSession,
-  isTwoFactorChallenge,
-  login,
-  loginTwoFactor,
   type SessionResponse,
   useSession,
 } from '../auth/session'
+import { isTwoFactorChallenge, login, loginTwoFactor } from '../auth/login'
 import {
   acceptExistingInvitation,
   acceptNewInvitation,
