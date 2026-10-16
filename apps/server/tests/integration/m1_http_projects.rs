@@ -731,21 +731,17 @@ async fn insert_active_run_fixture(pool: &PgPool, project_id: Uuid, owner_actor_
     .execute(&mut *transaction)
     .await
     .expect("insert provider connection");
-    sqlx::query(
-        r#"
-        INSERT INTO execution_profiles (
-            id, project_id, provider_connection_id, owner_actor_id,
-            name, codex_home_path, status, account_state
-        )
-        VALUES ($1, $2, $3, $4, 'archive-guard', $5, 'available', 'authenticated')
-        "#,
+    crate::harness_support::insert_account_profile(
+        &mut transaction,
+        execution_profile_id,
+        project_id,
+        provider_connection_id,
+        owner_actor_id,
+        "archive-guard",
+        &format!("/tmp/archive-guard-profile-{suffix}"),
+        "available",
+        "authenticated",
     )
-    .bind(execution_profile_id)
-    .bind(project_id)
-    .bind(provider_connection_id)
-    .bind(owner_actor_id)
-    .bind(format!("/tmp/archive-guard-profile-{suffix}"))
-    .execute(&mut *transaction)
     .await
     .expect("insert execution profile");
     sqlx::query(

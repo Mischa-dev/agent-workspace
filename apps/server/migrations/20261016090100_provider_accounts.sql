@@ -155,25 +155,31 @@ ON execution_profiles
 FOR EACH ROW
 EXECUTE FUNCTION validate_execution_profile_account();
 
+-- Copies what changed on the account to its profiles; a health check that
+-- only touches last_health_at leaves the profiles' login state alone.
 CREATE OR REPLACE FUNCTION mirror_provider_account_state()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW.account_state IS NOT DISTINCT FROM OLD.account_state
+       AND NEW.status IS NOT DISTINCT FROM OLD.status
+       AND NEW.last_failure_category IS NOT DISTINCT FROM OLD.last_failure_category THEN
+        RETURN NEW;
+    END IF;
     UPDATE execution_profiles profile
-       SET account_state = NEW.account_state,
-           status = CASE WHEN profile.status = 'disabled' THEN profile.status
-                         ELSE NEW.status END,
+       SET account_state = CASE
+               WHEN NEW.account_state IS DISTINCT FROM OLD.account_state
+               THEN NEW.account_state ELSE profile.account_state END,
+           status = CASE
+               WHEN profile.status = 'disabled' THEN profile.status
+               WHEN NEW.status IS DISTINCT FROM OLD.status THEN NEW.status
+               ELSE profile.status END,
            last_health_at = NEW.last_health_at,
            last_failure_category = NEW.last_failure_category,
            version = profile.version + 1,
            updated_at = now()
-     WHERE profile.provider_account_id = NEW.id
-       AND (
-           profile.account_state IS DISTINCT FROM NEW.account_state
-           OR (profile.status <> 'disabled' AND profile.status IS DISTINCT FROM NEW.status)
-           OR profile.last_failure_category IS DISTINCT FROM NEW.last_failure_category
-       );
+     WHERE profile.provider_account_id = NEW.id;
     RETURN NEW;
 END;
 $$;

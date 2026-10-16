@@ -491,8 +491,9 @@ impl HarnessSession for DemoSession {
                 return Ok(());
             }
             match answer {
-                HarnessAnswer::Approve => self.finish_turn(),
-                HarnessAnswer::Deny | HarnessAnswer::Text(_) => {
+                // An answered question is a go-ahead, as an approval is.
+                HarnessAnswer::Approve | HarnessAnswer::Text(_) => self.finish_turn(),
+                HarnessAnswer::Deny => {
                     if let Some(turn) = self.active.take() {
                         self.set_turn_status(&turn.thread_id, &turn.turn_id, "interrupted", None);
                     }
@@ -590,4 +591,86 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::PathBuf, sync::Arc};
+
+    use uuid::Uuid;
+
+    use super::{DemoAdapter, DemoHarness};
+    use crate::provider::{
+        adapter::{AccountHandle, HarnessAnswer, HarnessEvent},
+        contract_tests::adapter_contract,
+        registry::ShutdownSignal,
+        run_config::RunConfig,
+    };
+
+    fn account(max_concurrent_runs: u16) -> AccountHandle {
+        AccountHandle {
+            id: Uuid::now_v7(),
+            home: PathBuf::from("/nonexistent/demo-home"),
+            max_concurrent_runs,
+        }
+    }
+
+    #[tokio::test]
+    async fn demo_adapter_keeps_the_adapter_contract() {
+        let worktree = tempfile::tempdir().expect("worktree");
+        let adapter = DemoHarness(Arc::new(DemoAdapter::new(
+            Arc::new(ShutdownSignal::default()),
+            8,
+        )));
+        adapter_contract(&adapter, account(2), worktree.path()).await;
+    }
+
+    #[tokio::test]
+    async fn approving_the_demo_turn_writes_its_proof_and_records_the_run_settings() {
+        let worktree = tempfile::tempdir().expect("worktree");
+        std::fs::write(worktree.path().join("KNOWN_FILE.txt"), "start\n").expect("known file");
+        let demo = Arc::new(DemoAdapter::new(Arc::new(ShutdownSignal::default()), 8));
+        let adapter = DemoHarness(Arc::clone(&demo));
+        let account = account(1);
+        let config = RunConfig {
+            model: Some("demo-small".to_owned()),
+            reasoning: Some("high".to_owned()),
+            ..RunConfig::default()
+        };
+        let mut run =
+            crate::provider::adapter::HarnessAdapter::acquire_run(&adapter, account.clone())
+                .await
+                .expect("run session");
+        let thread = run
+            .start_thread(worktree.path(), &config)
+            .await
+            .expect("thread");
+        run.start_turn(&thread, worktree.path(), "prove it", &config)
+            .await
+            .expect("turn");
+        let HarnessEvent::Request(request) = run.next_event().await.expect("approval") else {
+            panic!("the demo turn asks for approval first");
+        };
+        run.answer(request, HarnessAnswer::Approve)
+            .await
+            .expect("approve");
+        let mut completed = false;
+        for _ in 0..10 {
+            if let HarnessEvent::TurnCompleted { completed: done } =
+                run.next_event().await.expect("event")
+            {
+                completed = done;
+                break;
+            }
+        }
+        assert!(completed);
+        let proof = std::fs::read_to_string(worktree.path().join("KNOWN_FILE.txt")).expect("proof");
+        assert!(proof.contains(super::DEMO_PROOF_LINE));
+        let turns = demo.turns(account.id);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].config, config,
+            "the adapter received the run's settings"
+        );
+    }
 }

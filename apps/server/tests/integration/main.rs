@@ -3,6 +3,7 @@
 
 mod agent_interface;
 mod direct_conversations;
+mod harness_support;
 mod m0_database;
 mod m1_api_policy_database;
 mod m1_bootstrap_database;

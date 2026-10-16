@@ -18,6 +18,8 @@ use crate::{
 pub mod adapter;
 pub mod catalog;
 mod codex_app_server;
+#[cfg(test)]
+mod contract_tests;
 pub mod demo;
 pub mod manifest;
 mod registry;
@@ -192,6 +194,9 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
     run_config(state, run_id).await
 }
 
+const SLOT_RELEASE_WAIT: Duration = Duration::from_secs(10);
+const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
 pub async fn start_run(
     state: &AppState,
     project_id: Uuid,
@@ -203,10 +208,25 @@ pub async fn start_run(
 ) -> Result<StartedProviderRun, AppError> {
     let account = ProfileAccount::for_profile(&state.pool, execution_profile_id).await?;
     let config = ensure_run_config(state, run_id).await?;
-    let provider = state
-        .supervisors
-        .acquire_run(&account.adapter_kind, account.handle())
-        .await;
+    // The scheduler admits from database counts; a run that just ended may
+    // still hold its harness slot until its session winds down, so a full
+    // harness is waited on briefly rather than failing the run.
+    let mut waited = Duration::ZERO;
+    let provider = loop {
+        match state
+            .supervisors
+            .acquire_run(&account.adapter_kind, account.handle())
+            .await
+        {
+            Err(HarnessError::HostCapacity | HarnessError::AccountCapacity)
+                if waited < SLOT_RELEASE_WAIT =>
+            {
+                sleep(SLOT_RETRY_INTERVAL).await;
+                waited += SLOT_RETRY_INTERVAL;
+            }
+            result => break result,
+        }
+    };
     let mut provider = match provider {
         Ok(provider) => {
             mark_account_healthy(state, account.account_id).await?;
@@ -816,12 +836,13 @@ async fn handle_provider_request(
         #[derive(FromRow)]
         struct Resolution {
             run_state: String,
+            kind: String,
             status: String,
             response: Option<Value>,
         }
         let resolution = sqlx::query_as::<_, Resolution>(
             r#"
-            SELECT ar.state AS run_state, aa.status, aa.response
+            SELECT ar.state AS run_state, aa.kind, aa.status, aa.response
             FROM agent_approvals aa
             JOIN agent_runs ar ON ar.id = aa.agent_run_id
             WHERE aa.id = $1
@@ -857,7 +878,7 @@ async fn handle_provider_request(
             return Ok(());
         }
         let answer = match resolution.response.as_ref() {
-            Some(response) if kind == "question" => response
+            Some(response) if resolution.kind == "question" => response
                 .get("answer")
                 .and_then(Value::as_str)
                 .map(|answer| HarnessAnswer::Text(answer.to_owned()))

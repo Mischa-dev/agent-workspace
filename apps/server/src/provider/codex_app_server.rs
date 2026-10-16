@@ -1425,3 +1425,406 @@ fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, fs, path::Path, sync::Arc, time::Duration};
+
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use super::{
+        CodexAdapter, SupervisorState, health_snapshot, item_kind, parse_login_start, parse_model,
+        parse_provider_request, parse_rate_limit_window, provider_event_key, record_failure,
+        restart_backoff, turn_start_params,
+    };
+    use crate::{
+        config::AppConfig,
+        provider::{
+            adapter::{
+                AccountHandle, HarnessAdapter, HarnessError, ItemKind, LoginStart, RecoveredTurn,
+                RequestKind,
+            },
+            contract_tests::adapter_contract,
+            registry::ShutdownSignal,
+            run_config::RunConfig,
+        },
+    };
+
+    #[test]
+    fn restart_backoff_is_bounded() {
+        assert_eq!(restart_backoff(1), Duration::from_millis(100));
+        assert_eq!(restart_backoff(3), Duration::from_millis(400));
+        assert_eq!(restart_backoff(100), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn repeated_failures_open_the_circuit() {
+        let mut state = SupervisorState::new();
+        for _ in 0..5 {
+            record_failure(&mut state);
+        }
+        let health = health_snapshot(&state);
+        assert!(health.circuit_open);
+        assert_eq!(health.consecutive_failures, 5);
+    }
+
+    #[test]
+    fn provider_requests_become_neutral_requests() {
+        let request = parse_provider_request(json!({
+            "id": 17,
+            "method": "item/tool/requestUserInput",
+            "params": {"questions": [{
+                "id": "choice",
+                "question": "Which release track?",
+                "options": [{"label": "Stable"}, {"label": "Preview"}]
+            }]}
+        }))
+        .expect("provider request");
+        assert_eq!(request.kind, RequestKind::Question);
+        assert_eq!(request.summary, "Which release track?");
+        assert_eq!(request.public_options()[0]["label"], "Stable");
+        assert_eq!(request.token["questionIds"], json!(["choice"]));
+        assert!(!request.summary.contains("Codex"));
+
+        let approval = parse_provider_request(json!({
+            "id": 19,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"command": "rm -rf /"}
+        }))
+        .expect("approval request");
+        assert_eq!(approval.kind, RequestKind::Approval);
+        assert!(
+            !approval.summary.contains("rm -rf"),
+            "raw provider params stay private"
+        );
+
+        let unsupported = parse_provider_request(json!({
+            "id": 18,
+            "method": "account/chatgptAuthTokens/refresh",
+            "params": {}
+        }))
+        .expect("unsupported provider request");
+        assert_eq!(unsupported.kind, RequestKind::Unsupported);
+
+        let item = json!({"params": {"item": {"type": "commandExecution"}}});
+        assert_eq!(item_kind(&item), ItemKind::CommandExecution);
+    }
+
+    #[test]
+    fn provider_event_identities_are_stable_and_bounded() {
+        let first = json!({
+            "method": "item/completed",
+            "params": {"item": {"id": "item-7", "type": "commandExecution"}}
+        });
+        assert_eq!(
+            provider_event_key("item/completed", &first),
+            "provider:item/completed:\"item-7\""
+        );
+        let oversized = json!({"params": {"opaque": "x".repeat(4096)}});
+        let key = provider_event_key("item/started", &oversized);
+        assert!(key.starts_with("provider:item/started:event:sha256:"));
+        assert!(key.len() < 160);
+    }
+
+    #[test]
+    fn login_and_rate_limit_shapes_are_bounded() {
+        let login = parse_login_start(
+            json!({
+                "type": "chatgptDeviceCode",
+                "loginId": "login-1",
+                "verificationUrl": "https://example.com/device",
+                "userCode": "ABCD-EFGH"
+            }),
+            "chatgptDeviceCode",
+        )
+        .expect("device login response");
+        assert!(matches!(login, LoginStart::DeviceCode { .. }));
+        assert!(
+            parse_login_start(
+                json!({"type": "chatgpt", "loginId": "login-2", "authUrl": "javascript:alert(1)"}),
+                "chatgpt"
+            )
+            .is_err()
+        );
+        let window = parse_rate_limit_window(Some(&json!({
+            "usedPercent": 42,
+            "resetsAt": 2_000_000_000_i64,
+            "windowDurationMins": 300
+        })))
+        .expect("rate limit window")
+        .expect("present rate limit window");
+        assert_eq!(window.used_percent, 42);
+        assert!(parse_rate_limit_window(Some(&json!({"usedPercent": 101}))).is_err());
+    }
+
+    #[test]
+    fn model_list_entries_become_catalog_models() {
+        let model = parse_model(&json!({
+            "id": "gpt-x",
+            "model": "gpt-x",
+            "displayName": "GPT X",
+            "description": "Fast",
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "low"}, {"reasoningEffort": "high"}
+            ],
+            "defaultReasoningEffort": "low",
+            "serviceTiers": [{"id": "priority", "name": "Fast"}],
+            "hidden": false,
+            "isDefault": true
+        }))
+        .expect("model");
+        assert_eq!(model.id, "gpt-x");
+        assert_eq!(model.reasoning_levels, vec!["low", "high"]);
+        assert_eq!(model.default_reasoning.as_deref(), Some("low"));
+        assert!(model.speeds.iter().any(|speed| speed.id == "standard"));
+        assert!(model.speeds.iter().any(|speed| speed.id == "priority"));
+        assert!(model.is_default);
+        assert!(parse_model(&json!({"id": "bad id with spaces"})).is_none());
+    }
+
+    #[test]
+    fn run_settings_reach_the_turn() {
+        let config = RunConfig {
+            model: Some("gpt-x".to_owned()),
+            reasoning: Some("high".to_owned()),
+            speed: Some("priority".to_owned()),
+            options: json!({"reasoningSummary": "concise"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ..RunConfig::default()
+        };
+        let params = turn_start_params("thread-1", Path::new("/work"), "go", &config);
+        assert_eq!(params["model"], "gpt-x");
+        assert_eq!(params["effort"], "high");
+        assert_eq!(params["serviceTier"], "priority");
+        assert_eq!(params["summary"], "concise");
+        let standard = RunConfig {
+            speed: Some("standard".to_owned()),
+            ..RunConfig::default()
+        };
+        let params = turn_start_params("thread-1", Path::new("/work"), "go", &standard);
+        assert!(params.get("serviceTier").is_none());
+        assert!(params.get("model").is_none());
+    }
+
+    struct FakeCodex {
+        _temporary: tempfile::TempDir,
+        data_root: std::path::PathBuf,
+        worktree: std::path::PathBuf,
+        requests: std::path::PathBuf,
+        config: AppConfig,
+    }
+
+    /// A stand-in `codex app-server` that answers the methods the adapter
+    /// uses and logs every request it receives.
+    #[cfg(unix)]
+    fn fake_codex(host_limit: usize) -> FakeCodex {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let data_root = temporary.path().join("data");
+        let worktree = data_root.join("worktrees/one");
+        fs::create_dir_all(&worktree).expect("create worktree");
+        let requests = temporary.path().join("requests.log");
+        let binary = temporary.path().join("fake-codex");
+        let script = format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{log}'
+  if [[ "$line" != *'"id"'* ]]; then
+    continue
+  fi
+  request_id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+  if [[ "$line" == *'"method":"initialize"'* ]]; then
+    printf '{{"id":%s,"result":{{"server":"fake"}}}}\n' "$request_id"
+  elif [[ "$line" == *'"method":"thread/start"'* ]]; then
+    printf '{{"id":%s,"result":{{"thread":{{"id":"thread-%s"}}}}}}\n' "$request_id" "$request_id"
+  elif [[ "$line" == *'"method":"turn/start"'* ]]; then
+    printf '{{"id":%s,"result":{{"turn":{{"id":"turn-%s"}}}}}}\n' "$request_id" "$request_id"
+  elif [[ "$line" == *'"method":"account/read"'* ]]; then
+    printf '{{"id":%s,"result":{{"account":{{"type":"chatgpt","email":"person@example.com"}}}}}}\n' "$request_id"
+  elif [[ "$line" == *'"method":"model/list"'* ]]; then
+    printf '{{"id":%s,"result":{{"data":[{{"id":"gpt-x","model":"gpt-x","displayName":"GPT X","supportedReasoningEfforts":[{{"reasoningEffort":"low"}}],"defaultReasoningEffort":"low","isDefault":true}}],"nextCursor":null}}}}\n' "$request_id"
+  elif [[ "$line" == *'"method":"thread/read"'* ]]; then
+    printf '{{"id":%s,"result":{{"thread":{{"turns":[{{"id":"turn-5","status":"completed","items":[{{"type":"agentMessage","text":"recovered proof"}}]}}]}}}}}}\n' "$request_id"
+  else
+    printf '{{"id":%s,"result":{{}}}}\n' "$request_id"
+  fi
+done
+"#,
+            log = requests.display()
+        );
+        fs::write(&binary, script).expect("write fake Codex binary");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("make fake Codex executable");
+        let config = AppConfig::from_values(&BTreeMap::from([
+            (
+                "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+                "postgres://example.invalid/database".to_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
+                data_root.to_string_lossy().into_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
+                binary.to_string_lossy().into_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_CODEX_HOST_CONCURRENCY_LIMIT".to_owned(),
+                host_limit.to_string(),
+            ),
+            (
+                "AGENT_WORKSPACE_CODEX_REQUEST_TIMEOUT_SECONDS".to_owned(),
+                "2".to_owned(),
+            ),
+            (
+                "AGENT_WORKSPACE_CODEX_SHUTDOWN_TIMEOUT_SECONDS".to_owned(),
+                "1".to_owned(),
+            ),
+        ]))
+        .expect("fake Codex config");
+        FakeCodex {
+            _temporary: temporary,
+            data_root,
+            worktree,
+            requests,
+            config,
+        }
+    }
+
+    fn account(fake: &FakeCodex, name: &str, max_concurrent_runs: u16) -> AccountHandle {
+        let home = fake.data_root.join("homes").join(name);
+        fs::create_dir_all(&home).expect("create account home");
+        AccountHandle {
+            id: Uuid::now_v7(),
+            home,
+            max_concurrent_runs,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_adapter_keeps_the_adapter_contract() {
+        let fake = fake_codex(4);
+        let adapter = CodexAdapter::new(&fake.config, Arc::new(ShutdownSignal::default()))
+            .expect("Codex adapter");
+        let account = account(&fake, "contract", 2);
+        adapter_contract(&adapter, account, &fake.worktree).await;
+        adapter.shutdown_all().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn account_pages_never_take_a_run_slot_and_idle_processes_are_freed() {
+        let fake = fake_codex(1);
+        let adapter = CodexAdapter::new(&fake.config, Arc::new(ShutdownSignal::default()))
+            .expect("Codex adapter")
+            .with_idle_ttl(Duration::ZERO);
+        let first = account(&fake, "first", 1);
+
+        // Many account pages open at once (up to the idle process cap) leave
+        // the host's only run slot free.
+        let mut pages = Vec::new();
+        for _ in 0..super::MAX_IDLE_PROCESSES {
+            let mut page = adapter
+                .acquire_control(account(&fake, "page", 1))
+                .await
+                .expect("account page");
+            page.read_account().await.expect("read account");
+            pages.push(page);
+        }
+        let mut run = adapter
+            .acquire_run(first.clone())
+            .await
+            .expect("a run starts while account pages are open");
+        let thread = run
+            .start_thread(&fake.worktree, &RunConfig::default())
+            .await
+            .expect("thread");
+        assert!(matches!(
+            adapter.acquire_run(account(&fake, "second", 1)).await,
+            Err(HarnessError::HostCapacity)
+        ));
+        assert!(matches!(
+            adapter.acquire_control(account(&fake, "extra", 1)).await,
+            Err(HarnessError::ControlCapacity)
+        ));
+        drop(pages);
+
+        // With the pages closed and their processes idle past the TTL, the
+        // next request reaps them.
+        let mut page = adapter
+            .acquire_control(first.clone())
+            .await
+            .expect("page after the others closed");
+        page.read_account().await.expect("read account");
+        drop(page);
+        run.resume_thread(&thread, &fake.worktree, &RunConfig::default())
+            .await
+            .expect("resume");
+        assert_eq!(
+            run.read_latest_turn(&thread).await.expect("latest turn"),
+            RecoveredTurn {
+                id: Some("turn-5".to_owned()),
+                status: "completed".to_owned(),
+                final_message: Some("recovered proof".to_owned()),
+            }
+        );
+        drop(run);
+        let total_processes = adapter
+            .pool
+            .accounts
+            .lock()
+            .map(|accounts| {
+                accounts
+                    .values()
+                    .map(|processes| processes.slots.lock().map(|slots| slots.len()).unwrap_or(0))
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        assert!(
+            total_processes <= 2,
+            "idle account-page processes were shut down, {total_processes} left"
+        );
+        adapter.shutdown_all().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_settings_and_account_homes_reach_codex() {
+        let fake = fake_codex(4);
+        let adapter = CodexAdapter::new(&fake.config, Arc::new(ShutdownSignal::default()))
+            .expect("Codex adapter");
+        let account = account(&fake, "settings", 2);
+        let config = RunConfig {
+            model: Some("gpt-x".to_owned()),
+            reasoning: Some("low".to_owned()),
+            ..RunConfig::default()
+        };
+        let mut run = adapter.acquire_run(account.clone()).await.expect("run");
+        let thread = run
+            .start_thread(&fake.worktree, &config)
+            .await
+            .expect("thread");
+        run.start_turn(&thread, &fake.worktree, "go", &config)
+            .await
+            .expect("turn");
+        drop(run);
+        let mut control = adapter.acquire_control(account).await.expect("control");
+        let models = control.list_models().await.expect("models");
+        assert_eq!(models.len(), 1);
+        drop(control);
+        let log = fs::read_to_string(&fake.requests).expect("request log");
+        let turn = log
+            .lines()
+            .find(|line| line.contains("\"method\":\"turn/start\""))
+            .expect("turn/start request");
+        assert!(turn.contains("\"model\":\"gpt-x\""));
+        assert!(turn.contains("\"effort\":\"low\""));
+        adapter.shutdown_all().await;
+    }
+}

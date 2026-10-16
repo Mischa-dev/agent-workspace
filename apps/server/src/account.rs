@@ -474,9 +474,12 @@ pub(crate) async fn insert_account(
         r#"
         INSERT INTO provider_accounts (
             id, organization_id, owner_actor_id, adapter_kind, name, home_path,
-            max_concurrent_runs
+            max_concurrent_runs, status, account_state
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            'authentication_required', 'authentication_required'
+        )
         "#,
     )
     .bind(account_id)

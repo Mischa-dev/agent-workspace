@@ -225,7 +225,7 @@ async fn team_runs_use_only_invoker_owned_profiles_and_missing_setup_has_no_effe
     assert_eq!(replay.0, StatusCode::CREATED);
     assert_eq!(replay.1["id"], member_profile_id.to_string());
     let profile_path = sqlx::query_scalar::<_, String>(
-        "SELECT codex_home_path FROM execution_profiles WHERE id = $1",
+        "SELECT account.home_path FROM execution_profiles profile JOIN provider_accounts account ON account.id = profile.provider_account_id WHERE profile.id = $1",
     )
     .bind(member_profile_id)
     .fetch_one(&pool)

@@ -244,19 +244,46 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
 
     crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
     let codex_manifest = crate::provider::codex_manifest();
-    let provider_connection_id = crate::execution_setup::ensure_provider_connection(
-        &mut transaction,
-        project_id,
-        &codex_manifest,
-    )
-    .await?;
-
     // Upgrade tests seed schemas from before provider accounts (S6), where
-    // the profile itself held the private home directory.
+    // the profile itself held the private home directory, and from before
+    // connections recorded a binary version.
     let has_provider_accounts =
         sqlx::query_scalar::<_, bool>("SELECT to_regclass('provider_accounts') IS NOT NULL")
             .fetch_one(&mut *transaction)
             .await?;
+    let provider_connection_id = if has_provider_accounts {
+        crate::execution_setup::ensure_provider_connection(
+            &mut transaction,
+            project_id,
+            &codex_manifest,
+        )
+        .await?
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO provider_connections (id, project_id, kind, host, capabilities)
+            VALUES ($1, $2, 'codex_app_server', 'local_project_host', $3)
+            ON CONFLICT (project_id, kind, host)
+            DO UPDATE SET id = provider_connections.id
+            RETURNING id
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(serde_json::json!({
+            "supports_streaming": true,
+            "supports_commands": true,
+            "supports_file_changes": true,
+            "supports_approvals": true,
+            "supports_questions": true,
+            "supports_resume": true,
+            "supports_interrupt": true,
+            "supports_pull_request_creation": false,
+            "supports_remote_execution": false
+        }))
+        .fetch_one(&mut *transaction)
+        .await?
+    };
     let profile_path = runtime_path_text(&retained_profile)?;
     let (execution_profile_id, stored_profile_path) = if has_provider_accounts {
         let account_id = sqlx::query_scalar::<_, Uuid>(
