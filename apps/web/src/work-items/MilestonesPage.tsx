@@ -8,7 +8,7 @@ import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { Banner, Button, Dialog, EmptyState, ErrorState, MessageSkeleton, PageHeader, SegmentedControl, TextArea, TextField, formatDateLabel } from '../ui'
 import { workItemsHref } from './links'
-import { useCreateMilestone, useMilestones, useUpdateMilestone } from './planningHooks'
+import { useCreateMilestone, useMilestoneList, useUpdateMilestone } from './planningHooks'
 import { TaskGlyph } from './TaskGlyph'
 import type { Milestone } from './types'
 import './work.css'
@@ -30,7 +30,7 @@ export function MilestonesPage() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
-  const milestones = useMilestones(projectId, true)
+  const milestones = useMilestoneList(projectId, true)
   const update = useUpdateMilestone()
   const [shown, setShown] = useState<Shown>('open')
   const [editing, setEditing] = useState<Milestone | 'new' | null>(null)
@@ -51,8 +51,8 @@ export function MilestonesPage() {
     )
   }
 
-  const readOnly = Boolean(project.data.archivedAt)
-  const all = milestones.data ?? []
+  const readOnly = Boolean(project.data.archivedAt) || !milestones.data?.canEdit
+  const all = milestones.data?.milestones ?? []
   const visible = all.filter((milestone) => (shown === 'archived' ? milestone.archived : !milestone.archived))
   const archivedCount = all.filter((milestone) => milestone.archived).length
   const setArchived = (milestone: Milestone, archived: boolean) => {

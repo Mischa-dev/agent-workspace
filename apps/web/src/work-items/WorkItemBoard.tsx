@@ -118,7 +118,10 @@ export function WorkItemBoard({
       const laneChange = laneChanged && state.lanes !== 'none' ? fieldMove(state.lanes, lane.key, target.laneKey, laneLabel) : null
       const change = (item: WorkItemCard) => (laneChange ? laneChange.apply(columnChange ? columnChange.apply(item) : item) : columnChange ? columnChange.apply(item) : item)
 
-      const send = async () => {
+      // A status move and a lane change are two saves. When the move saves but
+      // the lane change doesn't, the move stands and the error comes back as
+      // `laneError`, so the person is told what did and didn't happen.
+      const send = async (): Promise<{ laneError?: unknown }> => {
         let version = card.version
         if (columnsBy === 'status') {
           const moved = await moveWorkItem({
@@ -130,11 +133,18 @@ export function WorkItemBoard({
             idempotencyKey: crypto.randomUUID(),
           })
           version = moved.version
-          if (!laneChange) return
+          if (!laneChange) return {}
+          try {
+            await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...laneChange.patch } })
+          } catch (laneError) {
+            return { laneError }
+          }
+          return {}
         }
-        const patch = { ...(columnChange && columnsBy !== 'status' ? columnChange.patch : {}), ...(laneChange?.patch ?? {}) }
-        if (Object.keys(patch).length === 0) return
+        const patch = { ...(columnChange ? columnChange.patch : {}), ...(laneChange?.patch ?? {}) }
+        if (Object.keys(patch).length === 0) return {}
         await updateWorkItem({ projectId, workItemId: card.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: version, ...patch } })
+        return {}
       }
 
       setAnnouncement(`Moved ${card.key} to ${to.label}${laneChange ? `, ${laneLabel}` : ''}.`)
@@ -144,6 +154,11 @@ export function WorkItemBoard({
         (current) => applyMove(current, cardId, to.key, columnIndex, change, from.key),
         send,
       )
+        .then(({ laneError }) => {
+          if (laneError === undefined) return
+          setAnnouncement(`Moved ${card.key} to ${to.label}, but its lane didn’t change.`)
+          notify({ tone: 'warning', message: `${card.key} moved to ${to.label}, but it stayed in ${lane.label}. ${editErrorMessage(laneError, 'The lane change')}` })
+        })
         .catch((error) => {
           setAnnouncement(`${card.key} went back: the move didn’t save.`)
           notify({ tone: 'danger', message: `${card.key} went back to ${from.label}. ${editErrorMessage(error, 'The move')}` })

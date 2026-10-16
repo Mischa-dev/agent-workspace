@@ -509,6 +509,55 @@ async fn links_to_other_projects_respect_membership() {
     assert_eq!(seen["blockedBy"], json!([]));
     assert_eq!(seen["ready"], false);
 
+    // Refusals don't name the hidden task either: not as the original of a
+    // duplicate, nor along a dependency cycle.
+    let other = create_task(owner, project, json!({ "title": "Ship it again" })).await;
+    let other_id = other["id"].as_str().expect("test value");
+    let (status, duplicate) = owner
+        .post(
+            &format!("{base}/work-items/{main_id}/relations"),
+            json!({ "expectedVersion": linked["version"], "kind": "duplicates", "target": secret["key"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{duplicate}");
+    let (status, refused) = member
+        .post(
+            &format!("{base}/work-items/{main_id}/relations"),
+            json!({ "expectedVersion": duplicate["version"], "kind": "duplicates", "target": other["key"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(!refused.to_string().contains("SIDE-"), "{refused}");
+    let secret_id = secret["id"].as_str().expect("test value");
+    let (_, secret_now) = owner
+        .get(&format!(
+            "/api/v1/projects/{side_id}/work-items/{secret_id}"
+        ))
+        .await;
+    let (status, closed_loop) = owner
+        .post(
+            &format!("/api/v1/projects/{side_id}/work-items/{secret_id}/dependencies"),
+            json!({ "expectedVersion": secret_now["version"], "blockedBy": [other["key"]] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{closed_loop}");
+    let (_, other_now) = member.get(&format!("{base}/work-items/{other_id}")).await;
+    let (status, refused) = member
+        .post(
+            &format!("{base}/work-items/{other_id}/dependencies"),
+            json!({ "expectedVersion": other_now["version"], "blockedBy": [main["key"]] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(!refused.to_string().contains("SIDE-"), "{refused}");
+    assert!(
+        refused["error"]["details"]["path"]
+            .as_array()
+            .expect("test value")
+            .contains(&json!("a task in another project")),
+        "{refused}"
+    );
+
     // Nor can the member read the side project's list or labels.
     let (status, _) = member
         .get(&format!("/api/v1/projects/{side_id}/work-items"))

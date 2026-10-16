@@ -66,10 +66,10 @@ export async function updateLabel(input: {
   )
 }
 
-export async function listMilestones(projectId: string, includeArchived = false): Promise<Milestone[]> {
+export async function listMilestones(projectId: string, includeArchived = false): Promise<{ milestones: Milestone[]; canEdit: boolean }> {
   const query = includeArchived ? '?includeArchived=true' : ''
   const payload = record(await requestJson<unknown>(projectPath(projectId, `milestones${query}`)))
-  return list(payload.milestones).map(milestone)
+  return { milestones: list(payload.milestones).map(milestone), canEdit: boolean(payload.canEdit) }
 }
 
 export async function createMilestone(input: {

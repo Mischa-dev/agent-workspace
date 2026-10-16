@@ -39,6 +39,17 @@ pub struct Reader {
     pub connection_id: Option<Uuid>,
 }
 
+/// The agent connection an actor writes through, as `actor_can_access_project` takes it.
+fn connection_of(actor: &CommandActor) -> Option<Uuid> {
+    match &actor.audit {
+        AuditAttribution::Mcp {
+            external_agent_connection_id,
+            ..
+        } => *external_agent_connection_id,
+        AuditAttribution::Browser { .. } => None,
+    }
+}
+
 /// Another task, as a reader who may see it sees it.
 #[derive(Clone, Debug, FromRow, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -527,7 +538,7 @@ pub async fn change_dependencies(
             .rows_affected()
         } else {
             if let Some(path) = blocking_path(transaction, blocked.id, blocking.id).await? {
-                let keys = keys_for(transaction, &path).await?;
+                let keys = keys_for(transaction, actor, &path).await?;
                 return Ok(Err((index, LinkRefusal::Cycle { path: keys })));
             }
             let inserted = sqlx::query(
@@ -668,18 +679,29 @@ async fn record_link_activities(
     Ok(versions)
 }
 
+/// The keys of `ids` in order; a task the actor can't see is named only as
+/// one in another project.
 async fn keys_for(
     transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
     ids: &[Uuid],
 ) -> Result<Vec<String>, AppError> {
     let keys = sqlx::query_as::<_, (Uuid, String)>(
         r#"
-        SELECT item.id, project.project_key || '-' || item.number
+        SELECT item.id,
+               CASE
+                   WHEN item.project_id = $2 OR actor_can_access_project($3, $4, item.project_id)
+                   THEN project.project_key || '-' || item.number
+                   ELSE 'a task in another project'
+               END
         FROM work_items item JOIN projects project ON project.id = item.project_id
         WHERE item.id = ANY($1)
         "#,
     )
     .bind(ids)
+    .bind(actor.project_id)
+    .bind(actor.actor_id)
+    .bind(connection_of(actor))
     .fetch_all(&mut **transaction)
     .await?
     .into_iter()
@@ -764,7 +786,11 @@ pub async fn change_relation(
         if kind == RelationKind::Duplicates
             && let Some(original) = sqlx::query_scalar::<_, String>(
                 r#"
-                SELECT project.project_key || '-' || item.number
+                SELECT CASE
+                    WHEN item.project_id = $3 OR actor_can_access_project($4, $5, item.project_id)
+                    THEN project.project_key || '-' || item.number
+                    ELSE 'a task in another project'
+                END
                 FROM work_item_relations relation
                 JOIN work_items item ON item.id = relation.other_work_item_id
                 JOIN projects project ON project.id = item.project_id
@@ -774,6 +800,9 @@ pub async fn change_relation(
             )
             .bind(task_id)
             .bind(other_id)
+            .bind(task.project_id)
+            .bind(actor.actor_id)
+            .bind(connection_of(actor))
             .fetch_optional(&mut **transaction)
             .await?
         {

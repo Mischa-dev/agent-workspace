@@ -59,12 +59,23 @@ export function useLabels(projectId: string, includeArchived = false) {
   })
 }
 
+/** The milestones and whether the viewer may change them. */
+export function useMilestoneList(projectId: string, includeArchived = false) {
+  return useQuery({
+    queryKey: queryKeys.workItemMilestones(projectId, includeArchived),
+    queryFn: () => listMilestones(projectId, includeArchived),
+    enabled: Boolean(projectId),
+    staleTime: 30_000,
+  })
+}
+
 export function useMilestones(projectId: string, includeArchived = false) {
   return useQuery({
     queryKey: queryKeys.workItemMilestones(projectId, includeArchived),
     queryFn: () => listMilestones(projectId, includeArchived),
     enabled: Boolean(projectId),
     staleTime: 30_000,
+    select: (page) => page.milestones,
   })
 }
 
