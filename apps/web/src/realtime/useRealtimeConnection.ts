@@ -68,6 +68,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
     const pendingDeltas: Record<string, Record<string, string>> = {}
     const streamRunIds: Record<string, Record<string, string>> = {}
     const invalidationTimers = new Map<string, number>()
+    let workItemQueue: Promise<void> = Promise.resolve()
 
     const remember = (eventId: string) => {
       if (recentIds.has(eventId)) return false
@@ -271,7 +272,10 @@ export function useRealtimeConnection(): RealtimeContextValue {
           }
           const workItem = workItemChange(envelope)
           if (workItem) {
-            void applyWorkItemChange(queryClient, envelope.projectId, workItem)
+            // One at a time, in event order: a card's neighbours may be moving too.
+            workItemQueue = workItemQueue
+              .then(() => applyWorkItemChange(queryClient, envelope.projectId, workItem))
+              .catch(() => undefined)
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
