@@ -214,7 +214,7 @@ async fn provider_turn_failure_idles_its_linked_session_without_live_credentials
     assert_eq!(session_state, "idle");
     assert_eq!(
         failure_reason,
-        "The hosted Codex turn failed. The worktree was preserved."
+        "The agent's turn failed. The worktree was preserved."
     );
 
     let (failure_entries, outbox_events) = sqlx::query_as::<_, (i64, i64)>(

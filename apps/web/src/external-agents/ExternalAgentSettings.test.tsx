@@ -180,4 +180,58 @@ describe('ExternalAgentSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(screen.queryByText(token)).not.toBeInTheDocument()
   })
+  it('adds a Codex runner in one form and shows its settings once', async () => {
+    const posts: Array<{ path: string; body: unknown }> = []
+    const secret = `whsec_${'s'.repeat(43)}`
+    let created = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (init?.method === 'POST') {
+          created = true
+          posts.push({ path, body: JSON.parse(String(init.body)) })
+          return jsonResponse({
+            connection: { ...connection, displayName: 'Codex', handle: 'codex' },
+            oneTimeCredential: {
+              id: credentialId,
+              token,
+              tokenPrefix: token.slice(0, 16),
+              expiresAt: '2026-09-04T07:00:00Z',
+            },
+            webhookSecret: secret,
+          })
+        }
+        return jsonResponse({ connections: created ? [connection] : [] })
+      }),
+    )
+
+    renderSettings()
+    await screen.findByText('No agents connected yet.')
+    fireEvent.click(screen.getByRole('radio', { name: 'Codex' }))
+    expect(screen.getByLabelText('Handle')).toHaveValue('codex')
+    fireEvent.change(screen.getByLabelText('Runner URL (optional)'), {
+      target: { value: 'https://runner.example/wake' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add runner' }))
+    const settings = await screen.findByLabelText('Runner settings')
+    expect(posts).toHaveLength(1)
+    expect(posts[0].body).toMatchObject({
+      displayName: 'Codex',
+      handle: 'codex',
+      role: 'member',
+      webhookUrl: 'https://runner.example/wake',
+    })
+    expect(settings.textContent).toContain(`AGENT_WORKSPACE_TOKEN=${token}`)
+    expect(settings.textContent).toContain(`AGENT_WORKSPACE_WEBHOOK_SECRET=${secret}`)
+    expect(settings.textContent).toContain('AGENT_WORKSPACE_RUNNER=codex')
+    expect(posts.every(({ path }) => !path.includes('aw_ext_') && !path.includes('whsec_'))).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy settings' }))
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(settings.textContent)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByText(secret, { exact: false })).not.toBeInTheDocument()
+  })
 })

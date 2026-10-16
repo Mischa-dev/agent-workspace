@@ -226,7 +226,7 @@ done
     assert_eq!(state, "failed");
     assert_eq!(
         failure_reason.as_deref(),
-        Some("Codex App Server could not start. The worktree was preserved.")
+        Some("The agent harness could not start. The worktree was preserved.")
     );
     assert_eq!(workspace_state, "retained");
     assert_eq!(worktree_state, "ready");

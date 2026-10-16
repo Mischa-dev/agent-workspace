@@ -329,6 +329,7 @@ const replyStatuses: ReplyRequestStatus[] = [
   'passed',
   'released',
   'expired',
+  'cancelled',
 ]
 
 function normalizeReplyRequest(value: unknown): ReplyRequest | null {
@@ -349,8 +350,12 @@ function normalizeReplyRequest(value: unknown): ReplyRequest | null {
     required: record.required === true,
     status: record.status as ReplyRequestStatus,
     reason: nullableString(record.reason),
+    progress: nullableString(record.progress),
+    progressAt: nullableString(record.progressAt),
     updatedAt: string(record.updatedAt),
     agentLastSeenAt: nullableString(record.agentLastSeenAt),
+    threadId: nullableString(record.threadId),
+    followsRequestId: nullableString(record.followsRequestId),
   }
 }
 
@@ -364,6 +369,14 @@ export async function continueConversation(conversationId: string) {
 export async function retryReplyRequest(requestId: string) {
   await requestJson<unknown>(
     `/api/v1/reply-requests/${encodeURIComponent(requestId)}/retry`,
+    { method: 'POST' },
+  )
+}
+
+/** Stop an agent's work on a request (and its follow-ups queued behind it). */
+export async function stopReplyRequest(requestId: string) {
+  await requestJson<unknown>(
+    `/api/v1/reply-requests/${encodeURIComponent(requestId)}/stop`,
     { method: 'POST' },
   )
 }

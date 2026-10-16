@@ -41,10 +41,10 @@ pub fn prepare_private_profile_directory(
     let normalized_root = resolve_path_within_data_root(configured_data_root, configured_root)?;
     let relative_profile_root = normalized_root
         .strip_prefix(&normalized_data_root)
-        .map_err(|_| AppError::Invalid("Codex profile root escapes the data root"))?;
+        .map_err(|_| AppError::Invalid("account home root escapes the data root"))?;
     if relative_profile_root.as_os_str().is_empty() {
         return Err(AppError::Invalid(
-            "Codex profile root must be beneath the data root",
+            "account home root must be beneath the data root",
         ));
     }
 
@@ -55,7 +55,7 @@ pub fn prepare_private_profile_directory(
         existing_anchor_and_suffix(data_parent, &normalized_data_root)?;
     let canonical_anchor = anchor_path
         .canonicalize()
-        .map_err(|_| AppError::Internal("canonicalize Codex profile ancestor"))?;
+        .map_err(|_| AppError::Internal("canonicalize account home ancestor"))?;
     let mut directory = open_directory(&canonical_anchor)?;
     let mut canonical_data_root = canonical_anchor;
 
@@ -72,17 +72,17 @@ pub fn prepare_private_profile_directory(
     let mut canonical_root = canonical_data_root;
     for component in relative_profile_root.components() {
         let Component::Normal(name) = component else {
-            return Err(AppError::Invalid("unsafe Codex profile root"));
+            return Err(AppError::Invalid("unsafe account home root"));
         };
         directory = create_or_open_child(&directory, name)?;
         canonical_root.push(name);
     }
     fchmod(&directory, PRIVATE_DIRECTORY_MODE)
-        .map_err(|_| AppError::Internal("protect Codex profile root"))?;
+        .map_err(|_| AppError::Internal("protect account home root"))?;
 
     let profile = create_or_open_child(&directory, OsStr::new(profile_key))?;
     fchmod(&profile, PRIVATE_DIRECTORY_MODE)
-        .map_err(|_| AppError::Internal("protect Codex profile"))?;
+        .map_err(|_| AppError::Internal("protect account home"))?;
     let profile_path = canonical_root.join(profile_key);
 
     // The final path check catches a rename/substitution that occurred while
@@ -91,9 +91,9 @@ pub fn prepare_private_profile_directory(
     // principal is granted concurrent write access to the containing root.
     let canonical_profile = profile_path
         .canonicalize()
-        .map_err(|_| AppError::Internal("canonicalize Codex profile"))?;
+        .map_err(|_| AppError::Internal("canonicalize account home"))?;
     if canonical_profile != profile_path {
-        return Err(AppError::Invalid("unsafe Codex profile path"));
+        return Err(AppError::Invalid("unsafe account home path"));
     }
 
     Ok(profile_path)
@@ -106,7 +106,7 @@ pub fn prepare_private_profile_directory(
     _profile_key: &str,
 ) -> Result<PathBuf, AppError> {
     Err(AppError::Internal(
-        "private Codex profiles require a Unix host",
+        "private account homes require a Unix host",
     ))
 }
 
@@ -117,14 +117,14 @@ fn validate_profile_key(profile_key: &str) -> Result<(), AppError> {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {
-        return Err(AppError::Invalid("unsafe Codex profile key"));
+        return Err(AppError::Invalid("unsafe account home key"));
     }
     Ok(())
 }
 
 fn normalize_absolute(path: &Path) -> Result<PathBuf, AppError> {
     if !path.is_absolute() {
-        return Err(AppError::Invalid("Codex profile root must be absolute"));
+        return Err(AppError::Invalid("account home root must be absolute"));
     }
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -134,7 +134,7 @@ fn normalize_absolute(path: &Path) -> Result<PathBuf, AppError> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !normalized.pop() {
-                    return Err(AppError::Invalid("unsafe Codex profile root"));
+                    return Err(AppError::Invalid("unsafe account home root"));
                 }
             }
             Component::Normal(value) => normalized.push(value),
@@ -150,12 +150,12 @@ fn existing_anchor_and_suffix<'a>(
     let mut anchor = root_parent.to_path_buf();
     while !anchor.exists() {
         if !anchor.pop() {
-            return Err(AppError::Invalid("unsafe Codex profile root"));
+            return Err(AppError::Invalid("unsafe account home root"));
         }
     }
     let suffix = normalized_root
         .strip_prefix(&anchor)
-        .map_err(|_| AppError::Invalid("unsafe Codex profile root"))?
+        .map_err(|_| AppError::Invalid("unsafe account home root"))?
         .to_path_buf();
     Ok((anchor, suffix))
 }
@@ -167,14 +167,14 @@ fn open_directory(path: &Path) -> Result<OwnedFd, AppError> {
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
-    .map_err(|_| AppError::Invalid("unsafe Codex profile ancestor"))
+    .map_err(|_| AppError::Invalid("unsafe account home ancestor"))
 }
 
 #[cfg(unix)]
 fn create_or_open_child(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd, AppError> {
     match mkdirat(parent, name, PRIVATE_DIRECTORY_MODE) {
         Ok(()) | Err(Errno::EXIST) => {}
-        Err(_) => return Err(AppError::Internal("create Codex profile directory")),
+        Err(_) => return Err(AppError::Internal("create account home directory")),
     }
     openat(
         parent,
@@ -182,7 +182,7 @@ fn create_or_open_child(parent: &OwnedFd, name: &OsStr) -> Result<OwnedFd, AppEr
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
-    .map_err(|_| AppError::Invalid("unsafe Codex profile directory"))
+    .map_err(|_| AppError::Invalid("unsafe account home directory"))
 }
 
 #[cfg(all(test, unix))]

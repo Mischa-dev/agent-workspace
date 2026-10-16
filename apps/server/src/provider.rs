@@ -15,15 +15,26 @@ use crate::{
     realtime::RealtimeEvent,
 };
 
+pub mod adapter;
+pub mod catalog;
 mod codex_app_server;
+#[cfg(test)]
+mod contract_tests;
+pub mod demo;
+pub mod manifest;
+mod registry;
+pub mod run_config;
 
-pub use codex_app_server::{
-    AccountSummary, LoginCeremonyError, LoginCeremonySnapshot, LoginKind, LoginReservation,
-    LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, SupervisorRegistry,
+pub use adapter::{
+    AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
+    ProfileHealth, RateLimitSummary, RateLimitWindow,
 };
-use codex_app_server::{
-    ApprovalKind, ItemKind, ProfileLease, ProviderAnswer, ProviderEvent, RecoveredTurn,
+use adapter::{HarnessAnswer, HarnessEvent, HarnessRequest, ItemKind, RecoveredTurn, RequestKind};
+pub use codex_app_server::{CODEX_KIND, codex_manifest};
+pub use registry::{
+    LoginCeremonyError, LoginCeremonySnapshot, LoginReservation, SupervisorRegistry,
 };
+use run_config::RunConfig;
 
 const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
 
@@ -33,17 +44,17 @@ struct ProviderApprovalPolicy {
     human_required: bool,
 }
 
-fn provider_approval_policy(kind: ApprovalKind) -> Option<ProviderApprovalPolicy> {
+fn provider_approval_policy(kind: RequestKind) -> Option<ProviderApprovalPolicy> {
     match kind {
-        ApprovalKind::Question => Some(ProviderApprovalPolicy {
+        RequestKind::Question => Some(ProviderApprovalPolicy {
             eligible_role: ANY_AUTHORIZED_APPROVER,
             human_required: false,
         }),
-        ApprovalKind::Approval => Some(ProviderApprovalPolicy {
+        RequestKind::Approval => Some(ProviderApprovalPolicy {
             eligible_role: "owner",
             human_required: true,
         }),
-        ApprovalKind::Unsupported => None,
+        RequestKind::Unsupported => None,
     }
 }
 
@@ -63,6 +74,143 @@ pub(crate) enum ProviderRecovery {
     Unavailable,
 }
 
+/// The provider account behind an execution profile, and the adapter that
+/// runs it.
+#[derive(Clone, Debug, FromRow)]
+pub(crate) struct ProfileAccount {
+    pub(crate) account_id: Uuid,
+    pub(crate) adapter_kind: String,
+    pub(crate) home_path: String,
+    pub(crate) max_concurrent_runs: i16,
+}
+
+impl ProfileAccount {
+    pub(crate) fn handle(&self) -> AccountHandle {
+        AccountHandle {
+            id: self.account_id,
+            home: PathBuf::from(&self.home_path),
+            max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+        }
+    }
+
+    pub(crate) async fn for_profile(
+        pool: &sqlx::PgPool,
+        execution_profile_id: Uuid,
+    ) -> Result<Self, AppError> {
+        Ok(sqlx::query_as::<_, Self>(
+            r#"
+            SELECT account.id AS account_id, account.adapter_kind, account.home_path,
+                   account.max_concurrent_runs
+            FROM execution_profiles profile
+            JOIN provider_accounts account ON account.id = profile.provider_account_id
+            WHERE profile.id = $1
+            "#,
+        )
+        .bind(execution_profile_id)
+        .fetch_one(pool)
+        .await?)
+    }
+}
+
+async fn run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppError> {
+    let config = sqlx::query_scalar::<_, Value>("SELECT config FROM agent_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(RunConfig::from_value(&config))
+}
+
+/// Resolves a run's settings for the account it runs on: the launch
+/// overrides over the account's defaults over the workspace catalog and the
+/// adapter's manifest. Refuses values the harness doesn't offer.
+pub(crate) async fn resolve_run_config(
+    state: &AppState,
+    organization_id: Uuid,
+    adapter_kind: &str,
+    account_defaults: &Value,
+    launch: &RunConfig,
+) -> Result<RunConfig, AppError> {
+    let manifest = state
+        .supervisors
+        .manifest(adapter_kind)
+        .ok_or(AppError::Conflict(
+            "agent_run",
+            "this harness is not installed",
+        ))?;
+    let catalog = catalog::run_catalog(&state.pool, organization_id, manifest).await?;
+    launch
+        .resolve(&RunConfig::from_value(account_defaults), manifest, &catalog)
+        .map_err(|error| AppError::Validation(error.0))
+}
+
+/// `resolve_run_config` for settings that were valid once: whatever the
+/// harness or catalog stopped offering falls back on its own, and the rest
+/// (isolation above all) is kept.
+pub(crate) async fn resolve_stored_run_config(
+    state: &AppState,
+    organization_id: Uuid,
+    adapter_kind: &str,
+    account_defaults: &Value,
+    launch: &RunConfig,
+) -> Result<RunConfig, AppError> {
+    let manifest = state
+        .supervisors
+        .manifest(adapter_kind)
+        .ok_or(AppError::Conflict(
+            "agent_run",
+            "this harness is not installed",
+        ))?;
+    let catalog = catalog::run_catalog(&state.pool, organization_id, manifest).await?;
+    launch
+        .resolve_keeping_what_still_fits(
+            &RunConfig::from_value(account_defaults),
+            manifest,
+            &catalog,
+        )
+        .map_err(|error| AppError::Validation(error.0))
+}
+
+/// The run's frozen settings. Runs created without them (by paths that
+/// predate H4) get their account's defaults once, here, and keep them.
+async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppError> {
+    let config = run_config(state, run_id).await?;
+    if config != RunConfig::default() {
+        return Ok(config);
+    }
+    let (organization_id, adapter_kind, run_defaults) = sqlx::query_as::<_, (Uuid, String, Value)>(
+        r#"
+            SELECT account.organization_id, account.adapter_kind, account.run_defaults
+            FROM agent_runs run
+            JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+            JOIN provider_accounts account ON account.id = profile.provider_account_id
+            WHERE run.id = $1
+            "#,
+    )
+    .bind(run_id)
+    .fetch_one(&state.pool)
+    .await?;
+    // Defaults that stopped matching the catalog fall back one by one.
+    let resolved = resolve_stored_run_config(
+        state,
+        organization_id,
+        &adapter_kind,
+        &run_defaults,
+        &RunConfig::default(),
+    )
+    .await?;
+    let value = serde_json::to_value(&resolved)
+        .map_err(|_| AppError::Internal("serialize run settings"))?;
+    sqlx::query("UPDATE agent_runs SET config = $2 WHERE id = $1 AND config = '{}'::jsonb")
+        .bind(run_id)
+        .bind(value)
+        .execute(&state.pool)
+        .await?;
+    run_config(state, run_id).await
+}
+
+const SLOT_RELEASE_WAIT: Duration = Duration::from_secs(10);
+const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
 pub async fn start_run(
     state: &AppState,
     project_id: Uuid,
@@ -72,25 +220,35 @@ pub async fn start_run(
     worktree: PathBuf,
     prompt: String,
 ) -> Result<StartedProviderRun, AppError> {
-    let codex_home = sqlx::query_scalar::<_, String>(
-        "SELECT codex_home_path FROM execution_profiles WHERE id = $1",
-    )
-    .bind(execution_profile_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let codex_home = PathBuf::from(codex_home);
-    let provider = state
-        .supervisors
-        .acquire(execution_profile_id, codex_home)
-        .await;
+    let account = ProfileAccount::for_profile(&state.pool, execution_profile_id).await?;
+    let config = ensure_run_config(state, run_id).await?;
+    // The scheduler admits from database counts; a run that just ended may
+    // still hold its harness slot until its session winds down, so a full
+    // harness is waited on briefly rather than failing the run.
+    let mut waited = Duration::ZERO;
+    let provider = loop {
+        match state
+            .supervisors
+            .acquire_run(&account.adapter_kind, account.handle())
+            .await
+        {
+            Err(HarnessError::HostCapacity | HarnessError::AccountCapacity)
+                if waited < SLOT_RELEASE_WAIT =>
+            {
+                sleep(SLOT_RETRY_INTERVAL).await;
+                waited += SLOT_RETRY_INTERVAL;
+            }
+            result => break result,
+        }
+    };
     let mut provider = match provider {
         Ok(provider) => {
-            mark_profile_healthy(state, execution_profile_id).await?;
+            mark_account_healthy(state, account.account_id).await?;
             provider
         }
         Err(error) => {
-            mark_profile_failure(state, execution_profile_id, "supervisor_unavailable").await;
-            return Err(provider_error(run_id, "acquire profile supervisor", error));
+            mark_account_failure(state, account.account_id, "supervisor_unavailable").await;
+            return Err(provider_error(run_id, "acquire harness session", error));
         }
     };
 
@@ -109,13 +267,13 @@ pub async fn start_run(
     let (provider_session_id, provider_thread_id) = if let Some((session_id, thread_id)) = existing
     {
         provider
-            .resume_thread(&thread_id, &worktree)
+            .resume_thread(&thread_id, &worktree, &config)
             .await
             .map_err(|error| provider_error(run_id, "resume thread", error))?;
         (session_id, thread_id)
     } else {
         let thread_id = provider
-            .start_thread(&worktree)
+            .start_thread(&worktree, &config)
             .await
             .map_err(|error| provider_error(run_id, "start thread", error))?;
         let session_id = Uuid::now_v7();
@@ -170,7 +328,7 @@ pub async fn start_run(
     transaction.commit().await?;
 
     let turn_id = provider
-        .start_turn(&provider_thread_id, &worktree, &prompt)
+        .start_turn(&provider_thread_id, &worktree, &prompt, &config)
         .await
         .map_err(|error| provider_error(run_id, "start turn", error))?;
 
@@ -221,14 +379,14 @@ pub async fn start_run(
             tracing::error!(
                 error_category = error.log_category(),
                 %run_id,
-                "hosted Codex turn failed"
+                "agent turn failed"
             );
             let _ = fail_run(
                 &background_state,
                 project_id,
                 run_id,
                 conversation_id,
-                "The hosted Codex turn failed. The worktree was preserved.",
+                "The agent's turn failed. The worktree was preserved.",
             )
             .await;
         }
@@ -245,37 +403,40 @@ pub(crate) async fn inspect_provider_for_recovery(
     run_id: Uuid,
     worktree: PathBuf,
 ) -> ProviderRecovery {
-    let provider = sqlx::query_as::<_, (String, String, Uuid, Option<String>)>(
+    let provider = sqlx::query_as::<_, (String, Uuid, Option<String>)>(
         r#"
-        SELECT ps.provider_thread_id, ep.codex_home_path, ep.id,
-               ar.provider_turn_id
+        SELECT ps.provider_thread_id, ar.execution_profile_id, ar.provider_turn_id
         FROM agent_runs ar
         JOIN provider_sessions ps ON ps.id = ar.provider_session_id
-        JOIN execution_profiles ep ON ep.id = ar.execution_profile_id
         WHERE ar.id = $1
         "#,
     )
     .bind(run_id)
     .fetch_optional(&state.pool)
     .await;
-    let Ok(Some((provider_thread_id, codex_home, execution_profile_id, provider_turn_id))) =
-        provider
-    else {
+    let Ok(Some((provider_thread_id, execution_profile_id, provider_turn_id))) = provider else {
         return ProviderRecovery::Unavailable;
     };
     let Some(provider_turn_id) = provider_turn_id else {
         return ProviderRecovery::UnboundTurn;
     };
+    let Ok(account) = ProfileAccount::for_profile(&state.pool, execution_profile_id).await else {
+        return ProviderRecovery::Unavailable;
+    };
+    let Ok(config) = run_config(state, run_id).await else {
+        return ProviderRecovery::Unavailable;
+    };
 
+    // Reading history never takes a run slot.
     let provider = state
         .supervisors
-        .acquire(execution_profile_id, PathBuf::from(codex_home))
+        .acquire_control(&account.adapter_kind, account.handle())
         .await;
     let Ok(mut provider) = provider else {
         return ProviderRecovery::Unavailable;
     };
     if provider
-        .resume_thread(&provider_thread_id, &worktree)
+        .resume_thread(&provider_thread_id, &worktree, &config)
         .await
         .is_err()
     {
@@ -307,16 +468,16 @@ fn recovered_turn_has_identity(history: &RecoveredTurn, expected_turn_id: &str) 
     history.id.as_deref() == Some(expected_turn_id)
 }
 
-async fn mark_profile_healthy(state: &AppState, profile_id: Uuid) -> Result<(), AppError> {
+async fn mark_account_healthy(state: &AppState, account_id: Uuid) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        UPDATE execution_profiles
+        UPDATE provider_accounts
         SET last_health_at = now(), last_failure_category = NULL,
-            version = version + 1, updated_at = now()
+            updated_at = now()
         WHERE id = $1
         "#,
     )
-    .bind(profile_id)
+    .bind(account_id)
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -347,24 +508,24 @@ async fn idle_unowned_provider_session(
     Ok(())
 }
 
-async fn mark_profile_failure(state: &AppState, profile_id: Uuid, category: &'static str) {
+async fn mark_account_failure(state: &AppState, account_id: Uuid, category: &'static str) {
     if let Err(error) = sqlx::query(
         r#"
-        UPDATE execution_profiles
+        UPDATE provider_accounts
         SET last_health_at = now(), last_failure_category = $2,
-            version = version + 1, updated_at = now()
+            updated_at = now()
         WHERE id = $1
         "#,
     )
-    .bind(profile_id)
+    .bind(account_id)
     .bind(category)
     .execute(&state.pool)
     .await
     {
         tracing::error!(
             error_type = std::any::type_name_of_val(&error),
-            %profile_id,
-            "failed to persist redacted Codex profile health"
+            %account_id,
+            "failed to persist redacted provider account health"
         );
     }
 }
@@ -418,7 +579,7 @@ struct RecoveryCompletion<'a> {
 #[allow(clippy::too_many_arguments)]
 async fn drive_turn(
     state: AppState,
-    mut provider: ProfileLease,
+    mut provider: Box<dyn HarnessSession>,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
@@ -427,7 +588,6 @@ async fn drive_turn(
 ) -> Result<(), AppError> {
     let mut message = PlainTextMessageBuffer::default();
     let message_stream_id = Uuid::now_v7();
-    let execution_profile_id = provider.profile_id();
     loop {
         tokio::select! {
             event = provider.next_event() => {
@@ -438,14 +598,14 @@ async fn drive_turn(
                             sleep(Duration::from_millis(100)).await;
                         }
                         if state.supervisors.is_shutting_down() {
-                            provider.shutdown_process().await;
+                            provider.shutdown().await;
                             return Ok(());
                         }
                         return Err(provider_error(run_id, "read event", error));
                     }
                 };
                 match event {
-                    ProviderEvent::Request(request) => handle_provider_request(
+                    HarnessEvent::Request(request) => handle_provider_request(
                         &state,
                         &mut provider,
                         project_id,
@@ -453,9 +613,9 @@ async fn drive_turn(
                         conversation_id,
                         request,
                     ).await?,
-                    ProviderEvent::AgentMessageDelta(delta) => {
+                    HarnessEvent::MessageDelta(delta) => {
                         if let Err(error) = message.push(&delta) {
-                            provider.shutdown_process().await;
+                            provider.shutdown().await;
                             return Err(provider_message_error(run_id, error));
                         }
                         state.realtime.publish(RealtimeEvent {
@@ -470,7 +630,7 @@ async fn drive_turn(
                             }),
                         });
                     }
-                    ProviderEvent::ItemStarted(event)
+                    HarnessEvent::ItemStarted(event)
                         if event.kind == ItemKind::CommandExecution => {
                         persist_event(
                             &state,
@@ -480,12 +640,12 @@ async fn drive_turn(
                             SignificantProviderEvent {
                                 key: &event.key,
                                 kind: "command_started",
-                                summary: "Codex started a command in the isolated worktree.",
+                                summary: "The agent started a command in the isolated worktree.",
                                 payload: json!({}),
                             },
                         ).await?;
                     }
-                    ProviderEvent::ItemCompleted(event)
+                    HarnessEvent::ItemCompleted(event)
                         if event.kind == ItemKind::CommandExecution => {
                         persist_event(
                             &state,
@@ -495,12 +655,12 @@ async fn drive_turn(
                             SignificantProviderEvent {
                                 key: &event.key,
                                 kind: "command_completed",
-                                summary: "Codex completed a command in the isolated worktree.",
+                                summary: "The agent completed a command in the isolated worktree.",
                                 payload: json!({}),
                             },
                         ).await?;
                     }
-                    ProviderEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
+                    HarnessEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
                         persist_event(
                             &state,
                             project_id,
@@ -509,16 +669,16 @@ async fn drive_turn(
                             SignificantProviderEvent {
                                 key: &event.key,
                                 kind: "file_change",
-                                summary: "Codex completed a file change in the isolated worktree.",
+                                summary: "The agent completed a file change in the isolated worktree.",
                                 payload: json!({}),
                             },
                         ).await?;
                     }
-                    ProviderEvent::TurnCompleted { completed } => {
+                    HarnessEvent::TurnCompleted { completed } => {
                         if !completed {
                             return Err(AppError::Conflict(
                                 "provider",
-                                "Codex turn did not complete successfully",
+                                "the agent's turn did not complete successfully",
                             ));
                         }
                         complete_run(
@@ -532,27 +692,27 @@ async fn drive_turn(
                         ).await?;
                         return Ok(());
                     }
-                    ProviderEvent::Error => {
-                        return Err(AppError::Conflict("provider", "Codex reported an error"));
+                    HarnessEvent::Error => {
+                        return Err(AppError::Conflict("provider", "the harness reported an error"));
                     }
-                    ProviderEvent::ItemStarted(_)
-                    | ProviderEvent::ItemCompleted(_)
-                    | ProviderEvent::Ignored => {}
+                    HarnessEvent::ItemStarted(_)
+                    | HarnessEvent::ItemCompleted(_)
+                    | HarnessEvent::Ignored => {}
                 }
             }
             () = sleep(Duration::from_millis(500)) => {
                 if state.supervisors.is_shutting_down() {
-                    provider.shutdown_process().await;
+                    provider.shutdown().await;
                     return Ok(());
                 }
-                if state.supervisors.profile_is_stopping(execution_profile_id).await {
-                    provider.shutdown_process().await;
+                if provider.is_stopping() {
+                    provider.shutdown().await;
                     fail_run(
                         &state,
                         project_id,
                         run_id,
                         conversation_id,
-                        "The Execution Profile was stopped. The worktree was preserved.",
+                        "The provider account was signed out. The worktree was preserved.",
                     ).await?;
                     return Ok(());
                 }
@@ -568,7 +728,7 @@ async fn drive_turn(
                 }
             }
             () = state.supervisors.shutdown_requested() => {
-                provider.shutdown_process().await;
+                provider.shutdown().await;
                 return Ok(());
             }
         }
@@ -577,15 +737,15 @@ async fn drive_turn(
 
 async fn handle_provider_request(
     state: &AppState,
-    provider: &mut ProfileLease,
+    provider: &mut Box<dyn HarnessSession>,
     project_id: Uuid,
     run_id: Uuid,
     conversation_id: Uuid,
-    request: codex_app_server::ProviderRequest,
+    request: HarnessRequest,
 ) -> Result<(), AppError> {
-    if request.kind == ApprovalKind::Unsupported {
+    if request.kind == RequestKind::Unsupported {
         provider
-            .answer_request(request, ProviderAnswer::Deny)
+            .answer(request, HarnessAnswer::Deny)
             .await
             .map_err(|error| {
                 provider_error(run_id, "reject unsupported provider request", error)
@@ -593,14 +753,14 @@ async fn handle_provider_request(
         return Ok(());
     }
     let kind = match request.kind {
-        ApprovalKind::Question => "question",
-        ApprovalKind::Approval => "approval",
-        ApprovalKind::Unsupported => unreachable!("unsupported requests return above"),
+        RequestKind::Question => "question",
+        RequestKind::Approval => "approval",
+        RequestKind::Unsupported => unreachable!("unsupported requests return above"),
     };
     let approval_policy = provider_approval_policy(request.kind)
         .ok_or(AppError::Internal("unsupported provider approval policy"))?;
-    let provider_request_id = request.durable_id();
-    let summary = request.summary().to_owned();
+    let provider_request_id = request.durable_id.clone();
+    let summary = request.summary.clone();
     let options = request.public_options();
     let mut transaction = state.pool.begin().await?;
     let inserted_approval_id = sqlx::query_scalar::<_, Uuid>(
@@ -670,23 +830,19 @@ async fn handle_provider_request(
     loop {
         sleep(Duration::from_millis(300)).await;
         if state.supervisors.is_shutting_down() {
-            let _ = provider.answer_request(request, ProviderAnswer::Deny).await;
-            provider.shutdown_process().await;
+            let _ = provider.answer(request, HarnessAnswer::Deny).await;
+            provider.shutdown().await;
             return Ok(());
         }
-        if state
-            .supervisors
-            .profile_is_stopping(provider.profile_id())
-            .await
-        {
-            let _ = provider.answer_request(request, ProviderAnswer::Deny).await;
-            provider.shutdown_process().await;
+        if provider.is_stopping() {
+            let _ = provider.answer(request, HarnessAnswer::Deny).await;
+            provider.shutdown().await;
             fail_run(
                 state,
                 project_id,
                 run_id,
                 conversation_id,
-                "The Execution Profile was stopped. The worktree was preserved.",
+                "The provider account was signed out. The worktree was preserved.",
             )
             .await?;
             return Ok(());
@@ -694,12 +850,13 @@ async fn handle_provider_request(
         #[derive(FromRow)]
         struct Resolution {
             run_state: String,
+            kind: String,
             status: String,
             response: Option<Value>,
         }
         let resolution = sqlx::query_as::<_, Resolution>(
             r#"
-            SELECT ar.state AS run_state, aa.status, aa.response
+            SELECT ar.state AS run_state, aa.kind, aa.status, aa.response
             FROM agent_approvals aa
             JOIN agent_runs ar ON ar.id = aa.agent_run_id
             WHERE aa.id = $1
@@ -710,7 +867,7 @@ async fn handle_provider_request(
         .await?;
         if resolution.run_state == "interrupted" {
             provider
-                .answer_request(request, ProviderAnswer::Deny)
+                .answer(request, HarnessAnswer::Deny)
                 .await
                 .map_err(|error| provider_error(run_id, "decline interrupted request", error))?;
             return Ok(());
@@ -735,20 +892,20 @@ async fn handle_provider_request(
             return Ok(());
         }
         let answer = match resolution.response.as_ref() {
-            Some(response) if kind == "question" => response
+            Some(response) if resolution.kind == "question" => response
                 .get("answer")
                 .and_then(Value::as_str)
-                .map(|answer| ProviderAnswer::Text(answer.to_owned()))
+                .map(|answer| HarnessAnswer::Text(answer.to_owned()))
                 .ok_or(AppError::Internal("resolved question omitted its answer"))?,
             Some(response)
                 if response.get("decision").and_then(Value::as_str) == Some("approve") =>
             {
-                ProviderAnswer::Approve
+                HarnessAnswer::Approve
             }
-            _ => ProviderAnswer::Deny,
+            _ => HarnessAnswer::Deny,
         };
         provider
-            .answer_request(request, answer)
+            .answer(request, answer)
             .await
             .map_err(|error| provider_error(run_id, "answer provider request", error))?;
         sqlx::query(
@@ -899,7 +1056,7 @@ async fn complete_run(
         run_id,
         "provider:run:completed",
         "run_completed",
-        "The hosted Codex turn completed.",
+        "The agent's turn completed.",
         json!({}),
     )
     .await?;
@@ -1108,9 +1265,9 @@ fn provider_error(run_id: Uuid, operation: &'static str, error: impl std::fmt::D
         %run_id,
         operation,
         error_type = std::any::type_name_of_val(&error),
-        "Codex App Server operation failed"
+        "harness operation failed"
     );
-    AppError::Conflict("provider", "Codex App Server operation failed")
+    AppError::Conflict("provider", "the agent harness operation failed")
 }
 
 fn validated_worker_message(
@@ -1128,9 +1285,9 @@ fn provider_message_error(run_id: Uuid, error: MessageContentError) -> AppError 
     tracing::warn!(
         %run_id,
         validation_error = ?error,
-        "Codex Message output violated the shared Message boundary"
+        "agent Message output violated the shared Message boundary"
     );
-    AppError::Conflict("provider", "Codex Message output is invalid")
+    AppError::Conflict("provider", "the agent's Message output is invalid")
 }
 
 #[cfg(test)]
@@ -1140,25 +1297,25 @@ mod tests {
         validated_worker_message,
     };
     use crate::message_content::{MAX_MESSAGE_TEXT_CHARACTERS, MessageContentError};
-    use crate::provider::codex_app_server::{ApprovalKind, RecoveredTurn};
+    use crate::provider::adapter::{RecoveredTurn, RequestKind};
 
     #[test]
     fn provider_approval_policy_keeps_execution_approvals_human_required() {
         assert_eq!(
-            provider_approval_policy(ApprovalKind::Question),
+            provider_approval_policy(RequestKind::Question),
             Some(ProviderApprovalPolicy {
                 eligible_role: "any_authorized",
                 human_required: false,
             })
         );
         assert_eq!(
-            provider_approval_policy(ApprovalKind::Approval),
+            provider_approval_policy(RequestKind::Approval),
             Some(ProviderApprovalPolicy {
                 eligible_role: "owner",
                 human_required: true,
             })
         );
-        assert_eq!(provider_approval_policy(ApprovalKind::Unsupported), None);
+        assert_eq!(provider_approval_policy(RequestKind::Unsupported), None);
     }
 
     #[test]
