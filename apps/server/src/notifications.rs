@@ -78,6 +78,8 @@ pub enum Category {
     Tasks,
     Runs,
     PullRequests,
+    /// Capacity alerts about your provider accounts (W9).
+    Usage,
 }
 
 impl Category {
@@ -93,6 +95,7 @@ impl Category {
                 kind::RUN_FAILED,
             ]),
             Self::PullRequests => Some(&[kind::CHECKS_FAILED, kind::REVIEW_REQUESTED]),
+            Self::Usage => Some(crate::usage::alerts::kind::ALL),
         }
     }
 }
@@ -342,7 +345,7 @@ pub async fn fan_out(
 }
 
 /// Tells the recipient's open browsers their notifications changed.
-async fn announce(
+pub(crate) async fn announce(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     actor_id: Uuid,
@@ -904,6 +907,10 @@ const VISIBLE: &str = r#"
     actor_can_access_project($1, NULL, n.project_id)
     AND (n.conversation_id IS NULL OR conversation_visible_to(n.conversation_id, $1))
     AND (n.pull_request_id IS NULL OR pull_request_visible_to(n.pull_request_id, $1))
+    AND (n.subject_kind <> 'provider_account' OR EXISTS (
+        SELECT 1 FROM provider_accounts account
+        WHERE account.id = n.subject_id AND account.owner_actor_id = $1
+    ))
 "#;
 
 #[derive(Clone, Debug, Default)]
@@ -1361,11 +1368,23 @@ fn view(row: NotificationRow) -> NotificationView {
         }),
         _ => None,
     };
+    // Kinds that belong to no project (capacity alerts) name their place.
+    let project_name = row
+        .detail
+        .get("place")
+        .and_then(serde_json::Value::as_str)
+        .filter(|place| !place.is_empty())
+        .map_or(row.project_name, str::to_owned);
+    let subject_title = if row.subject_kind == "provider_account" {
+        project_name.clone()
+    } else {
+        subject_title
+    };
     NotificationView {
         id: row.id,
         kind: row.kind,
         project_id: row.project_id,
-        project_name: row.project_name,
+        project_name,
         subject: SubjectView {
             kind: row.subject_kind,
             id: row.subject_id,

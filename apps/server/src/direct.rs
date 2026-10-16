@@ -968,7 +968,56 @@ async fn ensure_direct_space(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("organization"))?;
+    ensure_space_in(transaction, principal, organization_id, &organization_role).await
+}
 
+/// The direct space of `organization_id` for a person who is an enabled
+/// member there, created (and joined) if needed. Account-wide notices, such
+/// as capacity alerts, are filed under it because they belong to no
+/// project. `None` for anyone who isn't an enabled human member.
+pub(crate) async fn space_for_member(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    actor_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let Some((login_name, display_name, organization_role)) =
+        sqlx::query_as::<_, (String, String, String)>(
+            r#"
+            SELECT users.login_name, users.display_name, membership.role
+            FROM users
+            JOIN organization_memberships membership
+              ON membership.actor_id = users.actor_id AND membership.organization_id = $2
+            WHERE users.actor_id = $1 AND users.status = 'active' AND membership.enabled
+            "#,
+        )
+        .bind(actor_id)
+        .bind(organization_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let space = ensure_space_in(
+        transaction,
+        &Person {
+            actor_id,
+            actor_kind: "human",
+            login_name: &login_name,
+            display_name: &display_name,
+        },
+        organization_id,
+        &organization_role,
+    )
+    .await?;
+    Ok(space.enabled.then_some(space.project_id))
+}
+
+async fn ensure_space_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &Person<'_>,
+    organization_id: Uuid,
+    organization_role: &str,
+) -> Result<DirectSpace, AppError> {
     let project_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1003,7 +1052,7 @@ async fn ensure_direct_space(
     .execute(&mut **transaction)
     .await?;
 
-    let role = match organization_role.as_str() {
+    let role = match organization_role {
         "owner" => "owner",
         "admin" => "admin",
         _ => "member",

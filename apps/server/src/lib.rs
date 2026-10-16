@@ -50,6 +50,7 @@ pub mod seed;
 pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
+pub mod usage;
 pub mod work_item_commands;
 pub mod work_item_history;
 pub mod work_item_labels;
@@ -103,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .merge(message_edits::router())
         .merge(reactions::router())
         .merge(notifications::router())
+        .merge(usage::router())
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(github::router())

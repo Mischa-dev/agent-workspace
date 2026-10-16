@@ -34,7 +34,7 @@ use super::{
         AccountHandle, AccountSummary, HarnessAdapter, HarnessAnswer, HarnessError, HarnessEvent,
         HarnessFuture, HarnessItem, HarnessRequest, HarnessSession, ItemKind, LoginKind,
         LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, RecoveredTurn, RequestKind,
-        RequestOption,
+        RequestOption, ResetCredit, ResetCredits, ResetOutcome, UsageReport, UsageWindow,
     },
     manifest::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
@@ -849,6 +849,39 @@ impl HarnessSession for CodexSession {
         })
     }
 
+    fn read_usage(&mut self) -> HarnessFuture<'_, UsageReport> {
+        Box::pin(async move {
+            let response = self.request("account/rateLimits/read", Value::Null).await?;
+            parse_usage_report(&response)
+        })
+    }
+
+    fn spend_reset_credit<'a>(
+        &'a mut self,
+        credit_id: Option<&'a str>,
+        idempotency_key: &'a str,
+    ) -> HarnessFuture<'a, ResetOutcome> {
+        Box::pin(async move {
+            let credit_id = credit_id
+                .map(|id| bounded_provider_text(id, 200))
+                .transpose()?;
+            let idempotency_key = bounded_provider_text(idempotency_key, 200)?;
+            let response = self
+                .request(
+                    "account/rateLimitResetCredit/consume",
+                    json!({"creditId": credit_id, "idempotencyKey": idempotency_key}),
+                )
+                .await?;
+            match response.get("outcome").and_then(Value::as_str) {
+                Some("reset") => Ok(ResetOutcome::Reset),
+                Some("nothingToReset") => Ok(ResetOutcome::NothingToReset),
+                Some("noCredit") => Ok(ResetOutcome::NoCredit),
+                Some("alreadyRedeemed") => Ok(ResetOutcome::AlreadyRedeemed),
+                _ => Err(HarnessError::InvalidResponse),
+            }
+        })
+    }
+
     fn list_models(&mut self) -> HarnessFuture<'_, Vec<ModelEntry>> {
         Box::pin(self.read_models())
     }
@@ -1038,7 +1071,175 @@ fn parse_event(raw: Value) -> Result<HarnessEvent, HarnessError> {
                 == Some("completed"),
         },
         "error" => HarnessEvent::Error,
+        // Usage readings are a side note to the turn; one that doesn't parse
+        // is dropped, never the turn.
+        "account/rateLimits/updated" => raw
+            .pointer("/params/rateLimits")
+            .and_then(|snapshot| parse_usage_snapshot(None, snapshot).ok())
+            .map(|windows| {
+                HarnessEvent::UsageUpdated(UsageReport {
+                    windows,
+                    reset_credits: None,
+                    plan: None,
+                })
+            })
+            .unwrap_or(HarnessEvent::Ignored),
         _ => HarnessEvent::Ignored,
+    })
+}
+
+/// The most windows one account read may report.
+const MAX_USAGE_WINDOWS: usize = 16;
+const MAX_RESET_CREDITS: usize = 50;
+
+/// `account/rateLimits/read`: the multi-bucket view when present (one
+/// bucket per metered limit, such as `codex`), else the single snapshot.
+fn parse_usage_report(response: &Value) -> Result<UsageReport, HarnessError> {
+    let mut windows = Vec::new();
+    match response
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+        .filter(|buckets| !buckets.is_empty())
+    {
+        Some(buckets) => {
+            for (limit_id, snapshot) in buckets {
+                windows.extend(parse_usage_snapshot(Some(limit_id), snapshot)?);
+            }
+        }
+        None => {
+            let snapshot = response
+                .get("rateLimits")
+                .ok_or(HarnessError::InvalidResponse)?;
+            windows.extend(parse_usage_snapshot(None, snapshot)?);
+        }
+    }
+    windows.truncate(MAX_USAGE_WINDOWS);
+    let plan = response
+        .pointer("/rateLimits/planType")
+        .and_then(Value::as_str)
+        .and_then(|plan| bounded_provider_text(plan, 40).ok());
+    let reset_credits = match response
+        .get("rateLimitResetCredits")
+        .filter(|value| !value.is_null())
+    {
+        None => None,
+        Some(summary) => Some(parse_reset_credits(summary)?),
+    };
+    Ok(UsageReport {
+        windows,
+        reset_credits,
+        plan,
+    })
+}
+
+fn parse_usage_snapshot(
+    limit_id: Option<&str>,
+    snapshot: &Value,
+) -> Result<Vec<UsageWindow>, HarnessError> {
+    let limit_id = limit_id
+        .or_else(|| snapshot.get("limitId").and_then(Value::as_str))
+        .map(usage_key_segment)
+        .unwrap_or_else(|| "codex".to_owned());
+    let limit_name = snapshot
+        .get("limitName")
+        .and_then(Value::as_str)
+        .and_then(|name| bounded_provider_text(name, 80).ok());
+    let reached = snapshot
+        .get("rateLimitReachedType")
+        .is_some_and(|value| !value.is_null());
+    let mut windows = Vec::new();
+    for slot in ["primary", "secondary"] {
+        let Some(value) = snapshot.get(slot).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let used_percent = value
+            .get("usedPercent")
+            .and_then(Value::as_i64)
+            .ok_or(HarnessError::InvalidResponse)?
+            .clamp(0, 100);
+        let bounded = |name: &str, maximum: i64| {
+            value
+                .get(name)
+                .and_then(Value::as_i64)
+                .filter(|value| (0..=maximum).contains(value))
+        };
+        windows.push(UsageWindow {
+            key: format!("{limit_id}.{slot}"),
+            limit_name: limit_name.clone(),
+            used_percent: u16::try_from(used_percent).unwrap_or(100),
+            resets_at: bounded("resetsAt", 4_102_444_800),
+            duration_minutes: bounded("windowDurationMins", 525_600),
+            limit_reached: used_percent >= 100,
+        });
+    }
+    // The snapshot says a limit is reached without saying which window: the
+    // fullest one.
+    if reached
+        && !windows.iter().any(|window| window.limit_reached)
+        && let Some(fullest) = windows.iter_mut().max_by_key(|window| window.used_percent)
+    {
+        fullest.limit_reached = true;
+    }
+    Ok(windows)
+}
+
+/// A limit id as part of a window key: lower case letters, digits, `_`
+/// and `-`, at most 40 characters.
+fn usage_key_segment(limit_id: &str) -> String {
+    let segment = limit_id
+        .chars()
+        .filter_map(|c| {
+            let c = c.to_ascii_lowercase();
+            (c.is_ascii_alphanumeric() || matches!(c, '_' | '-')).then_some(c)
+        })
+        .take(40)
+        .collect::<String>();
+    if segment.is_empty() {
+        "codex".to_owned()
+    } else {
+        segment
+    }
+}
+
+fn parse_reset_credits(summary: &Value) -> Result<ResetCredits, HarnessError> {
+    let available = summary
+        .get("availableCount")
+        .and_then(Value::as_i64)
+        .filter(|count| (0..=10_000).contains(count))
+        .ok_or(HarnessError::InvalidResponse)?;
+    let mut credits = Vec::new();
+    for credit in summary
+        .get("credits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if credit.get("status").and_then(Value::as_str) != Some("available") {
+            continue;
+        }
+        let Some(id) = credit
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| bounded_provider_text(id, 200).ok())
+        else {
+            continue;
+        };
+        credits.push(ResetCredit {
+            id,
+            title: credit
+                .get("title")
+                .and_then(Value::as_str)
+                .and_then(|title| bounded_provider_text(title, 120).ok()),
+            expires_at: credit.get("expiresAt").and_then(Value::as_i64),
+            granted_at: credit.get("grantedAt").and_then(Value::as_i64),
+        });
+        if credits.len() == MAX_RESET_CREDITS {
+            break;
+        }
+    }
+    Ok(ResetCredits {
+        available: u32::try_from(available).unwrap_or(0),
+        credits,
     })
 }
 
@@ -1451,16 +1652,16 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CodexAdapter, SupervisorState, health_snapshot, item_kind, parse_login_start, parse_model,
-        parse_provider_request, parse_rate_limit_window, provider_event_key, record_failure,
-        restart_backoff, turn_start_params,
+        CodexAdapter, SupervisorState, health_snapshot, item_kind, parse_event, parse_login_start,
+        parse_model, parse_provider_request, parse_rate_limit_window, parse_usage_report,
+        provider_event_key, record_failure, restart_backoff, turn_start_params,
     };
     use crate::{
         config::AppConfig,
         provider::{
             adapter::{
-                AccountHandle, HarnessAdapter, HarnessError, ItemKind, LoginStart, RecoveredTurn,
-                RequestKind,
+                AccountHandle, HarnessAdapter, HarnessError, HarnessEvent, ItemKind, LoginStart,
+                RecoveredTurn, RequestKind,
             },
             contract_tests::adapter_contract,
             registry::ShutdownSignal,
@@ -1573,6 +1774,75 @@ mod tests {
         .expect("present rate limit window");
         assert_eq!(window.used_percent, 42);
         assert!(parse_rate_limit_window(Some(&json!({"usedPercent": 101}))).is_err());
+    }
+
+    #[test]
+    fn usage_reads_every_bucket_window_and_banked_reset() {
+        let report = parse_usage_report(&json!({
+            "rateLimits": {"planType": "pro", "primary": {"usedPercent": 10}},
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "limitId": "codex",
+                    "primary": {"usedPercent": 62, "resetsAt": 2_000_000_000_i64, "windowDurationMins": 300},
+                    "secondary": {"usedPercent": 140, "resetsAt": 2_000_500_000_i64, "windowDurationMins": 10080}
+                },
+                "Other Model!": {"secondary": {"usedPercent": 5, "windowDurationMins": 10080}}
+            },
+            "rateLimitResetCredits": {
+                "availableCount": 2,
+                "credits": [
+                    {"id": "credit-1", "grantedAt": 1_900_000_000_i64, "expiresAt": 2_000_100_000_i64,
+                     "resetType": "codexRateLimits", "status": "available", "title": "Bonus reset"},
+                    {"id": "credit-0", "grantedAt": 1_800_000_000_i64, "resetType": "codexRateLimits",
+                     "status": "redeemed"}
+                ]
+            }
+        }))
+        .expect("usage report");
+        let keys = report
+            .windows
+            .iter()
+            .map(|window| window.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, ["codex.primary", "codex.secondary", "othermodel.secondary"]);
+        assert_eq!(report.windows[1].used_percent, 100);
+        assert!(report.windows[1].limit_reached);
+        assert_eq!(report.plan.as_deref(), Some("pro"));
+        let credits = report.reset_credits.expect("banked resets");
+        assert_eq!(credits.available, 2);
+        assert_eq!(credits.credits.len(), 1);
+        assert_eq!(credits.credits[0].id, "credit-1");
+
+        // A plan with only a weekly window and the older single snapshot.
+        let weekly = parse_usage_report(&json!({
+            "rateLimits": {"primary": null, "secondary": {"usedPercent": 30, "windowDurationMins": 10080},
+                           "rateLimitReachedType": null}
+        }))
+        .expect("weekly only");
+        assert_eq!(weekly.windows.len(), 1);
+        assert_eq!(weekly.windows[0].key, "codex.secondary");
+        assert!(weekly.reset_credits.is_none());
+    }
+
+    #[test]
+    fn rolling_usage_updates_become_usage_events() {
+        let event = parse_event(json!({
+            "method": "account/rateLimits/updated",
+            "params": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 99},
+                                      "rateLimitReachedType": "rate_limit_reached"}}
+        }))
+        .expect("event");
+        let HarnessEvent::UsageUpdated(report) = event else {
+            panic!("expected a usage update");
+        };
+        assert_eq!(report.windows[0].key, "codex.primary");
+        assert!(report.windows[0].limit_reached);
+        let broken = parse_event(json!({
+            "method": "account/rateLimits/updated",
+            "params": {"rateLimits": {"primary": {"usedPercent": "lots"}}}
+        }))
+        .expect("event");
+        assert!(matches!(broken, HarnessEvent::Ignored));
     }
 
     #[test]

@@ -25,6 +25,7 @@ use super::{
         AccountHandle, AccountSummary, HarnessAdapter, HarnessAnswer, HarnessError, HarnessEvent,
         HarnessFuture, HarnessItem, HarnessRequest, HarnessSession, ItemKind, LoginKind,
         LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, RecoveredTurn, RequestKind,
+        ResetOutcome, UsageReport,
         RequestOption,
     },
     manifest::{
@@ -146,6 +147,8 @@ struct DemoAccount {
     /// Demo accounts start signed in; signing out sticks until a key is used.
     logged_out: bool,
     threads: HashMap<String, Vec<DemoTurnRecord>>,
+    /// What `read_usage` reports, when a test set it.
+    usage: Option<UsageReport>,
 }
 
 pub struct DemoAdapter {
@@ -167,6 +170,11 @@ impl DemoAdapter {
             running: Arc::new(AtomicUsize::new(0)),
             host_limit,
         }
+    }
+
+    /// Make the account report `usage` from now on, as if its plan changed.
+    pub fn set_usage(&self, account_id: Uuid, usage: UsageReport) {
+        lock(&self.accounts).entry(account_id).or_default().usage = Some(usage);
     }
 
     /// Every turn the account started, oldest first.
@@ -578,6 +586,49 @@ impl HarnessSession for DemoSession {
                 secondary: None,
             })
         })
+    }
+
+    fn read_usage(&mut self) -> HarnessFuture<'_, UsageReport> {
+        let usage = self.with_account(|account| account.usage.clone());
+        Box::pin(async move {
+            match usage {
+                Some(usage) => Ok(usage),
+                None => Ok(UsageReport::from_rate_limits(
+                    self.read_rate_limits().await?,
+                )),
+            }
+        })
+    }
+
+    /// Spending a banked reset empties every window, like Codex's does.
+    fn spend_reset_credit<'a>(
+        &'a mut self,
+        credit_id: Option<&'a str>,
+        _idempotency_key: &'a str,
+    ) -> HarnessFuture<'a, ResetOutcome> {
+        let outcome = self.with_account(|account| {
+            let Some(usage) = account.usage.as_mut() else {
+                return ResetOutcome::NoCredit;
+            };
+            let Some(credits) = usage.reset_credits.as_mut().filter(|c| c.available > 0) else {
+                return ResetOutcome::NoCredit;
+            };
+            if let Some(id) = credit_id {
+                if !credits.credits.iter().any(|credit| credit.id == id) {
+                    return ResetOutcome::NoCredit;
+                }
+                credits.credits.retain(|credit| credit.id != id);
+            } else if !credits.credits.is_empty() {
+                credits.credits.remove(0);
+            }
+            credits.available -= 1;
+            for window in &mut usage.windows {
+                window.used_percent = 0;
+                window.limit_reached = false;
+            }
+            ResetOutcome::Reset
+        });
+        Box::pin(async move { Ok(outcome) })
     }
 
     fn list_models(&mut self) -> HarnessFuture<'_, Vec<ModelEntry>> {
