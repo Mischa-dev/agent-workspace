@@ -612,6 +612,504 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
         .expect("drop schema");
 }
 
+/// Tag an agent in a project channel and it answers in a thread started from
+/// the message; people's next messages there reach it without a new mention,
+/// queued behind the claim it holds, and never reach an agent who isn't part
+/// of the thread any more.
+#[tokio::test]
+async fn channel_tags_open_a_thread_and_follow_ups_stick_to_it() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_threads").await
+    else {
+        return;
+    };
+    let project = owner.project(&app, &pool, &space, "TAG").await;
+    let codex = owner.add_agent(&app, &project, "Codex", "codex").await;
+    let rook = owner.add_agent(&app, &project, "Rook", "rook").await;
+    let codex_mcp = codex.connect(&app).await;
+    let rook_mcp = rook.connect(&app).await;
+    let (status, channel) = owner
+        .call(
+            &app,
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("channel-1"),
+            json!({ "name": "general" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{channel}");
+    let channel_id = channel["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+    owner
+        .post(
+            &app,
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            "tag-1",
+            json!([
+                { "type": "mention", "actorId": codex.actor_id },
+                { "type": "text", "text": " fix the flaky login test" }
+            ]),
+        )
+        .await;
+    assert_eq!(inbox_len(&rook_mcp, &app).await, 0, "only the tagged agent");
+    let request = only_request(&codex_mcp, &app).await;
+    assert_eq!(request["conversationKind"], "channel", "{request}");
+    assert_eq!(request["replyConversationId"], channel_id.as_str());
+    assert!(request["threadId"].is_null(), "{request}");
+    let first_id = request["requestId"].as_str().expect("id").to_owned();
+
+    // Claiming starts a thread from the message and moves the answer there.
+    let claim = codex_mcp
+        .tool(&app, "reply_claim", json!({ "requestId": first_id }))
+        .await;
+    assert_eq!(claim["outcome"], "ok", "{claim}");
+    let thread_id = claim["value"]["request"]["threadId"]
+        .as_str()
+        .expect("thread")
+        .to_owned();
+    assert_eq!(
+        claim["value"]["request"]["replyConversationId"],
+        thread_id.as_str()
+    );
+    let context = claim["value"]["recentMessages"]
+        .as_array()
+        .expect("context");
+    assert_eq!(context.len(), 1, "the tagged message, from the channel");
+    let origin = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT parent_channel_id::text, origin_message_id::text FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&thread_id)
+    .fetch_one(&pool)
+    .await
+    .expect("thread row");
+    assert_eq!(origin.0, channel_id);
+    assert_eq!(origin.1.as_deref(), request["messageId"].as_str());
+    let generation = claim["value"]["request"]["generation"].clone();
+    let interim = codex_mcp
+        .tool(
+            &app,
+            "reply_send",
+            json!({ "requestId": first_id, "generation": generation, "text": "On it: the test races the session refresh.", "final": false }),
+        )
+        .await;
+    assert_eq!(interim["outcome"], "ok", "{interim}");
+    assert_eq!(agent_messages(&pool, &channel_id).await, 0);
+    assert_eq!(agent_messages(&pool, &thread_id).await, 1);
+    // Both the channel and the thread show the agent at work.
+    assert_eq!(
+        latest_request(&owner, &app, &channel_id).await["threadId"],
+        thread_id.as_str()
+    );
+    assert_eq!(
+        latest_request(&owner, &app, &thread_id).await["status"],
+        "claimed"
+    );
+
+    // Rook once wrote in the thread, then left the project.
+    let rook_note = rook_mcp
+        .tool(
+            &app,
+            "message_send",
+            json!({ "conversationId": thread_id, "text": "I looked at this last week." }),
+        )
+        .await;
+    assert_eq!(rook_note["outcome"], "ok", "{rook_note}");
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE actor_id = $1::uuid AND project_id = $2::uuid",
+    )
+    .bind(&rook.actor_id)
+    .bind(&project)
+    .execute(&pool)
+    .await
+    .expect("disable Rook");
+
+    // A follow-up without a mention reaches Codex, queued behind its claim.
+    owner
+        .post(
+            &app,
+            &format!("/api/v1/threads/{thread_id}/messages"),
+            "follow-1",
+            json!([{ "type": "text", "text": "Also fix the test for logout." }]),
+        )
+        .await;
+    assert_eq!(
+        statuses(&pool, &[&first_id]).await,
+        ["claimed"],
+        "never replaced"
+    );
+    let follow_up = request_id(&pool, &thread_id, &codex.actor_id, "pending").await;
+    let inbox = codex_mcp.tool(&app, "inbox_list", json!({})).await;
+    let queued = inbox["value"]["requests"]
+        .as_array()
+        .expect("requests")
+        .iter()
+        .find(|item| item["requestId"] == follow_up.as_str())
+        .cloned()
+        .expect("follow-up in the inbox");
+    assert_eq!(queued["followsRequestId"], first_id.as_str(), "{queued}");
+    assert_eq!(queued["required"], false, "a follow-up may be passed");
+    assert_eq!(queued["replyConversationId"], thread_id.as_str());
+    let rook_asked = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM reply_requests WHERE agent_actor_id = $1::uuid",
+    )
+    .bind(&rook.actor_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(rook_asked, 0, "an agent who can't answer there isn't asked");
+    let kinds = sqlx::query_scalar::<_, String>(
+        "SELECT kind FROM external_agent_events WHERE resource_id = $1::uuid",
+    )
+    .bind(&follow_up)
+    .fetch_all(&pool)
+    .await
+    .expect("events");
+    assert_eq!(kinds, ["reply.followup"]);
+
+    // Codex finishes the first request, then picks up the follow-up there.
+    let done = codex_mcp
+        .tool(
+            &app,
+            "reply_send",
+            json!({ "requestId": first_id, "generation": generation, "text": "Fixed both." }),
+        )
+        .await;
+    assert_eq!(done["value"]["status"], "replied", "{done}");
+    let claim = codex_mcp
+        .tool(&app, "reply_claim", json!({ "requestId": follow_up }))
+        .await;
+    assert!(
+        claim["value"]["instructions"]
+            .as_str()
+            .is_some_and(|text| text.contains("follow-up")),
+        "{claim}"
+    );
+    let passed = codex_mcp
+        .tool(&app, "reply_pass", json!({ "requestId": follow_up }))
+        .await;
+    assert_eq!(passed["outcome"], "ok", "{passed}");
+    // Codex's interim and final replies, and Rook's note.
+    assert_eq!(agent_messages(&pool, &thread_id).await, 3);
+    assert_eq!(agent_messages(&pool, &channel_id).await, 0);
+
+    // A later message in the thread follows up again: Codex replied there.
+    owner
+        .post(
+            &app,
+            &format!("/api/v1/threads/{thread_id}/messages"),
+            "follow-2",
+            json!([{ "type": "text", "text": "One more: the signup test." }]),
+        )
+        .await;
+    let again = only_request(&codex_mcp, &app).await;
+    assert!(
+        again["followsRequestId"].is_null(),
+        "nothing claimed now: {again}"
+    );
+
+    admin
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("drop schema");
+}
+
+/// Stop ends an agent's work: the request and its queued follow-ups are
+/// cancelled, the agent's next call is refused with the reason, its
+/// connections hear about it at once, and only people can press it.
+#[tokio::test]
+async fn stop_cancels_the_claim_and_refuses_the_next_call() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_stop").await
+    else {
+        return;
+    };
+    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let mara_mcp = mara.connect(&app).await;
+    let (status, webhook) = owner
+        .call(
+            &app,
+            "POST",
+            &format!(
+                "/api/v1/projects/{space}/external-agents/{}/webhook",
+                mara.connection_id
+            ),
+            None,
+            json!({ "url": "https://runner.example/wake" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{webhook}");
+    assert_eq!(webhook["connection"]["wakeupFormat"], "typed");
+    let (_, dm) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": mara.actor_id }),
+        )
+        .await;
+    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    owner
+        .say(&app, &dm_id, "stop-1", "Refactor the auth module")
+        .await;
+    let request_id = only_request(&mara_mcp, &app).await["requestId"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let claim = mara_mcp
+        .tool(&app, "reply_claim", json!({ "requestId": request_id }))
+        .await;
+    let generation = claim["value"]["request"]["generation"].clone();
+
+    // Agents can't stop each other (or themselves) this way.
+    let refused = mara_mcp
+        .tool(&app, "reply_stop", json!({ "requestId": request_id }))
+        .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+
+    let (status, stopped) = owner
+        .call(
+            &app,
+            "POST",
+            &format!("/api/v1/reply-requests/{request_id}/stop"),
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert_eq!(stopped["status"], "cancelled");
+    let shown = latest_request(&owner, &app, &dm_id).await;
+    assert_eq!(shown["status"], "cancelled", "{shown}");
+    assert_eq!(shown["reason"], "Stopped by Owner.", "{shown}");
+
+    for (tool, arguments) in [
+        (
+            "reply_progress",
+            json!({ "requestId": request_id, "generation": generation, "status": "Still going" }),
+        ),
+        (
+            "reply_send",
+            json!({ "requestId": request_id, "generation": generation, "text": "Done anyway" }),
+        ),
+        ("reply_claim", json!({ "requestId": request_id })),
+    ] {
+        let late = mara_mcp.tool(&app, tool, arguments).await;
+        assert_eq!(late["outcome"], "conflict", "{tool}: {late}");
+        assert!(
+            late["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("stopped")),
+            "{tool}: {late}"
+        );
+    }
+    assert_eq!(agent_messages(&pool, &dm_id).await, 0);
+    let events = sqlx::query_scalar::<_, String>(
+        "SELECT event FROM agent_webhook_deliveries WHERE reply_request_id = $1::uuid ORDER BY created_at",
+    )
+    .bind(&request_id)
+    .fetch_all(&pool)
+    .await
+    .expect("deliveries");
+    assert_eq!(events, ["reply.requested", "reply.cancelled"]);
+
+    // Stopping twice is refused; asking again puts it back.
+    let (status, _) = owner
+        .call(
+            &app,
+            "POST",
+            &format!("/api/v1/reply-requests/{request_id}/stop"),
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = owner
+        .call(
+            &app,
+            "POST",
+            &format!("/api/v1/reply-requests/{request_id}/retry"),
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(statuses(&pool, &[&request_id]).await, ["pending"]);
+
+    admin
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("drop schema");
+}
+
+/// Typed wakeups say what happened and where, signed, without message text;
+/// webhooks from before typed wakeups keep getting `inbox.available`.
+#[tokio::test]
+async fn webhooks_say_what_happened_without_message_text() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_wakeups").await
+    else {
+        return;
+    };
+    let received = Arc::new(tokio::sync::Mutex::new(
+        Vec::<(String, String, String)>::new(),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    let sink = Arc::clone(&received);
+    tokio::spawn(async move {
+        let runner = axum::Router::new().route(
+            "/wake",
+            axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
+                let sink = Arc::clone(&sink);
+                async move {
+                    let header = |name: &str| {
+                        headers
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned()
+                    };
+                    sink.lock().await.push((
+                        header("x-workspace-timestamp"),
+                        header("x-workspace-signature"),
+                        body,
+                    ));
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        axum::serve(listener, runner).await.expect("serve");
+    });
+    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let (_, webhook) = owner
+        .call(
+            &app,
+            "POST",
+            &format!(
+                "/api/v1/projects/{space}/external-agents/{}/webhook",
+                mara.connection_id
+            ),
+            None,
+            json!({ "url": format!("http://{address}/wake") }),
+        )
+        .await;
+    let secret = webhook["webhookSecret"]
+        .as_str()
+        .expect("secret")
+        .to_owned();
+    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(agent_workspace_server::replies::run(
+        test_state(pool.clone()),
+        shutdown_receiver,
+    ));
+    let (_, dm) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/dms",
+            None,
+            json!({ "actorId": mara.actor_id }),
+        )
+        .await;
+    let dm_id = dm["conversation"]["id"].as_str().expect("dm").to_owned();
+    owner
+        .say(&app, &dm_id, "wake-1", "zeppelin budget please")
+        .await;
+    let (timestamp, signature, body) = next_wakeup(&received, 1).await;
+    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(wakeup["event"], "reply.requested", "{wakeup}");
+    assert_eq!(wakeup["conversationId"], dm_id.as_str(), "{wakeup}");
+    assert_eq!(wakeup["agentId"], mara.actor_id.as_str(), "{wakeup}");
+    assert!(wakeup["sessionRef"].is_null(), "{wakeup}");
+    assert!(!body.contains("zeppelin"), "no message text: {body}");
+    assert_eq!(
+        signature,
+        format!("sha256={}", hmac_hex(&secret, &timestamp, &body))
+    );
+
+    let request_id = wakeup["replyRequestId"].as_str().expect("id").to_owned();
+    let (status, _) = owner
+        .call(
+            &app,
+            "POST",
+            &format!("/api/v1/reply-requests/{request_id}/stop"),
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, body) = next_wakeup(&received, 2).await;
+    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(wakeup["event"], "reply.cancelled", "{wakeup}");
+    assert_eq!(wakeup["replyRequestId"], request_id.as_str(), "{wakeup}");
+
+    // A webhook from before typed wakeups gets the old body.
+    sqlx::query(
+        "UPDATE external_agent_connections SET wakeup_format = 'inbox' WHERE id = $1::uuid",
+    )
+    .bind(&mara.connection_id)
+    .execute(&pool)
+    .await
+    .expect("legacy format");
+    owner
+        .say(&app, &dm_id, "wake-2", "and the hangar lease")
+        .await;
+    let (_, _, body) = next_wakeup(&received, 3).await;
+    let wakeup: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(wakeup["event"], "inbox.available", "{wakeup}");
+    assert!(wakeup.get("conversationId").is_none(), "{wakeup}");
+
+    shutdown.send(true).expect("stop worker");
+    worker.await.expect("worker");
+    admin
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await
+        .expect("drop schema");
+}
+
+/// Wait for the `count`th wakeup the test runner received.
+async fn next_wakeup(
+    received: &tokio::sync::Mutex<Vec<(String, String, String)>>,
+    count: usize,
+) -> (String, String, String) {
+    for _ in 0..100 {
+        if let Some(wakeup) = received.lock().await.get(count - 1) {
+            return wakeup.clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("wakeup {count} never arrived");
+}
+
+fn hmac_hex(secret: &str, timestamp: &str, body: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).expect("key");
+    mac.update(format!("{timestamp}.{body}").as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
 /// The newest reply request on a conversation's timeline, as a browser sees it.
 async fn latest_request(owner: &Owner, app: &axum::Router, conversation_id: &str) -> Value {
     let (status, timeline) = owner
@@ -791,6 +1289,7 @@ struct Owner {
 
 struct Agent {
     actor_id: String,
+    connection_id: String,
     token: String,
 }
 
@@ -886,6 +1385,41 @@ impl Owner {
         assert_eq!(status, StatusCode::CREATED, "{body}");
     }
 
+    async fn post(&self, app: &axum::Router, uri: &str, key: &str, nodes: Value) {
+        let (status, body) = self
+            .call(
+                app,
+                "POST",
+                uri,
+                Some(key),
+                json!({ "content": { "version": 1, "nodes": nodes } }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+
+    /// A new project in the owner's organization.
+    async fn project(&self, app: &axum::Router, pool: &PgPool, space: &str, key: &str) -> String {
+        let organization_id = sqlx::query_scalar::<_, String>(
+            "SELECT organization_id::text FROM projects WHERE id = $1::uuid",
+        )
+        .bind(space)
+        .fetch_one(pool)
+        .await
+        .expect("organization");
+        let (status, project) = self
+            .call(
+                app,
+                "POST",
+                "/api/v1/projects",
+                Some(&format!("project-{key}")),
+                json!({ "organizationId": organization_id, "key": key, "name": key }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{project}");
+        project["id"].as_str().expect("project").to_owned()
+    }
+
     async fn add_agent(&self, app: &axum::Router, space: &str, name: &str, handle: &str) -> Agent {
         let (status, created) = self
             .call(
@@ -907,6 +1441,10 @@ impl Owner {
             actor_id: created["connection"]["actorId"]
                 .as_str()
                 .expect("actor")
+                .to_owned(),
+            connection_id: created["connection"]["id"]
+                .as_str()
+                .expect("connection")
                 .to_owned(),
             token: created["oneTimeCredential"]["token"]
                 .as_str()
@@ -1009,6 +1547,24 @@ async fn mcp(
         )
         .await
         .expect("MCP response")
+}
+
+fn test_state(pool: PgPool) -> AppState {
+    let database_url =
+        std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL for the test state");
+    let config = AppConfig::from_values(&BTreeMap::from([(
+        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
+        database_url,
+    )]))
+    .expect("test configuration");
+    let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
+    AppState {
+        config: Arc::new(config),
+        pool,
+        rate_limits: RateLimiters::default(),
+        realtime: RealtimeHub::new(32),
+        supervisors,
+    }
 }
 
 fn test_app(pool: PgPool, database_url: &str) -> axum::Router {

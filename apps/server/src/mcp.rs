@@ -779,6 +779,27 @@ impl McpServer {
         Json(replies::reply_release(&self.state, principal, arguments).await)
     }
 
+    #[tool(
+        description = "People: stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
+        annotations(
+            title = "Stop agent",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_stop(
+        &self,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyStopArguments>>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::StopProjection>> {
+        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
+        Json(replies::reply_stop(&self.state, principal, arguments).await)
+    }
+
     // -- Tasks ---------------------------------------------------------------
 
     #[tool(

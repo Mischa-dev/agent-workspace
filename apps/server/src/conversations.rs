@@ -2320,14 +2320,11 @@ async fn conversation_timeline(
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
-    let (reply_requests, agent_turns_remaining) =
-        if matches!(conversation.effective_kind(), "dm" | "group") {
-            let (requests, remaining) =
-                replies::timeline_requests(&state.pool, conversation.id).await?;
-            (requests, Some(remaining))
-        } else {
-            (Vec::new(), None)
-        };
+    let (reply_requests, remaining) =
+        replies::timeline_requests(&state.pool, conversation.id).await?;
+    // Only groups (and threads under them) have turns.
+    let agent_turns_remaining =
+        matches!(conversation.effective_kind(), "dm" | "group").then_some(remaining);
     Ok(Json(TimelineResponse {
         conversation: ConversationView::from(&conversation),
         linked_work_items,
