@@ -365,6 +365,18 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
             .is_some_and(|path| path.len() >= 2)
     );
 
+    // A key search matches the project's own key, not just the number.
+    let design_key = design["key"].as_str().expect("key");
+    let number = design_key.rsplit_once('-').expect("key").1;
+    let (_, found) = owner
+        .get(&format!("{base}/work-items?q={design_key}"))
+        .await;
+    assert_eq!(found["items"][0]["key"], design["key"], "{found}");
+    let (_, other) = owner
+        .get(&format!("{base}/work-items?q=ZZZ-{number}"))
+        .await;
+    assert_eq!(other["total"], 0, "{other}");
+
     // Lists know which tasks are ready and which are blocked.
     let (status, ready) = owner.get(&format!("{base}/work-items?ready=true")).await;
     assert_eq!(status, StatusCode::OK, "{ready}");

@@ -91,6 +91,21 @@ describe('board moves', () => {
     expect(moved.columns[1].total).toBe(2)
   })
 
+  it('takes a card out of every label column when its labels are cleared', () => {
+    const both = { ...card('t'), labels: [{ id: 'a', name: 'A', color: '#f00' }, { id: 'b', name: 'B', color: '#0f0' }] }
+    const board = {
+      columnsBy: 'label',
+      columns: [
+        { key: 'a', label: 'A', total: 1, items: [both] },
+        { key: 'b', label: 'B', total: 2, items: [card('u'), both] },
+        { key: 'none', label: 'No label', total: 0, items: [] },
+      ],
+    } as unknown as WorkItemBoardResponse
+    const moved = applyMove(board, 't', 'none', 0, (item) => ({ ...item, labels: [] }), 'a')
+    expect(moved.columns.map((column) => column.items.map((item) => item.id))).toEqual([[], ['u'], ['t']])
+    expect(moved.columns.map((column) => column.total)).toEqual([0, 1, 1])
+  })
+
   it('places a card by manual order on boards not grouped by status', () => {
     const at = (id: string, order: string) => ({ ...card(id), boardOrder: order })
     const column = [at('a', '1:1'), at('b', '1:3'), at('c', '2:0')]

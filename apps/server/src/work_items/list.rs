@@ -543,9 +543,16 @@ impl Filters {
                 .replace('_', "\\_");
             builder.push(" AND (item.title ILIKE ");
             builder.push_bind(format!("%{escaped}%"));
-            if let Some(number) = search_number(search) {
-                builder.push(" OR item.number = ");
+            if let Some((key, number)) = search_number(search) {
+                builder.push(" OR (item.number = ");
                 builder.push_bind(number);
+                // "OTHER-12" in project AW must not find AW-12.
+                if let Some(key) = key {
+                    builder.push(" AND upper(project.project_key) = upper(");
+                    builder.push_bind(key.to_owned());
+                    builder.push(")");
+                }
+                builder.push(")");
             }
             builder.push(")");
         }
@@ -660,18 +667,19 @@ impl Filters {
     }
 }
 
-/// "42", "#42" or "AW-42" as a task number.
-fn search_number(search: &str) -> Option<i64> {
+/// "42", "#42" or "AW-42" as a task number, with the project key if given.
+fn search_number(search: &str) -> Option<(Option<&str>, i64)> {
     let search = search.trim_start_matches('#');
-    let digits = match search.rsplit_once('-') {
-        Some((key, number)) if !key.is_empty() => number,
+    let (key, digits) = match search.rsplit_once('-') {
+        Some((key, number)) if !key.is_empty() => (Some(key), number),
         Some(_) => return None,
-        None => search,
+        None => (None, search),
     };
     digits
         .parse::<i64>()
         .ok()
         .filter(|number| *number > 0 && digits.chars().all(|c| c.is_ascii_digit()))
+        .map(|number| (key, number))
 }
 
 const BASE_FROM: &str = r#"
@@ -1641,9 +1649,9 @@ mod tests {
 
     #[test]
     fn task_numbers_are_found_in_searches() {
-        assert_eq!(search_number("42"), Some(42));
-        assert_eq!(search_number("#42"), Some(42));
-        assert_eq!(search_number("AW-42"), Some(42));
+        assert_eq!(search_number("42"), Some((None, 42)));
+        assert_eq!(search_number("#42"), Some((None, 42)));
+        assert_eq!(search_number("AW-42"), Some((Some("AW"), 42)));
         assert_eq!(search_number("fix-login"), None);
         assert_eq!(search_number("-3"), None);
         assert_eq!(search_number("4a"), None);

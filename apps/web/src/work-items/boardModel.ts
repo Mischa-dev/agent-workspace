@@ -163,6 +163,10 @@ export function applyMove(
       if (column.key === fromKey) {
         items = items.filter((item) => item.id !== cardId)
         if (column.key !== toColumnKey) total = Math.max(0, total - 1)
+      } else if (column.key !== toColumnKey && board.columnsBy === 'label' && !inLabelColumn(card, column.key) && items.some((item) => item.id === cardId)) {
+        // A task leaves every other label column whose label it lost, such as when its labels are cleared.
+        items = items.filter((item) => item.id !== cardId)
+        total = Math.max(0, total - 1)
       }
       if (column.key === toColumnKey) {
         // On a label board the task may already be in the target column; it moves there, not twice.
@@ -175,6 +179,10 @@ export function applyMove(
       return items === column.items ? column : { ...column, items, total }
     }),
   }
+}
+
+function inLabelColumn(card: WorkItemCard, key: string): boolean {
+  return key === 'none' ? card.labels.length === 0 : card.labels.some((label) => label.id === key)
 }
 
 /**
