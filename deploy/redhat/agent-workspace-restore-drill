@@ -145,12 +145,14 @@ restore drill report
   organizations:      ${organizations}
   projects:           ${projects}
   messages:           ${messages}
-  latest migration:   ${restored_version} (backup recorded ${expected_version})
+  latest migration:   ${restored_version} (at least ${expected_version} expected)
   failed migrations:  ${failed_migrations}
   data archive files: ${data_entries}
   after the drill:    $([[ "${keep}" == true ]] && echo "kept" || echo "dropped")
 REPORT
 
-[[ "${restored_version}" == "${expected_version}" ]] || die "restored migration version differs from the backup"
+# The recorded version is sampled just before the dump, so the dump may be
+# newer (a migration landed during it) but never older.
+(( restored_version >= expected_version )) || die "restored migration version is older than the backup recorded"
 [[ "${failed_migrations}" == 0 ]] || die "restored database lists failed migrations"
 log "drill: passed"

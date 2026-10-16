@@ -1366,7 +1366,7 @@ async fn store_from_request(
     principal: &AuthenticatedActor,
     owner: OwnerRequest,
     name: &str,
-    request: PutSecretRequest,
+    mut request: PutSecretRequest,
 ) -> Result<Json<SecretMetadata>, AppError> {
     let mut transaction = state.pool.begin().await?;
     let owner = authorize_owner(&mut transaction, principal, owner).await?;
@@ -1375,7 +1375,7 @@ async fn store_from_request(
         return Err(AppError::Validation("secret name"));
     }
     let keys = keyring(&state.config)?;
-    let value = SecretValue::new(request.value.trim().to_owned());
+    let value = SecretValue::new(std::mem::take(&mut request.value));
     let description = request
         .description
         .as_deref()

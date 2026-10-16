@@ -529,6 +529,44 @@ async fn a_saved_key_never_shows_in_a_dump_a_response_a_log_or_a_run_environment
     assert_eq!(revealed.expose(), PLAINTEXT_KEY);
     assert!(!format!("{revealed:?}").contains("ZZtop"));
 
+    // Credentials come back byte for byte, edge whitespace included.
+    let padded = format!("  {PLAINTEXT_KEY}\n\t");
+    let (status, saved) = send(
+        &setup.app,
+        setup.browser.request(
+            "PUT",
+            &format!("/api/v1/organizations/{organization}/secrets/padded_key"),
+            None,
+            json!({"value": padded}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let revealed_padded = secrets::reveal_named(
+        &setup.pool,
+        keys.as_ref(),
+        SecretOwner::Workspace {
+            organization_id: organization,
+        },
+        "padded_key",
+        "test.adapter_call",
+    )
+    .await
+    .expect("reveal")
+    .expect("saved padded key");
+    assert_eq!(revealed_padded.expose(), padded);
+    let (status, _) = send(
+        &setup.app,
+        setup.browser.request(
+            "DELETE",
+            &format!("/api/v1/organizations/{organization}/secrets/padded_key"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+
     // A wakeup webhook's signing secret is shown once, then lives encrypted.
     let space = send(
         &setup.app,

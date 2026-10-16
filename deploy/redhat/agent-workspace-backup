@@ -78,7 +78,10 @@ trap cleanup EXIT
 install -d -m 0700 "${work}"
 log "backup ${name} started"
 
-# Record the schema version so the restore drill can compare it.
+# Record the schema version before the dump starts. It is read in its own
+# snapshot, so a migration that lands while pg_dump runs can make the dump
+# newer than this; migrations only move forward, so the restore drill checks
+# that the restored version is at least this one.
 migration_version="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q \
   -v ON_ERROR_STOP=1 -c 'SELECT coalesce(max(version), 0) FROM _sqlx_migrations')"
 [[ "${migration_version}" =~ ^[0-9]+$ ]] || die "could not read the migration version"

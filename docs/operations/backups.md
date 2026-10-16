@@ -171,8 +171,9 @@ The drill fetches the newest set from `BACKUP_REMOTE`, checks `SHA256SUMS`,
 creates the spare database `BACKUP_DRILL_DATABASE` (default
 `agent_workspace_restore_drill`), restores the dump into it, reads the whole
 data archive, and prints a report: counts of organizations, projects and
-messages, and the latest migration version. It fails if the migration version
-differs from the one recorded at backup time. It then drops the spare
+messages, and the latest migration version. It fails if the restored migration
+version is older than the one recorded just before the dump (it can be newer
+when a migration landed while the dump ran). It then drops the spare
 database.
 
 It refuses to restore into the live database, `postgres`, or a template. If
