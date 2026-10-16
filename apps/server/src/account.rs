@@ -512,7 +512,8 @@ async fn update_account(
     ApiJson(request): ApiJson<UpdateAccountRequest>,
 ) -> Result<Json<ProviderAccountView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    IdempotencyKey::from_headers(&headers)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&request)?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     let manifest = state
         .supervisors
@@ -552,6 +553,28 @@ async fn update_account(
         }
         None => None,
     };
+    // A retried PATCH whose first response was lost replays instead of
+    // failing the version check it already passed.
+    let scope = idempotency::resource_bound_scope("provider_account", account_id, "update")?;
+    let mut transaction = state.pool.begin().await?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            replay.decode::<AccountCommandReference>()?;
+            transaction.commit().await?;
+            return Ok(Json(
+                fetch_account_view(&state, project_id, account_id).await?,
+            ));
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
     let updated = sqlx::query_scalar::<_, i64>(
         r#"
         UPDATE provider_accounts
@@ -569,7 +592,7 @@ async fn update_account(
     .bind(name)
     .bind(max_concurrent_runs)
     .bind(run_defaults)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *transaction)
     .await?;
     if updated.is_none() {
         let current_version =
@@ -582,6 +605,14 @@ async fn update_account(
             current_version,
         });
     }
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::OK,
+        &AccountCommandReference { account_id },
+    )
+    .await?;
+    transaction.commit().await?;
     Ok(Json(
         fetch_account_view(&state, project_id, account_id).await?,
     ))

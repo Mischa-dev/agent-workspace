@@ -225,6 +225,22 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     )
     .await;
     assert_eq!(defaults.0, StatusCode::OK, "{}", defaults.1);
+    // A retry whose first response was lost replays rather than conflicting.
+    let retried = send(
+        &application,
+        owner,
+        "PATCH",
+        &account,
+        "demo-defaults",
+        json!({
+            "expectedVersion": version,
+            "maxConcurrentRuns": 2,
+            "runDefaults": {"model": "demo-large", "reasoning": "high"}
+        }),
+    )
+    .await;
+    assert_eq!(retried.0, StatusCode::OK, "{}", retried.1);
+    assert_eq!(retried.2["version"], defaults.2["version"]);
     let first = start(
         &application,
         owner,
@@ -443,6 +459,45 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     .await;
     assert!(second_used.0.is_success(), "use second: {}", second_used.1);
     assert_ne!(uuid_field(&second_used.2, "profileId"), profile_id);
+
+    // Managers see a teammate's profile but not the private account behind it.
+    sqlx::query("UPDATE project_memberships SET role = 'admin' WHERE handle = 'w2-member'")
+        .execute(&pool)
+        .await
+        .expect("promote member");
+    let member_account = send(
+        &application,
+        member,
+        "POST",
+        &accounts,
+        "member-demo",
+        json!({"adapterKind": "demo"}),
+    )
+    .await;
+    assert!(member_account.0.is_success(), "{}", member_account.1);
+    let member_account_id = uuid_field(&member_account.2, "id");
+    let member_used = send(
+        &application,
+        member,
+        "POST",
+        &format!("{accounts}/{member_account_id}/use"),
+        "member-use-demo",
+        json!({}),
+    )
+    .await;
+    assert!(member_used.0.is_success(), "{}", member_used.1);
+    let profiles = send_get(
+        &application,
+        owner,
+        &format!("/api/v1/projects/{}/execution-profiles", seed.project_id),
+    )
+    .await;
+    assert_eq!(profiles.0, StatusCode::OK, "{}", profiles.1);
+    assert!(!profiles.1.contains(&member_account_id.to_string()));
+    assert!(
+        profiles.1.contains(&account_id.to_string()),
+        "owners see their own"
+    );
 
     // Signing out sticks, even though it stops the account's harness sessions.
     let signed_out = send(

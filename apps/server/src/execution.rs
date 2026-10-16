@@ -160,7 +160,10 @@ struct ExecutionProfileView {
     version: i64,
     status: ExecutionProfileStatus,
     account_state: AccountState,
-    provider_account_id: Uuid,
+    /// Only shown to the account's owner; managers see the profile, not the
+    /// private account behind it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_account_id: Option<Uuid>,
     max_concurrent_runs: u16,
     preferred: bool,
     last_health_at: Option<String>,
@@ -297,11 +300,13 @@ async fn list_execution_workers(
             SELECT candidate.*
             FROM execution_profiles candidate
             WHERE candidate.project_id = worker.project_id
-              AND candidate.provider_connection_id = connection.id
               AND candidate.owner_actor_id = $2
+            -- Any of the person's profiles can drive the worker, whichever
+            -- harness it was set up with, so readiness looks at all of them.
             ORDER BY
                 (candidate.status = 'available'
                  AND candidate.account_state = 'authenticated') DESC,
+                candidate.preferred DESC,
                 candidate.created_at,
                 candidate.id
             LIMIT 1
@@ -396,7 +401,12 @@ async fn list_execution_profiles(
             .supervisors
             .health(&row.account_adapter_kind, row.provider_account_id)
             .await;
-        profiles.push(execution_profile_view(&state.supervisors, row, health)?);
+        profiles.push(execution_profile_view(
+            &state.supervisors,
+            row,
+            health,
+            principal.actor_id,
+        )?);
     }
     transaction.commit().await?;
     Ok(Json(ExecutionProfilesResponse { profiles }))
@@ -896,7 +906,7 @@ async fn fetch_owned_execution_profile(
         .supervisors
         .health(&row.account_adapter_kind, row.provider_account_id)
         .await;
-    execution_profile_view(&state.supervisors, row, health)
+    execution_profile_view(&state.supervisors, row, health, owner_actor_id)
 }
 
 async fn require_project_action(
@@ -1027,6 +1037,7 @@ fn execution_profile_view(
     registry: &SupervisorRegistry,
     row: ExecutionProfileRow,
     supervisor_health: Option<ProfileHealth>,
+    viewer_actor_id: Uuid,
 ) -> Result<ExecutionProfileView, AppError> {
     let status = parse_profile_status(&row.status)?;
     let account_state = parse_account_state(&row.account_state)?;
@@ -1044,7 +1055,8 @@ fn execution_profile_view(
         version: positive_version(row.version)?,
         status,
         account_state,
-        provider_account_id: row.provider_account_id,
+        provider_account_id: (row.owner_actor_id == viewer_actor_id)
+            .then_some(row.provider_account_id),
         max_concurrent_runs: u16::try_from(row.max_concurrent_runs)
             .ok()
             .filter(|value| *value >= 1)
