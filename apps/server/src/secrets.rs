@@ -118,6 +118,11 @@ pub trait KeyEncryption: Send + Sync {
     fn unwrap(&self, wrapped: &WrappedKey, aad: &[u8]) -> Result<Zeroizing<[u8; 32]>, SecretError>;
     /// Whether this key id can still be opened.
     fn has_key(&self, master_key_id: &str) -> bool;
+    /// The same keyring read again from where it came from, if it has a
+    /// source that may have changed (a rotation adds keys to the file).
+    fn reloaded(&self) -> Option<Arc<dyn KeyEncryption>> {
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, Eq, PartialEq)]
@@ -146,6 +151,9 @@ impl From<SecretError> for AppError {
 /// Master keys read from an owner-only file.
 pub struct FileKeyring {
     keys: Vec<(String, Zeroizing<[u8; 32]>)>,
+    /// The file it was read from, so a reader holding it can pick up keys a
+    /// rotation added after it was read.
+    source: Option<PathBuf>,
 }
 
 impl FileKeyring {
@@ -180,13 +188,14 @@ impl FileKeyring {
         if keys.is_empty() {
             return Err(SecretError::KeyringUnreadable);
         }
-        Ok(Self { keys })
+        Ok(Self { keys, source: None })
     }
 
     /// A keyring with one new random key.
     pub fn generate() -> Self {
         Self {
             keys: vec![(new_key_id(), random_key())],
+            source: None,
         }
     }
 
@@ -199,7 +208,7 @@ impl FileKeyring {
                 .iter()
                 .map(|(id, key)| (id.clone(), Zeroizing::new(**key))),
         );
-        Self { keys }
+        Self { keys, source: None }
     }
 
     /// Only the keys in `keep`, in order; the active key always stays.
@@ -212,6 +221,7 @@ impl FileKeyring {
                 .filter(|(index, (id, _))| *index == 0 || keep.contains(id))
                 .map(|(_, (id, key))| (id.clone(), Zeroizing::new(**key)))
                 .collect(),
+            source: None,
         }
     }
 
@@ -274,6 +284,10 @@ impl KeyEncryption for FileKeyring {
 
     fn has_key(&self, master_key_id: &str) -> bool {
         self.key(master_key_id).is_some()
+    }
+
+    fn reloaded(&self) -> Option<Arc<dyn KeyEncryption>> {
+        load_cached(self.source.as_deref()?).ok()
     }
 }
 
@@ -406,7 +420,9 @@ pub fn read_keyring(path: &Path) -> Result<FileKeyring, SecretError> {
     }
     let contents =
         Zeroizing::new(std::fs::read_to_string(path).map_err(|_| SecretError::KeyringUnreadable)?);
-    FileKeyring::parse(&contents)
+    let mut keyring = FileKeyring::parse(&contents)?;
+    keyring.source = Some(path.to_owned());
+    Ok(keyring)
 }
 
 /// Write a keyring to a file that must not exist yet (owner-only).
@@ -780,7 +796,15 @@ pub async fn reveal<'e, E: PgExecutor<'e>>(
     .fetch_optional(executor)
     .await?
     .ok_or(AppError::NotFound("secret"))?;
-    let value = open_stored(keys, &stored)?;
+    // A rotation can re-seal this row under a key added after the caller
+    // read the keyring; read it again rather than fail mid-rotation.
+    let value = match open_stored(keys, &stored) {
+        Err(SecretError::UnknownMasterKey) => match keys.reloaded() {
+            Some(fresh) => open_stored(fresh.as_ref(), &stored)?,
+            None => return Err(SecretError::UnknownMasterKey.into()),
+        },
+        result => result?,
+    };
     tracing::debug!(secret_id = %secret_id, purpose, "secret used");
     Ok(value)
 }

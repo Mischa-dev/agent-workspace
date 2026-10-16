@@ -382,6 +382,59 @@ async fn a_job_whose_worker_died_runs_again_and_recurring_jobs_queue_their_next_
     assert_eq!(job_state(&setup.pool, last).await.0, "dead");
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 
+    // A claim that reaches its worker after another worker has taken the job
+    // never starts the handler. The trigger plays the other worker, taking
+    // the row as soon as the claim commits.
+    let stolen = created(
+        jobs::enqueue(&setup.pool, NewJob::new("test.lease"))
+            .await
+            .expect("enqueue stolen"),
+    );
+    sqlx::query(&format!(
+        r#"
+        CREATE FUNCTION steal_claim() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.id = '{stolen}' AND OLD.state = 'queued' THEN
+                UPDATE background_jobs
+                SET lease_token = gen_random_uuid(), lease_owner = 'thief'
+                WHERE id = NEW.id;
+            END IF;
+            RETURN NULL;
+        END $$
+        "#
+    ))
+    .execute(&setup.pool)
+    .await
+    .expect("create steal function");
+    sqlx::query(
+        "CREATE TRIGGER steal_claim AFTER UPDATE ON background_jobs \
+         FOR EACH ROW EXECUTE FUNCTION steal_claim()",
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("create steal trigger");
+    jobs::run_due(&setup.state, &registry, &options())
+        .await
+        .expect("late claim");
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the handler never started");
+    let owner = sqlx::query_scalar::<_, String>(
+        "SELECT lease_owner FROM background_jobs WHERE id = $1 AND state = 'running'",
+    )
+    .bind(stolen)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("stolen job");
+    assert_eq!(owner, "thief");
+    sqlx::query("DROP TRIGGER steal_claim ON background_jobs")
+        .execute(&setup.pool)
+        .await
+        .expect("drop steal trigger");
+    sqlx::query("DELETE FROM background_jobs WHERE id = $1")
+        .bind(stolen)
+        .execute(&setup.pool)
+        .await
+        .expect("clear stolen job");
+
     // The real worker loop picks up recurring system jobs and stops cleanly.
     let mut recurring = JobRegistry::new();
     let ticks = Arc::new(AtomicUsize::new(0));
@@ -849,10 +902,8 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
 
     // Rotating the master key re-seals the data key under a new one and
     // drops the old key; the value still opens.
-    let before = secrets::keyring(&setup.state.config)
-        .expect("keyring")
-        .active_key_id()
-        .to_owned();
+    let read_before_rotation = secrets::keyring(&setup.state.config).expect("keyring");
+    let before = read_before_rotation.active_key_id().to_owned();
     // The keyring cache keys on modification time; make sure it moves.
     tokio::time::sleep(Duration::from_millis(20)).await;
     let rotated = secrets::rotate_master_key(&setup.pool, &setup.state.config)
@@ -875,6 +926,21 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .await
             .expect("still opens")
             .expose(),
+        "whsec_legacyplaintextvalue123"
+    );
+    // A caller that read the keyring just before the rotation re-sealed the
+    // row still opens it: the unknown new key makes it read the file again.
+    assert!(!read_before_rotation.has_key(&rotated.active_key_id));
+    assert_eq!(
+        secrets::reveal(
+            &setup.pool,
+            read_before_rotation.as_ref(),
+            secret_id,
+            "test.sign"
+        )
+        .await
+        .expect("opens with a keyring read before the rotation")
+        .expose(),
         "whsec_legacyplaintextvalue123"
     );
 

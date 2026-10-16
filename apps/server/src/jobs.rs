@@ -592,8 +592,22 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
         state: state.clone(),
         job: job.clone(),
     };
+    // The claim may have reached this worker late, after its lease ran out
+    // and another worker took the job. Confirm the lease is still ours, and
+    // time renewals from this check, before any effect starts.
+    let Some(confirmed_at) = confirm_lease(&state.pool, job.id, job.lease_token, lease).await
+    else {
+        tracing::warn!(job_id = %job.id, kind, "a claimed job's lease was gone before it started");
+        return;
+    };
     let handler = (registration.handler)(context);
-    let renewals = renew_lease(state.pool.clone(), job.id, job.lease_token, lease);
+    let renewals = renew_lease(
+        state.pool.clone(),
+        job.id,
+        job.lease_token,
+        lease,
+        confirmed_at,
+    );
     let result = tokio::select! {
         result = tokio::time::timeout(registration.timeout, handler) => {
             result.unwrap_or_else(|_| Err(JobError::retry("The job ran out of time.")))
@@ -627,32 +641,58 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
 /// lost: another worker took the job, or renewals kept failing until the
 /// lease may have expired (so another worker may take it). Returning cancels
 /// the handler, so two workers never run the same job at once.
-async fn renew_lease(pool: PgPool, id: Uuid, token: Uuid, lease: Duration) {
-    let mut renewed_at = tokio::time::Instant::now();
+/// Extend a lease this worker holds, giving up after a sixth of it.
+/// `Ok(false)` means the lease is no longer this worker's.
+async fn extend_lease(pool: &PgPool, id: Uuid, token: Uuid, lease: Duration) -> Result<bool, ()> {
+    let extended = tokio::time::timeout(
+        lease / 6,
+        sqlx::query(
+            r#"
+            UPDATE background_jobs
+            SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+            WHERE id = $1 AND lease_token = $2 AND state = 'running'
+              AND lease_expires_at > now()
+            "#,
+        )
+        .bind(id)
+        .bind(token)
+        .bind(lease.as_secs_f64())
+        .execute(pool),
+    )
+    .await;
+    match extended {
+        Ok(Ok(result)) => Ok(result.rows_affected() == 1),
+        Ok(Err(_)) | Err(_) => Err(()),
+    }
+}
+
+/// Renew a just-claimed lease once before its handler starts. Returns when
+/// the renewal was sent, a safe lower bound for when the lease now ends.
+async fn confirm_lease(
+    pool: &PgPool,
+    id: Uuid,
+    token: Uuid,
+    lease: Duration,
+) -> Option<tokio::time::Instant> {
+    let sent = tokio::time::Instant::now();
+    matches!(extend_lease(pool, id, token, lease).await, Ok(true)).then_some(sent)
+}
+
+async fn renew_lease(
+    pool: PgPool,
+    id: Uuid,
+    token: Uuid,
+    lease: Duration,
+    mut renewed_at: tokio::time::Instant,
+) {
     loop {
         tokio::time::sleep(lease / 3).await;
-        let renewed = tokio::time::timeout(
-            lease / 6,
-            sqlx::query(
-                r#"
-                UPDATE background_jobs
-                SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
-                WHERE id = $1 AND lease_token = $2 AND state = 'running'
-                "#,
-            )
-            .bind(id)
-            .bind(token)
-            .bind(lease.as_secs_f64())
-            .execute(&pool),
-        )
-        .await;
-        match renewed {
-            Ok(Ok(result)) if result.rows_affected() == 1 => {
-                renewed_at = tokio::time::Instant::now();
-            }
-            Ok(Ok(_)) => return,
+        let sent = tokio::time::Instant::now();
+        match extend_lease(&pool, id, token, lease).await {
+            Ok(true) => renewed_at = sent,
+            Ok(false) => return,
             // A database blip: keep trying while the lease still holds.
-            Ok(Err(_)) | Err(_) => {
+            Err(()) => {
                 if !lease_still_held(renewed_at.elapsed(), lease) {
                     tracing::warn!(job_id = %id, "could not renew a job's lease in time; stopping it");
                     return;
