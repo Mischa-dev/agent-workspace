@@ -14,6 +14,7 @@ export function formatFullDate(iso: string) {
 
 export function dayKey(iso: string) {
   const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
   return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
 }
 
@@ -36,4 +37,3 @@ export function eventLabel(kind: string) {
   const words = kind.split('_').join(' ')
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
-

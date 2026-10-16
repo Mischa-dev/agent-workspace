@@ -266,7 +266,14 @@ pub async fn work_item_get(
     else {
         return ReadResult::not_found();
     };
-    match load_work_item(state, principal.project_id, work_item_id).await {
+    match load_work_item(
+        state,
+        principal.project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await
+    {
         Ok(Some(item)) => ReadResult::Found { value: item },
         Ok(None) => ReadResult::not_found(),
         Err(error) => {
@@ -320,11 +327,14 @@ pub async fn pull_request_get(
         FROM github_pull_requests
         WHERE project_id = $1
           AND (($2::uuid IS NOT NULL AND id = $2) OR html_url = $3)
+          -- A PR opened from a private thread stays private (migration 0050).
+          AND pull_request_visible_to(id, $4)
         "#,
     )
     .bind(principal.project_id)
     .bind(id)
     .bind(identifier)
+    .bind(principal.actor_id)
     .fetch_optional(&state.pool)
     .await;
     match row {
@@ -457,6 +467,7 @@ async fn load_work_item(
     state: &crate::AppState,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Option<WorkItemProjection>, sqlx::Error> {
     let row = sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_BY_ID_SELECT)
         .bind(project_id)
@@ -470,7 +481,7 @@ async fn load_work_item(
         crate::work_item_labels::active_names(&state.pool, project_id, work_item_id),
         load_acceptance_criteria(&state.pool, project_id, work_item_id),
         load_linked_repositories(&state.pool, project_id, work_item_id),
-        load_linked_pull_requests(&state.pool, project_id, work_item_id),
+        load_linked_pull_requests(&state.pool, project_id, work_item_id, viewer),
     )?;
     Ok(Some(work_item_projection(
         state,
@@ -557,10 +568,13 @@ async fn load_linked_repositories(
     .await
 }
 
+/// Pull requests linked to the task that `viewer` can see: one opened from a
+/// private thread stays out (migration 0050).
 async fn load_linked_pull_requests(
     pool: &sqlx::PgPool,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Vec<PullRequestRow>, sqlx::Error> {
     sqlx::query_as::<_, PullRequestRow>(
         r#"
@@ -586,12 +600,14 @@ async fn load_linked_pull_requests(
           ON pull_request.project_id = link.project_id
          AND pull_request.id = link.github_pull_request_id
         WHERE link.project_id = $1 AND link.work_item_id = $2 AND link.confirmed
+          AND pull_request_visible_to(pull_request.id, $3)
         ORDER BY pull_request.external_updated_at DESC, pull_request.id DESC
         LIMIT 20
         "#,
     )
     .bind(project_id)
     .bind(work_item_id)
+    .bind(viewer)
     .fetch_all(pool)
     .await
 }

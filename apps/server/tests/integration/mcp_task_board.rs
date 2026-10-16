@@ -79,7 +79,7 @@ async fn task_id(setup: &Setup, project: &str, number: i64) -> Uuid {
     .expect("task")
 }
 
-async fn owner(setup: &Setup, project: &str) -> Uuid {
+pub(super) async fn owner(setup: &Setup, project: &str) -> Uuid {
     sqlx::query_scalar::<_, Uuid>(
         "SELECT actor_id FROM project_memberships WHERE project_id = $1::uuid AND role = 'owner'",
     )
@@ -90,7 +90,7 @@ async fn owner(setup: &Setup, project: &str) -> Uuid {
 }
 
 /// A repository row, as connecting one through GitHub leaves it.
-async fn insert_repository(
+pub(super) async fn insert_repository(
     setup: &Setup,
     project: &str,
     full_name: &str,
@@ -136,7 +136,7 @@ fn rand_number() -> u32 {
 /// A pull request GitHub sync would have stored, on a repository with an
 /// installation, as m5_github_foundation sets one up. Returns its ID and
 /// GitHub URL.
-async fn seed_pull_request(
+pub(super) async fn seed_pull_request(
     setup: &Setup,
     project: &str,
     repository: Uuid,

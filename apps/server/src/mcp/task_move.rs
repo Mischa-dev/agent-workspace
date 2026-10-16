@@ -109,6 +109,10 @@ struct SourceCriterion {
 struct LinkLine {
     kind: String,
     label: String,
+    /// Whether every member of the source project can see it. Private ones
+    /// are only counted, never named, because the list is written into a
+    /// comment that everyone in the target project reads.
+    shared: bool,
 }
 
 pub(super) async fn task_move(
@@ -126,6 +130,11 @@ pub(super) async fn task_move(
         return ToolResult::not_found("That target project");
     };
     let source_project_id = principal.project_id;
+    if super::common::confined_project(principal)
+        .is_some_and(|project| project != target_project_id)
+    {
+        return ToolResult::not_found("That target project");
+    }
     if target_project_id == source_project_id {
         return ToolResult::invalid("toProjectId", "The task is already in that project.");
     }
@@ -147,10 +156,13 @@ pub(super) async fn task_move(
         mark_via(&mut transaction, principal).await?;
         let source_actor = command_actor(principal, source_project_id);
         let target_actor = command_actor(principal, target_project_id);
-        for (actor, project, what) in [
+        let mut projects = [
             (&source_actor, source_project_id, "this task's project"),
             (&target_actor, target_project_id, "the target project"),
-        ] {
+        ];
+        // Opposite moves must take the same first project lock.
+        projects.sort_by_key(|(_, project, _)| *project);
+        for (actor, project, what) in projects {
             let Some(membership) =
                 lock_membership(&mut transaction, principal.actor_id, project).await?
             else {
@@ -180,7 +192,7 @@ pub(super) async fn task_move(
             return Ok(ToolResult::not_found("That task"));
         };
         if archived {
-            let moved = already_moved(&mut transaction, state, task_id).await?;
+            let moved = already_moved(&mut transaction, state, principal, task_id).await?;
             transaction.commit().await?;
             return Ok(match moved {
                 Some(moved) => ToolResult::ok(TaskMoveValue {
@@ -367,7 +379,8 @@ pub(super) async fn task_move(
 
             carry_criteria(&mut transaction, principal, source_project_id, target_project_id, task.id, new_id)
                 .await?;
-            let links = links_left_behind(&mut transaction, source_project_id, task.id).await?;
+            let links = links_left_behind(&mut transaction, source_project_id, task.id, principal.actor_id)
+                .await?;
             let mut provenance = format!(
                 "Moved from {} by {}. The original is archived with its full history.",
                 task.key,
@@ -378,9 +391,7 @@ pub(super) async fn task_move(
             }
             if !links.is_empty() {
                 provenance.push_str(&format!("\n\nStill linked on {}:", task.key));
-                for link in &links {
-                    provenance.push_str(&format!("\n- {}: {}", link.kind, link.label));
-                }
+                provenance.push_str(&links_left_behind_text(&links));
             }
             add_comment(&mut transaction, &target_actor, new_id, &provenance).await?;
             let comments = sqlx::query_as::<_, SourceComment>(
@@ -574,33 +585,93 @@ async fn carry_criteria(
     .await
 }
 
+/// The lines listing what stays linked on the original. Shared links are
+/// named; private conversations and pull requests from private threads are
+/// only counted, since readers of the new task may not be able to see them.
+fn links_left_behind_text(links: &[LinkLine]) -> String {
+    let mut text = String::new();
+    for link in links.iter().filter(|link| link.shared) {
+        text.push_str(&format!("\n- {}: {}", link.kind, link.label));
+    }
+    let private_conversations = links
+        .iter()
+        .filter(|link| !link.shared && link.kind == "Conversation")
+        .count();
+    let private_pull_requests = links
+        .iter()
+        .filter(|link| !link.shared && link.kind == "Pull request")
+        .count();
+    for (count, singular, plural) in [
+        (
+            private_conversations,
+            "private conversation",
+            "private conversations",
+        ),
+        (
+            private_pull_requests,
+            "private pull request",
+            "private pull requests",
+        ),
+    ] {
+        match count {
+            0 => {}
+            1 => text.push_str(&format!("\n- and 1 {singular}")),
+            n => text.push_str(&format!("\n- and {n} {plural}")),
+        }
+    }
+    text
+}
+
 /// Threads, repositories and pull requests linked to the original. They stay
-/// in its project, so the new task lists them.
+/// in its project, so the new task lists them. The list is a comment every
+/// target-project member reads, so only links every source-project member
+/// can see are marked shared (and named); the rest are counted, and only if
+/// the mover can see them.
 async fn links_left_behind(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Vec<LinkLine>, AppError> {
     Ok(sqlx::query_as::<_, LinkLine>(
         r#"
-        SELECT 'Conversation' AS kind, conversation.name AS label
+        SELECT 'Conversation' AS kind, conversation.name AS label,
+               COALESCE(parent.visibility, conversation.visibility) = 'project' AS shared
         FROM work_item_conversation_links link
         JOIN conversations conversation ON conversation.id = link.conversation_id
+        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
+          AND conversation_visible_to(conversation.id, $3)
         UNION ALL
-        SELECT 'Repository', repository.owner || '/' || repository.name
+        SELECT 'Repository', repository.owner || '/' || repository.name, TRUE
         FROM work_item_repository_links link
         JOIN repositories repository ON repository.id = link.repository_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
         UNION ALL
-        SELECT 'Pull request', pull_request.html_url
+        -- Same rule as pull_request_visible_to, for a reader who belongs to
+        -- no private conversation: no run_artifact link, or one whose
+        -- thread is project-visible.
+        SELECT 'Pull request', pull_request.html_url,
+               NOT EXISTS (
+                   SELECT 1 FROM github_pull_request_conversation_links artifact
+                   WHERE artifact.github_pull_request_id = pull_request.id
+                     AND artifact.source = 'run_artifact')
+               OR EXISTS (
+                   SELECT 1 FROM github_pull_request_conversation_links artifact
+                   JOIN conversations thread ON thread.id = artifact.conversation_id
+                   LEFT JOIN conversations parent ON parent.id = thread.parent_channel_id
+                   WHERE artifact.github_pull_request_id = pull_request.id
+                     AND artifact.source = 'run_artifact'
+                     AND COALESCE(parent.visibility, thread.visibility) = 'project')
         FROM github_pull_request_work_item_links link
         JOIN github_pull_requests pull_request ON pull_request.id = link.github_pull_request_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
+          AND pull_request_visible_to(pull_request.id, $3)
         "#,
     )
     .bind(project_id)
     .bind(work_item_id)
+    .bind(viewer)
     .fetch_all(&mut **transaction)
     .await?)
 }
@@ -693,6 +764,7 @@ async fn archive(
 async fn already_moved(
     transaction: &mut Transaction<'_, Postgres>,
     state: &AppState,
+    principal: &McpPrincipal,
     source_id: Uuid,
 ) -> Result<Option<Vec<MovedTask>>, AppError> {
     let rows = sqlx::query_as::<_, (String, String, Uuid, Uuid, String)>(
@@ -704,9 +776,14 @@ async fn already_moved(
         JOIN work_items item ON item.id = alias.work_item_id
         JOIN projects project ON project.id = item.project_id
         WHERE alias.source_work_item_id = $1
+          AND actor_can_access_project($2, $3, item.project_id)
+          AND ($4::uuid IS NULL OR item.project_id = $4)
         "#,
     )
     .bind(source_id)
+    .bind(principal.actor_id)
+    .bind(principal.external_agent_connection_id)
+    .bind(super::common::confined_project(principal))
     .fetch_all(&mut **transaction)
     .await?;
     if rows.is_empty() {

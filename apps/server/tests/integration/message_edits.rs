@@ -2057,3 +2057,149 @@ async fn edits_and_removals_never_widen_visibility() {
         0
     );
 }
+
+#[tokio::test]
+async fn removing_a_message_scrubs_creation_replays_after_its_thread_was_renamed() {
+    let Some(setup) = setup("msg_renamed_replay").await else {
+        return;
+    };
+    let project = create_project(&setup, "WORK", "Work").await;
+    let channel = create_channel(&setup, &project, "general").await;
+    let token = connect_app(&setup.app, &setup.browser, "Editor", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let secret = "secret-before-thread-rename";
+    let sent = tool(
+        &setup.app,
+        &token,
+        &session,
+        "message_send",
+        json!({"conversationId": channel, "text": secret}),
+    )
+    .await;
+    assert_eq!(sent["outcome"], "ok", "{sent}");
+    let message = sent["value"]["messageId"].clone();
+    let request = json!({"name": secret, "originMessageId": message});
+    let (status, thread) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/threads"),
+            Some("original-thread"),
+            request.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    let renamed = tool(
+        &setup.app,
+        &token,
+        &session,
+        "conversation_update",
+        json!({"conversationId": thread["conversation"]["id"], "name": "Safe name"}),
+    )
+    .await;
+    assert_eq!(renamed["outcome"], "ok", "{renamed}");
+    let removed = tool(
+        &setup.app,
+        &token,
+        &session,
+        "message_delete",
+        json!({"messageId": message}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    assert_eq!(
+        copies(&setup.pool, "idempotency_keys", secret).await,
+        0,
+        "the original thread-create response must lose its old name"
+    );
+    let (status, replay) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v1/channels/{channel}/threads"),
+            Some("original-thread"),
+            request,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{replay}");
+    assert!(!replay.to_string().contains(secret), "{replay}");
+}
+
+#[tokio::test]
+async fn editing_a_message_rechecks_access_after_parent_membership_is_revoked() {
+    let Some(setup) = setup("message_revoked").await else {
+        return;
+    };
+    let project = create_project(&setup, "LOCK", "Locking")
+        .await
+        .parse::<Uuid>()
+        .expect("project");
+    let actor = owner_id(&setup.pool).await;
+    let parent = Uuid::now_v7();
+    let thread = Uuid::now_v7();
+    sqlx::query("INSERT INTO conversations (id, project_id, kind, name, visibility) VALUES ($1, $2, 'channel', 'Private', 'members')")
+        .bind(parent).bind(project).execute(&setup.pool).await.expect("channel");
+    sqlx::query("INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) VALUES ($1, $2, $3, $3)")
+        .bind(project).bind(parent).bind(actor).execute(&setup.pool).await.expect("member");
+    sqlx::query("INSERT INTO conversations (id, project_id, kind, parent_channel_id, name) VALUES ($1, $2, 'thread', $3, 'Private thread')")
+        .bind(thread).bind(project).bind(parent).execute(&setup.pool).await.expect("thread");
+    let message = say(
+        &setup,
+        &setup.browser,
+        &thread.to_string(),
+        "original",
+        text("Keep this unchanged"),
+    )
+    .await;
+    let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
+    let session = initialize(&setup.app, &token).await.expect("session");
+    let mut revocation = setup.pool.begin().await.expect("revocation");
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *revocation)
+        .await
+        .expect("pid");
+    sqlx::query("SELECT id FROM conversations WHERE id = $1 FOR UPDATE")
+        .bind(thread)
+        .execute(&mut *revocation)
+        .await
+        .expect("lock thread");
+    sqlx::query("DELETE FROM conversation_members WHERE conversation_id = $1 AND actor_id = $2")
+        .bind(parent)
+        .bind(actor)
+        .execute(&mut *revocation)
+        .await
+        .expect("remove member");
+    let app = setup.app.clone();
+    let message_id = message.parse::<Uuid>().expect("message");
+    let pending = tokio::spawn(async move {
+        tool(
+            &app,
+            &token,
+            &session,
+            "message_edit",
+            json!({
+                "messageId": message_id, "text": "Forbidden edit", "clientRequestId": "revoked"
+            }),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))")
+                .bind(pid).fetch_one(&setup.pool).await.expect("waiter");
+            if blocked { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("edit waits for revocation");
+    revocation.commit().await.expect("revoked");
+    let result = pending.await.expect("edit result");
+    assert_eq!(result["outcome"], "not_found", "{result}");
+    let value: String = sqlx::query_scalar("SELECT plain_text FROM messages WHERE id = $1")
+        .bind(message_id)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("message");
+    assert_eq!(value, "Keep this unchanged");
+}

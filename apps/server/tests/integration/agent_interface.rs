@@ -1081,11 +1081,23 @@ pub(super) async fn login(app: &axum::Router) -> Browser {
 }
 
 pub(super) fn test_app(pool: PgPool, database_url: &str) -> axum::Router {
-    let config = AppConfig::from_values(&BTreeMap::from([(
+    test_app_with(pool, database_url, &[])
+}
+
+/// The app with extra configuration, such as a temporary data root.
+pub(super) fn test_app_with(
+    pool: PgPool,
+    database_url: &str,
+    extra: &[(&str, String)],
+) -> axum::Router {
+    let mut values = BTreeMap::from([(
         "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
         database_url.to_owned(),
-    )]))
-    .expect("test configuration");
+    )]);
+    for (key, value) in extra {
+        values.insert((*key).to_owned(), value.clone());
+    }
+    let config = AppConfig::from_values(&values).expect("test configuration");
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     router(AppState {
         config: Arc::new(config),

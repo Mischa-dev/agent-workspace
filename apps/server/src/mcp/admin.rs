@@ -246,10 +246,16 @@ struct AdminRow {
 /// Archived Projects are invisible everywhere else, so restoring one needs
 /// this separate check.
 async fn admin_row(
-    state: &AppState,
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &McpPrincipal,
     project_id: Uuid,
 ) -> Result<Option<AdminRow>, AppError> {
+    // Membership changes also lock the project first. Read authority after
+    // that lock, and retain it until the project mutation commits.
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
+        .bind(project_id)
+        .execute(&mut **transaction)
+        .await?;
     Ok(sqlx::query_as::<_, AdminRow>(
         r#"
         SELECT membership.role, organization_membership.role AS organization_role,
@@ -265,11 +271,12 @@ async fn admin_row(
         JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
         JOIN users user_account ON user_account.actor_id = $2 AND user_account.status = 'active'
         WHERE project.id = $1
+        FOR SHARE OF membership, organization_membership, actor, user_account
         "#,
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut **transaction)
     .await?)
 }
 
@@ -331,7 +338,8 @@ pub(super) async fn project_update(
     };
     let project_id = principal.project_id;
     let result = async {
-        let Some(row) = admin_row(state, principal, project_id).await? else {
+        let mut transaction = state.pool.begin().await?;
+        let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
         if !may_administer(principal, project_id, &row) {
@@ -343,7 +351,6 @@ pub(super) async fn project_update(
                 "The Messages space can't be renamed.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
         let current = sqlx::query_as::<_, (String, i64, bool)>(
             "SELECT name, version, archived_at IS NOT NULL FROM projects WHERE id = $1 FOR UPDATE",
         )
@@ -418,7 +425,8 @@ pub(super) async fn project_archive(
         else {
             return Ok(ToolResult::not_found("That project"));
         };
-        let Some(row) = admin_row(state, principal, project_id).await? else {
+        let mut transaction = state.pool.begin().await?;
+        let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
         if !may_administer(principal, project_id, &row) {
@@ -430,23 +438,22 @@ pub(super) async fn project_archive(
                 "The Messages space can't be archived.",
             ));
         }
-        let mut transaction = state.pool.begin().await?;
         let (archived, version) = sqlx::query_as::<_, (bool, i64)>(
             "SELECT archived_at IS NOT NULL, version FROM projects WHERE id = $1 FOR UPDATE",
         )
         .bind(project_id)
         .fetch_one(&mut *transaction)
         .await?;
-        if archived == archive {
-            transaction.commit().await?;
-            return Ok(ToolResult::ok(project_value(state, project_id).await?));
-        }
         if let Some(expected) = arguments.expected_version
             && expected != version
         {
             return Ok(ToolResult::conflict(format!(
                 "Someone changed this project first (now version {version}). Read it again, then retry."
             )));
+        }
+        if archived == archive {
+            transaction.commit().await?;
+            return Ok(ToolResult::ok(project_value(state, project_id).await?));
         }
         if archive {
             let has_active_run = sqlx::query_scalar::<_, bool>(
@@ -595,7 +602,8 @@ pub(super) async fn project_member_set(
     }
     let project_id = principal.project_id;
     let result = async {
-        let Some(row) = admin_row(state, principal, project_id).await? else {
+        let mut transaction = state.pool.begin().await?;
+        let Some(row) = admin_row(&mut transaction, principal, project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
         };
         if !may_administer(principal, project_id, &row) {
@@ -616,7 +624,7 @@ pub(super) async fn project_member_set(
         .bind(project_id)
         .bind(person)
         .bind(person.trim_start_matches('@'))
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *transaction)
         .await?
         else {
             return Ok(ToolResult::not_found(&format!(
@@ -634,9 +642,8 @@ pub(super) async fn project_member_set(
         )
         .bind(project_id)
         .bind(actor_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *transaction)
         .await?;
-        let mut transaction = state.pool.begin().await?;
         let action = match (existing, remove) {
             (None, true) => {
                 return Ok(ToolResult::not_found(&format!("{person} in this project")));

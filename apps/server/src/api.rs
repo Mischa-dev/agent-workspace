@@ -183,9 +183,34 @@ pub(crate) async fn start_agent_run(
     headers: HeaderMap,
     principal: AuthenticatedActor,
     ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(mut request): ApiJson<StartRunRequest>,
+    ApiJson(request): ApiJson<StartRunRequest>,
 ) -> Result<(StatusCode, Json<StartRunResponse>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let (status, response) = start_run_in(
+        &state,
+        &principal,
+        None,
+        conversation_id,
+        request,
+        IdempotencyKey::from_headers(&headers),
+    )
+    .await?;
+    Ok((status, Json(response)))
+}
+
+/// Start a Codex run in a thread on the caller's own Codex profile. Shared by
+/// the browser and MCP. `via_grant_id` is the connected app a person acts
+/// through; runs started that way also count against the per-person cap.
+pub(crate) async fn start_run_in(
+    state: &AppState,
+    principal: &impl RunActor,
+    via_grant_id: Option<Uuid>,
+    conversation_id: Uuid,
+    mut request: StartRunRequest,
+    // Checked after authorization, so a caller who may not start runs is
+    // refused as such rather than for a missing key.
+    idempotency_key: Result<IdempotencyKey, AppError>,
+) -> Result<(StatusCode, StartRunResponse), AppError> {
     request.prompt = request.prompt.trim().to_owned();
     let (prompt_content, prompt, prompt_mentions) =
         MessageContent::from_plain_text(request.prompt.clone())
@@ -195,7 +220,7 @@ pub(crate) async fn start_agent_run(
     let prompt_content = serde_json::to_value(prompt_content)
         .map_err(|_| AppError::Internal("serialize hosted prompt Message"))?;
     let conversation =
-        authorized_conversation(&state, &principal, conversation_id, Action::WorkerInvoke).await?;
+        authorized_conversation(state, principal, conversation_id, Action::WorkerInvoke).await?;
     if conversation.project_archived {
         return Err(AppError::ProjectArchived);
     }
@@ -206,13 +231,13 @@ pub(crate) async fn start_agent_run(
         return Err(AppError::Invalid("agent runs require a Thread"));
     }
 
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let idempotency_key = idempotency_key?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope = idempotency::resource_bound_scope("thread", conversation_id, "agent_run_start")?;
     let mut transaction = state.pool.begin().await?;
     guard_conversation_mutation(
         &mut transaction,
-        &principal,
+        principal,
         conversation_id,
         conversation.project_id,
         Action::WorkerInvoke,
@@ -220,7 +245,7 @@ pub(crate) async fn start_agent_run(
     .await?;
     let reservation = match idempotency::reserve(
         &mut transaction,
-        principal.actor_id,
+        principal.actor_id(),
         &scope,
         &idempotency_key,
         request_hash,
@@ -230,10 +255,20 @@ pub(crate) async fn start_agent_run(
         IdempotencyOutcome::Replay(replay) => {
             let response: StartRunResponse = replay.decode()?;
             transaction.commit().await?;
-            return Ok((replay.status(), Json(response)));
+            return Ok((replay.status(), response));
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
+    if principal.is_mcp()
+        && crate::runs::run_cap(&mut transaction, principal.actor_id())
+            .await?
+            .reached()
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "you already have 5 Codex runs queued or working; wait for one to finish",
+        ));
+    }
     if sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS (
@@ -257,7 +292,7 @@ pub(crate) async fn start_agent_run(
         &mut transaction,
         conversation.project_id,
         conversation_id,
-        principal.actor_id,
+        principal.actor_id(),
         request.repository_id,
     )
     .await?;
@@ -283,17 +318,18 @@ pub(crate) async fn start_agent_run(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
-            content_version, content, plain_text
+            content_version, content, plain_text, via_oauth_grant_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
         "#,
     )
     .bind(prompt_message_id)
     .bind(conversation.project_id)
     .bind(conversation_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .bind(prompt_content)
     .bind(&prompt)
+    .bind(via_grant_id)
     .execute(&mut *transaction)
     .await?;
     let prompt_sequence = allocate_conversation_sequence(&mut transaction, conversation_id).await?;
@@ -316,23 +352,24 @@ pub(crate) async fn start_agent_run(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot
+            authorization_snapshot, prompt_message_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9)
         "#,
     )
     .bind(run_id)
     .bind(conversation_id)
     .bind(setup.execution_worker_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .bind(setup.execution_profile_id)
     .bind(setup.repository_id)
     .bind(&prompt)
     .bind(serde_json::json!({
-        "actor_id": principal.actor_id,
+        "actor_id": principal.actor_id(),
         "project_id": conversation.project_id,
         "scope": ["repository.read", "repository.write", "provider.turn"]
     }))
+    .bind(prompt_message_id)
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
@@ -354,7 +391,7 @@ pub(crate) async fn start_agent_run(
         conversation_id,
         prompt_message_id,
         prompt_sequence,
-        principal.actor_id,
+        principal.actor_id(),
     )
     .await?;
     outbox::enqueue_agent_run_updated(
@@ -383,7 +420,7 @@ pub(crate) async fn start_agent_run(
     transaction.commit().await?;
 
     crate::scheduler::kick(state.clone());
-    Ok((StatusCode::ACCEPTED, Json(response)))
+    Ok((StatusCode::ACCEPTED, response))
 }
 
 async fn retry_agent_run(
@@ -437,20 +474,34 @@ async fn retry_agent_run(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let (repository_id, prompt, predecessor_state) = sqlx::query_as::<_, (Uuid, String, String)>(
-        r#"
-            SELECT repository_id, prompt, state
+    let (repository_id, prompt, predecessor_state, prompt_message_id) =
+        sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>)>(
+            r#"
+            SELECT repository_id, prompt, state, prompt_message_id
               FROM agent_runs
              WHERE id = $1 AND conversation_id = $2 AND project_id = $3
              FOR UPDATE
             "#,
-    )
-    .bind(predecessor_run_id)
-    .bind(conversation_id)
-    .bind(conversation.project_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("agent_run"))?;
+        )
+        .bind(predecessor_run_id)
+        .bind(conversation_id)
+        .bind(conversation.project_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    if let Some(message_id) = prompt_message_id
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT removed_at IS NOT NULL FROM messages WHERE id = $1",
+        )
+        .bind(message_id)
+        .fetch_one(&mut *transaction)
+        .await?
+    {
+        return Err(AppError::Conflict(
+            "agent_run",
+            "the prompt message was removed; start a new run",
+        ));
+    }
     if !matches!(
         predecessor_state.as_str(),
         "completed" | "failed" | "canceled" | "interrupted"
@@ -492,9 +543,9 @@ async fn retry_agent_run(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, predecessor_run_id,
-            state, prompt, authorization_snapshot
+            state, prompt, authorization_snapshot, prompt_message_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10)
         "#,
     )
     .bind(run_id)
@@ -511,6 +562,7 @@ async fn retry_agent_run(
         "scope": ["repository.read", "repository.write", "provider.turn"],
         "retry_of": predecessor_run_id
     }))
+    .bind(prompt_message_id)
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
@@ -2141,7 +2193,7 @@ pub(crate) async fn fetch_approval(
 
 async fn guard_conversation_mutation(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    principal: &AuthenticatedActor,
+    principal: &impl RunActor,
     conversation_id: Uuid,
     project_id: Uuid,
     action: Action,
@@ -2149,18 +2201,48 @@ async fn guard_conversation_mutation(
     #[derive(FromRow)]
     struct MutationGuard {
         kind: String,
-        parent_channel_id: Option<Uuid>,
         conversation_archived: bool,
         project_archived: bool,
         membership_role: String,
         membership_enabled: bool,
     }
 
+    // Match conversation writes: project first, then parent, then thread.
+    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR SHARE")
+        .bind(project_id)
+        .execute(&mut **transaction)
+        .await?;
+    let parent_channel_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT parent_channel_id FROM conversations WHERE id = $1 AND project_id = $2 AND conversation_visible_to(id, $3)",
+    )
+    .bind(conversation_id)
+    .bind(project_id)
+    .bind(principal.actor_id())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("conversation"))?;
+    let parent_archived = if let Some(parent_channel_id) = parent_channel_id {
+        !sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT archived_at IS NULL
+            FROM conversations
+            WHERE id = $1 AND project_id = $2 AND kind = 'channel'
+            FOR SHARE
+            "#,
+        )
+        .bind(parent_channel_id)
+        .bind(project_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(AppError::NotFound("conversation"))?
+    } else {
+        false
+    };
+
     let guard = sqlx::query_as::<_, MutationGuard>(
         r#"
         SELECT
             c.kind,
-            c.parent_channel_id,
             c.archived_at IS NOT NULL AS conversation_archived,
             p.archived_at IS NOT NULL AS project_archived,
             pm.role AS membership_role,
@@ -2179,12 +2261,14 @@ async fn guard_conversation_mutation(
          AND pm.enabled
         WHERE c.id = $1
           AND c.project_id = $2
-        FOR SHARE OF c, p, pm
+          AND conversation_visible_to(c.id, $3)
+        FOR UPDATE OF c
+        FOR SHARE OF p, pm
         "#,
     )
     .bind(conversation_id)
     .bind(project_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
@@ -2204,23 +2288,16 @@ async fn guard_conversation_mutation(
     if guard.project_archived {
         return Err(AppError::ProjectArchived);
     }
-    let parent_archived = if let Some(parent_channel_id) = guard.parent_channel_id {
-        !sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT archived_at IS NULL
-            FROM conversations
-            WHERE id = $1 AND project_id = $2 AND kind = 'channel'
-            FOR SHARE
-            "#,
-        )
-        .bind(parent_channel_id)
-        .bind(project_id)
-        .fetch_optional(&mut **transaction)
+    // A visibility predicate evaluated before waiting on a lock can have an
+    // older snapshot. Check again while holding the parent and thread locks.
+    if !sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+        .bind(conversation_id)
+        .bind(principal.actor_id())
+        .fetch_one(&mut **transaction)
         .await?
-        .ok_or(AppError::NotFound("conversation"))?
-    } else {
-        false
-    };
+    {
+        return Err(AppError::NotFound("conversation"));
+    }
     if guard.conversation_archived || parent_archived {
         return Err(AppError::NotFound("conversation"));
     }
@@ -2229,7 +2306,7 @@ async fn guard_conversation_mutation(
 
 async fn authorized_conversation(
     state: &AppState,
-    principal: &AuthenticatedActor,
+    principal: &impl RunActor,
     conversation_id: Uuid,
     action: Action,
 ) -> Result<ConversationRow, AppError> {
@@ -2260,10 +2337,11 @@ async fn authorized_conversation(
          AND pm.actor_id = $2
          AND pm.enabled
         WHERE c.id = $1
+          AND conversation_visible_to(c.id, $2)
         "#,
     )
     .bind(conversation_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
@@ -2284,7 +2362,7 @@ async fn authorized_conversation(
 }
 
 fn authorize_project_action(
-    principal: &AuthenticatedActor,
+    principal: &impl RunActor,
     project_id: Uuid,
     membership_role: &str,
     membership_enabled: bool,
@@ -2292,8 +2370,8 @@ fn authorize_project_action(
     resource: Resource,
 ) -> Result<(), AppError> {
     let subject = Subject::new(
-        principal.actor_id,
-        parse_actor_kind(&principal.actor_kind)?,
+        principal.actor_id(),
+        principal.actor_kind()?,
         true,
         Some(Membership::project(
             project_id,
@@ -2305,6 +2383,36 @@ fn authorize_project_action(
     match authorize(&subject, action, resource) {
         Decision::Allow => Ok(()),
         Decision::Deny(_) => Err(AppError::Forbidden),
+    }
+}
+
+/// Whoever starts or changes a run: a browser session or an MCP caller.
+pub(crate) trait RunActor {
+    fn actor_id(&self) -> Uuid;
+    fn actor_kind(&self) -> Result<ActorKind, AppError>;
+    fn is_mcp(&self) -> bool {
+        false
+    }
+}
+
+impl RunActor for AuthenticatedActor {
+    fn actor_id(&self) -> Uuid {
+        self.actor_id
+    }
+    fn actor_kind(&self) -> Result<ActorKind, AppError> {
+        parse_actor_kind(&self.actor_kind)
+    }
+}
+
+impl RunActor for crate::runs::RunCaller {
+    fn actor_id(&self) -> Uuid {
+        self.actor_id
+    }
+    fn actor_kind(&self) -> Result<ActorKind, AppError> {
+        Ok(self.actor_kind)
+    }
+    fn is_mcp(&self) -> bool {
+        self.is_mcp()
     }
 }
 

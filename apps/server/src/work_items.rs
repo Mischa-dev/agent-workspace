@@ -1242,7 +1242,7 @@ async fn get_work_item(
         Action::WorkItemView,
         Some(work_item_id),
     )?;
-    let row = fetch_work_item(&state.pool, project_id, work_item_id)
+    let row = fetch_work_item(&state.pool, project_id, work_item_id, principal.actor_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
     Ok(Json(work_item_view(row, capabilities(&membership)?)?))
@@ -1272,7 +1272,7 @@ async fn get_work_item_by_key(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("work_item"))?;
-    let row = fetch_work_item(&state.pool, project_id, work_item_id)
+    let row = fetch_work_item(&state.pool, project_id, work_item_id, principal.actor_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
     Ok(Json(work_item_view(row, capabilities(&membership)?)?))
@@ -1380,9 +1380,14 @@ async fn update_work_item(
             if current.version == request.expected_version && current.archived {
                 return Err(AppError::Conflict("work_item", "archived"));
             }
-            let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
-                .await?
-                .ok_or(AppError::NotFound("work_item"))?;
+            let row = fetch_work_item_in_transaction(
+                &mut transaction,
+                project_id,
+                work_item_id,
+                principal.actor_id,
+            )
+            .await?
+            .ok_or(AppError::NotFound("work_item"))?;
             return work_item_version_conflict_response(work_item_view(row, capabilities)?);
         }
         UpdateWorkItemOutcome::TooManyLabels { .. }
@@ -1394,9 +1399,14 @@ async fn update_work_item(
         }
         UpdateWorkItemOutcome::Noop(_) | UpdateWorkItemOutcome::Applied { .. } => {}
     }
-    let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
+    let row = fetch_work_item_in_transaction(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
     let item = work_item_view(row, capabilities)?;
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
@@ -1512,17 +1522,26 @@ async fn set_work_item_archived(
         // whose old key opens the moved one.
         ArchiveOutcome::MovedAway { .. } => return Err(AppError::Conflict("work_item", "moved")),
         ArchiveOutcome::VersionConflict(_) => {
-            let current =
-                fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
-                    .await?
-                    .ok_or(AppError::NotFound("work_item"))?;
+            let current = fetch_work_item_in_transaction(
+                &mut transaction,
+                project_id,
+                work_item_id,
+                principal.actor_id,
+            )
+            .await?
+            .ok_or(AppError::NotFound("work_item"))?;
             return work_item_version_conflict_response(work_item_view(current, capabilities)?);
         }
         ArchiveOutcome::Unchanged(_) | ArchiveOutcome::Applied { .. } => {}
     }
-    let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::Internal("archived Work Item is unavailable"))?;
+    let row = fetch_work_item_in_transaction(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::Internal("archived Work Item is unavailable"))?;
     let item = work_item_view(row, capabilities)?;
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
@@ -1627,9 +1646,14 @@ async fn work_with_worker(
         transaction.commit().await?;
         (existing.conversation_id, existing.repository_id, key)
     } else {
-        let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-            .await?
-            .ok_or(AppError::NotFound("work_item"))?;
+        let current = fetch_work_item_for_update(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            principal.actor_id,
+        )
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
         if current.version != request.expected_version {
             let current = work_item_view(current, capabilities(&membership)?)?;
             return work_item_version_conflict_response(current);
@@ -1642,11 +1666,13 @@ async fn work_with_worker(
             SELECT EXISTS (
                 SELECT 1 FROM conversations
                 WHERE project_id = $1 AND id = $2 AND kind = 'channel' AND archived_at IS NULL
+                  AND conversation_visible_to(id, $3)
             )
             "#,
         )
         .bind(project_id)
         .bind(request.channel_id)
+        .bind(principal.actor_id)
         .fetch_one(&mut *transaction)
         .await?;
         if !channel_exists {
@@ -1922,6 +1948,7 @@ async fn change_work_item_thread_link(
         &mut transaction,
         project_id,
         work_item_id,
+        principal.actor_id,
         capabilities(&membership)?,
     )
     .await?;
@@ -2046,9 +2073,14 @@ async fn change_work_item_repository_link(
         .ok_or(AppError::NotFound("work_item"))?;
     let caps = capabilities(&membership)?;
     if current.version != expected_version {
-        let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
-            .await?
-            .ok_or(AppError::NotFound("work_item"))?;
+        let row = fetch_work_item_in_transaction(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            principal.actor_id,
+        )
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
         return work_item_version_conflict_response(work_item_view(row, caps)?);
     }
     if current.archived {
@@ -2085,7 +2117,14 @@ async fn change_work_item_repository_link(
         }
         RepositoryLinkOutcome::Unchanged | RepositoryLinkOutcome::Changed { .. } => {}
     }
-    let item = current_work_item_view(&mut transaction, project_id, work_item_id, caps).await?;
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+        caps,
+    )
+    .await?;
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
     work_item_response(StatusCode::OK, item)
@@ -2237,9 +2276,14 @@ async fn move_work_item(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
+    let current = fetch_work_item_for_update(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::NotFound("work_item"))?;
     let caps = capabilities(&membership)?;
     if current.version != request.expected_version {
         return work_item_version_conflict_response(work_item_view(current, caps)?);
@@ -2331,7 +2375,14 @@ async fn move_work_item(
         version,
     )
     .await?;
-    let item = current_work_item_view(&mut transaction, project_id, work_item_id, caps).await?;
+    let item = current_work_item_view(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+        caps,
+    )
+    .await?;
     complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
     transaction.commit().await?;
     work_item_response(StatusCode::OK, item)
@@ -2409,9 +2460,14 @@ async fn create_work_item(
                     return Err(AppError::Internal("top-level Work Item had a parent"));
                 }
             };
-            let row = fetch_work_item_in_transaction(&mut transaction, project_id, work_item_id)
-                .await?
-                .ok_or(AppError::Internal("created Work Item is unavailable"))?;
+            let row = fetch_work_item_in_transaction(
+                &mut transaction,
+                project_id,
+                work_item_id,
+                principal.actor_id,
+            )
+            .await?
+            .ok_or(AppError::Internal("created Work Item is unavailable"))?;
             let item = work_item_view(row, capabilities(&membership)?)?;
             complete(&mut transaction, &reservation, StatusCode::CREATED, &item).await?;
             transaction.commit().await?;
@@ -2434,7 +2490,7 @@ async fn list_acceptance_criteria(
         Action::WorkItemView,
         Some(work_item_id),
     )?;
-    let row = fetch_work_item(&state.pool, project_id, work_item_id)
+    let row = fetch_work_item(&state.pool, project_id, work_item_id, principal.actor_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
     Ok(Json(
@@ -2486,9 +2542,14 @@ async fn create_acceptance_criterion(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
+    let current = fetch_work_item_for_update(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::NotFound("work_item"))?;
     let item_capabilities = capabilities(&membership)?;
     if current.version != request.expected_version {
         return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
@@ -2516,6 +2577,7 @@ async fn create_acceptance_criterion(
             &mut transaction,
             project_id,
             work_item_id,
+            principal.actor_id,
             request.expected_version,
             outcome,
             item_capabilities,
@@ -2526,6 +2588,7 @@ async fn create_acceptance_criterion(
         &mut transaction,
         project_id,
         work_item_id,
+        principal.actor_id,
         item_capabilities,
     )
     .await?;
@@ -2584,9 +2647,14 @@ async fn update_acceptance_criterion(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
+    let current = fetch_work_item_for_update(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::NotFound("work_item"))?;
     let item_capabilities = capabilities(&membership)?;
     if current.version != request.expected_version {
         return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
@@ -2619,6 +2687,7 @@ async fn update_acceptance_criterion(
             &mut transaction,
             project_id,
             work_item_id,
+            principal.actor_id,
             request.expected_version,
             outcome,
             item_capabilities,
@@ -2630,6 +2699,7 @@ async fn update_acceptance_criterion(
         &mut transaction,
         project_id,
         work_item_id,
+        principal.actor_id,
         item_capabilities,
     )
     .await?;
@@ -2678,9 +2748,14 @@ async fn remove_acceptance_criterion(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
+    let current = fetch_work_item_for_update(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::NotFound("work_item"))?;
     let item_capabilities = capabilities(&membership)?;
     if current.version != request.expected_version {
         return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
@@ -2707,6 +2782,7 @@ async fn remove_acceptance_criterion(
             &mut transaction,
             project_id,
             work_item_id,
+            principal.actor_id,
             request.expected_version,
             outcome,
             item_capabilities,
@@ -2717,6 +2793,7 @@ async fn remove_acceptance_criterion(
         &mut transaction,
         project_id,
         work_item_id,
+        principal.actor_id,
         item_capabilities,
     )
     .await?;
@@ -2732,6 +2809,7 @@ async fn criteria_refusal(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
     expected_version: i64,
     outcome: CriteriaOutcome,
     item_capabilities: WorkItemCapabilities,
@@ -2741,8 +2819,14 @@ async fn criteria_refusal(
             if conflict_kind(&current, expected_version) == Some(ConflictKind::Version) =>
         {
             work_item_version_conflict_response(
-                current_work_item_view(transaction, project_id, work_item_id, item_capabilities)
-                    .await?,
+                current_work_item_view(
+                    transaction,
+                    project_id,
+                    work_item_id,
+                    viewer,
+                    item_capabilities,
+                )
+                .await?,
             )
         }
         CriteriaOutcome::Conflict(_) => Err(AppError::Conflict("work_item", "archived")),
@@ -2807,9 +2891,14 @@ async fn create_work_item_comment(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let current = fetch_work_item_for_update(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
+    let current = fetch_work_item_for_update(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::NotFound("work_item"))?;
     if current.archived_at.is_some() {
         return Err(AppError::Conflict("work_item", "archived"));
     }
@@ -2941,7 +3030,7 @@ async fn get_work_item_timeline(
         Action::WorkItemView,
         Some(work_item_id),
     )?;
-    fetch_work_item(&state.pool, project_id, work_item_id)
+    fetch_work_item(&state.pool, project_id, work_item_id, principal.actor_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
     let before_sequence = query
@@ -3311,10 +3400,12 @@ async fn fetch_work_item(
     pool: &PgPool,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Option<WorkItemRow>, AppError> {
     Ok(sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_SELECT)
         .bind(project_id)
         .bind(work_item_id)
+        .bind(viewer)
         .fetch_optional(pool)
         .await?)
 }
@@ -3323,10 +3414,12 @@ async fn fetch_work_item_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Option<WorkItemRow>, AppError> {
     Ok(sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_SELECT)
         .bind(project_id)
         .bind(work_item_id)
+        .bind(viewer)
         .fetch_optional(&mut **transaction)
         .await?)
 }
@@ -3335,11 +3428,13 @@ async fn fetch_work_item_for_update(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
 ) -> Result<Option<WorkItemRow>, AppError> {
     let query = format!("{WORK_ITEM_SELECT} FOR UPDATE OF item");
     Ok(sqlx::query_as::<_, WorkItemRow>(&query)
         .bind(project_id)
         .bind(work_item_id)
+        .bind(viewer)
         .fetch_optional(&mut **transaction)
         .await?)
 }
@@ -3348,9 +3443,10 @@ async fn current_work_item_view(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     work_item_id: Uuid,
+    viewer: Uuid,
     capabilities: WorkItemCapabilities,
 ) -> Result<WorkItemView, AppError> {
-    let row = fetch_work_item_in_transaction(transaction, project_id, work_item_id)
+    let row = fetch_work_item_in_transaction(transaction, project_id, work_item_id, viewer)
         .await?
         .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
     work_item_view(row, capabilities)
@@ -3397,6 +3493,8 @@ macro_rules! work_item_labels_column {
 }
 const WORK_ITEM_LABELS_COLUMN: &str = work_item_labels_column!();
 
+/// One task as `$3` (the viewing Actor) sees it: linked threads and pull
+/// requests from private conversations they are not in are left out.
 const WORK_ITEM_SELECT: &str = concat!(
     r#"
     SELECT
@@ -3475,6 +3573,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                 LIMIT 1
             ) newest_run ON true
             WHERE link.project_id = item.project_id AND link.work_item_id = item.id
+              AND conversation_visible_to(thread.id, $3)
         ), '[]'::jsonb) AS linked_threads,
         COALESCE((
             SELECT jsonb_agg(
@@ -3524,6 +3623,7 @@ const WORK_ITEM_SELECT: &str = concat!(
               ON pull_request.project_id = link.project_id
              AND pull_request.id = link.github_pull_request_id
             WHERE link.project_id = item.project_id AND link.work_item_id = item.id
+              AND pull_request_visible_to(pull_request.id, $3)
         ), '[]'::jsonb) AS linked_pull_requests
     FROM work_items item
     JOIN projects project ON project.id = item.project_id

@@ -14,6 +14,17 @@ export function AccountSettingsPage() {
   const [name, setName] = useState(session.user.displayName)
   const [error, setError] = useState<string | null>(null)
   const status = useQuery({ queryKey: ['workos-status'], queryFn: workOsStatus })
+  const profile = useQuery({
+    queryKey: ['account-profile'],
+    queryFn: () => requestJson<{ githubLogin?: string | null }>('/api/v1/account/profile'),
+  })
+  const [githubDraft, setGithubDraft] = useState<string | null>(null)
+  const githubLogin = githubDraft ?? profile.data?.githubLogin ?? ''
+  const saveGithub = useMutation({
+    mutationFn: () => requestJson('/api/v1/account/profile', { method: 'PATCH', json: { githubLogin: githubLogin.trim() } }),
+    onSuccess: async () => { setError(null); await client.invalidateQueries({ queryKey: ['account-profile'] }) },
+    onError: (reason) => setError(isApiError(reason) ? reason.message : 'Could not save your GitHub username.'),
+  })
   const save = useMutation({
     mutationFn: () => requestJson('/api/v1/account/profile', { method: 'PATCH', json: { displayName: name } }),
     onSuccess: async () => { setError(null); await client.invalidateQueries() },
@@ -36,6 +47,11 @@ export function AccountSettingsPage() {
             <Button busy={save.isPending} disabled={!name.trim()} type="submit" variant="primary">Save profile</Button>
           </form>
           {save.isSuccess && <p role="status">Profile saved.</p>}
+          <form className="aw-inline-form" onSubmit={(event) => { event.preventDefault(); saveGithub.mutate() }}>
+            <TextField id="account-github" label="GitHub username" hint="Used only to find pull requests that ask for your review." maxLength={39} value={githubLogin} onChange={(event) => setGithubDraft(event.target.value)} />
+            <Button busy={saveGithub.isPending} disabled={profile.isPending} type="submit">Save GitHub username</Button>
+          </form>
+          {saveGithub.isSuccess && <p role="status">GitHub username saved.</p>}
         </Section>
         <Section title="Sign-in" description="Link WorkOS to keep your existing projects, conversations, and username.">
           {status.isPending && <p>Loading sign-in settings…</p>}

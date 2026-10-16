@@ -12,7 +12,7 @@ describe('API client security boundary', () => {
     document.cookie = 'agent_workspace_csrf=csrf-value; Path=/'
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(
+      .mockImplementation(async () =>
         new Response(JSON.stringify({ ok: true }), {
           headers: { 'content-type': 'application/json' },
         }),
@@ -59,6 +59,41 @@ describe('API client security boundary', () => {
         message: 'Project archived.',
         requestId: 'request-1',
         status: 409,
+    })
+  })
+
+  it('ignores a malformed CSRF cookie instead of crashing before fetch', async () => {
+    document.cookie = 'agent_workspace_csrf=%not-a-valid-escape; Path=/'
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      requestJson('/api/v1/projects', { method: 'POST', json: {} }),
+    ).resolves.toEqual({ ok: true })
+
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers)
+    expect(headers.has('x-csrf-token')).toBe(false)
+  })
+
+  it.each([
+    ['non-JSON success', new Response('<html>proxy error</html>')],
+    [
+      'malformed JSON success',
+      new Response('{broken', {
+        headers: { 'content-type': 'application/json' },
+      }),
+    ],
+  ])('rejects a %s response instead of returning a mistyped null', async (_, response) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+    await expect(requestJson('/api/v1/projects')).rejects.toMatchObject({
+      code: 'invalid_response',
+      message: 'The server returned an invalid response.',
+      status: 200,
     })
   })
 })
