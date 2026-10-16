@@ -112,7 +112,14 @@ if [[ "${current}" == "${previous}" && -n "${uploaded}" && -n "${uploaded_sum}" 
   log "secrets key ${uploaded} is missing or damaged off-host; uploading it again"
 fi
 
+# The daily unit runs this twice, so a second pass can land in the same
+# second as the first; never reuse a name that already exists off-host.
+existing="$(remote_list "${BACKUP_KEY_REMOTE}")"
 name="$(new_set_name)"
+while [[ "${name}" == "${uploaded}" ]] || grep -qxF -- "${name}" <<<"${existing}"; do
+  sleep 1
+  name="$(new_set_name)"
+done
 install -d -m 0700 "${work}/${name}"
 encrypt_stream "${BACKUP_KEY_AGE_RECIPIENTS_FILE}" "${work}/${name}/secrets-key.age" \
   <"${BACKUP_SECRETS_KEY_FILE}"

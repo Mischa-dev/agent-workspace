@@ -95,19 +95,32 @@ migration_version="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -
 coproc rotation_lock {
   PGDATABASE="${BACKUP_DATABASE}" exec "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1
 }
+lock_pid="${rotation_lock_PID:?}"
+lock_output="${rotation_lock[0]}"
+lock_input="${rotation_lock[1]}"
 printf '%s\n' "SELECT 'locked' FROM (SELECT pg_advisory_lock(470127786, 3)) AS held;" \
-  >&"${rotation_lock[1]}"
-IFS= read -r locked <&"${rotation_lock[0]}" || true
+  >&"${lock_input}"
+IFS= read -r locked <&"${lock_output}" || true
 [[ "${locked}" == locked ]] || die "could not take the key rotation lock"
 
 # The dump is streamed straight into age; no plaintext copy touches the disk.
 PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PG_DUMP}" --format=custom \
   | encrypt_stream "${BACKUP_AGE_RECIPIENTS_FILE}" "${work}/database.dump.age"
+# The same session must still hold the lock now. If it dropped, a rotation
+# may have run during the dump, so the dump is discarded (the trap removes
+# the partial set) rather than kept with keys no backup holds together.
+held=""
+# A dead session's pipe must fail the write, not kill the script.
+trap '' PIPE
+{
+  printf '%s\n' "SELECT 'held' FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND classid = 470127786 AND objid = 3 AND objsubid = 2 AND granted;" \
+    >&"${lock_input}" && IFS= read -r held <&"${lock_output}"
+} 2>/dev/null || true
+trap - PIPE
+[[ "${held}" == held ]] || die "lost the key rotation lock during the dump; discarding it"
 # Closing the session releases the lock.
-lock_pid="${rotation_lock_PID:?}"
-lock_input="${rotation_lock[1]}"
 exec {lock_input}>&-
-wait "${lock_pid}" || true
+wait "${lock_pid}" || die "the key rotation lock session failed; discarding the dump"
 test -s "${work}/database.dump.age" || die "database dump is empty"
 log "database dump encrypted ($(stat -c %s "${work}/database.dump.age") bytes)"
 
