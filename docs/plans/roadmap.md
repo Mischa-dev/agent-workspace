@@ -2086,11 +2086,17 @@ first admin comes from an interactive command (`bootstrap-admin`). Add a
 container image and a compose file (the app plus PostgreSQL) that start a
 working install, first-run setup in the browser that creates the first admin
 and generates the secrets master key, a configuration reference with safe
-defaults, and upgrade notes. The Red Hat scripts stay in `deploy/redhat` as
-one example of a host.
+defaults, and upgrade notes. An empty database isn't enough to open setup,
+since anyone who reaches a fresh install first would own it. On first start
+the server writes a one-time setup code to a file in its data folder that only
+the host can read, and logs the file's path but never the code (`AGENTS.md`
+keeps secrets out of logs). Setup asks for the code, which stops working once
+the first admin exists. The Red Hat scripts stay in `deploy/redhat` as one
+example of a host.
 
 **Done when:** On a fresh machine, `docker compose up` and a browser get you
-to a working workspace.
+to a working workspace, and setup refuses anyone without the code from the
+host.
 
 #### O9. Open-source release
 
