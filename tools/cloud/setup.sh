@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     --warm) warm="${2:?--warm needs wait, background or skip}"; shift 2 ;;
     --warm=*) warm="${1#--warm=}"; shift ;;
     --db-only) db_only=1; shift ;;
-    -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
