@@ -2,8 +2,9 @@
 # Back up the secrets master key (keyring) on its own: a different age
 # recipient and a different off-host place from the database backups, because
 # a dump together with its key defeats the encryption. Runs after the daily
-# backup and uploads only when the key file changed. Key sets are never
-# pruned: an old dump may need the key that was current when it was made.
+# backup and uploads only when the key file, its recipients or its
+# destination changed. Key sets are never pruned: an old dump may need the
+# key that was current when it was made.
 #
 # usage: agent-workspace-backup-key [--config FILE] [--force]
 set -euo pipefail
@@ -59,11 +60,15 @@ require_transport_tools "${BACKUP_KEY_REMOTE}"
 take_lock backup-key
 umask 0077
 state_file="${BACKUP_STATE_DIR}/secrets-key.sha256"
+# The saved state names what was uploaded and where it went: a new key, a new
+# destination or new recipients each need a fresh upload.
 current="$(sha256sum -- "${BACKUP_SECRETS_KEY_FILE}" | cut -d' ' -f1)"
+current+=" $(sha256sum -- "${BACKUP_KEY_AGE_RECIPIENTS_FILE}" | cut -d' ' -f1)"
+current+=" $(printf '%s' "${BACKUP_KEY_REMOTE}" | sha256sum | cut -d' ' -f1)"
 previous=""
 [[ -f "${state_file}" ]] && previous="$(<"${state_file}")"
 if [[ "${current}" == "${previous}" && "${force}" == false ]]; then
-  log "secrets key unchanged since the last upload; nothing to do"
+  log "secrets key, recipients and destination unchanged since the last upload; nothing to do"
   exit 0
 fi
 

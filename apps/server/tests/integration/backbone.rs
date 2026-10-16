@@ -1184,6 +1184,63 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
 }
 
 #[tokio::test]
+async fn access_revoked_while_a_write_is_in_flight_stops_the_write() {
+    let Some(setup) = backbone("backbone_revoke").await else {
+        return;
+    };
+    let organization = setup.organization_id;
+    let writes = [
+        (
+            "PUT",
+            "/api/v1/settings/values/run.model".to_owned(),
+            json!({"scope": "workspace", "organizationId": organization, "value": "late-model"}),
+        ),
+        (
+            "PUT",
+            format!("/api/v1/organizations/{organization}/secrets/late_key"),
+            json!({"value": "late-value"}),
+        ),
+    ];
+    for (method, uri, body) in writes {
+        // An administrator removes the owner and hasn't committed yet.
+        let mut revoke = setup.pool.begin().await.expect("revoke");
+        sqlx::query(
+            r#"
+            UPDATE organization_memberships SET enabled = false
+            WHERE organization_id = $1
+              AND actor_id = (SELECT actor_id FROM users WHERE login_name = 'owner')
+            "#,
+        )
+        .bind(organization)
+        .execute(&mut *revoke)
+        .await
+        .expect("disable membership");
+        let request = setup.browser.request(method, &uri, None, body);
+        let app = setup.app.clone();
+        let write = tokio::spawn(async move { send(&app, request).await });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!write.is_finished(), "{uri} waits for the revocation");
+        revoke.commit().await.expect("commit revocation");
+        let (status, answer) = write.await.expect("write task");
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {answer}");
+        sqlx::query(
+            "UPDATE organization_memberships SET enabled = true WHERE organization_id = $1",
+        )
+        .bind(organization)
+        .execute(&setup.pool)
+        .await
+        .expect("restore membership");
+    }
+    let (settings, secrets): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM settings), (SELECT count(*) FROM secrets WHERE name = 'late_key')",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("counts");
+    assert_eq!((settings, secrets), (0, 0));
+}
+
+#[tokio::test]
 async fn metrics_need_their_token_outside_development() {
     let Some(setup) = backbone("backbone_metrics").await else {
         return;

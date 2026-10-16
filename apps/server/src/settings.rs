@@ -34,7 +34,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -698,9 +698,11 @@ fn membership_role(value: &str) -> Result<MembershipRole, AppError> {
     }
 }
 
-/// The caller's role in the workspace, if they're an active member.
-async fn workspace_role(
-    pool: &PgPool,
+/// The caller's role in the workspace, if they're an active member. The
+/// rows are locked `FOR SHARE`, so inside a transaction a revocation waits
+/// for the write it would have stopped.
+async fn workspace_role<'e, E: PgExecutor<'e>>(
+    executor: E,
     actor_id: Uuid,
     organization_id: Uuid,
 ) -> Result<Option<String>, AppError> {
@@ -711,18 +713,20 @@ async fn workspace_role(
         JOIN actors actor ON actor.id = membership.actor_id
         WHERE membership.organization_id = $1 AND membership.actor_id = $2
           AND membership.enabled AND actor.status = 'active'
+        FOR SHARE OF membership, actor
         "#,
     )
     .bind(organization_id)
     .bind(actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 
 /// The caller's role in the project and its workspace, if they're an
-/// active member of both and the project isn't archived.
-async fn project_role(
-    pool: &PgPool,
+/// active member of both and the project isn't archived. Locked like
+/// [`workspace_role`].
+async fn project_role<'e, E: PgExecutor<'e>>(
+    executor: E,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<(Uuid, String)>, AppError> {
@@ -738,22 +742,23 @@ async fn project_role(
          AND organization_membership.actor_id = $2 AND organization_membership.enabled
         JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
         WHERE project.id = $1 AND project.archived_at IS NULL
+        FOR SHARE OF project, membership, organization_membership, actor
         "#,
     )
     .bind(project_id)
     .bind(actor_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?)
 }
 
 /// Owners and admins of the workspace, as people. Anyone else gets "not
 /// found" when they aren't a member, and "forbidden" when they are.
-pub async fn authorize_workspace_manage(
-    pool: &PgPool,
+pub async fn authorize_workspace_manage<'e, E: PgExecutor<'e>>(
+    executor: E,
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    let role = workspace_role(pool, principal.actor_id, organization_id)
+    let role = workspace_role(executor, principal.actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
     let subject = Subject::new(
@@ -782,12 +787,12 @@ pub async fn authorize_workspace_manage(
 
 /// Owners and admins of the project, as people. Returns the project's
 /// workspace.
-pub async fn authorize_project_manage(
-    pool: &PgPool,
+pub async fn authorize_project_manage<'e, E: PgExecutor<'e>>(
+    executor: E,
     principal: &AuthenticatedActor,
     project_id: Uuid,
 ) -> Result<Uuid, AppError> {
-    let (organization_id, role) = project_role(pool, principal.actor_id, project_id)
+    let (organization_id, role) = project_role(executor, principal.actor_id, project_id)
         .await?
         .ok_or(AppError::NotFound("project"))?;
     let subject = Subject::new(
@@ -816,12 +821,12 @@ pub async fn authorize_project_manage(
 
 /// Any person who is an active member of the workspace, for their own
 /// settings and keys.
-pub async fn authorize_personal(
-    pool: &PgPool,
+pub async fn authorize_personal<'e, E: PgExecutor<'e>>(
+    executor: E,
     principal: &AuthenticatedActor,
     organization_id: Uuid,
 ) -> Result<(), AppError> {
-    workspace_role(pool, principal.actor_id, organization_id)
+    workspace_role(executor, principal.actor_id, organization_id)
         .await?
         .ok_or(AppError::NotFound("workspace"))?;
     if principal.actor_kind != "human" {
@@ -1022,8 +1027,10 @@ struct WriteResponse {
     setting: Resolved,
 }
 
+/// Check the caller may write at `scope`. Call it inside the write's
+/// transaction: the membership rows stay locked until it commits.
 async fn authorize_target(
-    state: &AppState,
+    connection: &mut PgConnection,
     principal: &AuthenticatedActor,
     scope: Scope,
     organization_id: Option<Uuid>,
@@ -1032,13 +1039,13 @@ async fn authorize_target(
     match scope {
         Scope::Workspace => {
             let organization_id = organization_id.ok_or(AppError::Validation("organizationId"))?;
-            authorize_workspace_manage(&state.pool, principal, organization_id).await?;
+            authorize_workspace_manage(&mut *connection, principal, organization_id).await?;
             Ok(Target::Workspace { organization_id })
         }
         Scope::Project => {
             let project_id = project_id.ok_or(AppError::Validation("projectId"))?;
             let organization_id =
-                authorize_project_manage(&state.pool, principal, project_id).await?;
+                authorize_project_manage(&mut *connection, principal, project_id).await?;
             Ok(Target::Project {
                 organization_id,
                 project_id,
@@ -1046,7 +1053,7 @@ async fn authorize_target(
         }
         Scope::User => {
             let organization_id = organization_id.ok_or(AppError::Validation("organizationId"))?;
-            authorize_personal(&state.pool, principal, organization_id).await?;
+            authorize_personal(&mut *connection, principal, organization_id).await?;
             Ok(Target::User {
                 organization_id,
                 actor_id: principal.actor_id,
@@ -1086,15 +1093,15 @@ async fn set_value(
 ) -> Result<Json<WriteResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
+    let mut transaction = state.pool.begin().await?;
     let target = authorize_target(
-        &state,
+        &mut transaction,
         &principal,
         request.scope,
         request.organization_id,
         request.project_id,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
     let version = set(
         &mut transaction,
         target,
@@ -1135,15 +1142,15 @@ async fn reset_value(
 ) -> Result<Json<WriteResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
+    let mut transaction = state.pool.begin().await?;
     let target = authorize_target(
-        &state,
+        &mut transaction,
         &principal,
         request.scope,
         request.organization_id,
         request.project_id,
     )
     .await?;
-    let mut transaction = state.pool.begin().await?;
     let removed = reset(
         &mut transaction,
         target,

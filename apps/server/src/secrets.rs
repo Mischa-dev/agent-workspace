@@ -1265,12 +1265,11 @@ async fn put_workspace(
     ApiJson(request): ApiJson<PutSecretRequest>,
 ) -> Result<Json<SecretMetadata>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     store_from_request(
         &state,
         &headers,
         &principal,
-        SecretOwner::Workspace { organization_id },
+        OwnerRequest::Workspace(organization_id),
         &name,
         request,
     )
@@ -1285,16 +1284,11 @@ async fn put_project(
     ApiJson(request): ApiJson<PutSecretRequest>,
 ) -> Result<Json<SecretMetadata>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let organization_id =
-        crate::settings::authorize_project_manage(&state.pool, &principal, project_id).await?;
     store_from_request(
         &state,
         &headers,
         &principal,
-        SecretOwner::Project {
-            organization_id,
-            project_id,
-        },
+        OwnerRequest::Project(project_id),
         &name,
         request,
     )
@@ -1309,29 +1303,73 @@ async fn put_personal(
     ApiJson(request): ApiJson<PutSecretRequest>,
 ) -> Result<Json<SecretMetadata>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    crate::settings::authorize_personal(&state.pool, &principal, organization_id).await?;
     store_from_request(
         &state,
         &headers,
         &principal,
-        SecretOwner::Actor {
-            organization_id,
-            actor_id: principal.actor_id,
-        },
+        OwnerRequest::Personal(organization_id),
         &name,
         request,
     )
     .await
 }
 
+/// Whose secret a browser request names, before it's been checked.
+#[derive(Clone, Copy)]
+enum OwnerRequest {
+    Workspace(Uuid),
+    Project(Uuid),
+    Personal(Uuid),
+}
+
+/// Check the caller may change secrets for `request`. Call it inside the
+/// write's transaction: the membership rows stay locked until it commits,
+/// so access revoked mid-request can't let the write through.
+async fn authorize_owner(
+    connection: &mut PgConnection,
+    principal: &AuthenticatedActor,
+    request: OwnerRequest,
+) -> Result<SecretOwner, AppError> {
+    Ok(match request {
+        OwnerRequest::Workspace(organization_id) => {
+            crate::settings::authorize_workspace_manage(
+                &mut *connection,
+                principal,
+                organization_id,
+            )
+            .await?;
+            SecretOwner::Workspace { organization_id }
+        }
+        OwnerRequest::Project(project_id) => {
+            let organization_id =
+                crate::settings::authorize_project_manage(&mut *connection, principal, project_id)
+                    .await?;
+            SecretOwner::Project {
+                organization_id,
+                project_id,
+            }
+        }
+        OwnerRequest::Personal(organization_id) => {
+            crate::settings::authorize_personal(&mut *connection, principal, organization_id)
+                .await?;
+            SecretOwner::Actor {
+                organization_id,
+                actor_id: principal.actor_id,
+            }
+        }
+    })
+}
+
 async fn store_from_request(
     state: &AppState,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
-    owner: SecretOwner,
+    owner: OwnerRequest,
     name: &str,
     request: PutSecretRequest,
 ) -> Result<Json<SecretMetadata>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    let owner = authorize_owner(&mut transaction, principal, owner).await?;
     validate_name(name)?;
     if name.starts_with("webhook:") {
         return Err(AppError::Validation("secret name"));
@@ -1343,7 +1381,6 @@ async fn store_from_request(
         .as_deref()
         .map(str::trim)
         .filter(|description| !description.is_empty());
-    let mut transaction = state.pool.begin().await?;
     let stored = put(
         &mut transaction,
         keys.as_ref(),
@@ -1383,12 +1420,11 @@ async fn delete_workspace(
     ApiPath((organization_id, name)): ApiPath<(Uuid, String)>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id).await?;
     delete_from_request(
         &state,
         &headers,
         &principal,
-        SecretOwner::Workspace { organization_id },
+        OwnerRequest::Workspace(organization_id),
         &name,
     )
     .await
@@ -1401,16 +1437,11 @@ async fn delete_project(
     ApiPath((project_id, name)): ApiPath<(Uuid, String)>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let organization_id =
-        crate::settings::authorize_project_manage(&state.pool, &principal, project_id).await?;
     delete_from_request(
         &state,
         &headers,
         &principal,
-        SecretOwner::Project {
-            organization_id,
-            project_id,
-        },
+        OwnerRequest::Project(project_id),
         &name,
     )
     .await
@@ -1423,15 +1454,11 @@ async fn delete_personal(
     ApiPath((organization_id, name)): ApiPath<(Uuid, String)>,
 ) -> Result<StatusCode, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    crate::settings::authorize_personal(&state.pool, &principal, organization_id).await?;
     delete_from_request(
         &state,
         &headers,
         &principal,
-        SecretOwner::Actor {
-            organization_id,
-            actor_id: principal.actor_id,
-        },
+        OwnerRequest::Personal(organization_id),
         &name,
     )
     .await
@@ -1441,11 +1468,12 @@ async fn delete_from_request(
     state: &AppState,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
-    owner: SecretOwner,
+    owner: OwnerRequest,
     name: &str,
 ) -> Result<StatusCode, AppError> {
-    validate_name(name)?;
     let mut transaction = state.pool.begin().await?;
+    let owner = authorize_owner(&mut transaction, principal, owner).await?;
+    validate_name(name)?;
     let id = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM secrets

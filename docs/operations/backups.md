@@ -28,8 +28,10 @@ on its own, by `agent-workspace-backup-key`:
 
 - It is encrypted to a **different** age recipient.
 - It goes to a **different** off-host place.
-- It is uploaded only when the file changed (the script keeps its hash in
-  `/var/lib/agent-workspace-backup`).
+- It is uploaded only when the file, its recipients or its destination
+  changed (the script keeps their hashes in `/var/lib/agent-workspace-backup`),
+  so pointing `BACKUP_KEY_REMOTE` somewhere new uploads it there on the next
+  run.
 - Key sets are never pruned. An old dump may need the key that was current
   when it was made.
 
