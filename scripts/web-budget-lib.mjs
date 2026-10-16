@@ -1,39 +1,29 @@
 import { gzipSync } from 'node:zlib'
-import { lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
+// The budget holds the code every page load downloads (what index.html loads
+// before the app can paint) and each lazily loaded chunk on its own, never a
+// grand total, so a branch that adds a lazy route doesn't edit this file.
+// Raise a limit only when that part really grows, and say why next to it.
 export const WEB_ASSET_LIMITS = Object.freeze({
-  // Raised from 500/160 KiB for the redesign's shell, components and icons (+62 KiB raw, +22 KiB gzip).
-  // Account settings and the shared member picker bring the measured bundle to
-  // 571,778 raw bytes and 180,817 gzip bytes. Keep the raw ceiling and allow
-  // 2 KiB more gzip for these added routes and controls.
-  // Google and WorkOS agent controls measure 574,498 raw / 181,586 gzip bytes.
-  // Allow 2 KiB raw for these controls; retain the compressed transfer limit.
-  // The agent interface (connected apps, thread status and board, DM threads,
-  // pages, decisions, pins and search) measures 605,885 raw / 192,439 gzip
-  // bytes, most of it in lazily loaded routes.
-  // Mobile support (the service worker, one phone drawer, swipes, the keyboard
-  // viewport, reconnect on resume) adds 9,350 raw / 5,358 gzip bytes over
-  // 607,316 / 193,011, measuring 616,666 / 198,369; sw.js alone is 3,524 / 1,406.
-  // Editing and removing messages, their history, reactions, live updates of
-  // older pages and mark-unread (MCP Phase 3) measure 642,380 / 206,161, all
-  // in the lazily loaded conversation routes.
-  // Tasks at scale (W3: windowed list with grouping and bulk edits, board with
-  // drag and swimlanes, the task panel's per-field editing, milestones,
-  // workflow settings, and the popover, combobox, date picker and table kit)
-  // measure 762,524 raw / 243,021 gzip bytes, up 118,744 / 36,457. Nearly all
-  // of it is in the lazily loaded WorkItemsPage, TaskDetail, Milestones and
-  // Project settings chunks; the entry chunk gains only a route and a link.
-  // W3's review fixes (archived and locked targets, serialized task saves,
-  // exact key search, droppable lanes) bring it to 766,447 / 244,218.
-  javascriptRawBytes: 752 * 1024,
-  javascriptGzipBytes: 240 * 1024,
-  // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
-  // Lowered from 104 KiB once pass two removed the legacy stylesheet.
-  // Tasks at scale (W3) add two lazily loaded stylesheets, work items
-  // (16,875 bytes) and the picker kit (5,487), measuring 124,287; index.css is
-  // unchanged.
-  cssRawBytes: 123 * 1024,
+  // index.html's scripts and module preloads: the entry chunk, the shared UI
+  // chunk and theme-boot.js. Measured 388,329 raw / 120,899 gzip bytes when
+  // the budget moved to per-chunk limits (October 2026).
+  initialJavascriptRawBytes: 400 * 1024,
+  initialJavascriptGzipBytes: 128 * 1024,
+  // index.html's stylesheets: the design system's five theme presets,
+  // components and page layouts. Measured 101,925 raw bytes.
+  initialCssRawBytes: 106 * 1024,
+  // Any other script (each lazy route or shared lazy chunk, sw.js). The
+  // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
+  // Tasks at scale (W3) made the task list page (list, board, filters, bulk
+  // edits) and the task panel the largest lazy routes: 54,755 raw / 17,390
+  // gzip and 54,619 / 15,346 bytes.
+  chunkJavascriptRawBytes: 56 * 1024,
+  chunkJavascriptGzipBytes: 18 * 1024,
+  // Any stylesheet a lazy chunk loads.
+  chunkCssRawBytes: 32 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
@@ -45,17 +35,63 @@ export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
       gzipBytes: gzipSync(bytes, { level: 9, mtime: 0 }).length,
     }
   })
+  const initial = initialAssets(distRoot)
+  const isInitial = ({ file }) => initial.has(file)
   const javascript = files.filter(({ file }) => file.endsWith('.js'))
   const css = files.filter(({ file }) => file.endsWith('.css'))
   const totals = {
+    initialJavascriptRawBytes: sum(javascript.filter(isInitial), 'bytes'),
+    initialJavascriptGzipBytes: sum(javascript.filter(isInitial), 'gzipBytes'),
+    initialCssRawBytes: sum(css.filter(isInitial), 'bytes'),
     javascriptRawBytes: sum(javascript, 'bytes'),
     javascriptGzipBytes: sum(javascript, 'gzipBytes'),
     cssRawBytes: sum(css, 'bytes'),
   }
-  const violations = Object.entries(limits)
-    .filter(([name, limit]) => totals[name] > limit)
-    .map(([name, limit]) => ({ name, observed: totals[name], limit }))
-  return { compression: 'gzip level 9, per emitted asset', files, totals, limits, violations }
+  const violations = []
+  for (const name of ['initialJavascriptRawBytes', 'initialJavascriptGzipBytes', 'initialCssRawBytes']) {
+    if (limits[name] !== undefined && totals[name] > limits[name]) {
+      violations.push({ name, observed: totals[name], limit: limits[name] })
+    }
+  }
+  const chunkChecks = [
+    [javascript, 'bytes', 'chunkJavascriptRawBytes'],
+    [javascript, 'gzipBytes', 'chunkJavascriptGzipBytes'],
+    [css, 'bytes', 'chunkCssRawBytes'],
+  ]
+  for (const [records, key, name] of chunkChecks) {
+    const limit = limits[name]
+    if (limit === undefined) continue
+    for (const record of records) {
+      if (!isInitial(record) && record[key] > limit) {
+        violations.push({ name, file: record.file, observed: record[key], limit })
+      }
+    }
+  }
+  return {
+    compression: 'gzip level 9, per emitted asset',
+    initial: [...initial].sort(),
+    files,
+    totals,
+    limits,
+    violations,
+  }
+}
+
+// The scripts, module preloads and stylesheets index.html loads itself.
+function initialAssets(distRoot) {
+  const indexPath = join(distRoot, 'index.html')
+  const initial = new Set()
+  if (!existsSync(indexPath)) return initial
+  const html = readFileSync(indexPath, 'utf8')
+  for (const [tag] of html.matchAll(/<(?:script|link)\b[^>]*>/gi)) {
+    const isScript = /^<script/i.test(tag)
+    const rel = /\brel\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1]?.toLowerCase()
+    if (!isScript && rel !== 'modulepreload' && rel !== 'stylesheet') continue
+    const reference = /\b(?:src|href)\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1]
+    if (!reference || /^[a-z][a-z0-9+.-]*:/i.test(reference) || reference.startsWith('//')) continue
+    initial.add(reference.replace(/^\.?\//, '').split(/[?#]/)[0])
+  }
+  return initial
 }
 
 function walkRegularFiles(root) {
