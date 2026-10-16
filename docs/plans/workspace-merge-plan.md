@@ -230,6 +230,9 @@ means the agent finds the request on its next poll.
 
 ### Phase 4: After cutover (roughly in order)
 
+> [`roadmap.md`](roadmap.md) now carries this phase: each item below is part of
+> one of its workstreams, and the roadmap is the list to keep up to date.
+
 1. Org-level agent credentials, so one connection works in every project the
    agent belongs to.
 2. Notes and files, porting Workspace's revisioned Resources.
