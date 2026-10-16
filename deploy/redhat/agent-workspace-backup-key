@@ -43,10 +43,8 @@ require_setting BACKUP_KEY_REMOTE
 require_file BACKUP_SECRETS_KEY_FILE "${BACKUP_SECRETS_KEY_FILE}"
 require_file BACKUP_KEY_AGE_RECIPIENTS_FILE "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
 if [[ -n "${BACKUP_AGE_RECIPIENTS_FILE:-}" ]]; then
-  if [[ "$(readlink -f -- "${BACKUP_AGE_RECIPIENTS_FILE}")" == "$(readlink -f -- "${BACKUP_KEY_AGE_RECIPIENTS_FILE}")" ]] \
-    || cmp -s -- "${BACKUP_AGE_RECIPIENTS_FILE}" "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"; then
-    die "BACKUP_KEY_AGE_RECIPIENTS_FILE must hold a different recipient from BACKUP_AGE_RECIPIENTS_FILE"
-  fi
+  require_file BACKUP_AGE_RECIPIENTS_FILE "${BACKUP_AGE_RECIPIENTS_FILE}"
+  require_separate_recipients "${BACKUP_AGE_RECIPIENTS_FILE}" "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
 fi
 if [[ -n "${BACKUP_REMOTE:-}" ]]; then
   require_separate_remotes "${BACKUP_REMOTE}" "${BACKUP_KEY_REMOTE}"

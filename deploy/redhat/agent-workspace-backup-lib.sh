@@ -317,6 +317,23 @@ local_list() {
 
 # The two remotes must never share a place: a dump next to its key defeats
 # the encryption.
+# The recipients in an age recipients file: one per line, without comments,
+# blank lines or surrounding space, sorted. age lets every recipient in a file
+# decrypt on its own, so two files are separate only if these sets are.
+age_recipients() {
+  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -- "$1" \
+    | grep -v -e '^$' -e '^#' \
+    | LC_ALL=C sort -u
+}
+
+require_separate_recipients() {
+  local data_file="$1" key_file="$2" shared
+  [[ -n "$(age_recipients "${key_file}")" ]] || die "${key_file} lists no age recipients"
+  shared="$(LC_ALL=C comm -12 <(age_recipients "${data_file}") <(age_recipients "${key_file}"))"
+  [[ -z "${shared}" ]] \
+    || die "BACKUP_KEY_AGE_RECIPIENTS_FILE shares a recipient with BACKUP_AGE_RECIPIENTS_FILE; one identity could open both the database dump and the secrets key"
+}
+
 require_separate_remotes() {
   local data_spec="$1" key_spec="$2" data_host data_path
   [[ "${data_spec}" != "${key_spec}" ]] || die "BACKUP_KEY_REMOTE must differ from BACKUP_REMOTE"

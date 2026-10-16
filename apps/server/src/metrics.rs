@@ -42,6 +42,8 @@ struct Registry {
     jobs_dead: Mutex<BTreeMap<String, u64>>,
     alerts: Mutex<BTreeMap<&'static str, u64>>,
     browser_errors: Mutex<u64>,
+    browser_errors_dropped: Mutex<u64>,
+    browser_window: Mutex<Option<(Instant, u32)>>,
     server_errors: Mutex<BTreeMap<&'static str, u64>>,
 }
 
@@ -323,6 +325,16 @@ async fn render(state: &AppState) -> Result<String, AppError> {
             "aw_server_errors_total{{category=\"{category}\"}} {count}"
         );
     }
+    out.push_str("# TYPE aw_browser_errors_dropped_total counter\n");
+    let _ = writeln!(
+        out,
+        "aw_browser_errors_dropped_total {}",
+        registry
+            .browser_errors_dropped
+            .lock()
+            .map(|count| *count)
+            .unwrap_or(0)
+    );
     out.push_str("# TYPE aw_browser_errors_total counter\n");
     let _ = writeln!(
         out,
@@ -425,9 +437,33 @@ struct ClientErrorReport {
     release: Option<String>,
 }
 
+/// Browser error reports the whole server logs per minute. The endpoint is
+/// open to signed-out pages and an `Origin` header can be forged, so this
+/// caps what anyone can write to the logs through it.
+const BROWSER_REPORTS_PER_MINUTE: u32 = 60;
+
+/// Whether one more browser report fits this minute's budget, else how long
+/// until the next minute starts.
+fn take_browser_report_slot(now: Instant) -> Result<(), u64> {
+    let Ok(mut window) = registry().browser_window.lock() else {
+        return Err(60);
+    };
+    match window.as_mut() {
+        Some((started, used)) if now.duration_since(*started) < Duration::from_secs(60) => {
+            if *used >= BROWSER_REPORTS_PER_MINUTE {
+                let left = Duration::from_secs(60).saturating_sub(now.duration_since(*started));
+                return Err(left.as_secs().max(1));
+            }
+            *used += 1;
+        }
+        _ => *window = Some((now, 1)),
+    }
+    Ok(())
+}
+
 /// Browser error reports: counted and logged, bounded and stripped of
 /// query strings, never stored. Open to signed-out pages too, so it is
-/// limited to allowed origins and small bodies.
+/// limited to allowed origins, small bodies and a server-wide budget.
 async fn report_client_error(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -436,6 +472,14 @@ async fn report_client_error(
     crate::auth::require_allowed_origin(&state.config, &headers)?;
     if body.len() > 8 * 1024 {
         return Err(AppError::PayloadTooLarge);
+    }
+    if let Err(retry_after_seconds) = take_browser_report_slot(Instant::now()) {
+        if let Ok(mut dropped) = registry().browser_errors_dropped.lock() {
+            *dropped += 1;
+        }
+        return Err(AppError::RateLimited {
+            retry_after_seconds,
+        });
     }
     let report = serde_json::from_slice::<ClientErrorReport>(&body)
         .map_err(|_| AppError::Invalid("JSON request body"))?;
@@ -501,6 +545,21 @@ pub async fn health_check(state: &AppState) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_reports_have_a_server_wide_budget_per_minute() {
+        let start = Instant::now();
+        *registry().browser_window.lock().expect("window") = None;
+        for _ in 0..BROWSER_REPORTS_PER_MINUTE {
+            assert_eq!(take_browser_report_slot(start), Ok(()));
+        }
+        let refused = take_browser_report_slot(start + Duration::from_secs(10));
+        assert_eq!(refused, Err(50));
+        assert_eq!(
+            take_browser_report_slot(start + Duration::from_secs(61)),
+            Ok(())
+        );
+    }
 
     #[test]
     fn route_classes_never_carry_ids() {

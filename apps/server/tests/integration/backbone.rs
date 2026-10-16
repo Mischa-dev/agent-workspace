@@ -18,12 +18,13 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
+    error::AppError,
     jobs::{self, Enqueued, JobError, JobRegistry, NewJob, WorkerOptions},
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
     router,
-    secrets::{self, FileKeyring, SecretOwner},
+    secrets::{self, FileKeyring, KeyEncryption, NewSecret, SecretOwner, SecretValue},
 };
 use axum::{
     body::Body,
@@ -723,6 +724,108 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .expect("still opens")
             .expose(),
         "whsec_legacyplaintextvalue123"
+    );
+
+    // A server that read the keyring before the rotation can't store a
+    // secret under the key it just retired: that value could never open.
+    let stale = secrets::read_keyring(
+        setup
+            .state
+            .config
+            .secrets_key_path
+            .as_deref()
+            .expect("key path"),
+    )
+    .expect("keyring");
+    let saved = |keys: FileKeyring, name: &'static str| {
+        let pool = setup.pool.clone();
+        let organization_id = setup.organization_id;
+        async move {
+            let mut connection = pool.acquire().await.expect("connection");
+            secrets::put(
+                &mut connection,
+                &keys,
+                NewSecret {
+                    owner: SecretOwner::Workspace { organization_id },
+                    name,
+                    description: None,
+                    value: &SecretValue::new("sk-held-writer-value".to_owned()),
+                    actor_id: None,
+                    system_managed: false,
+                },
+            )
+            .await
+        }
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    secrets::rotate_master_key(&setup.pool, &setup.state.config)
+        .await
+        .expect("rotate again");
+    assert!(matches!(
+        saved(stale, "stale_writer").await,
+        Err(AppError::Conflict(_, _))
+    ));
+
+    // A write in flight while a rotation runs holds it off, and the rotation
+    // re-seals what that write stored before it drops the old key.
+    let current = secrets::read_keyring(
+        setup
+            .state
+            .config
+            .secrets_key_path
+            .as_deref()
+            .expect("key path"),
+    )
+    .expect("keyring");
+    let mut writer = setup.pool.begin().await.expect("writer");
+    let held = secrets::put(
+        &mut writer,
+        &current,
+        NewSecret {
+            owner: SecretOwner::Workspace {
+                organization_id: setup.organization_id,
+            },
+            name: "held_writer",
+            description: None,
+            value: &SecretValue::new("sk-held-writer-value".to_owned()),
+            actor_id: None,
+            system_managed: false,
+        },
+    )
+    .await
+    .expect("held write");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let rotation = tokio::spawn({
+        let pool = setup.pool.clone();
+        let config = setup.state.config.clone();
+        async move { secrets::rotate_master_key(&pool, &config).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!rotation.is_finished(), "the rotation waits for the writer");
+    writer.commit().await.expect("commit writer");
+    let result = rotation
+        .await
+        .expect("join")
+        .expect("rotate under a writer");
+    assert_eq!(
+        result.retired_key_ids,
+        vec![current.active_key_id().to_owned()]
+    );
+    let after = secrets::read_keyring(
+        setup
+            .state
+            .config
+            .secrets_key_path
+            .as_deref()
+            .expect("key path"),
+    )
+    .expect("keyring");
+    assert_eq!(
+        secrets::reveal(&setup.pool, &after, held.id, "test.held")
+            .await
+            .expect("the held write still opens")
+            .expose(),
+        "sk-held-writer-value"
     );
 }
 

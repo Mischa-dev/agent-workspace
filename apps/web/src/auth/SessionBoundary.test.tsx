@@ -4,7 +4,7 @@ import {
   QueryClientProvider,
 } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
 import { SessionBoundary } from './SessionBoundary'
@@ -30,6 +30,24 @@ const signedOutSession: SessionResponse = {
 }
 
 describe('normal session expiry', () => {
+  // Signed in, the boundary refetches the session and opens the realtime
+  // socket. Keep both off the network: a real connection from jsdom fails
+  // differently on each Node version (on Node 22 it rejects outside the test).
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+    vi.stubGlobal(
+      'WebSocket',
+      class extends EventTarget {
+        readyState = 0
+        close() {}
+        send() {}
+      },
+    )
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('clears Actor caches when a 200 session response becomes signed out', async () => {
     const queryClient = new QueryClient()
     queryClient.setQueryData(queryKeys.session, authenticatedSession)

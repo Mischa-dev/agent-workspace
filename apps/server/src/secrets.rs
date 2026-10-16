@@ -41,7 +41,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgConnection, PgExecutor, PgPool};
+use sqlx::{Connection, FromRow, PgConnection, PgExecutor, PgPool};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -55,6 +55,9 @@ use crate::{
 const KEYRING_HEADER: &str = "aw-secrets-v1";
 /// The most a secret may hold.
 pub const MAX_SECRET_BYTES: usize = 64 * 1024;
+/// Secret writes hold this advisory lock shared; key rotation takes it
+/// exclusively while it retires old master keys.
+const ROTATION_LOCK: (i32, i32) = (470127786, 2);
 
 // ---------------------------------------------------------------------------
 // Values
@@ -553,6 +556,25 @@ pub async fn put(
     {
         return Err(AppError::Validation("secret description"));
     }
+    let mut transaction = connection.begin().await?;
+    let connection = &mut *transaction;
+    // Hold off a rotation that's retiring keys until this write commits, and
+    // refuse a write sealed under a key a finished rotation already retired
+    // (this server read the keyring before it changed; a retry reloads it).
+    sqlx::query("SELECT pg_advisory_xact_lock_shared($1, $2)")
+        .bind(ROTATION_LOCK.0)
+        .bind(ROTATION_LOCK.1)
+        .execute(&mut *connection)
+        .await?;
+    let retired = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM secret_master_keys_retired WHERE master_key_id = $1)",
+    )
+    .bind(keys.active_key_id())
+    .fetch_one(&mut *connection)
+    .await?;
+    if retired {
+        return Err(AppError::Conflict("secret", "master key rotated"));
+    }
     let organization_id = secret.owner.organization_id();
     let existing = sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -622,9 +644,11 @@ pub async fn put(
         .execute(&mut *connection)
         .await?;
     }
-    metadata(&mut *connection, id)
+    let stored = metadata(&mut *connection, id)
         .await?
-        .ok_or(AppError::Internal("stored secret"))
+        .ok_or(AppError::Internal("stored secret"))?;
+    transaction.commit().await?;
+    Ok(stored)
 }
 
 struct Sealed {
@@ -813,32 +837,40 @@ pub async fn rewrap_all(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, 
             transaction.commit().await?;
             return Ok(rewrapped);
         }
-        for stored in &batch {
-            let associated = aad(stored.id, stored.organization_id);
-            let wrapped = WrappedKey {
-                master_key_id: stored.master_key_id.clone(),
-                nonce: stored
-                    .wrap_nonce
-                    .as_deref()
-                    .map(|nonce| nonce.try_into().map_err(|_| SecretError::Corrupt))
-                    .transpose()?,
-                ciphertext: stored.wrapped_key.clone(),
-            };
-            let data_key = keys.unwrap(&wrapped, &associated)?;
-            let rewrapped_key = keys.wrap(&data_key, &associated)?;
-            sqlx::query(
-                "UPDATE secrets SET wrapped_key = $2, wrap_nonce = $3, master_key_id = $4 WHERE id = $1",
-            )
-            .bind(stored.id)
-            .bind(&rewrapped_key.ciphertext)
-            .bind(rewrapped_key.nonce.as_ref().map(|nonce| nonce.as_slice()))
-            .bind(&rewrapped_key.master_key_id)
-            .execute(&mut *transaction)
-            .await?;
-            rewrapped += 1;
-        }
+        rewrapped += rewrap_rows(&mut transaction, keys, &batch).await?;
         transaction.commit().await?;
     }
+}
+
+async fn rewrap_rows(
+    connection: &mut PgConnection,
+    keys: &dyn KeyEncryption,
+    rows: &[StoredSecret],
+) -> Result<u64, AppError> {
+    for stored in rows {
+        let associated = aad(stored.id, stored.organization_id);
+        let wrapped = WrappedKey {
+            master_key_id: stored.master_key_id.clone(),
+            nonce: stored
+                .wrap_nonce
+                .as_deref()
+                .map(|nonce| nonce.try_into().map_err(|_| SecretError::Corrupt))
+                .transpose()?,
+            ciphertext: stored.wrapped_key.clone(),
+        };
+        let data_key = keys.unwrap(&wrapped, &associated)?;
+        let rewrapped_key = keys.wrap(&data_key, &associated)?;
+        sqlx::query(
+            "UPDATE secrets SET wrapped_key = $2, wrap_nonce = $3, master_key_id = $4 WHERE id = $1",
+        )
+        .bind(stored.id)
+        .bind(&rewrapped_key.ciphertext)
+        .bind(rewrapped_key.nonce.as_ref().map(|nonce| nonce.as_slice()))
+        .bind(&rewrapped_key.master_key_id)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(rows.len() as u64)
 }
 
 /// The master key ids secrets still use.
@@ -872,14 +904,48 @@ pub async fn rotate_master_key(
     let current = read_keyring(&path)?;
     let rotated = current.with_new_active_key();
     replace_keyring(&path, &rotated).map_err(|_| AppError::Internal("write secrets keyring"))?;
-    let rewrapped_secrets = rewrap_all(pool, &rotated).await?;
-    let in_use = master_keys_in_use(pool).await?;
+    let mut rewrapped_secrets = rewrap_all(pool, &rotated).await?;
+    // Writers that read the keyring before it changed may still be sealing
+    // under an old key. Wait for them, re-seal what they stored, and mark
+    // the old keys retired so a later write under one is refused.
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
+        .bind(ROTATION_LOCK.0)
+        .bind(ROTATION_LOCK.1)
+        .execute(&mut *transaction)
+        .await?;
+    let stragglers = sqlx::query_as::<_, StoredSecret>(
+        r#"
+        SELECT id, organization_id, ciphertext, nonce, wrapped_key, wrap_nonce, master_key_id
+        FROM secrets WHERE master_key_id <> $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(rotated.active_key_id())
+    .fetch_all(&mut *transaction)
+    .await?;
+    rewrapped_secrets += rewrap_rows(&mut transaction, &rotated, &stragglers).await?;
+    let in_use =
+        sqlx::query_scalar::<_, String>("SELECT DISTINCT master_key_id FROM secrets ORDER BY 1")
+            .fetch_all(&mut *transaction)
+            .await?;
     let trimmed = rotated.retain(&in_use);
     let retired_key_ids = rotated
         .key_ids()
         .into_iter()
         .filter(|id| !trimmed.key_ids().contains(id))
         .collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        INSERT INTO secret_master_keys_retired (master_key_id)
+        SELECT unnest($1::text[])
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(&retired_key_ids)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
     replace_keyring(&path, &trimmed).map_err(|_| AppError::Internal("write secrets keyring"))?;
     Ok(RotationResult {
         active_key_id: trimmed.active_key_id().to_owned(),
