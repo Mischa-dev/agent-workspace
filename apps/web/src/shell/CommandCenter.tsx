@@ -20,13 +20,14 @@ import { useProjectByKey } from './useProjectByKey'
 const projectPath = (projectId: string, rest = '') => `/projects/${encodeURIComponent(projectId)}${rest}`
 
 /** The Project in the address bar, if any. */
-function useRouteProject(projects: Project[], listed: boolean) {
+function useRouteProject(projects: Project[]) {
   const location = useLocation()
   const match = /^\/projects\/([^/]+)/.exec(location.pathname)
   const id = match ? decodeURIComponent(match[1]) : ''
   const inList = projects.find((project) => project.id === id) ?? null
-  // The rail holds the first 100 Projects; the page's own Project may not be one.
-  const fetched = useProject(listed && !inList && UUID.test(id) ? id : '')
+  // The rail holds the first 100 Projects, and may not have loaded; the page's
+  // own Project is fetched directly (the page shares this cached read).
+  const fetched = useProject(!inList && UUID.test(id) ? id : '')
   return inList ?? (fetched.data && !fetched.data.archivedAt ? fetched.data : null)
 }
 
@@ -80,7 +81,7 @@ export function CommandCenter() {
     () => (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt),
     [projectsQuery.data?.projects],
   )
-  const current = useRouteProject(projects, projectsQuery.isSuccess)
+  const current = useRouteProject(projects)
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
   const { mutateAsync: switchProject } = useSwitchProject()
