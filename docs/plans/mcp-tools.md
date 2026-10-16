@@ -59,6 +59,7 @@ limited by their role in the project.
 | `briefing` | ✓ | What needs you. Fixed. |
 | `projects_list` | ~ | Add `includeArchived`, and each project's key and your role. |
 | `project_open` | ~ | Also return the workflow (statuses with IDs and categories), labels, member count, and archived state. |
+| `notification_list`, `notification_update` | ✓ | The person's inbox (roadmap N1, N2): list by view and category, and read, unread, archive, restore or snooze. `briefing` includes the unread ones. |
 
 ### Projects and people
 
