@@ -99,6 +99,8 @@ pub struct AppConfig {
     pub codex_max_buffered_events: usize,
     pub codex_request_timeout: Duration,
     pub codex_shutdown_timeout: Duration,
+    /// How often a Codex Cloud task's status is read while it runs.
+    pub codex_cloud_poll_interval: Duration,
     pub demo_executor: bool,
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
@@ -194,6 +196,11 @@ impl AppConfig {
             Duration::from_secs(parse(values, "CODEX_REQUEST_TIMEOUT_SECONDS", "120")?);
         let codex_shutdown_timeout =
             Duration::from_secs(parse(values, "CODEX_SHUTDOWN_TIMEOUT_SECONDS", "5")?);
+        let codex_cloud_poll_interval = Duration::from_millis(parse(
+            values,
+            "CODEX_CLOUD_POLL_MILLISECONDS",
+            "15000",
+        )?);
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
@@ -268,6 +275,14 @@ impl AppConfig {
                 reason: "must be between 1 and 30".into(),
             });
         }
+        if !(Duration::from_millis(10)..=Duration::from_secs(600))
+            .contains(&codex_cloud_poll_interval)
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}CODEX_CLOUD_POLL_MILLISECONDS"),
+                reason: "must be between 10 and 600000".into(),
+            });
+        }
         if demo_executor && !environment.is_development() {
             return Err(ConfigError::Invalid {
                 key: format!("{PREFIX}DEMO_EXECUTOR"),
@@ -322,6 +337,7 @@ impl AppConfig {
             codex_max_buffered_events,
             codex_request_timeout,
             codex_shutdown_timeout,
+            codex_cloud_poll_interval,
             demo_executor,
             github,
             workos,

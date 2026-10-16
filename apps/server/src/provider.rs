@@ -18,6 +18,7 @@ use crate::{
 pub mod adapter;
 pub mod catalog;
 mod codex_app_server;
+pub(crate) mod codex_cloud;
 #[cfg(test)]
 mod contract_tests;
 pub mod demo;
@@ -31,6 +32,7 @@ pub use adapter::{
 };
 use adapter::{HarnessAnswer, HarnessEvent, HarnessRequest, ItemKind, RecoveredTurn, RequestKind};
 pub use codex_app_server::{CODEX_KIND, codex_manifest};
+pub use codex_cloud::{CODEX_CLOUD_KIND, codex_cloud_manifest};
 pub use registry::{
     LoginCeremonyError, LoginCeremonySnapshot, LoginReservation, SupervisorRegistry,
 };
