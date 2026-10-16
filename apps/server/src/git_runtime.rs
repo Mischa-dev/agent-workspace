@@ -240,7 +240,12 @@ pub fn adopt_legacy_mirror(
     Ok(PreparedRepository { base_commit })
 }
 
-pub fn unique_run_branch(project_key: &str) -> Result<String, AppError> {
+/// A fresh run branch: the harness's prefix (`codex/run-`), the project key
+/// and a unique id.
+pub fn unique_run_branch(prefix: &str, project_key: &str) -> Result<String, AppError> {
+    if !is_run_branch_prefix(prefix) {
+        return Err(AppError::Invalid("unsafe run branch prefix"));
+    }
     let slug = project_key.to_ascii_lowercase();
     if slug.is_empty()
         || !slug
@@ -249,7 +254,24 @@ pub fn unique_run_branch(project_key: &str) -> Result<String, AppError> {
     {
         return Err(AppError::Invalid("unsafe project key"));
     }
-    Ok(format!("codex/run-{slug}-{}", Uuid::now_v7()))
+    Ok(format!("{prefix}{slug}-{}", Uuid::now_v7()))
+}
+
+/// Run branches are `<harness>/run-…`; the server only ever creates, moves or
+/// deletes branches of that shape, so a person's own branches are never
+/// touched.
+pub fn is_run_branch_prefix(prefix: &str) -> bool {
+    let Some(namespace) = prefix.strip_suffix("/run-") else {
+        return false;
+    };
+    (1..=32).contains(&namespace.len())
+        && namespace
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && namespace
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 pub fn resolve_base_commit(mirror: &Path, branch: &str) -> Result<String, AppError> {
@@ -706,7 +728,10 @@ pub fn validate_registered_ref(value: &str) -> Result<(), AppError> {
 }
 
 fn validate_branch(value: &str) -> Result<(), AppError> {
-    if !value.starts_with("codex/run-") {
+    let owned = value
+        .find("/run-")
+        .is_some_and(|index| is_run_branch_prefix(&value[..index + 5]) && value.len() > index + 5);
+    if !owned {
         return Err(AppError::Invalid("unsafe Git branch"));
     }
     validate_ref(value)
@@ -1027,6 +1052,10 @@ mod tests {
         }
         assert!(validate_branch("main").is_err());
         assert!(validate_branch("codex/run-aw-safe").is_ok());
+        assert!(validate_branch("other-harness/run-aw-safe").is_ok());
+        assert!(validate_branch("feature/run-").is_err());
+        assert!(validate_branch("Main/run-x").is_err());
+        assert!(validate_branch("a/b/run-x").is_err());
     }
 
     #[test]
@@ -1039,8 +1068,8 @@ mod tests {
 
     #[test]
     fn creates_collision_safe_branch_names() {
-        let first = unique_run_branch("AW").expect("branch");
-        let second = unique_run_branch("AW").expect("branch");
+        let first = unique_run_branch("codex/run-", "AW").expect("branch");
+        let second = unique_run_branch("codex/run-", "AW").expect("branch");
         assert!(first.starts_with("codex/run-aw-"));
         assert_ne!(first, second);
     }
@@ -1204,7 +1233,7 @@ mod tests {
             workers.push(thread::spawn(move || {
                 let worktree = managed_worktree_path(&data_root, repository_id, workspace_id)
                     .expect("managed worktree path");
-                let branch = unique_run_branch("aw").expect("unique branch");
+                let branch = unique_run_branch("codex/run-", "aw").expect("unique branch");
                 create_worktree(&mirror, &worktree, &branch, &base_commit)
                     .expect("create linked worktree");
                 (worktree, branch)

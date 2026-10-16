@@ -19,8 +19,12 @@ const SCHEDULER_LEASE: Duration = Duration::from_secs(30);
 const WORKTREE_START_FAILURE_REASON: &str =
     "Worktree creation failed; inspect the retained repository workspace.";
 const PROVIDER_START_FAILURE_REASON: &str =
-    "Codex App Server could not start. The worktree was preserved.";
+    "The agent harness could not start. The worktree was preserved.";
+const UNKNOWN_HARNESS_REASON: &str =
+    "This run's harness is not installed on the server. Nothing was started.";
 const CLEANED_RETRY_REASON: &str = "The previous worktree was removed by retention cleanup before the retry could use it. Start a new Thread to continue.";
+/// Run states that hold a harness turn (and count against limits).
+const ACTIVE_TURN_STATES: &str = "('starting', 'working', 'blocked', 'recovering')";
 const UNSAFE_RETRY_REASON: &str = "The previous worktree is dirty, missing, or no longer has its owned branch. It was preserved; start a new Thread or inspect it before retrying.";
 
 enum RetryWorkspace {
@@ -40,7 +44,7 @@ struct ClaimedRun {
     default_branch: String,
     project_key: String,
     execution_profile_id: Uuid,
-    requesting_actor_id: Uuid,
+    adapter_kind: String,
     prompt: String,
     predecessor_run_id: Option<Uuid>,
     claim_id: Uuid,
@@ -107,18 +111,22 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
     )
     .execute(&mut *transaction)
     .await?;
-    let active = sqlx::query_scalar::<_, i64>(
+    // The host-wide cap only counts runs on this server; cloud harnesses
+    // never wait on it (H8).
+    let local_active = sqlx::query_scalar::<_, i64>(&format!(
         r#"
-        SELECT count(*) FROM agent_runs
-        WHERE state IN ('starting', 'working', 'blocked', 'recovering')
-        "#,
-    )
+        SELECT count(*) FROM agent_runs run
+        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+        JOIN provider_connections connection
+          ON connection.id = profile.provider_connection_id
+        WHERE run.state IN {ACTIVE_TURN_STATES}
+          AND connection.host = 'local_project_host'
+        "#
+    ))
     .fetch_one(&mut *transaction)
     .await?;
-    if active >= i64::try_from(state.config.codex_host_concurrency_limit).unwrap_or(i64::MAX) {
-        transaction.commit().await?;
-        return Ok(None);
-    }
+    let host_full = local_active
+        >= i64::try_from(state.config.codex_host_concurrency_limit).unwrap_or(i64::MAX);
 
     #[derive(FromRow)]
     struct Candidate {
@@ -131,34 +139,50 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         default_branch: String,
         project_key: String,
         execution_profile_id: Uuid,
-        requesting_actor_id: Uuid,
+        adapter_kind: String,
         prompt: String,
         predecessor_run_id: Option<Uuid>,
     }
-    let candidate = sqlx::query_as::<_, Candidate>(
+    // Oldest first among runs whose account has a free slot (up to its
+    // `max_concurrent_runs`), whose thread has no turn running, and, for
+    // local harnesses, while the host has room.
+    let candidate = sqlx::query_as::<_, Candidate>(&format!(
         r#"
         SELECT run.id AS run_id, run.project_id, run.conversation_id,
                run.repository_id, repository.mirror_path, repository.clone_url,
                repository.default_branch, project.project_key,
-               run.execution_profile_id, run.requesting_actor_id, run.prompt,
+               run.execution_profile_id, account.adapter_kind, run.prompt,
                run.predecessor_run_id
         FROM agent_runs run
         JOIN repositories repository
           ON repository.id = run.repository_id
          AND repository.project_id = run.project_id
         JOIN projects project ON project.id = run.project_id
+        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        JOIN provider_connections connection
+          ON connection.id = profile.provider_connection_id
         WHERE run.state = 'queued'
           AND run.scheduler_claim_id IS NULL
+          AND (connection.host <> 'local_project_host' OR NOT $1)
+          AND (
+              SELECT count(*) FROM agent_runs active
+              JOIN execution_profiles active_profile
+                ON active_profile.id = active.execution_profile_id
+              WHERE active_profile.provider_account_id = account.id
+                AND active.state IN {ACTIVE_TURN_STATES}
+          ) < account.max_concurrent_runs
           AND NOT EXISTS (
               SELECT 1 FROM agent_runs active
-              WHERE active.execution_profile_id = run.execution_profile_id
-                AND active.state IN ('starting', 'working', 'blocked', 'recovering')
+              WHERE active.conversation_id = run.conversation_id
+                AND active.state IN {ACTIVE_TURN_STATES}
           )
         ORDER BY run.created_at, run.id
         FOR UPDATE OF run SKIP LOCKED
         LIMIT 1
-        "#,
-    )
+        "#
+    ))
+    .bind(host_full)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(candidate) = candidate else {
@@ -201,7 +225,7 @@ async fn claim_next(state: &AppState) -> Result<Option<ClaimedRun>, AppError> {
         default_branch: candidate.default_branch,
         project_key: candidate.project_key,
         execution_profile_id: candidate.execution_profile_id,
-        requesting_actor_id: candidate.requesting_actor_id,
+        adapter_kind: candidate.adapter_kind,
         prompt: candidate.prompt,
         predecessor_run_id: candidate.predecessor_run_id,
         claim_id,
@@ -331,7 +355,15 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
 
     let workspace_id = Uuid::now_v7();
     let worktree_id = Uuid::now_v7();
-    let branch = git_runtime::unique_run_branch(&run.project_key)?;
+    let Some(branch_prefix) = state
+        .supervisors
+        .manifest(&run.adapter_kind)
+        .map(|manifest| manifest.branch_prefix.clone())
+    else {
+        fail_admission(state, &run, UNKNOWN_HARNESS_REASON, None).await?;
+        return Err(AppError::Conflict("agent_run", "harness is not installed"));
+    };
+    let branch = git_runtime::unique_run_branch(&branch_prefix, &run.project_key)?;
     let worktree = managed_worktree_path(&state.config.data_root, run.repository_id, workspace_id)?;
     let mut transaction = state.pool.begin().await?;
     let owned = sqlx::query_scalar::<_, bool>(
@@ -433,9 +465,7 @@ async fn start_admitted_run(
     run: &ClaimedRun,
     worktree: std::path::PathBuf,
 ) -> Result<(), AppError> {
-    if state.config.demo_executor {
-        prepare_demo_blocker(state, run).await?;
-    } else if let Err(error) = provider::start_run(
+    if let Err(error) = provider::start_run(
         state,
         run.project_id,
         run.run_id,
@@ -534,53 +564,6 @@ async fn reusable_retry_workspace(
         return Ok(RetryWorkspace::Unsafe);
     }
     Ok(RetryWorkspace::Reuse(workspace_id, worktree_id, worktree))
-}
-
-async fn prepare_demo_blocker(state: &AppState, run: &ClaimedRun) -> Result<(), AppError> {
-    let mut transaction = state.pool.begin().await?;
-    transition_run(&mut transaction, run.run_id, RunState::Working, None).await?;
-    let approval_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO agent_approvals (
-            id, agent_run_id, requesting_actor_id, provider_request_id,
-            kind, summary, options, eligible_role, human_required
-        )
-        VALUES ($1, $2, $3, $4, 'approval', $5, $6, 'owner', true)
-        "#,
-    )
-    .bind(approval_id)
-    .bind(run.run_id)
-    .bind(run.requesting_actor_id)
-    .bind(format!("development-approval-{approval_id}"))
-    .bind("Allow the development executor to append its proof line to KNOWN_FILE.txt?")
-    .bind(json!([
-        {"id": "approve", "label": "Allow once"},
-        {"id": "deny", "label": "Interrupt run"}
-    ]))
-    .execute(&mut *transaction)
-    .await?;
-    crate::external_events::enqueue_external_approval_requested(&mut transaction, approval_id)
-        .await?;
-    transition_run(&mut transaction, run.run_id, RunState::Blocked, None).await?;
-    let event_id = insert_event(
-        &mut transaction,
-        run.run_id,
-        "approval_requested",
-        "The run is waiting for an approval.",
-        json!({"approval_id": approval_id}),
-    )
-    .await?;
-    insert_entry(&mut transaction, run.conversation_id, event_id).await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        run.project_id,
-        run.conversation_id,
-        run.run_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(())
 }
 
 async fn fail_admission(

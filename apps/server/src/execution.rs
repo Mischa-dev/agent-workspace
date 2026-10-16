@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::get,
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
@@ -16,15 +16,17 @@ use crate::{
     policy::{
         Action, ActorKind, Membership, MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
-    profile_runtime::prepare_private_profile_directory,
-    provider::ProfileHealth,
+    provider::{
+        CODEX_KIND, ProfileHealth, SupervisorRegistry,
+        catalog::{self, Catalog},
+        manifest::{AdapterManifest, ModelOverrides},
+    },
 };
 
 const MAX_EXECUTION_RESOURCES: i64 = 100;
 const MAX_PROFILE_NAME_CHARS: usize = 120;
 const MAX_DISPLAY_NAME_CHARS: usize = 120;
 const MAX_HANDLE_CHARS: usize = 32;
-const PINNED_CODEX_VERSION: &str = "0.146.0";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -36,6 +38,15 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/{id}/execution-profiles",
             get(list_execution_profiles).post(register_personal_execution_profile),
         )
+        .route("/api/v1/projects/{id}/harnesses", get(list_harnesses))
+        .route(
+            "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
+            post(refresh_catalog),
+        )
+        .route(
+            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+            put(save_model_overrides).delete(remove_model),
+        )
 }
 
 #[derive(Debug, FromRow)]
@@ -44,9 +55,17 @@ struct ProjectAccessRow {
     handle: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
+/// Registering a profile uses one of the caller's provider accounts in the
+/// project. With no account named, it reuses their existing profile, or their
+/// existing account of the harness, or creates one.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegisterProfileRequest {
+    #[serde(default)]
+    provider_account_id: Option<Uuid>,
+    #[serde(default)]
+    adapter_kind: Option<String>,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ExecutionProfileCommandReference {
@@ -66,6 +85,8 @@ struct ExecutionWorkerRow {
     membership_enabled: bool,
     profile_status: Option<String>,
     profile_account_state: Option<String>,
+    /// Whether the profile's connection is enabled and its harness installed.
+    profile_usable: Option<bool>,
     profile_owner_actor_status: Option<String>,
     profile_owner_membership_enabled: Option<bool>,
     provider_kind: String,
@@ -82,7 +103,10 @@ struct ExecutionProfileRow {
     version: i64,
     status: String,
     account_state: String,
-    max_active_turns: i16,
+    provider_account_id: Uuid,
+    account_adapter_kind: String,
+    max_concurrent_runs: i16,
+    preferred: bool,
     last_health_at: Option<String>,
     last_failure_category: Option<String>,
     owner_actor_id: Uuid,
@@ -138,7 +162,12 @@ struct ExecutionProfileView {
     version: i64,
     status: ExecutionProfileStatus,
     account_state: AccountState,
-    max_active_turns: u16,
+    /// Only shown to the account's owner; managers see the profile, not the
+    /// private account behind it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_account_id: Option<Uuid>,
+    max_concurrent_runs: u16,
+    preferred: bool,
     last_health_at: Option<String>,
     last_failure_category: Option<String>,
     owner: ExecutionActorView,
@@ -201,10 +230,14 @@ enum ActorStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderView {
-    kind: &'static str,
+    kind: String,
+    /// The harness's name, or `None` when this server has no adapter for it.
+    display_name: Option<String>,
     enabled: bool,
     version: i64,
-    binary_version: &'static str,
+    binary_version: String,
+    /// Whether the registered adapter speaks this binary version.
+    supported: bool,
     capabilities: ProviderCapabilities,
 }
 
@@ -249,6 +282,7 @@ async fn list_execution_workers(
             membership.enabled AS membership_enabled,
             profile.status AS profile_status,
             profile.account_state AS profile_account_state,
+            profile.usable AS profile_usable,
             profile_owner.status AS profile_owner_actor_status,
             profile_owner_membership.enabled AS profile_owner_membership_enabled,
             connection.kind AS provider_kind,
@@ -266,14 +300,28 @@ async fn list_execution_workers(
           ON connection.project_id = worker.project_id
          AND connection.id = worker.provider_connection_id
         LEFT JOIN LATERAL (
-            SELECT candidate.*
+            SELECT candidate.*,
+                   COALESCE(candidate_connection.enabled
+                            AND candidate_account.adapter_kind = ANY($4), false) AS usable
             FROM execution_profiles candidate
+            LEFT JOIN provider_connections candidate_connection
+              ON candidate_connection.project_id = candidate.project_id
+             AND candidate_connection.id = candidate.provider_connection_id
+            LEFT JOIN provider_accounts candidate_account
+              ON candidate_account.id = candidate.provider_account_id
             WHERE candidate.project_id = worker.project_id
-              AND candidate.provider_connection_id = connection.id
               AND candidate.owner_actor_id = $2
+            -- Any of the person's profiles can drive the worker, whichever
+            -- harness it was set up with, so readiness looks at all of them,
+            -- ranking first the ones a run could actually start with.
             ORDER BY
                 (candidate.status = 'available'
+                 AND candidate.account_state = 'authenticated'
+                 AND COALESCE(candidate_connection.enabled
+                              AND candidate_account.adapter_kind = ANY($4), false)) DESC,
+                (candidate.status = 'available'
                  AND candidate.account_state = 'authenticated') DESC,
+                candidate.preferred DESC,
                 candidate.created_at,
                 candidate.id
             LIMIT 1
@@ -290,12 +338,19 @@ async fn list_execution_workers(
     .bind(project_id)
     .bind(principal.actor_id)
     .bind(MAX_EXECUTION_RESOURCES)
+    .bind(
+        state
+            .supervisors
+            .manifests()
+            .map(|manifest| manifest.kind.clone())
+            .collect::<Vec<_>>(),
+    )
     .fetch_all(&mut *transaction)
     .await?;
 
     let workers = rows
         .into_iter()
-        .map(execution_worker_view)
+        .map(|row| execution_worker_view(&state.supervisors, row))
         .collect::<Result<Vec<_>, _>>()?;
     transaction.commit().await?;
     Ok(Json(ExecutionWorkersResponse { workers }))
@@ -323,7 +378,10 @@ async fn list_execution_profiles(
             profile.version,
             profile.status,
             profile.account_state,
-            profile.max_active_turns,
+            profile.provider_account_id,
+            account.adapter_kind AS account_adapter_kind,
+            account.max_concurrent_runs,
+            profile.preferred,
             profile.last_health_at::text AS last_health_at,
             profile.last_failure_category,
             profile.owner_actor_id,
@@ -338,6 +396,7 @@ async fn list_execution_profiles(
             connection.binary_version,
             connection.capabilities
         FROM execution_profiles profile
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
         JOIN actors owner ON owner.id = profile.owner_actor_id
         JOIN project_memberships owner_membership
           ON owner_membership.project_id = profile.project_id
@@ -360,8 +419,16 @@ async fn list_execution_profiles(
 
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
-        let health = state.supervisors.health(row.id).await;
-        profiles.push(execution_profile_view(row, health)?);
+        let health = state
+            .supervisors
+            .health(&row.account_adapter_kind, row.provider_account_id)
+            .await;
+        profiles.push(execution_profile_view(
+            &state.supervisors,
+            row,
+            health,
+            principal.actor_id,
+        )?);
     }
     transaction.commit().await?;
     Ok(Json(ExecutionProfilesResponse { profiles }))
@@ -372,13 +439,36 @@ async fn register_personal_execution_profile(
     principal: AuthenticatedActor,
     headers: HeaderMap,
     ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<EmptyRequest>,
+    ApiJson(request): ApiJson<RegisterProfileRequest>,
 ) -> Result<(StatusCode, Json<ExecutionProfileView>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let scope =
         idempotency::resource_bound_scope("project", project_id, "execution_profile_register")?;
+    // Naming an account checks it belongs to the caller before anything is
+    // reserved.
+    let named_account = match request.provider_account_id {
+        Some(account_id) => Some(
+            crate::account::require_account_owner(&state, &principal, project_id, account_id)
+                .await?,
+        ),
+        None => None,
+    };
+    // A named account decides the harness; naming a different one is refused.
+    let adapter_kind = match (&request.adapter_kind, &named_account) {
+        (Some(kind), Some(account)) if kind != &account.adapter_kind => {
+            return Err(AppError::Validation("adapterKind"));
+        }
+        (_, Some(account)) => account.adapter_kind.clone(),
+        (Some(kind), None) => kind.clone(),
+        (None, None) => CODEX_KIND.to_owned(),
+    };
+    let manifest = state
+        .supervisors
+        .manifest(&adapter_kind)
+        .cloned()
+        .ok_or(AppError::Validation("adapterKind"))?;
     let mut transaction = state.pool.begin().await?;
     let access = require_project_action(
         &mut transaction,
@@ -418,125 +508,418 @@ async fn register_personal_execution_profile(
         .execute(&mut *transaction)
         .await?;
 
-    let existing_profile_id = sqlx::query_scalar::<_, Uuid>(
+    let account = match named_account {
+        Some(account) => Some(account),
+        None => {
+            let existing_profile_id = sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT profile.id
+                FROM execution_profiles profile
+                JOIN provider_accounts account ON account.id = profile.provider_account_id
+                JOIN provider_connections connection
+                  ON connection.id = profile.provider_connection_id
+                 AND connection.project_id = profile.project_id
+                 AND connection.enabled
+                WHERE profile.project_id = $1
+                  AND profile.owner_actor_id = $2
+                  AND account.adapter_kind = $3
+                ORDER BY profile.preferred DESC, profile.created_at, profile.id
+                LIMIT 1
+                "#,
+            )
+            .bind(project_id)
+            .bind(principal.actor_id)
+            .bind(&adapter_kind)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if let Some(profile_id) = existing_profile_id {
+                let reference = ExecutionProfileCommandReference { profile_id };
+                idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference)
+                    .await?;
+                transaction.commit().await?;
+                let profile = fetch_owned_execution_profile(
+                    &state,
+                    project_id,
+                    profile_id,
+                    principal.actor_id,
+                )
+                .await?;
+                return Ok((StatusCode::OK, Json(profile)));
+            }
+            None
+        }
+    };
+    // Reuse the caller's existing account of this harness so signing in once
+    // covers every project; otherwise create one.
+    let account = match account {
+        Some(account) => account,
+        None => {
+            let organization_id =
+                sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                    .bind(project_id)
+                    .fetch_one(&mut *transaction)
+                    .await?;
+            let existing_account_id = sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT id FROM provider_accounts
+                WHERE organization_id = $1 AND owner_actor_id = $2 AND adapter_kind = $3
+                  AND status <> 'disabled'
+                ORDER BY (account_state = 'authenticated') DESC, created_at, id
+                LIMIT 1
+                "#,
+            )
+            .bind(organization_id)
+            .bind(principal.actor_id)
+            .bind(&manifest.kind)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let account_id = match existing_account_id {
+                Some(account_id) => account_id,
+                None => {
+                    let name = manifest.display_name.clone();
+                    crate::account::insert_account(
+                        &state,
+                        &mut transaction,
+                        organization_id,
+                        principal.actor_id,
+                        &manifest,
+                        &name,
+                    )
+                    .await?
+                }
+            };
+            crate::account::account_access_in(&mut transaction, account_id).await?
+        }
+    };
+    let (profile_id, created) = crate::account::use_account_in_project(
+        &state,
+        &mut transaction,
+        project_id,
+        principal.actor_id,
+        &access.handle,
+        &account,
+    )
+    .await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    let reference = ExecutionProfileCommandReference { profile_id };
+    idempotency::complete(&mut transaction, &reservation, status, &reference).await?;
+    transaction.commit().await?;
+    crate::execution_setup::activate_pending_worker_for_account(&state.pool, account.account_id)
+        .await?;
+    let profile =
+        fetch_owned_execution_profile(&state, project_id, profile_id, principal.actor_id).await?;
+    Ok((status, Json(profile)))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HarnessView {
+    #[serde(flatten)]
+    manifest: AdapterManifest,
+    catalog: Catalog,
+    /// Whether the caller may edit this workspace's catalog.
+    can_edit_catalog: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HarnessesResponse {
+    harnesses: Vec<HarnessView>,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkspaceAccessRow {
+    organization_id: Uuid,
+    organization_role: String,
+}
+
+async fn workspace_access(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+) -> Result<WorkspaceAccessRow, AppError> {
+    Ok(sqlx::query_as::<_, WorkspaceAccessRow>(
         r#"
-        SELECT profile.id
-        FROM execution_profiles profile
-        JOIN provider_connections connection
-          ON connection.id = profile.provider_connection_id
-         AND connection.project_id = profile.project_id
-         AND connection.enabled
-        WHERE profile.project_id = $1
-          AND profile.owner_actor_id = $2
-        ORDER BY profile.created_at, profile.id
-        LIMIT 1
+        SELECT project.organization_id, membership.role AS organization_role
+        FROM projects project
+        JOIN organization_memberships membership
+          ON membership.organization_id = project.organization_id
+         AND membership.actor_id = $2
+         AND membership.enabled
+        WHERE project.id = $1
         "#,
     )
     .bind(project_id)
     .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
+    .fetch_one(&mut **transaction)
+    .await?)
+}
 
-    let (status, profile_id) = if let Some(profile_id) = existing_profile_id {
-        let reference = ExecutionProfileCommandReference { profile_id };
-        idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
-        (StatusCode::OK, profile_id)
-    } else {
-        // A fresh project has no provider or worker yet: the first person to
-        // connect their Codex account sets them up (AWD-11).
-        crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
-        let existing_provider = sqlx::query_scalar::<_, Uuid>(
-            r#"
-            SELECT connection.id
-            FROM execution_workers worker
-            JOIN project_memberships worker_membership
-              ON worker_membership.project_id = worker.project_id
-             AND worker_membership.actor_id = worker.actor_id
-             AND worker_membership.role = 'worker'
-             AND worker_membership.enabled
-            JOIN actors worker_actor
-              ON worker_actor.id = worker.actor_id
-             AND worker_actor.kind = 'execution_worker'
-             AND worker_actor.status = 'active'
-            JOIN provider_connections connection
-              ON connection.id = worker.provider_connection_id
-             AND connection.project_id = worker.project_id
-             AND connection.enabled
-            WHERE worker.project_id = $1 AND worker.enabled
-            ORDER BY worker.created_at, worker.id
-            LIMIT 1
-            FOR SHARE OF worker, worker_membership, worker_actor, connection
-            "#,
-        )
-        .bind(project_id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-        let needs_worker = existing_provider.is_none();
-        let provider_connection_id = match existing_provider {
-            Some(provider_connection_id) => provider_connection_id,
-            None => {
-                crate::execution_setup::ensure_local_provider(&mut transaction, project_id).await?
-            }
-        };
-        let profile_id = Uuid::now_v7();
-        let project_key = project_id.simple().to_string();
-        let actor_key = principal.actor_id.simple().to_string();
-        let profile_key = format!("{project_key}-{}", &actor_key[..16]);
-        let data_root = state.config.data_root.clone();
-        let codex_home_root = state.config.codex_home_root.clone();
-        let profile_path = tokio::task::spawn_blocking(move || {
-            prepare_private_profile_directory(&data_root, &codex_home_root, &profile_key)
-        })
+fn may_edit_catalog(principal: &AuthenticatedActor, workspace: &WorkspaceAccessRow) -> bool {
+    principal.actor_kind == "human"
+        && matches!(workspace.organization_role.as_str(), "owner" | "admin")
+}
+
+async fn harness_view(
+    state: &AppState,
+    organization_id: Uuid,
+    manifest: &AdapterManifest,
+    can_edit_catalog: bool,
+) -> Result<HarnessView, AppError> {
+    Ok(HarnessView {
+        catalog: catalog::catalog(&state.pool, organization_id, manifest).await?,
+        manifest: manifest.clone(),
+        can_edit_catalog,
+    })
+}
+
+/// Every harness this server can run, with its manifest and this
+/// workspace's model catalog (H3).
+async fn list_harnesses(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(project_id): ApiPath<Uuid>,
+) -> Result<Json<HarnessesResponse>, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    require_project_action(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ProjectView,
+    )
+    .await?;
+    let workspace = workspace_access(&mut transaction, &principal, project_id).await?;
+    transaction.commit().await?;
+    let can_edit = may_edit_catalog(&principal, &workspace);
+    let mut harnesses = Vec::new();
+    for manifest in state.supervisors.manifests() {
+        harnesses.push(harness_view(&state, workspace.organization_id, manifest, can_edit).await?);
+    }
+    Ok(Json(HarnessesResponse { harnesses }))
+}
+
+/// Asks the harness for its current models, through one of the caller's
+/// signed-in accounts, and stores them. People's edits are kept.
+async fn refresh_catalog(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((project_id, kind)): ApiPath<(Uuid, String)>,
+) -> Result<Json<HarnessView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
+    let scope = idempotency::resource_bound_scope("project", project_id, "catalog_refresh")?;
+    let manifest = state
+        .supervisors
+        .manifest(&kind)
+        .cloned()
+        .ok_or(AppError::NotFound("harness"))?;
+    if !manifest.features.model_listing {
+        return Err(AppError::Conflict(
+            "harness",
+            "this harness can't list its models; add them by hand",
+        ));
+    }
+    let mut transaction = state.pool.begin().await?;
+    // Same boundary as the other catalog edits: the project is visible and
+    // the caller may edit the workspace catalog.
+    require_project_action(
+        &mut transaction,
+        &principal,
+        project_id,
+        Action::ProjectView,
+    )
+    .await?;
+    let workspace = workspace_access(&mut transaction, &principal, project_id).await?;
+    // A refresh replaces the workspace's provider-reported models for
+    // everyone, so it is a catalog edit.
+    if !may_edit_catalog(&principal, &workspace) {
+        return Err(AppError::Forbidden);
+    }
+    let can_edit = may_edit_catalog(&principal, &workspace);
+    // A retry whose first refresh already landed replays it instead of
+    // asking the harness again. The key is only held once the models are in
+    // hand, below, so a failed listing can be retried with the same key.
+    if let IdempotencyOutcome::Replay(_) = idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(Json(
+            harness_view(&state, workspace.organization_id, &manifest, can_edit).await?,
+        ));
+    }
+    let account = sqlx::query_as::<_, crate::provider::ProfileAccount>(
+        r#"
+        SELECT account.id AS account_id, account.adapter_kind, account.home_path,
+               account.max_concurrent_runs
+        FROM provider_accounts account
+        LEFT JOIN execution_profiles profile
+          ON profile.provider_account_id = account.id AND profile.project_id = $4
+        WHERE account.organization_id = $1 AND account.owner_actor_id = $2
+          AND account.adapter_kind = $3
+          AND account.status = 'available' AND account.account_state = 'authenticated'
+        ORDER BY profile.preferred DESC NULLS LAST, account.created_at, account.id
+        LIMIT 1
+        "#,
+    )
+    .bind(workspace.organization_id)
+    .bind(principal.actor_id)
+    .bind(&manifest.kind)
+    .bind(project_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::Conflict(
+        "harness",
+        "sign in to an account for this harness first",
+    ))?;
+    transaction.rollback().await?;
+    let mut session = state
+        .supervisors
+        .acquire_control(&manifest.kind, account.handle())
         .await
-        .map_err(|_| AppError::Internal("prepare personal Execution Profile task"))??;
-        let profile_path = profile_path.to_str().ok_or(AppError::Internal(
-            "personal Execution Profile path encoding",
-        ))?;
-        let name = format!("Personal Codex · @{}", access.handle);
-        sqlx::query(
-            r#"
-            INSERT INTO execution_profiles (
-                id, project_id, provider_connection_id, owner_actor_id,
-                name, codex_home_path, status, account_state
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6,
-                'authentication_required', 'authentication_required'
-            )
-            "#,
-        )
-        .bind(profile_id)
-        .bind(project_id)
-        .bind(provider_connection_id)
-        .bind(principal.actor_id)
-        .bind(name)
-        .bind(profile_path)
-        .execute(&mut *transaction)
-        .await?;
-        if needs_worker {
-            crate::execution_setup::ensure_default_worker(
+        .map_err(|error| catalog_error(&manifest.kind, error))?;
+    let models = session
+        .list_models()
+        .await
+        .map_err(|error| catalog_error(&manifest.kind, error))?;
+    drop(session);
+    let mut transaction = state.pool.begin().await?;
+    match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        // A concurrent retry with the same key stored its refresh first.
+        IdempotencyOutcome::Replay(_) => {}
+        IdempotencyOutcome::Reserved(reservation) => {
+            catalog::store_refresh(
                 &mut transaction,
-                project_id,
-                provider_connection_id,
-                profile_id,
-                false,
+                workspace.organization_id,
+                &manifest.kind,
+                &models,
+            )
+            .await?;
+            idempotency::complete(
+                &mut transaction,
+                &reservation,
+                StatusCode::OK,
+                &serde_json::json!({}),
             )
             .await?;
         }
-        let reference = ExecutionProfileCommandReference { profile_id };
-        idempotency::complete(
-            &mut transaction,
-            &reservation,
-            StatusCode::CREATED,
-            &reference,
-        )
-        .await?;
-        (StatusCode::CREATED, profile_id)
-    };
+    }
     transaction.commit().await?;
-    let profile =
-        fetch_owned_execution_profile(&state, project_id, profile_id, principal.actor_id).await?;
-    Ok((status, Json(profile)))
+    Ok(Json(
+        harness_view(&state, workspace.organization_id, &manifest, can_edit).await?,
+    ))
+}
+
+fn catalog_error(kind: &str, error: crate::provider::HarnessError) -> AppError {
+    tracing::warn!(
+        adapter_kind = kind,
+        error_type = std::any::type_name_of_val(&error),
+        "harness model listing failed"
+    );
+    AppError::Conflict("harness", "the harness could not list its models")
+}
+
+fn valid_model_id(model_id: &str) -> Result<(), AppError> {
+    if (1..=200).contains(&model_id.len())
+        && model_id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/' | b':')
+        })
+    {
+        Ok(())
+    } else {
+        Err(AppError::Validation("modelId"))
+    }
+}
+
+async fn require_catalog_editor(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+) -> Result<Uuid, AppError> {
+    let mut transaction = state.pool.begin().await?;
+    require_project_action(&mut transaction, principal, project_id, Action::ProjectView).await?;
+    let workspace = workspace_access(&mut transaction, principal, project_id).await?;
+    transaction.commit().await?;
+    if may_edit_catalog(principal, &workspace) {
+        Ok(workspace.organization_id)
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+/// A workspace owner or admin edits one model (context size, prices, name,
+/// reasoning levels, speeds, hiding it), or adds one by hand.
+async fn save_model_overrides(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
+    ApiJson(overrides): ApiJson<ModelOverrides>,
+) -> Result<Json<HarnessView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    IdempotencyKey::from_headers(&headers)?;
+    valid_model_id(&model_id)?;
+    overrides.validate().map_err(AppError::Validation)?;
+    let manifest = state
+        .supervisors
+        .manifest(&kind)
+        .cloned()
+        .ok_or(AppError::NotFound("harness"))?;
+    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
+    catalog::save_overrides(
+        &state.pool,
+        organization_id,
+        &manifest.kind,
+        &model_id,
+        &overrides,
+        principal.actor_id,
+    )
+    .await?;
+    Ok(Json(
+        harness_view(&state, organization_id, &manifest, true).await?,
+    ))
+}
+
+async fn remove_model(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
+) -> Result<Json<HarnessView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    IdempotencyKey::from_headers(&headers)?;
+    valid_model_id(&model_id)?;
+    let manifest = state
+        .supervisors
+        .manifest(&kind)
+        .cloned()
+        .ok_or(AppError::NotFound("harness"))?;
+    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
+    if !catalog::remove_model(&state.pool, organization_id, &manifest.kind, &model_id).await? {
+        return Err(AppError::NotFound("harness_model"));
+    }
+    Ok(Json(
+        harness_view(&state, organization_id, &manifest, true).await?,
+    ))
 }
 
 async fn fetch_owned_execution_profile(
@@ -553,7 +936,10 @@ async fn fetch_owned_execution_profile(
             profile.version,
             profile.status,
             profile.account_state,
-            profile.max_active_turns,
+            profile.provider_account_id,
+            account.adapter_kind AS account_adapter_kind,
+            account.max_concurrent_runs,
+            profile.preferred,
             profile.last_health_at::text AS last_health_at,
             profile.last_failure_category,
             profile.owner_actor_id,
@@ -568,6 +954,7 @@ async fn fetch_owned_execution_profile(
             connection.binary_version,
             connection.capabilities
         FROM execution_profiles profile
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
         JOIN actors owner ON owner.id = profile.owner_actor_id
         JOIN project_memberships owner_membership
           ON owner_membership.project_id = profile.project_id
@@ -586,8 +973,11 @@ async fn fetch_owned_execution_profile(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound("execution_profile"))?;
-    let health = state.supervisors.health(row.id).await;
-    execution_profile_view(row, health)
+    let health = state
+        .supervisors
+        .health(&row.account_adapter_kind, row.provider_account_id)
+        .await;
+    execution_profile_view(&state.supervisors, row, health, owner_actor_id)
 }
 
 async fn require_project_action(
@@ -645,7 +1035,10 @@ async fn require_project_action(
     }
 }
 
-fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView, AppError> {
+fn execution_worker_view(
+    registry: &SupervisorRegistry,
+    row: ExecutionWorkerRow,
+) -> Result<ExecutionWorkerView, AppError> {
     let actor_status = parse_actor_status(&row.actor_status)?;
     let profile_owner_status = row
         .profile_owner_actor_status
@@ -679,7 +1072,9 @@ fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView,
     {
         ExecutionWorkerStatus::AuthenticationRequired
     } else if !row.provider_enabled
+        || registry.manifest(&row.provider_kind).is_none()
         || profile_status == Some(ExecutionProfileStatus::Unavailable)
+        || row.profile_usable == Some(false)
         || account_state == Some(AccountState::Unknown)
     {
         ExecutionWorkerStatus::Unavailable
@@ -700,6 +1095,7 @@ fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView,
         enabled: row.worker_enabled,
         status,
         provider: provider_view(
+            registry,
             &row.provider_kind,
             row.provider_enabled,
             row.provider_version,
@@ -710,8 +1106,10 @@ fn execution_worker_view(row: ExecutionWorkerRow) -> Result<ExecutionWorkerView,
 }
 
 fn execution_profile_view(
+    registry: &SupervisorRegistry,
     row: ExecutionProfileRow,
     supervisor_health: Option<ProfileHealth>,
+    viewer_actor_id: Uuid,
 ) -> Result<ExecutionProfileView, AppError> {
     let status = parse_profile_status(&row.status)?;
     let account_state = parse_account_state(&row.account_state)?;
@@ -719,6 +1117,7 @@ fn execution_profile_view(
     let available_for_new_runs = status == ExecutionProfileStatus::Available
         && account_state == AccountState::Authenticated
         && row.provider_enabled
+        && registry.manifest(&row.provider_kind).is_some()
         && owner_status == ActorStatus::Active
         && row.owner_membership_enabled;
 
@@ -728,12 +1127,15 @@ fn execution_profile_view(
         version: positive_version(row.version)?,
         status,
         account_state,
-        max_active_turns: u16::try_from(row.max_active_turns)
+        provider_account_id: (row.owner_actor_id == viewer_actor_id)
+            .then_some(row.provider_account_id),
+        max_concurrent_runs: u16::try_from(row.max_concurrent_runs)
             .ok()
-            .filter(|value| *value == 1)
+            .filter(|value| *value >= 1)
             .ok_or(AppError::Internal(
-                "stored Execution Profile concurrency limit",
+                "stored provider account concurrency limit",
             ))?,
+        preferred: row.preferred,
         last_health_at: row.last_health_at,
         last_failure_category: bounded_failure_category(row.last_failure_category)?,
         owner: execution_actor_view(
@@ -746,6 +1148,7 @@ fn execution_profile_view(
         available_for_new_runs,
         supervisor: supervisor_health_view(supervisor_health),
         provider: provider_view(
+            registry,
             &row.provider_kind,
             row.provider_enabled,
             row.provider_version,
@@ -804,24 +1207,25 @@ fn execution_actor_view(
     })
 }
 
+/// A provider connection as people see it. A harness this server has no
+/// adapter for, or a binary version outside its range, shows as unsupported
+/// rather than failing the whole list.
 fn provider_view(
+    registry: &SupervisorRegistry,
     kind: &str,
     enabled: bool,
     version: i64,
     binary_version: &str,
     capabilities: &serde_json::Value,
 ) -> Result<ProviderView, AppError> {
-    if kind != "codex_app_server" {
-        return Err(AppError::Internal("stored Worker Provider kind"));
-    }
-    if binary_version != PINNED_CODEX_VERSION {
-        return Err(AppError::Internal("stored Worker Provider binary version"));
-    }
+    let manifest = registry.manifest(kind);
     Ok(ProviderView {
-        kind: "codex_app_server",
+        kind: kind.to_owned(),
+        display_name: manifest.map(|manifest| manifest.display_name.clone()),
         enabled,
         version: positive_version(version)?,
-        binary_version: PINNED_CODEX_VERSION,
+        binary_version: binary_version.to_owned(),
+        supported: manifest.is_some_and(|manifest| manifest.versions.contains(binary_version)),
         capabilities: ProviderCapabilities::from_json(capabilities),
     })
 }
