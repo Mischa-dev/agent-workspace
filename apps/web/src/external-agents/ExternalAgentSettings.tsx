@@ -16,6 +16,7 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  formatDateTime,
 } from '../ui'
 import {
   createExternalAgent,
@@ -44,8 +45,7 @@ const SCOPE_LABELS: Record<ExternalAgentScope, string> = {
 
 function formatWhen(iso: string | null | undefined) {
   if (!iso) return null
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return formatDateTime(iso) || iso
 }
 
 export function ExternalAgentSettings({ projectId }: { projectId: string }) {

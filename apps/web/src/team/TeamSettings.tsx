@@ -16,6 +16,7 @@ import {
   Section,
   SelectField,
   StatusChip,
+  formatDateTime,
   type ChipTone,
 } from '../ui'
 import {
@@ -36,9 +37,7 @@ import {
 const INVITATION_TONES: Record<string, ChipTone> = { active: 'success', accepted: 'muted', revoked: 'muted', expired: 'muted' }
 
 function formatDate(iso: string | null | undefined) {
-  if (!iso) return null
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return formatDateTime(iso) || null
 }
 
 function codexReadiness(readiness: string) {

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import { ActorTag, Avatar, Banner, Button, ErrorState, MessageSkeleton, Row, RowList } from '../ui'
+import { ActorTag, Avatar, Banner, Button, ErrorState, MessageSkeleton, Row, RowList, formatDateTime } from '../ui'
 import {
   listSponsoredExecutionRequests,
   respondToSponsoredExecution,
@@ -16,8 +16,7 @@ type DecisionInput = {
 }
 
 function formatWhen(iso: string) {
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return formatDateTime(iso) || iso
 }
 
 export function SponsoredExecutionSettings({ projectId }: { projectId: string }) {
