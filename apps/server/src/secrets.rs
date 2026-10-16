@@ -58,6 +58,8 @@ pub const MAX_SECRET_BYTES: usize = 64 * 1024;
 /// Secret writes hold this advisory lock shared; key rotation takes it
 /// exclusively while it retires old master keys.
 const ROTATION_LOCK: (i32, i32) = (470127786, 2);
+/// Held for a whole rotation, so two rotations never interleave.
+const ONE_ROTATION_LOCK: (i32, i32) = (470127786, 3);
 
 // ---------------------------------------------------------------------------
 // Values
@@ -726,8 +728,11 @@ fn open_stored(
 /// Decrypt a secret for the one call that needs it, and note that it was
 /// used. `purpose` (such as `"webhook.sign"`) goes to the log; the value
 /// never does.
-pub async fn reveal(
-    pool: &PgPool,
+/// Open a secret for one use. Takes any executor, so a caller already inside
+/// a transaction reveals through it instead of waiting for a second
+/// connection.
+pub async fn reveal<'e, E: PgExecutor<'e>>(
+    executor: E,
     keys: &dyn KeyEncryption,
     secret_id: Uuid,
     purpose: &'static str,
@@ -740,7 +745,7 @@ pub async fn reveal(
         "#,
     )
     .bind(secret_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?
     .ok_or(AppError::NotFound("secret"))?;
     let value = open_stored(keys, &stored)?;
@@ -914,6 +919,14 @@ pub async fn rotate_master_key(
         .secrets_key_path
         .clone()
         .ok_or(AppError::SecretsNotConfigured)?;
+    // On a connection of its own, outside the pool, so a pool of one still
+    // has room for the rotation's work; closing it releases the lock.
+    let mut one_rotation = PgConnection::connect_with(&pool.connect_options()).await?;
+    sqlx::query("SELECT pg_advisory_lock($1, $2)")
+        .bind(ONE_ROTATION_LOCK.0)
+        .bind(ONE_ROTATION_LOCK.1)
+        .execute(&mut one_rotation)
+        .await?;
     let current = read_keyring(&path)?;
     let rotated = current.with_new_active_key();
     replace_keyring(&path, &rotated).map_err(|_| AppError::Internal("write secrets keyring"))?;
@@ -960,6 +973,7 @@ pub async fn rotate_master_key(
     .await?;
     transaction.commit().await?;
     replace_keyring(&path, &trimmed).map_err(|_| AppError::Internal("write secrets keyring"))?;
+    let _ = one_rotation.close().await;
     Ok(RotationResult {
         active_key_id: trimmed.active_key_id().to_owned(),
         rewrapped_secrets,

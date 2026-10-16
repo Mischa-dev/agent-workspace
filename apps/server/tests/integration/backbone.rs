@@ -827,6 +827,33 @@ async fn old_plaintext_webhook_secrets_move_into_the_store_and_keys_rotate() {
             .expose(),
         "sk-held-writer-value"
     );
+
+    // Two rotations at once take turns, and every secret still opens.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (first, second) = tokio::join!(
+        secrets::rotate_master_key(&setup.pool, &setup.state.config),
+        secrets::rotate_master_key(&setup.pool, &setup.state.config),
+    );
+    first.expect("first rotation");
+    second.expect("second rotation");
+    let last = secrets::read_keyring(
+        setup
+            .state
+            .config
+            .secrets_key_path
+            .as_deref()
+            .expect("key path"),
+    )
+    .expect("keyring");
+    for id in sqlx::query_scalar::<_, Uuid>("SELECT id FROM secrets")
+        .fetch_all(&setup.pool)
+        .await
+        .expect("ids")
+    {
+        secrets::reveal(&setup.pool, &last, id, "test.after_rotations")
+            .await
+            .expect("opens after concurrent rotations");
+    }
 }
 
 /// A person who owns another workspace, made directly (bootstrap only

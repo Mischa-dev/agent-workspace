@@ -906,11 +906,14 @@ async fn deliver_webhooks(state: &AppState, client: &reqwest::Client) -> Result<
         let secret = match (&delivery.webhook_secret_id, &delivery.webhook_secret) {
             (Some(id), _) => {
                 let revealed = match crate::secrets::keyring(&state.config) {
-                    Ok(keys) => {
-                        crate::secrets::reveal(pool, keys.as_ref(), *id, "agent_webhook.sign")
-                            .await
-                            .ok()
-                    }
+                    Ok(keys) => crate::secrets::reveal(
+                        &mut *transaction,
+                        keys.as_ref(),
+                        *id,
+                        "agent_webhook.sign",
+                    )
+                    .await
+                    .ok(),
                     Err(_) => None,
                 };
                 secret_unreadable = revealed.is_none();

@@ -317,12 +317,12 @@ local_list() {
 
 # The two remotes must never share a place: a dump next to its key defeats
 # the encryption.
-# The recipients in an age recipients file: one per line, without comments,
-# blank lines or surrounding space, sorted. age lets every recipient in a file
-# decrypt on its own, so two files are separate only if these sets are.
+# The recipients in an age recipients file, one per line and sorted: comment
+# and blank lines dropped, and an SSH key reduced to its type and key (age
+# ignores the trailing comment). age lets every recipient in a file decrypt
+# on its own, so two files are separate only if these sets are.
 age_recipients() {
-  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -- "$1" \
-    | grep -v -e '^$' -e '^#' \
+  awk '$1 !~ /^#/ && NF { if ($1 ~ /^ssh-/) print $1, $2; else print $1 }' "$1" \
     | LC_ALL=C sort -u
 }
 
