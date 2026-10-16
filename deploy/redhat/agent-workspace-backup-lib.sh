@@ -363,15 +363,30 @@ require_separate_recipients() {
     || die "BACKUP_KEY_AGE_RECIPIENTS_FILE shares a recipient with BACKUP_AGE_RECIPIENTS_FILE; one identity could open both the database dump and the secrets key"
 }
 
+# A destination's path in a comparable form: a local one fully resolved
+# (symlinks too), a remote one with ., .. and repeated slashes folded
+# (symlinks on the remote host can't be seen from here).
+# The two backups must never share a directory: database retention would
+# prune key sets, which are kept forever.
+comparable_remote_path() {
+  case "${remote_kind}" in
+    local) realpath -m -- "${remote_path}" ;;
+    ssh) realpath -m -s -- "${remote_path}" ;;
+  esac
+}
+
 require_separate_remotes() {
-  local data_spec="$1" key_spec="$2" data_host data_path
+  local data_spec="$1" key_spec="$2" data_kind data_host data_path key_path
   [[ "${data_spec}" != "${key_spec}" ]] || die "BACKUP_KEY_REMOTE must differ from BACKUP_REMOTE"
   parse_remote "${data_spec}"
-  data_host="${remote_host}"
-  data_path="${remote_path}"
+  data_kind="${remote_kind}"
+  data_host="${remote_host#*@}"
+  data_path="$(comparable_remote_path)"
   parse_remote "${key_spec}"
-  if [[ "${remote_host}" == "${data_host}" ]]; then
-    if [[ "${remote_path}/" == "${data_path}/"* || "${data_path}/" == "${remote_path}/"* ]]; then
+  key_path="$(comparable_remote_path)"
+  # The login part doesn't change which machine it is.
+  if [[ "${remote_kind}" == "${data_kind}" && "${remote_host#*@}" == "${data_host}" ]]; then
+    if [[ "${key_path%/}/" == "${data_path%/}/"* || "${data_path%/}/" == "${key_path%/}/"* ]]; then
       die "BACKUP_KEY_REMOTE must not be inside BACKUP_REMOTE or contain it"
     fi
   fi

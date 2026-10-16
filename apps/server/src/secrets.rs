@@ -604,6 +604,25 @@ pub async fn put(
         return Err(AppError::Conflict("secret", "master key rotated"));
     }
     let organization_id = secret.owner.organization_id();
+    // FOR UPDATE can't lock a row that doesn't exist yet, so two first-time
+    // writes of one name would both insert. Serialize them on the name.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "secret:{organization_id}:{}:{}:{}",
+            secret
+                .owner
+                .project_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            secret
+                .owner
+                .actor_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            secret.name
+        ))
+        .execute(&mut *connection)
+        .await?;
     let existing = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id FROM secrets

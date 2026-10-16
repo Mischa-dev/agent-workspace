@@ -567,6 +567,62 @@ async fn a_saved_key_never_shows_in_a_dump_a_response_a_log_or_a_run_environment
     .await;
     assert!(status.is_success(), "{status}");
 
+    // Two first writes of one new name at once: the second waits for the
+    // first instead of inserting a duplicate, and both succeed, one row.
+    let mut first_write = setup.pool.begin().await.expect("first write");
+    secrets::put(
+        &mut first_write,
+        keys.as_ref(),
+        NewSecret {
+            owner: SecretOwner::Workspace {
+                organization_id: organization,
+            },
+            name: "racing_key",
+            description: None,
+            value: &SecretValue::new("racing-one".to_owned()),
+            actor_id: None,
+            system_managed: false,
+        },
+    )
+    .await
+    .expect("first write");
+    let second = tokio::spawn({
+        let app = setup.app.clone();
+        let request = setup.browser.request(
+            "PUT",
+            &format!("/api/v1/organizations/{organization}/secrets/racing_key"),
+            None,
+            json!({"value": "racing-two"}),
+        );
+        async move { send(&app, request).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !second.is_finished(),
+        "the second write waits for the first"
+    );
+    first_write.commit().await.expect("commit first write");
+    let second = second.await.expect("join second write");
+    assert_eq!(second.0, StatusCode::OK, "{}", second.1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM secrets WHERE name = 'racing_key'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("count racing rows"),
+        1
+    );
+    let (status, _) = send(
+        &setup.app,
+        setup.browser.request(
+            "DELETE",
+            &format!("/api/v1/organizations/{organization}/secrets/racing_key"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+
     // A wakeup webhook's signing secret is shown once, then lives encrypted.
     let space = send(
         &setup.app,

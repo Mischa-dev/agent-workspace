@@ -3,7 +3,7 @@ use std::{
     fmt,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -435,7 +435,26 @@ fn validate_secret_file(
     web_root: &Path,
     maximum_bytes: u64,
 ) -> Result<(), ConfigError> {
-    if !path.is_absolute() || path.starts_with(data_root) || path.starts_with(web_root) {
+    let outside_roots = || {
+        // Compare resolved paths: `..` or a symlinked directory could
+        // otherwise point into a served root while the text looks outside it.
+        let resolved = path
+            .parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+            .zip(path.file_name())
+            .map(|(parent, name)| parent.join(name));
+        let Some(resolved) = resolved else {
+            return false;
+        };
+        [data_root, web_root].into_iter().all(|root| {
+            let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            !path.starts_with(root) && !resolved.starts_with(&canonical)
+        })
+    };
+    let plain = path
+        .components()
+        .all(|component| matches!(component, Component::RootDir | Component::Normal(_)));
+    if !path.is_absolute() || !plain || !outside_roots() {
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}{key}"),
             reason: "must be an absolute path outside runtime data and release roots".into(),
@@ -682,6 +701,38 @@ mod tests {
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
             "postgres://example.invalid/database".to_owned(),
         )])
+    }
+
+    #[test]
+    fn a_secret_file_may_not_reach_a_served_root_through_dots_or_symlinks() {
+        use std::os::unix::fs::{OpenOptionsExt as _, symlink};
+        let base = std::env::temp_dir().join(format!("aw-secret-path-{}", uuid::Uuid::new_v4()));
+        let web_root = base.join("release/web");
+        let data_root = base.join("data");
+        let outside = base.join("etc");
+        for directory in [&web_root, &data_root, &outside] {
+            std::fs::create_dir_all(directory).expect("make directory");
+        }
+        for file in [web_root.join("keyring"), outside.join("keyring")] {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(0o600)
+                .open(&file)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, b"k"))
+                .expect("write keyring");
+        }
+        symlink(&web_root, base.join("etc/linked-web")).expect("link");
+        let check = |path: PathBuf| {
+            validate_secret_file("SECRETS_KEY_PATH", &path, &data_root, &web_root, 64)
+        };
+        check(outside.join("keyring")).expect("a plain outside path is fine");
+        check(base.join("release/../release/web/keyring")).expect_err("dots into the web root");
+        check(base.join("etc/../release/web/keyring")).expect_err("dots anywhere");
+        check(base.join("etc/linked-web/keyring")).expect_err("a symlinked directory into it");
+        check(web_root.join("keyring")).expect_err("the web root itself");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
