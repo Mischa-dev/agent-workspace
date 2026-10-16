@@ -65,14 +65,18 @@ The newest `BACKUP_KEEP_MIN` sets (default 3) are always kept on both sides.
 
 All in `deploy/redhat/`:
 
-- `agent-workspace-backup`: the daily backup.
+- `agent-workspace-daily-backup`: what the unit runs. It runs the key backup
+  and then the daily backup, attempting both even when one fails.
+- `agent-workspace-backup`: the daily backup. It refuses to run when the
+  database and key recipient files share a recipient.
 - `agent-workspace-backup-key`: the secrets key backup.
 - `agent-workspace-restore-drill`: the restore drill.
 - `agent-workspace-backup-lib.sh`: shared helpers, including the transport.
   All off-host copying goes through its `remote_*` functions.
 - `backup.env.example`: every setting, with comments.
-- `agent-workspace-daily-backup.service` and `.timer`: run both backup
-  scripts at 03:30 with low CPU and I/O priority and a 1 GiB memory cap.
+- `agent-workspace-daily-backup.service` and `.timer`: run
+  `agent-workspace-daily-backup` at 03:30 with low CPU and I/O priority and a
+  1 GiB memory cap.
   `pg_dump` itself runs inside the PostgreSQL container, outside those limits.
 
 The scripts read `/etc/agent-workspace/backup.env` (or `--config FILE`). The

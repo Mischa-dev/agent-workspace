@@ -44,6 +44,12 @@ parse_remote "${BACKUP_REMOTE}"
 if [[ -n "${BACKUP_KEY_REMOTE:-}" ]]; then
   require_separate_remotes "${BACKUP_REMOTE}" "${BACKUP_KEY_REMOTE}"
 fi
+# Refuse before any dump exists: one identity able to open both a dump and the
+# secrets key would defeat keeping them apart.
+if [[ -n "${BACKUP_KEY_AGE_RECIPIENTS_FILE:-}" ]]; then
+  require_file BACKUP_KEY_AGE_RECIPIENTS_FILE "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+  require_separate_recipients "${BACKUP_AGE_RECIPIENTS_FILE}" "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+fi
 [[ "${BACKUP_LOCAL_DIR}" == /* ]] || die "BACKUP_LOCAL_DIR must be absolute"
 [[ "${BACKUP_DATA_ROOT}" == /* ]] || die "BACKUP_DATA_ROOT must be absolute"
 require_tools age tar gzip sha256sum flock

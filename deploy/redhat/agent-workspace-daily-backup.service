@@ -9,9 +9,9 @@ UMask=0077
 WorkingDirectory=/tmp
 # Settings (remote, recipients, retention) live in /etc/agent-workspace/backup.env.
 # See docs/operations/backups.md.
-ExecStart=/opt/agent-workspace/current/bin/agent-workspace-backup --config /etc/agent-workspace/backup.env
-# The secrets key goes to its own recipient and remote, and only when it changed.
-ExecStart=/opt/agent-workspace/current/bin/agent-workspace-backup-key --config /etc/agent-workspace/backup.env
+# One command runs the secrets key backup (its own recipient and remote) and
+# then the database backup, attempting both even when one fails.
+ExecStart=/opt/agent-workspace/current/bin/agent-workspace-daily-backup --config /etc/agent-workspace/backup.env
 # Stay out of the way of the live app and anything else on the host. pg_dump
 # itself runs inside the PostgreSQL container, so these limits cover the
 # compression, encryption, archive and upload work done here.

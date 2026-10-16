@@ -1,11 +1,11 @@
 #!/usr/bin/bash
 # Back up the secrets master key (keyring) on its own: a different age
 # recipient and a different off-host place from the database backups, because
-# a dump together with its key defeats the encryption. Runs after the daily
-# backup and uploads when the key file, its recipients or its destination
-# changed, or when its last upload no longer reads back intact. Key sets are
-# never pruned: an old dump may need the key that was current when it was
-# made.
+# a dump together with its key defeats the encryption. Runs before the daily
+# backup (see agent-workspace-daily-backup) and uploads when the key file,
+# its recipients or its destination changed, or when its last upload no
+# longer reads back intact. Key sets are never pruned: an old dump may need
+# the key that was current when it was made.
 #
 # usage: agent-workspace-backup-key [--config FILE] [--force]
 set -euo pipefail

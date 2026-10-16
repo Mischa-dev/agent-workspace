@@ -47,6 +47,7 @@ sudo install -m 0755 \
   deploy/redhat/agent-workspace-backup \
   deploy/redhat/agent-workspace-backup-key \
   deploy/redhat/agent-workspace-backup-lib.sh \
+  deploy/redhat/agent-workspace-daily-backup \
   deploy/redhat/agent-workspace-restore-drill \
   deploy/redhat/agent-workspace-pg-restore \
   deploy/redhat/agent-workspace-psql \
