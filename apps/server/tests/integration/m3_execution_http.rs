@@ -178,7 +178,7 @@ async fn execution_resources_are_project_scoped_and_status_only() {
     assert_eq!(profile["version"], 1);
     assert_eq!(profile["status"], "available");
     assert_eq!(profile["accountState"], "authenticated");
-    assert_eq!(profile["maxActiveTurns"], 1);
+    assert_eq!(profile["maxConcurrentRuns"], 2);
     assert_eq!(profile["lastFailureCategory"], "process_start_failed");
     assert_eq!(profile["availableForNewRuns"], true);
     assert_eq!(profile["supervisor"]["state"], "stopped");
@@ -237,6 +237,8 @@ fn assert_redacted(response: &str, private_runtime_root: &std::path::Path) {
     for forbidden in [
         "codexHomePath",
         "codex_home_path",
+        "homePath",
+        "home_path",
         "mirrorPath",
         "worktreePath",
         "credential",
@@ -301,20 +303,17 @@ async fn insert_foreign_execution_fixture(pool: &PgPool, organization_id: Uuid) 
     .execute(&mut *transaction)
     .await
     .expect("insert foreign Provider Connection");
-    sqlx::query(
-        r#"
-        INSERT INTO execution_profiles (
-            id, project_id, provider_connection_id, owner_actor_id,
-            name, codex_home_path, status
-        )
-        VALUES ($1, $2, $3, $4, 'Foreign profile', '/private/foreign-profile', 'available')
-        "#,
+    crate::harness_support::insert_account_profile(
+        &mut transaction,
+        profile_id,
+        project_id,
+        connection_id,
+        owner_actor_id,
+        "Foreign profile",
+        "/private/foreign-profile",
+        "available",
+        "unknown",
     )
-    .bind(profile_id)
-    .bind(project_id)
-    .bind(connection_id)
-    .bind(owner_actor_id)
-    .execute(&mut *transaction)
     .await
     .expect("insert foreign Execution Profile");
     sqlx::query(

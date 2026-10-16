@@ -186,6 +186,72 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ExecutionProfileManage
     ),
     policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
+        Patch,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/browser",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/api-key",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/login/cancel",
+        CredentialManage
+    ),
+    policy_route!(
+        "account",
+        Post,
+        "/api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
+        CredentialManage
+    ),
+    policy_route!(
+        "execution",
+        Post,
+        "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
+        ExecutionProfileManage
+    ),
+    policy_route!(
+        "execution",
+        Put,
+        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+        ProjectManage
+    ),
+    policy_route!(
+        "execution",
+        Delete,
+        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
+        ProjectManage
+    ),
+    policy_route!(
         "conversations",
         Post,
         "/api/v1/projects/{id}/channels",
@@ -314,6 +380,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "replies",
         Post,
         "/api/v1/reply-requests/{id}/retry",
+        MessageSend
+    ),
+    policy_route!(
+        "replies",
+        Post,
+        "/api/v1/reply-requests/{id}/stop",
         MessageSend
     ),
     // Editing and removing your own message needs MessageSend. Removing
@@ -588,6 +660,66 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
         WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/bulk",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/labels",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/labels/{label_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/milestones",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/milestones/{milestone_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Put,
+        "/api/v1/projects/{project_id}/work-item-workflow",
+        ProjectManage
     ),
 ];
 

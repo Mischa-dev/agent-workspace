@@ -35,6 +35,8 @@ import { ConversationHeader } from '../conversations/ConversationHeader'
 import { ThreadStatusButton } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
+import { ReplyStatusList } from '../conversations/ReplyStatus'
+import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useArchiveConversation } from '../conversations/useArchiveConversation'
@@ -43,8 +45,10 @@ import { useInstantMutation } from '../app/mutations'
 import { usePageTitle } from '../shell/documentTitleModel'
 import {
   normalizeTimelinePage,
+  retryReplyRequest,
   searchMentionableActors,
   sendConversationMessage,
+  stopReplyRequest,
 } from '../conversations/api'
 import type {
   ConversationCapabilities,
@@ -85,6 +89,8 @@ export type RunState =
 
 export type Run = {
   id: string
+  /** The settings frozen on the run when it started (harness, model, reasoning, speed). */
+  config?: unknown
   state: RunState
   repositoryId: string
   repositoryWorkspaceId: string | null
@@ -151,6 +157,7 @@ type Timeline = {
   latestTerminalRun: Run | null
   approvals: Approval[]
   capabilities: ConversationCapabilities & { workerInvoke: boolean }
+  replyRequests: ConversationTimelinePage['replyRequests']
 }
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
@@ -515,6 +522,18 @@ export function ThreadPage() {
     },
   })
   const entries = older.entries
+  // Agents at work here. A channel tag answered in this thread is about the
+  // channel message it started from, so it shows under the thread's messages.
+  const replyRequests = verifiedTimeline?.replyRequests
+  const requestsByMessage = useMemo(() => groupReplyRequests(replyRequests ?? []), [replyRequests])
+  const trailingRequests = useMemo(() => {
+    const shown = new Set(entries.flatMap((entry) => (entry.message ? [entry.message.id] : [])))
+    return (replyRequests ?? []).filter((request) => !shown.has(request.messageId))
+  }, [entries, replyRequests])
+  const retryAgent = (requestId: string) => void retryReplyRequest(requestId).then(() => thread.timeline.refetch())
+  const stopAgent = verifiedTimeline?.capabilities.sendMessage
+    ? (requestId: string) => stopReplyRequest(requestId).then(() => thread.timeline.refetch())
+    : undefined
   const latestFailureEvent = useMemo(
     () =>
       latestTerminalRun?.state === 'failed'
@@ -965,10 +984,20 @@ export function ThreadPage() {
           entries={entries}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
+          renderExtras={(entry) =>
+            entry.message && !entry.message.removed ? (
+              <ReplyStatusList onRetry={retryAgent} onStop={stopAgent} requests={requestsByMessage.get(entry.message.id) ?? []} />
+            ) : null
+          }
           renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
           viewerId={session.user.actorId}
         />
+        {trailingRequests.length ? (
+          <div className="aw-replies--trailing">
+            <ReplyStatusList onRetry={retryAgent} onStop={stopAgent} requests={trailingRequests} />
+          </div>
+        ) : null}
         {pendingSends.map((item, index) => (
           <PendingMessageRow
             continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}

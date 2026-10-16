@@ -4,13 +4,7 @@ import { queryKeys } from '../api/queryKeys'
 import { ApiError } from '../api/errors'
 import { currentQueryScopeGeneration } from '../api/queryScope'
 import { getWorkItem } from '../work-items/api'
-import type {
-  WorkItem,
-  WorkItemBoardResponse,
-  WorkItemCard,
-  WorkItemFilters,
-  WorkItemListResponse,
-} from '../work-items/types'
+import type { WorkItem, WorkItemCard, WorkItemFilters, WorkItemListResponse } from '../work-items/types'
 
 /** Where a task's card sits on the board, from a work_item.updated event. */
 export type WorkItemPlacement = {
@@ -63,7 +57,8 @@ export function workItemChange(event: {
   return { workItemId, version: version as number, placement }
 }
 
-export function toCard(item: WorkItem): WorkItemCard {
+/** `base` is the card already on screen, for the board order only a list response carries. */
+export function toCard(item: WorkItem, base?: WorkItemCard): WorkItemCard {
   return {
     id: item.id,
     projectId: item.projectId,
@@ -79,14 +74,44 @@ export function toCard(item: WorkItem): WorkItemCard {
     updatedAt: item.updatedAt,
     labels: item.labels,
     capabilities: item.capabilities,
+    createdAt: item.createdAt,
+    milestone: item.milestone,
+    startDate: item.startDate,
+    dueDate: item.dueDate,
+    estimate: item.estimate,
+    ready: item.ready,
+    parentId: item.parent?.id ?? null,
+    blockedReason: item.blocked?.reason ?? null,
+    openBlockerCount: item.blockedBy.filter((blocker) => !blocker.finished && !blocker.archived).length,
+    subtaskCount: item.subtasks.length,
+    subtasksDone: item.subtasks.filter((subtask) => subtask.finished).length,
+    claimedBy: item.claim?.actor ?? null,
+    boardOrder: base?.boardOrder ?? '',
   }
 }
+
+/** Filters this module can't evaluate on a card; a view using any of them refetches. */
+const SERVER_ONLY_FILTERS = [
+  'labelIds',
+  'milestoneId',
+  'parentId',
+  'blocked',
+  'ready',
+  'claimed',
+  'dueBefore',
+  'dueAfter',
+  'overdue',
+  'includeDone',
+  'sort',
+  'groupBy',
+] as const
 
 /**
  * Whether the server would list this card under these filters, mirroring the
  * list query. `null` when it can't be told here (a search with wildcards).
  */
 export function cardMatchesFilters(card: WorkItemCard, filters: WorkItemFilters): boolean | null {
+  if (SERVER_ONLY_FILTERS.some((name) => filters[name as keyof WorkItemFilters] !== undefined)) return null
   if (Boolean(filters.archived) !== (card.archivedAt !== null)) return false
   if (filters.typeId && card.itemType.id !== filters.typeId) return false
   if (filters.statusId && card.status.id !== filters.statusId) return false
@@ -124,7 +149,13 @@ export function patchList(
     if (!present) return 'unchanged'
     // A shorter page with more behind it would leave a gap: let the next task in.
     if (list.nextCursor !== null) return 'refetch'
-    return { data: { ...list, items: list.items.filter((item) => item.id !== workItemId) } }
+    return {
+      data: {
+        ...list,
+        items: list.items.filter((item) => item.id !== workItemId),
+        total: Math.max(0, list.total - 1),
+      },
+    }
   }
   if (!card) return 'unchanged'
   if (present) return replaceAt(list, index, card)
@@ -138,7 +169,7 @@ export function patchList(
   const at = list.items.findIndex((item) => item.number < card.number)
   const items = [...list.items]
   items.splice(at < 0 ? items.length : at, 0, card)
-  return { data: { ...list, items } }
+  return { data: { ...list, items, total: list.total + 1 } }
 }
 
 function replaceAt(list: WorkItemListResponse, index: number, card: WorkItemCard): Patched<WorkItemListResponse> {
@@ -147,71 +178,19 @@ function replaceAt(list: WorkItemListResponse, index: number, card: WorkItemCard
   return { data: { ...list, items } }
 }
 
-/**
- * Takes the card out of whichever column held it and puts it beside its
- * neighbours in its new column. Refetches only when neither neighbour is on
- * screen to place it against.
- */
-export function patchBoard(
-  board: WorkItemBoardResponse,
-  card: WorkItemCard | null,
-  workItemId: string,
-  placement: WorkItemPlacement | null,
-  filters: WorkItemFilters,
-): Patched<WorkItemBoardResponse> {
-  const present = board.columns.flatMap((column) => column.items).find((item) => item.id === workItemId)
-  if (present && card && present.version > card.version) return 'unchanged'
-  const columns = board.columns.map((column) => ({
-    ...column,
-    items: column.items.filter((item) => item.id !== workItemId),
-  }))
-  // A card leaving a column with more cards behind it would leave the column
-  // short: refetch so the next one comes up.
-  const source = board.columns.find((column) => column.items.some((item) => item.id === workItemId))
-  const removed = (): Patched<WorkItemBoardResponse> =>
-    !present ? 'unchanged' : source?.hasMore ? 'refetch' : { data: { columns } }
-  const matches = card ? cardMatchesFilters(card, { ...filters, cursor: undefined }) : false
-  if (matches === null) return 'refetch'
-  if (!card || !matches) return removed()
-  if (!placement || placement.statusId !== card.status.id) return 'refetch'
-  const column = columns.find((candidate) => candidate.status.id === placement.statusId)
-  if (!column) return removed()
-  const items = column.items
-  let at = -1
-  if (placement.afterId === null) at = 0
-  else {
-    const after = items.findIndex((item) => item.id === placement.afterId)
-    if (after >= 0) at = after + 1
-  }
-  if (at < 0 && placement.beforeId !== null) {
-    const before = items.findIndex((item) => item.id === placement.beforeId)
-    if (before >= 0) at = before
-  }
-  if (at < 0 && placement.beforeId === null && !column.hasMore) at = items.length
-  if (at < 0) {
-    // Neither neighbour is loaded. Unfiltered, that puts it further down a long
-    // column; filtered, the neighbours may just be filtered out, so ask.
-    if (column.hasMore && !filtered(filters)) return removed()
-    return 'refetch'
-  }
-  if (source && source.status.id !== column.status.id && source.hasMore) return 'refetch'
-  // A card joining a long column pushes its last loaded card past the cutoff.
-  if (column.hasMore && source?.status.id !== column.status.id) return 'refetch'
-  column.items = [...items.slice(0, at), card, ...items.slice(at)]
-  return { data: { columns } }
-}
-
-/** Filters that narrow the board, so event neighbours may be off it. */
-function filtered(filters: WorkItemFilters) {
-  return Object.entries(filters).some(([name, value]) => name !== 'cursor' && name !== 'limit' && Boolean(value))
-}
-
 function isListKey(key: readonly unknown[]) {
   return key[2] === 'work-items' && key[3] === 'list' && key.length === 5
 }
 
-function isBoardKey(key: readonly unknown[]) {
-  return key[2] === 'work-items' && key[3] === 'list' && key[5] === 'board'
+/**
+ * The task list page's views: pages of the list, its groups, the board, and
+ * the label and milestone task counts. Their sorts, groups, totals and manual
+ * board order are computed by the server, so they refetch rather than patch.
+ */
+const SERVER_ORDERED_VIEWS = new Set(['pages', 'groups', 'board', 'labels', 'milestones'])
+
+function isServerOrderedKey(key: readonly unknown[]) {
+  return key[2] === 'work-items' && SERVER_ORDERED_VIEWS.has(key[3] as string)
 }
 
 function filtersOf(key: readonly unknown[]): WorkItemFilters {
@@ -220,14 +199,13 @@ function filtersOf(key: readonly unknown[]): WorkItemFilters {
 }
 
 function cardIn(query: Query, workItemId: string): WorkItemCard | undefined {
-  const data = query.state.data as Partial<WorkItemListResponse & WorkItemBoardResponse> | undefined
-  const items = data?.items ?? data?.columns?.flatMap((column) => column.items) ?? []
-  return items.find((item) => item.id === workItemId)
+  const data = query.state.data as Partial<WorkItemListResponse> | undefined
+  return data?.items?.find((item) => item.id === workItemId)
 }
 
 /**
- * Patches every cached list, board and detail view for one changed task, and
- * refetches only the ones it can't place. Returns once the caches are set.
+ * Patches every cached plain list and detail view for one changed task, and
+ * refetches the views it can't place (including the task list page's own). Returns once the caches are set.
  */
 export async function applyWorkItemChange(
   queryClient: QueryClient,
@@ -235,10 +213,13 @@ export async function applyWorkItemChange(
   change: WorkItemChange,
 ): Promise<void> {
   const root = queryKeys.workItemsRoot(projectId)
-  const views = queryClient
-    .getQueryCache()
-    .findAll({ queryKey: root })
-    .filter((query) => isListKey(query.queryKey) || isBoardKey(query.queryKey))
+  const cached = queryClient.getQueryCache().findAll({ queryKey: root })
+  for (const query of cached) {
+    if (isServerOrderedKey(query.queryKey)) {
+      void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true })
+    }
+  }
+  const views = cached.filter((query) => isListKey(query.queryKey))
   const detailKey = queryKeys.workItem(projectId, change.workItemId)
   const cachedDetail = queryClient.getQueryData<WorkItem>(detailKey)
   const shown = views.some((query) => cardIn(query, change.workItemId))
@@ -279,14 +260,12 @@ export async function applyWorkItemChange(
   // A newer version outran this event: its neighbours are stale, and the newer
   // event places the card itself.
   if (item && item.version > change.version) return
-  const card = item ? toCard(item) : null
   for (const query of views) {
     const data = query.state.data
     if (!data) continue
     const filters = filtersOf(query.queryKey)
-    const result = isBoardKey(query.queryKey)
-      ? patchBoard(data as WorkItemBoardResponse, card, change.workItemId, change.placement, filters)
-      : patchList(data as WorkItemListResponse, card, change.workItemId, filters)
+    const card = item ? toCard(item, cardIn(query, change.workItemId)) : null
+    const result = patchList(data as WorkItemListResponse, card, change.workItemId, filters)
     if (result === 'refetch') void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true })
     else if (result !== 'unchanged') queryClient.setQueryData(query.queryKey, result.data)
   }

@@ -8,6 +8,7 @@ use axum::{
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -29,20 +30,20 @@ use crate::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
         CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
-        CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording, PlacementProblem,
-        ProjectMembership, RepositoryLinkOutcome, ThreadLinkOutcome, UpdateWorkItemCommand,
+        CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording,
+        MAX_BLOCKED_REASON_CHARACTERS, NewTaskFields, PlacementProblem, ProjectMembership,
+        RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome, UpdateWorkItemCommand,
         UpdateWorkItemOutcome, authorize_mutation, change_criteria, change_repository_link,
         change_thread_link, conflict_kind, create_work_item as execute_create_work_item,
         finalize_change, finalize_comment, insert_activity, lock_membership, lock_work_item,
-        place_in_column, set_archived, update_work_item_by_id,
+        place_in_column, set_archived, update_work_item_by_id, valid_estimate,
     },
+    work_item_labels::LabelDelta,
 };
 
 #[cfg(test)]
 const MAX_DESCRIPTION_CHARACTERS: usize = crate::work_item_commands::MAX_DESCRIPTION_CHARACTERS;
 const MAX_SEARCH_CHARACTERS: usize = 120;
-const DEFAULT_PAGE_SIZE: u16 = 50;
-const MAX_PAGE_SIZE: u16 = 100;
 
 const DEFAULT_TYPES: [(&str, i32, bool); 6] = [
     ("Feature", 1, false),
@@ -83,15 +84,22 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
     ("Canceled", "Backlog"),
 ];
 
+mod list;
+mod planning;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/work-items",
-            get(list_work_items).post(create_work_item),
+            get(list::list_work_items).post(create_work_item),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/board",
-            get(get_work_item_board),
+            get(list::get_work_item_board),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/groups",
+            get(list::list_work_item_groups),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}",
@@ -127,7 +135,43 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/work-item-workflow",
-            get(get_workflow),
+            get(planning::get_workflow).put(planning::replace_workflow),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/bulk",
+            axum::routing::post(planning::bulk_update),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
+            axum::routing::post(planning::change_dependencies),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
+            axum::routing::post(planning::change_relation),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
+            axum::routing::post(planning::watch),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
+            axum::routing::post(planning::release_claim),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/labels",
+            get(planning::list_labels).post(planning::create_label),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/labels/{label_id}",
+            axum::routing::patch(planning::update_label),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/milestones",
+            get(planning::list_milestones).post(planning::create_milestone),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/milestones/{milestone_id}",
+            axum::routing::patch(planning::update_milestone),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
@@ -185,22 +229,10 @@ struct ProjectMembershipRow {
 }
 
 #[derive(Clone, Debug, FromRow)]
-struct WorkflowTypeRow {
-    id: Uuid,
-    name: String,
-    position: i32,
-    is_default: bool,
-    enabled: bool,
-}
-
-#[derive(Clone, Debug, FromRow)]
 struct WorkflowStatusRow {
     id: Uuid,
     name: String,
     semantic_category: String,
-    position: i32,
-    is_default: bool,
-    enabled: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -231,21 +263,21 @@ struct WorkItemRow {
     linked_threads: serde_json::Value,
     linked_repositories: serde_json::Value,
     linked_pull_requests: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WorkItemListQuery {
-    q: Option<String>,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
-    semantic_category: Option<String>,
-    priority: Option<String>,
-    assignee_actor_id: Option<Uuid>,
-    unassigned: Option<bool>,
-    archived: Option<bool>,
-    cursor: Option<String>,
-    limit: Option<u16>,
+    parent: Option<serde_json::Value>,
+    milestone: Option<serde_json::Value>,
+    start_date: Option<String>,
+    due_date: Option<String>,
+    estimate: Option<f64>,
+    blocked: Option<serde_json::Value>,
+    blocked_by: serde_json::Value,
+    blocks: serde_json::Value,
+    relations: serde_json::Value,
+    subtasks: serde_json::Value,
+    claim: Option<serde_json::Value>,
+    watchers: serde_json::Value,
+    watching: bool,
+    estimate_unit: String,
+    ready: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -259,6 +291,15 @@ struct CreateWorkItemRequest {
     #[serde(default = "default_priority")]
     priority: String,
     assignee_actor_id: Option<Uuid>,
+    parent_work_item_id: Option<Uuid>,
+    milestone_id: Option<Uuid>,
+    #[serde(default)]
+    label_ids: Vec<Uuid>,
+    start_date: Option<String>,
+    due_date: Option<String>,
+    estimate: Option<f64>,
+    #[serde(default)]
+    acceptance_criteria: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,6 +313,22 @@ struct UpdateWorkItemRequest {
     priority: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     assignee_actor_id: Option<Option<Uuid>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    parent_work_item_id: Option<Option<Uuid>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    milestone_id: Option<Option<Uuid>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    start_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    due_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    estimate: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    blocked_reason: Option<Option<String>>,
+    #[serde(default)]
+    add_label_ids: Vec<Uuid>,
+    #[serde(default)]
+    remove_label_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -320,6 +377,32 @@ pub struct WorkItemView {
     linked_repositories: Vec<LinkedRepositoryView>,
     linked_pull_requests: Vec<LinkedPullRequestView>,
     capabilities: WorkItemCapabilities,
+    /// Planning fields. Replays stored before they existed have none.
+    #[serde(flatten)]
+    planning: TaskPlanningView,
+}
+
+/// A task's place in the plan: parent, milestone, dates, estimate,
+/// dependencies, links, subtasks, claim and watchers. Other tasks appear as
+/// `TaskRef`s and only when the viewer can see their project.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct TaskPlanningView {
+    parent: Option<serde_json::Value>,
+    milestone: Option<serde_json::Value>,
+    start_date: Option<String>,
+    due_date: Option<String>,
+    estimate: Option<f64>,
+    blocked: Option<serde_json::Value>,
+    blocked_by: Vec<serde_json::Value>,
+    blocks: Vec<serde_json::Value>,
+    ready: bool,
+    relations: Vec<serde_json::Value>,
+    subtasks: Vec<serde_json::Value>,
+    claim: Option<serde_json::Value>,
+    watchers: Vec<serde_json::Value>,
+    watching: bool,
+    estimate_unit: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -617,73 +700,16 @@ struct WorkerInvocationRow {
     response_body: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkItemListResponse {
-    items: Vec<WorkItemCardView>,
-    next_cursor: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkItemBoardResponse {
-    columns: Vec<WorkItemBoardColumn>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkItemBoardColumn {
-    status: WorkItemStatusView,
-    items: Vec<WorkItemCardView>,
-    has_more: bool,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MoveWorkItemRequest {
     expected_version: i64,
     target_status_id: Uuid,
-    target_position: i32,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkItemCardView {
-    id: Uuid,
-    project_id: Uuid,
-    key: String,
-    number: i64,
-    title: String,
-    item_type: WorkItemTypeView,
-    status: WorkItemStatusView,
-    priority: String,
-    assignee: Option<AssigneeView>,
-    version: i64,
-    archived_at: Option<String>,
-    updated_at: String,
-    labels: Vec<WorkItemLabelView>,
-    capabilities: WorkItemCapabilities,
-}
-
-impl From<WorkItemView> for WorkItemCardView {
-    fn from(item: WorkItemView) -> Self {
-        Self {
-            id: item.id,
-            project_id: item.project_id,
-            key: item.key,
-            number: item.number,
-            title: item.title,
-            item_type: item.item_type,
-            status: item.status,
-            priority: item.priority,
-            assignee: item.assignee,
-            version: item.version,
-            archived_at: item.archived_at,
-            updated_at: item.updated_at,
-            labels: item.labels,
-            capabilities: item.capabilities,
-        }
-    }
+    /// 1-based among the column's open tasks. Give exactly one of this,
+    /// `before_id` or `after_id`; anchors stay right on a filtered board.
+    target_position: Option<i32>,
+    before_id: Option<Uuid>,
+    after_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -704,46 +730,6 @@ struct WorkItemConflictDetails {
     resource: &'static str,
     current_version: i64,
     current: WorkItemView,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowResponse {
-    types: Vec<WorkflowTypeView>,
-    statuses: Vec<WorkflowStatusDefinitionView>,
-    transitions: Vec<WorkflowTransitionView>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowTypeView {
-    id: Uuid,
-    name: String,
-    position: i32,
-    is_default: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowStatusDefinitionView {
-    id: Uuid,
-    name: String,
-    semantic_category: String,
-    position: i32,
-    is_default: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowTransitionView {
-    from_status_id: Uuid,
-    to_status_id: Uuid,
-}
-
-#[derive(Debug, FromRow)]
-struct WorkflowTransitionRow {
-    from_status_id: Uuid,
-    to_status_id: Uuid,
 }
 
 pub async fn provision_missing_default_workflows(pool: &PgPool) -> Result<u64, AppError> {
@@ -771,14 +757,13 @@ pub async fn ensure_default_workflow(
         .await?
         .ok_or(AppError::NotFound("project"))?;
 
-    let types = sqlx::query_as::<_, WorkflowTypeRow>(
-        "SELECT id, name, position, is_default, enabled FROM work_item_types WHERE project_id = $1 ORDER BY position, id",
-    )
-    .bind(project_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    let statuses = sqlx::query_as::<_, WorkflowStatusRow>(
-        "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 ORDER BY position, id",
+    let types =
+        sqlx::query_scalar::<_, bool>("SELECT enabled FROM work_item_types WHERE project_id = $1")
+            .bind(project_id)
+            .fetch_all(&mut **transaction)
+            .await?;
+    let statuses = sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM work_item_statuses WHERE project_id = $1",
     )
     .bind(project_id)
     .fetch_all(&mut **transaction)
@@ -832,354 +817,15 @@ pub async fn ensure_default_workflow(
         return Ok(true);
     }
 
-    let types_match = types.len() == DEFAULT_TYPES.len()
-        && types.iter().zip(DEFAULT_TYPES).all(|(row, expected)| {
-            row.name == expected.0
-                && row.position == expected.1
-                && row.is_default == expected.2
-                && row.enabled
-        });
-    let statuses_match = statuses.len() == DEFAULT_STATUSES.len()
-        && statuses
-            .iter()
-            .zip(DEFAULT_STATUSES)
-            .all(|(row, expected)| {
-                row.name == expected.0
-                    && row.semantic_category == expected.1
-                    && row.position == expected.2
-                    && row.is_default == expected.3
-                    && row.enabled
-            });
-    if !types_match || !statuses_match || transition_count != DEFAULT_TRANSITIONS.len() as i64 {
+    // A project that has a workflow keeps it: owners change statuses, types
+    // and transitions (work_item_workflow), so it needn't match the default.
+    if !types.contains(&true) || !statuses.contains(&true) {
         return Err(AppError::Conflict(
             "work_item_workflow",
-            "existing workflow does not match the M4 default",
-        ));
-    }
-    let transition_names = sqlx::query_as::<_, (String, String)>(
-        r#"
-        SELECT source.name, target.name
-        FROM work_item_status_transitions transition
-        JOIN work_item_statuses source
-          ON source.project_id = transition.project_id
-         AND source.id = transition.from_status_id
-        JOIN work_item_statuses target
-          ON target.project_id = transition.project_id
-         AND target.id = transition.to_status_id
-        WHERE transition.project_id = $1
-        ORDER BY source.name, target.name
-        "#,
-    )
-    .bind(project_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    let mut expected = DEFAULT_TRANSITIONS
-        .into_iter()
-        .map(|(from, to)| (from.to_owned(), to.to_owned()))
-        .collect::<Vec<_>>();
-    expected.sort();
-    if transition_names != expected {
-        return Err(AppError::Conflict(
-            "work_item_workflow",
-            "existing transitions do not match the M4 default",
+            "the project's workflow has no active status or type",
         ));
     }
     Ok(false)
-}
-
-async fn get_workflow(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-) -> Result<Json<WorkflowResponse>, AppError> {
-    let membership = project_membership(&state.pool, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let types = sqlx::query_as::<_, WorkflowTypeRow>(
-        "SELECT id, name, position, is_default, enabled FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position, id",
-    )
-    .bind(project_id)
-    .fetch_all(&state.pool)
-    .await?;
-    let statuses = sqlx::query_as::<_, WorkflowStatusRow>(
-        "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position, id",
-    )
-    .bind(project_id)
-    .fetch_all(&state.pool)
-    .await?;
-    let transitions = sqlx::query_as::<_, WorkflowTransitionRow>(
-        "SELECT from_status_id, to_status_id FROM work_item_status_transitions WHERE project_id = $1 ORDER BY from_status_id, to_status_id",
-    )
-    .bind(project_id)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(WorkflowResponse {
-        types: types
-            .into_iter()
-            .map(|row| WorkflowTypeView {
-                id: row.id,
-                name: row.name,
-                position: row.position,
-                is_default: row.is_default,
-            })
-            .collect(),
-        statuses: statuses
-            .into_iter()
-            .map(|row| WorkflowStatusDefinitionView {
-                id: row.id,
-                name: row.name,
-                semantic_category: row.semantic_category,
-                position: row.position,
-                is_default: row.is_default,
-            })
-            .collect(),
-        transitions: transitions
-            .into_iter()
-            .map(|row| WorkflowTransitionView {
-                from_status_id: row.from_status_id,
-                to_status_id: row.to_status_id,
-            })
-            .collect(),
-    }))
-}
-
-async fn list_work_items(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<WorkItemListQuery>,
-) -> Result<Json<WorkItemListResponse>, AppError> {
-    state
-        .rate_limits
-        .check_expensive_read(principal.session_id)?;
-    let membership = project_membership(&state.pool, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let search = normalize_search(query.q.as_deref())?;
-    validate_priority_filter(query.priority.as_deref())?;
-    validate_semantic_category(query.semantic_category.as_deref())?;
-    if query.unassigned == Some(true) && query.assignee_actor_id.is_some() {
-        return Err(AppError::Validation("assignee filter"));
-    }
-    validate_list_filter_ids(
-        &state.pool,
-        project_id,
-        query.type_id,
-        query.status_id,
-        query.assignee_actor_id,
-    )
-    .await?;
-    let before_number = query
-        .cursor
-        .as_deref()
-        .map(|value| decode_cursor(value, project_id))
-        .transpose()?;
-    let limit = i64::from(
-        query
-            .limit
-            .unwrap_or(DEFAULT_PAGE_SIZE)
-            .clamp(1, MAX_PAGE_SIZE),
-    );
-    let rows = sqlx::query_as::<_, WorkItemRow>(
-        &format!(r#"
-        SELECT
-            item.id, item.project_id, project.project_key,
-            item.number, item.title, ''::text AS description,
-            item.type_id, item_type.name AS type_name,
-            item.status_id, status.name AS status_name,
-            status.semantic_category, item.priority,
-            item.assignee_actor_id,
-            assignee.display_name AS assignee_display_name,
-            assignee.handle AS assignee_handle,
-            assignee_actor.kind AS assignee_kind,
-            CASE WHEN assignee.actor_id IS NULL THEN NULL
-                 ELSE assignee.enabled AND assignee_actor.status = 'active'
-            END AS assignee_active,
-            item.version, item.archived_at::text AS archived_at,
-            item.created_at::text AS created_at,
-            item.updated_at::text AS updated_at,
-            {WORK_ITEM_LABELS_COLUMN},
-            '[]'::jsonb AS acceptance_criteria,
-            '[]'::jsonb AS linked_threads,
-            '[]'::jsonb AS linked_repositories,
-            '[]'::jsonb AS linked_pull_requests
-        FROM work_items item
-        JOIN projects project ON project.id = item.project_id
-        JOIN work_item_types item_type
-          ON item_type.project_id = item.project_id AND item_type.id = item.type_id
-        JOIN work_item_statuses status
-          ON status.project_id = item.project_id AND status.id = item.status_id
-        LEFT JOIN project_memberships assignee
-          ON assignee.project_id = item.project_id
-         AND assignee.actor_id = item.assignee_actor_id
-        LEFT JOIN actors assignee_actor ON assignee_actor.id = assignee.actor_id
-        WHERE item.project_id = $1
-          AND ($2::bigint IS NULL OR item.number < $2)
-          AND ($3::text IS NULL OR item.title ILIKE $3 OR (project.project_key || '-' || item.number::text) ILIKE $3)
-          AND ($4::uuid IS NULL OR item.type_id = $4)
-          AND ($5::uuid IS NULL OR item.status_id = $5)
-          AND ($6::text IS NULL OR status.semantic_category = $6)
-          AND ($7::text IS NULL OR item.priority = $7)
-          AND ($8::uuid IS NULL OR item.assignee_actor_id = $8)
-          AND (NOT $9::boolean OR item.assignee_actor_id IS NULL)
-          AND (($10::boolean AND item.archived_at IS NOT NULL) OR (NOT $10::boolean AND item.archived_at IS NULL))
-        ORDER BY item.number DESC
-        LIMIT $11
-        "#),
-    )
-    .bind(project_id)
-    .bind(before_number)
-    .bind(search.map(|value| format!("%{value}%")))
-    .bind(query.type_id)
-    .bind(query.status_id)
-    .bind(query.semantic_category)
-    .bind(query.priority)
-    .bind(query.assignee_actor_id)
-    .bind(query.unassigned.unwrap_or(false))
-    .bind(query.archived.unwrap_or(false))
-    .bind(limit + 1)
-    .fetch_all(&state.pool)
-    .await?;
-    let has_more = rows.len() > limit as usize;
-    let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
-    let next_cursor = if has_more {
-        rows.last()
-            .map(|row| encode_cursor(project_id, row.number))
-            .transpose()?
-    } else {
-        None
-    };
-    let capabilities = capabilities(&membership)?;
-    let items = rows
-        .into_iter()
-        .map(|row| work_item_view(row, capabilities).map(WorkItemCardView::from))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Json(WorkItemListResponse { items, next_cursor }))
-}
-
-async fn get_work_item_board(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiQuery(query): ApiQuery<WorkItemListQuery>,
-) -> Result<Json<WorkItemBoardResponse>, AppError> {
-    let membership = project_membership(&state.pool, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    let search = normalize_search(query.q.as_deref())?;
-    validate_priority_filter(query.priority.as_deref())?;
-    validate_semantic_category(query.semantic_category.as_deref())?;
-    if query.cursor.is_some() {
-        return Err(AppError::Invalid("board cursor"));
-    }
-    if query.unassigned == Some(true) && query.assignee_actor_id.is_some() {
-        return Err(AppError::Validation("assignee filter"));
-    }
-    validate_list_filter_ids(
-        &state.pool,
-        project_id,
-        query.type_id,
-        query.status_id,
-        query.assignee_actor_id,
-    )
-    .await?;
-    let statuses = sqlx::query_as::<_, WorkflowStatusRow>(
-        "SELECT id, name, semantic_category, position, is_default, enabled FROM work_item_statuses WHERE project_id = $1 AND enabled ORDER BY position, id",
-    )
-    .bind(project_id)
-    .fetch_all(&state.pool)
-    .await?;
-    let limit = i64::from(
-        query
-            .limit
-            .unwrap_or(DEFAULT_PAGE_SIZE)
-            .clamp(1, MAX_PAGE_SIZE),
-    );
-    let caps = capabilities(&membership)?;
-    let mut columns = Vec::with_capacity(statuses.len());
-    for status in statuses {
-        if query
-            .status_id
-            .is_some_and(|status_id| status_id != status.id)
-        {
-            continue;
-        }
-        let rows = sqlx::query_as::<_, WorkItemRow>(
-            &format!(r#"
-            SELECT
-                item.id, item.project_id, project.project_key,
-                item.number, item.title, ''::text AS description,
-                item.type_id, item_type.name AS type_name,
-                item.status_id, status.name AS status_name,
-                status.semantic_category, item.priority,
-                item.assignee_actor_id,
-                assignee.display_name AS assignee_display_name,
-                assignee.handle AS assignee_handle,
-                assignee_actor.kind AS assignee_kind,
-                CASE WHEN assignee.actor_id IS NULL THEN NULL
-                     ELSE assignee.enabled AND assignee_actor.status = 'active'
-                END AS assignee_active,
-                item.version, item.archived_at::text AS archived_at,
-                item.created_at::text AS created_at,
-                item.updated_at::text AS updated_at,
-                {WORK_ITEM_LABELS_COLUMN},
-                '[]'::jsonb AS acceptance_criteria,
-                '[]'::jsonb AS linked_threads,
-                '[]'::jsonb AS linked_repositories,
-                '[]'::jsonb AS linked_pull_requests
-            FROM work_items item
-            JOIN projects project ON project.id = item.project_id
-            JOIN work_item_types item_type
-              ON item_type.project_id = item.project_id AND item_type.id = item.type_id
-            JOIN work_item_statuses status
-              ON status.project_id = item.project_id AND status.id = item.status_id
-            LEFT JOIN project_memberships assignee
-              ON assignee.project_id = item.project_id AND assignee.actor_id = item.assignee_actor_id
-            LEFT JOIN actors assignee_actor ON assignee_actor.id = assignee.actor_id
-            WHERE item.project_id = $1 AND item.status_id = $2
-              AND ($3::text IS NULL OR item.title ILIKE $3 OR (project.project_key || '-' || item.number::text) ILIKE $3)
-              AND ($4::uuid IS NULL OR item.type_id = $4)
-              AND ($5::text IS NULL OR status.semantic_category = $5)
-              AND ($6::text IS NULL OR item.priority = $6)
-              AND ($7::uuid IS NULL OR item.assignee_actor_id = $7)
-              AND (NOT $8::boolean OR item.assignee_actor_id IS NULL)
-              AND (($9::boolean AND item.archived_at IS NOT NULL) OR (NOT $9::boolean AND item.archived_at IS NULL))
-            ORDER BY item.board_rank, item.id
-            LIMIT $10
-            "#),
-        )
-        .bind(project_id)
-        .bind(status.id)
-        .bind(search.as_ref().map(|value| format!("%{value}%")))
-        .bind(query.type_id)
-        .bind(query.semantic_category.as_deref())
-        .bind(query.priority.as_deref())
-        .bind(query.assignee_actor_id)
-        .bind(query.unassigned.unwrap_or(false))
-        .bind(query.archived.unwrap_or(false))
-        .bind(limit + 1)
-        .fetch_all(&state.pool)
-        .await?;
-        let has_more = rows.len() > limit as usize;
-        let items = rows
-            .into_iter()
-            .take(limit as usize)
-            .map(|row| work_item_view(row, caps).map(WorkItemCardView::from))
-            .collect::<Result<Vec<_>, _>>()?;
-        columns.push(WorkItemBoardColumn {
-            status: WorkItemStatusView {
-                id: status.id,
-                name: status.name,
-                semantic_category: status.semantic_category,
-            },
-            items,
-            has_more,
-        });
-    }
-    Ok(Json(WorkItemBoardResponse { columns }))
 }
 
 async fn validate_list_filter_ids(
@@ -1286,15 +932,28 @@ async fn update_work_item(
     ApiJson(mut request): ApiJson<UpdateWorkItemRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
+    let fields = planning_field_changes(&request)?;
+    let labels_change = !request.add_label_ids.is_empty() || !request.remove_label_ids.is_empty();
     if request.expected_version < 1
         || (request.title.is_none()
             && request.description.is_none()
             && request.type_id.is_none()
             && request.status_id.is_none()
             && request.priority.is_none()
-            && request.assignee_actor_id.is_none())
+            && request.assignee_actor_id.is_none()
+            && request.parent_work_item_id.is_none()
+            && fields.is_empty()
+            && !labels_change)
     {
         return Err(AppError::Validation("Work Item update"));
+    }
+    if request.add_label_ids.len() + request.remove_label_ids.len() > MAX_LABEL_CHANGES
+        || request
+            .add_label_ids
+            .iter()
+            .any(|id| request.remove_label_ids.contains(id))
+    {
+        return Err(AppError::Validation("labelIds"));
     }
     request.title = request.title.as_deref().map(normalize_title).transpose()?;
     request.description = request
@@ -1316,6 +975,14 @@ async fn update_work_item(
         "priority": request.priority,
         "assigneeSpecified": request.assignee_actor_id.is_some(),
         "assigneeActorId": request.assignee_actor_id.flatten(),
+        "parentWorkItemId": request.parent_work_item_id,
+        "milestoneId": request.milestone_id,
+        "startDate": request.start_date,
+        "dueDate": request.due_date,
+        "estimate": request.estimate,
+        "blockedReason": request.blocked_reason,
+        "addLabelIds": request.add_label_ids,
+        "removeLabelIds": request.remove_label_ids,
     }))?;
     let mut transaction = state.pool.begin().await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
@@ -1347,6 +1014,16 @@ async fn update_work_item(
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
     let capabilities = capabilities(&membership)?;
+    if labels_change {
+        let all = [
+            request.add_label_ids.as_slice(),
+            request.remove_label_ids.as_slice(),
+        ]
+        .concat();
+        if !labels_are_active(&mut transaction, project_id, &all).await? {
+            return Err(AppError::Validation("labelIds"));
+        }
+    }
     let outcome = update_work_item_by_id(
         &mut transaction,
         &browser_actor(&headers, &principal, project_id)?,
@@ -1359,9 +1036,13 @@ async fn update_work_item(
             status_id: request.status_id,
             priority: request.priority.as_deref(),
             assignee_actor_id: request.assignee_actor_id,
-            parent_work_item_id: None,
+            parent_work_item_id: request.parent_work_item_id,
             board_placement: None,
-            labels: None,
+            labels: labels_change.then_some(LabelDelta {
+                add: &request.add_label_ids,
+                remove: &request.remove_label_ids,
+            }),
+            fields,
             summary: "Work Item updated",
             audit_action: "work_item.updated",
             audit_version_metadata: AuditVersionMetadata::Omit,
@@ -1373,6 +1054,10 @@ async fn update_work_item(
         UpdateWorkItemOutcome::InvalidAssignee => {
             return Err(AppError::Validation("assigneeActorId"));
         }
+        UpdateWorkItemOutcome::InvalidMilestone => {
+            return Err(AppError::Validation("milestoneId"));
+        }
+        UpdateWorkItemOutcome::InvalidDates => return Err(AppError::Validation("dueDate")),
         UpdateWorkItemOutcome::InvalidTransition { .. } => {
             return Err(AppError::Conflict("work_item_status", "transition"));
         }
@@ -1390,12 +1075,14 @@ async fn update_work_item(
             .ok_or(AppError::NotFound("work_item"))?;
             return work_item_version_conflict_response(work_item_view(row, capabilities)?);
         }
-        UpdateWorkItemOutcome::TooManyLabels { .. }
-        | UpdateWorkItemOutcome::InvalidParent(_)
-        | UpdateWorkItemOutcome::InvalidPlacement(_) => {
-            return Err(AppError::Internal(
-                "the web update changed labels, parent or position",
-            ));
+        UpdateWorkItemOutcome::TooManyLabels { .. } => {
+            return Err(AppError::Validation("addLabelIds"));
+        }
+        UpdateWorkItemOutcome::InvalidParent(_) => {
+            return Err(AppError::Validation("parentWorkItemId"));
+        }
+        UpdateWorkItemOutcome::InvalidPlacement(_) => {
+            return Err(AppError::Internal("the web update changed position"));
         }
         UpdateWorkItemOutcome::Noop(_) | UpdateWorkItemOutcome::Applied { .. } => {}
     }
@@ -1791,6 +1478,7 @@ async fn work_with_worker(
         ApiJson(crate::api::StartRunRequest {
             prompt: provider_prompt,
             repository_id: Some(repository_id),
+            config: None,
         }),
     )
     .await?;
@@ -2243,9 +1931,14 @@ async fn move_work_item(
     ApiJson(request): ApiJson<MoveWorkItemRequest>,
 ) -> Result<Response, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    if request.target_position < 1 || request.target_position > 10_000 {
-        return Err(AppError::Validation("targetPosition"));
-    }
+    let placement = match (request.target_position, request.before_id, request.after_id) {
+        (Some(position), None, None) if (1..=10_000).contains(&position) => BoardPlacement::Index(
+            usize::try_from(position - 1).map_err(|_| AppError::Validation("targetPosition"))?,
+        ),
+        (None, Some(anchor), None) => BoardPlacement::Before(anchor),
+        (None, None, Some(anchor)) => BoardPlacement::After(anchor),
+        _ => return Err(AppError::Validation("targetPosition")),
+    };
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "move")?;
     let request_hash = RequestHash::for_value(&request)?;
@@ -2321,15 +2014,13 @@ async fn move_work_item(
     .bind(work_item_id)
     .fetch_one(&mut *transaction)
     .await?;
-    let target_index = usize::try_from(request.target_position - 1)
-        .map_err(|_| AppError::Validation("targetPosition"))?;
     let board_rank = match place_in_column(
         &mut transaction,
         project_id,
         request.target_status_id,
         work_item_id,
         Some((current.status_id, current_rank)),
-        BoardPlacement::Index(target_index),
+        placement,
     )
     .await?
     {
@@ -2337,7 +2028,13 @@ async fn move_work_item(
         Err(PlacementProblem::OutOfRange { .. }) => {
             return Err(AppError::Validation("targetPosition"));
         }
-        Err(_) => return Err(AppError::Internal("place a Work Item on the board")),
+        Err(PlacementProblem::AnchorIsSelf | PlacementProblem::AnchorNotInColumn { .. }) => {
+            return Err(AppError::Validation(if request.before_id.is_some() {
+                "beforeId"
+            } else {
+                "afterId"
+            }));
+        }
     };
     let updated = sqlx::query(
         r#"
@@ -2373,6 +2070,8 @@ async fn move_work_item(
             "previousStatusId": current.status_id,
             "statusId": target_status.id,
             "targetPosition": request.target_position,
+            "beforeId": request.before_id,
+            "afterId": request.after_id,
         }),
         version,
     )
@@ -2401,6 +2100,24 @@ async fn create_work_item(
     request.title = normalize_title(&request.title)?;
     request.description = normalize_description(&request.description)?;
     validate_priority(&request.priority)?;
+    request.acceptance_criteria = request
+        .acceptance_criteria
+        .iter()
+        .map(|text| normalize_criterion_text(text))
+        .collect::<Result<_, _>>()?;
+    if request.acceptance_criteria.len() > MAX_NEW_CRITERIA
+        || request.label_ids.len() > MAX_LABEL_CHANGES
+    {
+        return Err(AppError::Validation("Work Item create"));
+    }
+    request.label_ids.sort();
+    request.label_ids.dedup();
+    let fields = NewTaskFields {
+        milestone_id: request.milestone_id,
+        start_date: parse_task_date(request.start_date.as_deref(), "startDate")?,
+        due_date: parse_task_date(request.due_date.as_deref(), "dueDate")?,
+        estimate: request.estimate,
+    };
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("projects", project_id, "work_items_create")?;
     let request_hash = RequestHash::for_value(&request)?;
@@ -2428,6 +2145,9 @@ async fn create_work_item(
         }
         IdempotencyOutcome::Reserved(reservation) => {
             ensure_default_workflow(&mut transaction, project_id).await?;
+            if !labels_are_active(&mut transaction, project_id, &request.label_ids).await? {
+                return Err(AppError::Validation("labelIds"));
+            }
             let outcome = execute_create_work_item(
                 &mut transaction,
                 &browser_actor(&headers, &principal, project_id)?,
@@ -2438,10 +2158,11 @@ async fn create_work_item(
                     status_id: request.status_id,
                     priority: &request.priority,
                     assignee_actor_id: request.assignee_actor_id,
-                    parent_work_item_id: None,
-                    label_ids: &[],
-                    acceptance_criteria: &[],
+                    parent_work_item_id: request.parent_work_item_id,
+                    label_ids: &request.label_ids,
+                    acceptance_criteria: &request.acceptance_criteria,
                     board_placement: None,
+                    fields,
                     activity_summary: "Work Item created",
                     activity_metadata: serde_json::json!({}),
                     activity_number_metadata: AllocatedNumberMetadata::Omit,
@@ -2455,11 +2176,19 @@ async fn create_work_item(
                 CreateWorkItemOutcome::InvalidAssignee => {
                     return Err(AppError::Validation("assigneeActorId"));
                 }
+                CreateWorkItemOutcome::InvalidMilestone => {
+                    return Err(AppError::Validation("milestoneId"));
+                }
+                CreateWorkItemOutcome::InvalidDates => {
+                    return Err(AppError::Validation("dueDate"));
+                }
                 CreateWorkItemOutcome::ParentNotFound
                 | CreateWorkItemOutcome::ParentArchived(_)
-                | CreateWorkItemOutcome::ParentTooDeep
-                | CreateWorkItemOutcome::InvalidPlacement(_) => {
-                    return Err(AppError::Internal("top-level Work Item had a parent"));
+                | CreateWorkItemOutcome::ParentTooDeep => {
+                    return Err(AppError::Validation("parentWorkItemId"));
+                }
+                CreateWorkItemOutcome::InvalidPlacement(_) => {
+                    return Err(AppError::Internal("new Work Item had a board position"));
                 }
             };
             let row = fetch_work_item_in_transaction(
@@ -3060,6 +2789,17 @@ async fn get_work_item_timeline(
     for row in rows {
         entries.push(timeline_entry_view(&state.pool, project_id, work_item_id, row).await?);
     }
+    // Field changes name statuses, people and milestones, not their IDs.
+    let mut payloads = entries
+        .iter_mut()
+        .filter_map(|entry| {
+            entry
+                .activity
+                .as_mut()
+                .map(|activity| &mut activity.payload)
+        })
+        .collect::<Vec<_>>();
+    crate::work_item_history::label_changes(&state.pool, project_id, &mut payloads).await?;
     Ok(Json(WorkItemTimelineResponse {
         entries,
         next_cursor,
@@ -3495,6 +3235,62 @@ macro_rules! work_item_labels_column {
 }
 const WORK_ITEM_LABELS_COLUMN: &str = work_item_labels_column!();
 
+/// A task as `TaskRef` JSON; `$t` is the task, `$s` its status and `$p`
+/// its project.
+macro_rules! task_ref_json {
+    ($t:literal, $s:literal, $p:literal) => {
+        concat!(
+            "jsonb_build_object('id', ",
+            $t,
+            ".id, 'projectId', ",
+            $t,
+            ".project_id, ",
+            "'key', ",
+            $p,
+            ".project_key || '-' || ",
+            $t,
+            ".number, 'title', ",
+            $t,
+            ".title, ",
+            "'statusName', ",
+            $s,
+            ".name, 'statusCategory', ",
+            $s,
+            ".semantic_category, ",
+            "'finished', ",
+            $s,
+            ".semantic_category IN ('completed', 'canceled'), ",
+            "'archived', ",
+            $t,
+            ".archived_at IS NOT NULL, ",
+            "'href', '/projects/' || ",
+            $t,
+            ".project_id || '/work-items/' || ",
+            $t,
+            ".id)"
+        )
+    };
+}
+
+/// An actor as `ActorView` JSON, named by their membership `$m`.
+macro_rules! actor_json {
+    ($a:literal, $m:literal) => {
+        concat!(
+            "jsonb_build_object('id', ",
+            $a,
+            ".id, 'kind', ",
+            $a,
+            ".kind, ",
+            "'displayName', COALESCE(",
+            $m,
+            ".display_name, 'Unknown'), ",
+            "'handle', COALESCE(",
+            $m,
+            ".handle, ''), 'avatarUrl', NULL)"
+        )
+    };
+}
+
 /// One task as `$3` (the viewing Actor) sees it: linked threads and pull
 /// requests from private conversations they are not in are left out.
 const WORK_ITEM_SELECT: &str = concat!(
@@ -3626,7 +3422,148 @@ const WORK_ITEM_SELECT: &str = concat!(
              AND pull_request.id = link.github_pull_request_id
             WHERE link.project_id = item.project_id AND link.work_item_id = item.id
               AND pull_request_visible_to(pull_request.id, $3)
-        ), '[]'::jsonb) AS linked_pull_requests
+        ), '[]'::jsonb) AS linked_pull_requests,
+"#,
+    r#"
+        (SELECT "#,
+    task_ref_json!("parent", "parent_status", "project"),
+    r#"
+           FROM work_items parent
+           JOIN work_item_statuses parent_status
+             ON parent_status.project_id = parent.project_id AND parent_status.id = parent.status_id
+          WHERE parent.project_id = item.project_id AND parent.id = item.parent_work_item_id
+        ) AS parent,
+        (SELECT jsonb_build_object('id', milestone.id, 'name', milestone.name,
+                                   'targetDate', milestone.target_date::text)
+           FROM project_milestones milestone
+          WHERE milestone.project_id = item.project_id AND milestone.id = item.milestone_id
+        ) AS milestone,
+        item.start_date::text AS start_date, item.due_date::text AS due_date, item.estimate,
+        CASE WHEN item.blocked_reason IS NULL THEN NULL ELSE jsonb_build_object(
+            'reason', item.blocked_reason, 'at', item.blocked_at::text,
+            'by', (SELECT "#,
+    actor_json!("blocker_actor", "blocker_membership"),
+    r#"
+                     FROM actors blocker_actor
+                     LEFT JOIN project_memberships blocker_membership
+                       ON blocker_membership.project_id = item.project_id
+                      AND blocker_membership.actor_id = blocker_actor.id
+                    WHERE blocker_actor.id = item.blocked_by_actor_id)
+        ) END AS blocked,
+        COALESCE((
+            SELECT jsonb_agg("#,
+    task_ref_json!("linked", "linked_status", "linked_project"),
+    r#" ORDER BY linked_status.semantic_category IN ('completed', 'canceled'),
+                         linked_project.project_key, linked.number)
+            FROM work_item_dependencies dependency
+            JOIN work_items linked
+              ON linked.project_id = dependency.blocking_project_id
+             AND linked.id = dependency.blocking_work_item_id
+            JOIN projects linked_project ON linked_project.id = linked.project_id
+            JOIN work_item_statuses linked_status
+              ON linked_status.project_id = linked.project_id AND linked_status.id = linked.status_id
+            WHERE dependency.project_id = item.project_id
+              AND dependency.blocked_work_item_id = item.id
+              AND linked.archived_at IS NULL
+              AND (linked.project_id = item.project_id
+                   OR actor_can_access_project($3, NULL, linked.project_id))
+        ), '[]'::jsonb) AS blocked_by,
+        COALESCE((
+            SELECT jsonb_agg("#,
+    task_ref_json!("linked", "linked_status", "linked_project"),
+    r#" ORDER BY linked_status.semantic_category IN ('completed', 'canceled'),
+                         linked_project.project_key, linked.number)
+            FROM work_item_dependencies dependency
+            JOIN work_items linked
+              ON linked.project_id = dependency.project_id
+             AND linked.id = dependency.blocked_work_item_id
+            JOIN projects linked_project ON linked_project.id = linked.project_id
+            JOIN work_item_statuses linked_status
+              ON linked_status.project_id = linked.project_id AND linked_status.id = linked.status_id
+            WHERE dependency.blocking_project_id = item.project_id
+              AND dependency.blocking_work_item_id = item.id
+              AND linked.archived_at IS NULL
+              AND (linked.project_id = item.project_id
+                   OR actor_can_access_project($3, NULL, linked.project_id))
+        ), '[]'::jsonb) AS blocks,
+        COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+                'kind', CASE
+                    WHEN relation.kind = 'duplicates' AND relation.work_item_id = item.id THEN 'duplicates'
+                    WHEN relation.kind = 'duplicates' THEN 'duplicated_by'
+                    ELSE 'relates_to' END,
+                'task', "#,
+    task_ref_json!("linked", "linked_status", "linked_project"),
+    r#") ORDER BY relation.created_at, linked.id)
+            FROM work_item_relations relation
+            JOIN work_items linked
+              ON linked.id = CASE WHEN relation.work_item_id = item.id
+                                  THEN relation.other_work_item_id ELSE relation.work_item_id END
+            JOIN projects linked_project ON linked_project.id = linked.project_id
+            JOIN work_item_statuses linked_status
+              ON linked_status.project_id = linked.project_id AND linked_status.id = linked.status_id
+            WHERE (relation.work_item_id = item.id OR relation.other_work_item_id = item.id)
+              AND (linked.project_id = item.project_id
+                   OR actor_can_access_project($3, NULL, linked.project_id))
+        ), '[]'::jsonb) AS relations,
+        COALESCE((
+            SELECT jsonb_agg("#,
+    task_ref_json!("child", "child_status", "project"),
+    r#" || jsonb_build_object('assignee', CASE WHEN child_assignee.actor_id IS NULL THEN NULL ELSE "#,
+    actor_json!("child_assignee_actor", "child_assignee"),
+    r#" END) ORDER BY child_status.position, child.board_rank, child.id)
+            FROM work_items child
+            JOIN work_item_statuses child_status
+              ON child_status.project_id = child.project_id AND child_status.id = child.status_id
+            LEFT JOIN project_memberships child_assignee
+              ON child_assignee.project_id = child.project_id
+             AND child_assignee.actor_id = child.assignee_actor_id
+            LEFT JOIN actors child_assignee_actor ON child_assignee_actor.id = child.assignee_actor_id
+            WHERE child.project_id = item.project_id AND child.parent_work_item_id = item.id
+              AND child.archived_at IS NULL
+        ), '[]'::jsonb) AS subtasks,
+        (SELECT jsonb_build_object('actor', "#,
+    actor_json!("claimer", "claimer_membership"),
+    r#", 'note', claim.note,
+                                   'claimedAt', claim.claimed_at::text,
+                                   'expiresAt', claim.expires_at::text)
+           FROM work_item_claims claim
+           JOIN actors claimer ON claimer.id = claim.actor_id
+           LEFT JOIN project_memberships claimer_membership
+             ON claimer_membership.project_id = item.project_id
+            AND claimer_membership.actor_id = claim.actor_id
+          WHERE claim.work_item_id = item.id AND claim.expires_at > now()
+        ) AS claim,
+        COALESCE((
+            SELECT jsonb_agg("#,
+    actor_json!("watcher_actor", "watcher"),
+    r#" ORDER BY lower(watcher.display_name), watcher.actor_id)
+            FROM work_item_watchers watching
+            JOIN project_memberships watcher
+              ON watcher.project_id = watching.project_id AND watcher.actor_id = watching.actor_id
+            JOIN actors watcher_actor ON watcher_actor.id = watching.actor_id
+            WHERE watching.work_item_id = item.id AND watcher.enabled
+        ), '[]'::jsonb) AS watchers,
+        EXISTS (SELECT 1 FROM work_item_watchers watching
+                 WHERE watching.work_item_id = item.id AND watching.actor_id = $3) AS watching,
+        COALESCE((SELECT settings.estimate_unit FROM project_task_settings settings
+                   WHERE settings.project_id = item.project_id), 'points') AS estimate_unit,
+        item.blocked_reason IS NULL AND item.archived_at IS NULL
+          AND status.semantic_category NOT IN ('completed', 'canceled')
+          AND NOT EXISTS (
+              SELECT 1
+                FROM work_item_dependencies dependency
+                JOIN work_items blocker
+                  ON blocker.project_id = dependency.blocking_project_id
+                 AND blocker.id = dependency.blocking_work_item_id
+                JOIN work_item_statuses blocker_status
+                  ON blocker_status.project_id = blocker.project_id
+                 AND blocker_status.id = blocker.status_id
+               WHERE dependency.project_id = item.project_id
+                 AND dependency.blocked_work_item_id = item.id
+                 AND blocker.archived_at IS NULL
+                 AND blocker_status.semantic_category NOT IN ('completed', 'canceled')
+          ) AS ready
     FROM work_items item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_types item_type
@@ -3704,7 +3641,109 @@ fn work_item_view(
         linked_repositories,
         linked_pull_requests,
         capabilities,
+        planning: TaskPlanningView {
+            parent: row.parent,
+            milestone: row.milestone,
+            start_date: row.start_date,
+            due_date: row.due_date,
+            estimate: row.estimate,
+            blocked: row.blocked,
+            blocked_by: json_list(row.blocked_by)?,
+            blocks: json_list(row.blocks)?,
+            ready: row.ready,
+            relations: json_list(row.relations)?,
+            subtasks: json_list(row.subtasks)?,
+            claim: row.claim,
+            watchers: json_list(row.watchers)?,
+            watching: row.watching,
+            estimate_unit: row.estimate_unit,
+        },
     })
+}
+
+fn json_list(value: serde_json::Value) -> Result<Vec<serde_json::Value>, AppError> {
+    match value {
+        serde_json::Value::Array(items) => Ok(items),
+        _ => Err(AppError::Internal("invalid Work Item planning projection")),
+    }
+}
+
+/// Most labels one change may add and remove together.
+const MAX_LABEL_CHANGES: usize = 50;
+/// Most acceptance criteria a new task may come with.
+const MAX_NEW_CRITERIA: usize = 50;
+
+fn parse_task_date(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<Option<NaiveDate>, AppError> {
+    value
+        .map(|value| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| AppError::Validation(field))
+        })
+        .transpose()
+}
+
+fn normalize_blocked_reason(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > MAX_BLOCKED_REASON_CHARACTERS
+        || value
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    {
+        return Err(AppError::Validation("blockedReason"));
+    }
+    Ok(value.to_owned())
+}
+
+fn planning_field_changes(request: &UpdateWorkItemRequest) -> Result<TaskFieldChanges, AppError> {
+    let date = |value: &Option<Option<String>>, field| {
+        value
+            .as_ref()
+            .map(|value| parse_task_date(value.as_deref(), field))
+            .transpose()
+    };
+    if request
+        .estimate
+        .flatten()
+        .is_some_and(|estimate| !valid_estimate(estimate))
+    {
+        return Err(AppError::Validation("estimate"));
+    }
+    Ok(TaskFieldChanges {
+        milestone_id: request.milestone_id,
+        start_date: date(&request.start_date, "startDate")?,
+        due_date: date(&request.due_date, "dueDate")?,
+        estimate: request.estimate,
+        blocked_reason: request
+            .blocked_reason
+            .as_ref()
+            .map(|value| value.as_deref().map(normalize_blocked_reason).transpose())
+            .transpose()?,
+    })
+}
+
+/// Whether every ID is an active label of the project.
+async fn labels_are_active(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    label_ids: &[Uuid],
+) -> Result<bool, AppError> {
+    if label_ids.is_empty() {
+        return Ok(true);
+    }
+    let found = sqlx::query_scalar::<_, i64>(
+        "SELECT count(DISTINCT id) FROM project_labels WHERE project_id = $1 AND id = ANY($2) AND archived_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(label_ids)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let mut distinct = label_ids.to_vec();
+    distinct.sort();
+    distinct.dedup();
+    Ok(found == distinct.len() as i64)
 }
 
 fn normalize_title(value: &str) -> Result<String, AppError> {
@@ -3784,38 +3823,6 @@ fn validate_semantic_category(value: Option<&str>) -> Result<(), AppError> {
     } else {
         Err(AppError::Validation("semanticCategory"))
     }
-}
-
-fn encode_cursor(project_id: Uuid, before_number: i64) -> Result<String, AppError> {
-    if before_number < 1 {
-        return Err(AppError::Internal("encode Work Item cursor"));
-    }
-    let mut bytes = Vec::with_capacity(25);
-    bytes.push(1);
-    bytes.extend_from_slice(project_id.as_bytes());
-    bytes.extend_from_slice(&before_number.to_be_bytes());
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-fn decode_cursor(value: &str, project_id: Uuid) -> Result<i64, AppError> {
-    if value.len() > 64 {
-        return Err(AppError::Invalid("Work Item cursor"));
-    }
-    let bytes = URL_SAFE_NO_PAD
-        .decode(value)
-        .map_err(|_| AppError::Invalid("Work Item cursor"))?;
-    if bytes.len() != 25 || bytes[0] != 1 || bytes[1..17] != *project_id.as_bytes() {
-        return Err(AppError::Invalid("Work Item cursor"));
-    }
-    let number = i64::from_be_bytes(
-        bytes[17..25]
-            .try_into()
-            .map_err(|_| AppError::Invalid("Work Item cursor"))?,
-    );
-    if number < 1 {
-        return Err(AppError::Invalid("Work Item cursor"));
-    }
-    Ok(number)
 }
 
 pub(crate) fn encode_work_item_timeline_cursor(
@@ -3991,9 +3998,8 @@ fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DESCRIPTION_CHARACTERS, UpdateWorkItemRequest, decode_cursor, encode_cursor,
-        normalize_description, normalize_title, normalize_worker_prompt, validate_priority,
-        validate_readable_key, worker_thread_name,
+        MAX_DESCRIPTION_CHARACTERS, UpdateWorkItemRequest, normalize_description, normalize_title,
+        normalize_worker_prompt, validate_priority, validate_readable_key, worker_thread_name,
     };
     use uuid::Uuid;
 
@@ -4009,17 +4015,6 @@ mod tests {
         assert!(normalize_description(&"a".repeat(MAX_DESCRIPTION_CHARACTERS + 1)).is_err());
         assert!(validate_priority("urgent").is_ok());
         assert!(validate_priority("critical").is_err());
-    }
-
-    #[test]
-    fn work_item_cursor_is_project_bound() {
-        let project_id = Uuid::now_v7();
-        let cursor = encode_cursor(project_id, 42).expect("encode valid Work Item cursor");
-        assert_eq!(
-            decode_cursor(&cursor, project_id).expect("decode valid Work Item cursor"),
-            42
-        );
-        assert!(decode_cursor(&cursor, Uuid::now_v7()).is_err());
     }
 
     #[test]

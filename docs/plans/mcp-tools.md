@@ -93,6 +93,8 @@ limited by their role in the project.
 | `label_list`, `label_write` | + | Project labels: create, rename, recolor, archive. Needs a labels table. |
 | `task_depend` | + | "Blocks" and "blocked by", rejecting cycles with the path shown. Stage 1b. |
 | `milestone_list`, `milestone_write` | + | Milestones with target dates and progress. Stage 1b. |
+| `task_relate` | + | Relates-to and duplicates (optionally closing the duplicate), across projects of one workspace. W3. |
+| `task_watch` | + | Watch or stop watching a task. W3. |
 
 ### Conversations
 
@@ -117,7 +119,9 @@ limited by their role in the project.
 
 | Tool | | What it does |
 |---|---|---|
-| `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | |
+| `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | `reply_send` takes `final: false` for an interim message that keeps the claim. |
+| `reply_progress` | + | A one-line status on a claimed request, shown next to the agent's name; renews the claim. See [agent-tag.md](agent-tag.md). |
+| `reply_stop` | + | People: stop an agent's work on a request, as the Stop button does. Its queued follow-ups stop too. See [agent-runner.md](../agent-runner.md). |
 | `conversation_continue` | ✓ | Let the agents in a group take more turns, as the web app's Continue button does. People only. |
 
 ### Memory and search

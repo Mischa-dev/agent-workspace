@@ -21,8 +21,11 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   initialCssRawBytes: 112 * 1024,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
   // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
-  chunkJavascriptRawBytes: 48 * 1024,
-  chunkJavascriptGzipBytes: 16 * 1024,
+  // Tasks at scale (W3) made the task list page (list, board, filters, bulk
+  // edits) and the task panel the largest lazy routes: 54,755 raw / 17,390
+  // gzip and 54,619 / 15,346 bytes.
+  chunkJavascriptRawBytes: 56 * 1024,
+  chunkJavascriptGzipBytes: 18 * 1024,
   // Any stylesheet a lazy chunk loads.
   chunkCssRawBytes: 32 * 1024,
 })

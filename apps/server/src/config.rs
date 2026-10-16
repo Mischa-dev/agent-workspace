@@ -77,6 +77,10 @@ pub struct AppConfig {
     pub server_addr: SocketAddr,
     pub webhook_addr: SocketAddr,
     pub allowed_origins: Vec<String>,
+    /// Operator-set webhook origins (`scheme://host[:port]`) that may use
+    /// http and private or tailnet addresses, such as an agent host's wakeup
+    /// listener on a Tailscale IP. Every other webhook must be public https.
+    pub webhook_trusted_origins: Vec<String>,
     /// The address people and cloud agents use, e.g. `https://workspace.example.com`.
     /// OAuth metadata and MCP resource URLs are built from it. Defaults to the
     /// loopback server address.
@@ -194,7 +198,8 @@ impl AppConfig {
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let allowed_origins = allowed_origins(values, environment)?;
-        let public_origin = public_origin(values)?;
+        let webhook_trusted_origins = webhook_trusted_origins(values)?;
+        let public_origin = public_origin(values, environment)?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
         validate_loopback("WEBHOOK_ADDR", webhook_addr, environment)?;
@@ -301,6 +306,7 @@ impl AppConfig {
             server_addr,
             webhook_addr,
             allowed_origins,
+            webhook_trusted_origins,
             public_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
@@ -529,7 +535,10 @@ fn validate_secret_file(
     Ok(())
 }
 
-fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+fn public_origin(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+) -> Result<Option<String>, ConfigError> {
     let Some(value) = values
         .get(&format!("{PREFIX}PUBLIC_ORIGIN"))
         .map(|value| value.trim().trim_end_matches('/'))
@@ -537,24 +546,60 @@ fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, Co
     else {
         return Ok(None);
     };
-    let parsed = value
-        .parse::<http::Uri>()
-        .map_err(|error| ConfigError::Invalid {
-            key: format!("{PREFIX}PUBLIC_ORIGIN"),
-            reason: error.to_string(),
-        })?;
-    if !matches!(parsed.scheme_str(), Some("http" | "https"))
-        || parsed.authority().is_none()
-        || parsed
-            .path_and_query()
-            .is_some_and(|path| path.as_str() != "/")
+    let parsed = url::Url::parse(value).map_err(|error| ConfigError::Invalid {
+        key: format!("{PREFIX}PUBLIC_ORIGIN"),
+        reason: error.to_string(),
+    })?;
+    let development_loopback = environment.is_development()
+        && parsed.scheme() == "http"
+        && parsed.host().is_some_and(|host| match host {
+            url::Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        });
+    if (parsed.scheme() != "https" && !development_loopback)
+        || parsed.host().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
     {
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}PUBLIC_ORIGIN"),
-            reason: "must be a scheme and host, such as https://workspace.example.com".into(),
+            reason: "must be an HTTPS origin without credentials, query, or fragment (development may use HTTP loopback)".into(),
         });
     }
     Ok(Some(value.to_owned()))
+}
+
+fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
+    let key = format!("{PREFIX}WEBHOOK_TRUSTED_ORIGINS");
+    let configured = values.get(&key).map(String::as_str).unwrap_or_default();
+    let mut origins = Vec::new();
+    for candidate in configured
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let invalid = |reason: &str| ConfigError::Invalid {
+            key: key.clone(),
+            reason: format!("{candidate}: {reason}"),
+        };
+        let url = reqwest::Url::parse(candidate).map_err(|error| invalid(&error.to_string()))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid("use an origin such as http://100.64.0.1:8732"));
+        }
+        origins.push(url.origin().ascii_serialization());
+    }
+    Ok(origins)
 }
 
 fn allowed_origins(
@@ -885,6 +930,38 @@ mod tests {
     }
 
     #[test]
+    fn public_origin_rejects_credentials_and_insecure_production_urls() {
+        for origin in [
+            "https://user@example.com",
+            "https://example.com?next=evil",
+            "https://example.com/#fragment",
+            "http://example.com",
+        ] {
+            let mut values = base_values();
+            values.insert("AGENT_WORKSPACE_ENV".to_owned(), "production".to_owned());
+            values.insert(
+                "AGENT_WORKSPACE_ALLOWED_ORIGINS".to_owned(),
+                "https://example.com".to_owned(),
+            );
+            values.insert(
+                "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+                origin.to_owned(),
+            );
+            assert!(
+                AppConfig::from_values(&values).is_err(),
+                "accepted {origin}"
+            );
+        }
+
+        let mut development = base_values();
+        development.insert(
+            "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+            "http://127.0.0.1:3100".to_owned(),
+        );
+        assert!(AppConfig::from_values(&development).is_ok());
+    }
+
+    #[test]
     fn codex_supervisor_limits_are_bounded() {
         let mut values = base_values();
         values.insert(
@@ -1069,5 +1146,34 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("oversized secret must fail");
         assert!(error.to_string().contains("between 1 and 4096 bytes"));
+    }
+
+    #[test]
+    fn webhook_trusted_origins_are_exact_origins() {
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
+            " http://100.119.56.3:8732 , https://hooks.internal:443/ ".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(
+            config.webhook_trusted_origins,
+            ["http://100.119.56.3:8732", "https://hooks.internal"]
+        );
+        for invalid in [
+            "ftp://100.119.56.3",
+            "http://user:secret@100.119.56.3:8732",
+            "http://100.119.56.3:8732/wake",
+            "100.119.56.3:8732",
+        ] {
+            values.insert(
+                "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
+                invalid.to_owned(),
+            );
+            assert!(
+                AppConfig::from_values(&values).is_err(),
+                "accepted {invalid}"
+            );
+        }
     }
 }

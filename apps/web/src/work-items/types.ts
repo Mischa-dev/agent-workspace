@@ -51,7 +51,53 @@ export type WorkItem = {
   linkedRepositories: LinkedRepository[]
   linkedPullRequests: LinkedPullRequest[]
   capabilities: WorkItemCapabilities
+  parent: TaskRef | null
+  milestone: MilestoneRef | null
+  startDate: string | null
+  dueDate: string | null
+  estimate: number | null
+  blocked: { reason: string; at: string; by: ActorRef | null } | null
+  blockedBy: TaskRef[]
+  blocks: TaskRef[]
+  ready: boolean
+  relations: TaskRelation[]
+  subtasks: Array<TaskRef & { assignee: ActorRef | null }>
+  claim: TaskClaim | null
+  watchers: ActorRef[]
+  watching: boolean
+  estimateUnit: EstimateUnit
 }
+
+export type EstimateUnit = 'points' | 'hours'
+
+export type ActorRef = {
+  id: string
+  displayName: string
+  handle: string
+  kind: string
+  avatarUrl: string | null
+}
+
+/** A small reference to another task, possibly in another project the viewer can see. */
+export type TaskRef = {
+  id: string
+  projectId: string
+  key: string
+  title: string
+  statusName: string
+  statusCategory: string
+  finished: boolean
+  archived: boolean
+  href: string
+}
+
+export type MilestoneRef = { id: string; name: string; targetDate: string | null }
+
+export type TaskRelationKind = 'relates_to' | 'duplicates' | 'duplicated_by'
+
+export type TaskRelation = { kind: TaskRelationKind; task: TaskRef }
+
+export type TaskClaim = { actor: ActorRef; note: string | null; claimedAt: string; expiresAt: string }
 
 export type LinkedThread = {
   id: string
@@ -105,15 +151,40 @@ export type AcceptanceCriterion = {
   updatedAt: string
 }
 
-export type WorkItemCard = Omit<
+export type WorkItemCard = Pick<
   WorkItem,
-  | 'description'
+  | 'id'
+  | 'projectId'
+  | 'key'
+  | 'number'
+  | 'title'
+  | 'itemType'
+  | 'status'
+  | 'priority'
+  | 'assignee'
+  | 'version'
+  | 'archivedAt'
   | 'createdAt'
-  | 'acceptanceCriteria'
-  | 'linkedThreads'
-  | 'linkedRepositories'
-  | 'linkedPullRequests'
->
+  | 'updatedAt'
+  | 'labels'
+  | 'capabilities'
+  | 'milestone'
+  | 'startDate'
+  | 'dueDate'
+  | 'estimate'
+  | 'ready'
+> & {
+  parentId: string | null
+  blockedReason: string | null
+  openBlockerCount: number
+  subtaskCount: number
+  subtasksDone: number
+  claimedBy: ActorRef | null
+  /** Manual order (status, then rank) as a string that sorts the same way. Boards not grouped by status keep it. */
+  boardOrder: string
+  /** Which group the row is in, when the list was grouped. */
+  group?: { key: string; label: string }
+}
 
 export type WorkflowType = WorkItemType & {
   position: number
@@ -126,9 +197,12 @@ export type WorkflowStatus = WorkItemStatus & {
 }
 
 export type WorkItemWorkflow = {
-  types: WorkflowType[]
-  statuses: WorkflowStatus[]
+  types: Array<WorkflowType & { taskCount: number }>
+  statuses: Array<WorkflowStatus & { taskCount: number }>
   transitions: Array<{ fromStatusId: string; toStatusId: string }>
+  canEdit: boolean
+  version: number
+  estimateUnit: EstimateUnit
 }
 
 export type WorkItemPriority =
@@ -138,6 +212,13 @@ export type WorkItemPriority =
   | 'high'
   | 'urgent'
 
+export type WorkItemSort = 'newest' | 'oldest' | 'updated' | 'priority' | 'due' | 'title' | 'manual'
+
+export type WorkItemGroupBy = 'status' | 'assignee' | 'priority' | 'label' | 'milestone' | 'parent' | 'type'
+
+export type BoardColumnsBy = 'status' | 'assignee' | 'priority' | 'milestone' | 'type' | 'label'
+
+/** Query parameters for GET /work-items, /work-items/groups and /work-items/board. */
 export type WorkItemFilters = {
   q?: string
   typeId?: string
@@ -147,6 +228,18 @@ export type WorkItemFilters = {
   assigneeActorId?: string
   unassigned?: boolean
   archived?: boolean
+  labelIds?: string
+  milestoneId?: string
+  parentId?: string
+  blocked?: 'true' | 'false'
+  ready?: boolean
+  claimed?: 'true' | 'false'
+  dueBefore?: string
+  dueAfter?: string
+  overdue?: boolean
+  includeDone?: 'false'
+  sort?: WorkItemSort
+  groupBy?: WorkItemGroupBy
   cursor?: string
   limit?: number
 }
@@ -154,14 +247,76 @@ export type WorkItemFilters = {
 export type WorkItemListResponse = {
   items: WorkItemCard[]
   nextCursor: string | null
+  total: number
+}
+
+export type WorkItemGroup = { key: string; label: string; count: number; color?: string }
+
+export type BoardColumn = {
+  key: string
+  label: string
+  status: WorkItemStatus | null
+  items: WorkItemCard[]
+  hasMore: boolean
+  total: number
+  nextCursor: string | null
+  filter: Record<string, string>
+  /** False for a column kept only for the tasks that still carry an archived or removed value. */
+  droppable: boolean
 }
 
 export type WorkItemBoardResponse = {
-  columns: Array<{
-    status: WorkItemStatus
-    items: WorkItemCard[]
-    hasMore: boolean
-  }>
+  columnsBy: BoardColumnsBy
+  columns: BoardColumn[]
+}
+
+export type ProjectLabel = {
+  id: string
+  name: string
+  color: string
+  description: string
+  archived: boolean
+  taskCount: number
+  version: number
+}
+
+export type Milestone = {
+  id: string
+  name: string
+  description: string
+  targetDate: string | null
+  archived: boolean
+  total: number
+  finished: number
+  open: number
+  progress: number
+  overdue: boolean
+  version: number
+}
+
+export type BulkChanges = {
+  statusId?: string
+  assigneeActorId?: string | null
+  priority?: WorkItemPriority
+  milestoneId?: string | null
+  addLabelIds?: string[]
+  removeLabelIds?: string[]
+  archived?: boolean
+  dueDate?: string | null
+}
+
+export type BulkProblem = { id: string; key: string | null; code: string; message: string }
+
+export type WorkflowDraftStatus = { id?: string; key?: string; name: string; semanticCategory: string; isDefault: boolean }
+export type WorkflowDraftType = { id?: string; key?: string; name: string; isDefault: boolean }
+
+export type WorkflowUpdate = {
+  expectedVersion: number
+  estimateUnit?: EstimateUnit
+  statuses: WorkflowDraftStatus[]
+  types: WorkflowDraftType[]
+  transitions: 'all' | Array<{ from: string; to: string }>
+  replacements?: Record<string, string>
 }
 
 export type WorkItemPatch = {
@@ -172,7 +327,22 @@ export type WorkItemPatch = {
   statusId?: string
   priority?: WorkItemPriority
   assigneeActorId?: string | null
+  parentWorkItemId?: string | null
+  milestoneId?: string | null
+  startDate?: string | null
+  dueDate?: string | null
+  estimate?: number | null
+  blockedReason?: string | null
+  addLabelIds?: string[]
+  removeLabelIds?: string[]
 }
+
+/** One field's before and after in a history entry. Ids are already display text. */
+export type FieldChange = { from: string | number | null; to: string | number | null }
+
+export type DescriptionChange = { diff: string; truncated: boolean }
+
+export type ActivityChanges = Record<string, FieldChange | DescriptionChange>
 
 export type WorkItemTimelineEntry = {
   sequence: number
@@ -185,6 +355,7 @@ export type WorkItemTimelineEntry = {
     summary: string
     /** The connected app it was done through, when the actor shows it. */
     via?: string | null
+    changes?: ActivityChanges | null
   } | null
   comment: {
     id: string
