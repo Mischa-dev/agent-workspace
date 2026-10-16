@@ -476,7 +476,7 @@ default environment with its defaults, and its status and pull request show in
 the task's thread; '@codex fix the flaky test' does the same; and ten queued
 tasks start as capacity frees up, blocked ones last.
 
-#### W8. Settings and accounts
+#### W8. Settings and accounts (#141)
 
 *6 items · Starts when W1 and W4 have merged · 3 add a migration*
 
