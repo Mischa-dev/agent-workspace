@@ -415,6 +415,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
         MessageSend
     ),
+    // A person changes only their own notifications; every row is also
+    // checked against what they can still see.
+    boundary_route!(
+        "notifications",
+        Post,
+        "/api/v1/inbox/update",
+        SessionAuthentication
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -661,6 +669,66 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
         WorkItemEdit
     ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/bulk",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/labels",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/labels/{label_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/milestones",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/milestones/{milestone_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Put,
+        "/api/v1/projects/{project_id}/work-item-workflow",
+        ProjectManage
+    ),
 ];
 
 #[cfg(test)]
@@ -679,6 +747,7 @@ mod tests {
         ("replies", include_str!("replies.rs")),
         ("message_edits", include_str!("message_edits.rs")),
         ("reactions", include_str!("reactions.rs")),
+        ("notifications", include_str!("notifications.rs")),
         ("github", include_str!("github.rs")),
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),

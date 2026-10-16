@@ -59,6 +59,7 @@ limited by their role in the project.
 | `briefing` | ✓ | What needs you. Fixed. |
 | `projects_list` | ~ | Add `includeArchived`, and each project's key and your role. |
 | `project_open` | ~ | Also return the workflow (statuses with IDs and categories), labels, member count, and archived state. |
+| `notification_list`, `notification_update` | ✓ | The person's inbox (roadmap N1, N2): list by view and category, and read, unread, archive, restore or snooze. `briefing` includes the unread ones. |
 
 ### Projects and people
 
@@ -93,6 +94,8 @@ limited by their role in the project.
 | `label_list`, `label_write` | + | Project labels: create, rename, recolor, archive. Needs a labels table. |
 | `task_depend` | + | "Blocks" and "blocked by", rejecting cycles with the path shown. Stage 1b. |
 | `milestone_list`, `milestone_write` | + | Milestones with target dates and progress. Stage 1b. |
+| `task_relate` | + | Relates-to and duplicates (optionally closing the duplicate), across projects of one workspace. W3. |
+| `task_watch` | + | Watch or stop watching a task. W3. |
 
 ### Conversations
 

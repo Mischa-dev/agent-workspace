@@ -708,6 +708,7 @@ pub(super) async fn create(
                 label_ids: &label_ids,
                 acceptance_criteria: &task.acceptance_criteria,
                 board_placement: None,
+                fields: Default::default(),
                 activity_summary: summary,
                 activity_metadata,
                 activity_number_metadata: AllocatedNumberMetadata::Include,
@@ -732,6 +733,12 @@ pub(super) async fn create(
                 work_item_id,
                 number,
             }),
+            CreateWorkItemOutcome::InvalidMilestone => {
+                return refused("milestone", super::writes::MILESTONE_MESSAGE.to_owned());
+            }
+            CreateWorkItemOutcome::InvalidDates => {
+                return refused("dueDate", super::writes::DATES_MESSAGE.to_owned());
+            }
             CreateWorkItemOutcome::InvalidAssignee => {
                 return refused(
                     "assignee",

@@ -783,6 +783,10 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["value"]["created"], false);
     assert_eq!(again["value"]["moved"][0]["id"], new_task.as_str());
+    assert_eq!(
+        again["value"]["moved"], moved["value"]["moved"],
+        "the replay lists the subtask too: {again}"
+    );
 
     // Mara isn't in the new project, so the old key opens what she could
     // always see: the archived original, pointing at where it went.
@@ -862,12 +866,17 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
             .is_some_and(|text| text.contains("PLAN-1 blocks PLAN-2 blocks PLAN-3")),
         "{cycle}"
     );
+    // A blocker may be in another project of the same workspace.
     let elsewhere = call(
         "task_depend",
         json!({"taskId": "PLAN-1", "blocks": ["ELSE-1"]}),
     )
     .await;
-    assert_eq!(elsewhere["outcome"], "invalid_request", "{elsewhere}");
+    assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
+    assert_eq!(
+        elsewhere["value"]["blocks"][0]["key"], "ELSE-1",
+        "{elsewhere}"
+    );
     let refused = tool(
         app,
         &reader,
@@ -1058,7 +1067,7 @@ async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
         );
     }
     let project_id = project.parse::<Uuid>().expect("project");
-    sqlx::query("INSERT INTO work_item_dependencies (project_id, blocking_work_item_id, blocked_work_item_id, created_by_actor_id) SELECT $1, chain.id, chain.next, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM (SELECT id, lead(id) OVER (ORDER BY n) AS next FROM unnest($2::uuid[]) WITH ORDINALITY AS t(id, n)) chain WHERE chain.next IS NOT NULL")
+    sqlx::query("INSERT INTO work_item_dependencies (project_id, blocking_project_id, blocking_work_item_id, blocked_work_item_id, created_by_actor_id) SELECT $1, $1, chain.id, chain.next, (SELECT actor_id FROM users WHERE login_name = 'owner') FROM (SELECT id, lead(id) OVER (ORDER BY n) AS next FROM unnest($2::uuid[]) WITH ORDINALITY AS t(id, n)) chain WHERE chain.next IS NOT NULL")
         .bind(project_id).bind(&tasks).execute(&setup.pool).await.expect("chain");
     let result = tool(
         &setup.app,

@@ -10,7 +10,6 @@ import {
   useCreateAcceptanceCriterion,
   useCreateWorkItem,
   useCreateWorkItemComment,
-  useMoveWorkItem,
   useRemoveAcceptanceCriterion,
   useSetWorkItemArchived,
   useSetWorkItemPrimaryRepository,
@@ -19,14 +18,13 @@ import {
   useUpdateAcceptanceCriterion,
   useUpdateWorkItem,
   useWorkItem,
-  useWorkItemBoard,
-  useWorkItems,
   useWorkItemWorkflow,
   useWorkItemTimeline,
   useWorkWithWorker,
 } from './hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
 import { buildOpenInCodexLink } from './codexDeepLink'
+import { EMPTY_PLANNING } from './testFixtures'
 import type { WorkItem } from './types'
 import { ApiError } from '../api/errors'
 import { useProject } from '../projects/hooks'
@@ -51,7 +49,6 @@ vi.mock('./hooks', () => ({
   useCreateAcceptanceCriterion: vi.fn(),
   useCreateWorkItem: vi.fn(),
   useCreateWorkItemComment: vi.fn(),
-  useMoveWorkItem: vi.fn(),
   useRemoveAcceptanceCriterion: vi.fn(),
   useSetWorkItemArchived: vi.fn(),
   useSetWorkItemPrimaryRepository: vi.fn(),
@@ -60,7 +57,6 @@ vi.mock('./hooks', () => ({
   useUpdateAcceptanceCriterion: vi.fn(),
   useUpdateWorkItem: vi.fn(),
   useWorkItem: vi.fn(),
-  useWorkItemBoard: vi.fn(),
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
   useWorkItemTimeline: vi.fn(),
@@ -106,6 +102,9 @@ const workflow = {
     },
   ],
   transitions: [],
+  canEdit: true,
+  version: 1,
+  estimateUnit: 'points',
 }
 const hostileTitle = '<img src=x onerror=alert(1)>'
 const workItem = {
@@ -129,6 +128,61 @@ const workItem = {
   linkedRepositories: [],
   linkedPullRequests: [],
   capabilities: { view: true, edit: true, archive: true },
+  ...EMPTY_PLANNING,
+}
+
+const card = {
+  id: workItemId,
+  projectId,
+  key: 'AW-1',
+  number: 1,
+  title: hostileTitle,
+  itemType: { id: 'type-a', name: 'Task' },
+  status: { id: 'status-a', name: 'Backlog', semanticCategory: 'backlog' },
+  priority: 'high',
+  assignee: null,
+  version: 1,
+  archivedAt: null,
+  createdAt: '2026-07-31T00:00:00Z',
+  updatedAt: '2026-07-31T00:00:00Z',
+  labels: [],
+  capabilities: { view: true, edit: true, archive: true },
+  parentId: null,
+  milestone: null,
+  startDate: null,
+  dueDate: null,
+  estimate: null,
+  blockedReason: null,
+  openBlockerCount: 0,
+  ready: true,
+  subtaskCount: 0,
+  subtasksDone: 0,
+  claimedBy: null,
+  boardOrder: '0000000001:00000000000000000000',
+}
+let requests: string[] = []
+
+/** The planning endpoints the list, board and pickers read, answered from memory. */
+function stubApi(board: unknown = { columnsBy: 'status', columns: [] }) {
+  requests = []
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requests.push(url)
+      if (url.includes('/work-items/board')) return json(board)
+      if (url.includes('/work-items/groups')) return json({ groups: [] })
+      if (url.includes('/labels')) return json({ labels: [] })
+      if (url.includes('/milestones')) return json({ milestones: [] })
+      if (url.includes('/work-items')) return json({ items: [card], nextCursor: null, total: 1 })
+      return json({})
+    }),
+  )
+}
+
+function listRequests() {
+  return requests.filter((url) => /\/work-items(\?|$)/.test(url))
 }
 
 beforeEach(() => {
@@ -149,43 +203,7 @@ beforeEach(() => {
     isPending: false,
     isError: false,
   } as unknown as ReturnType<typeof useWorkItemWorkflow>)
-  vi.mocked(useWorkItems).mockReturnValue({
-    data: {
-      items: [
-        {
-          id: workItemId,
-          projectId,
-          key: 'AW-1',
-          number: 1,
-          title: hostileTitle,
-          itemType: { id: 'type-a', name: 'Task' },
-          status: { id: 'status-a', name: 'Backlog', semanticCategory: 'backlog' },
-          priority: 'high',
-          assignee: null,
-          version: 1,
-          archivedAt: null,
-          updatedAt: '2026-07-31T00:00:00Z',
-          labels: [],
-          capabilities: { view: true, edit: true, archive: true },
-        },
-      ],
-      nextCursor: null,
-    },
-    isPending: false,
-    isError: false,
-    isSuccess: true,
-  } as unknown as ReturnType<typeof useWorkItems>)
-  vi.mocked(useWorkItemBoard).mockReturnValue({
-    data: { columns: [] },
-    isPending: false,
-    isError: false,
-    isSuccess: true,
-  } as unknown as ReturnType<typeof useWorkItemBoard>)
-  vi.mocked(useMoveWorkItem).mockReturnValue({
-    mutate: vi.fn(),
-    isPending: false,
-    isError: false,
-  } as unknown as ReturnType<typeof useMoveWorkItem>)
+  stubApi()
   vi.mocked(useCreateWorkItem).mockReturnValue({
     mutate: vi.fn(),
     isPending: false,
@@ -242,6 +260,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 function renderPage(path = `/projects/${projectId}/work-items`) {
@@ -249,40 +268,45 @@ function renderPage(path = `/projects/${projectId}/work-items`) {
   container.id = 'root'
   document.body.append(container)
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route element={<WorkItemsPage />} path="/projects/:projectId/work-items" />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route element={<WorkItemsPage />} path="/projects/:projectId/work-items" />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
     { container },
   )
 }
 
+function renderDetail() {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MemoryRouter initialEntries={[`/projects/${projectId}/work-items/${workItemId}`]}>
+        <Routes>
+          <Route element={<WorkItemDetailPage />} path="/projects/:projectId/work-items/:workItemId" />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
 describe('Work Items list', () => {
-  it('renders bounded cards as inert text and has no basic accessibility violations', async () => {
+  it('renders titles as inert text and has no basic accessibility violations', async () => {
     const rendered = renderPage()
 
-    expect(screen.getByText(hostileTitle)).toBeVisible()
+    expect(await screen.findByText(hostileTitle)).toBeVisible()
     expect(rendered.container.querySelector('img')).toBeNull()
-    expect(screen.getByRole('link', { name: /AW-1/ })).toHaveAttribute(
-      'href',
-      `/projects/${projectId}/work-items/${workItemId}`,
-    )
+    expect(screen.getByText(hostileTitle).closest('a')).toHaveAttribute('href', `/projects/${projectId}/work-items/${workItemId}`)
     expect((await axe.run(rendered.container)).violations).toEqual([])
   })
 
-  it('keeps filters in the URL and sends them to the query', () => {
+  it('reads filters from the URL, sends them to the server and clears them from a chip', async () => {
     renderPage(`/projects/${projectId}/work-items?priority=urgent`)
-    expect(screen.getByRole('combobox', { name: 'Priority' })).toHaveValue('urgent')
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Status' }), {
-      target: { value: 'status-a' },
-    })
-
-    expect(vi.mocked(useWorkItems)).toHaveBeenLastCalledWith(
-      projectId,
-      expect.objectContaining({ priority: 'urgent', statusId: 'status-a' }),
-    )
+    await waitFor(() => expect(listRequests().at(-1)).toContain('priority=urgent'))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Priority is Urgent' }))
+    await waitFor(() => expect(listRequests().at(-1)).not.toContain('priority='))
   })
 
   it('submits creation with an idempotency key', () => {
@@ -335,19 +359,27 @@ describe('Work Items list', () => {
     await waitFor(() => expect(trigger).toHaveFocus())
   })
 
-  it('renders the Kanban projection with keyboard-equivalent move controls', () => {
-    vi.mocked(useWorkItemBoard).mockReturnValue({
-      data: {
-        columns: [{ status: workItem.status, items: [workItem], hasMore: false }],
-      },
-      isPending: false,
-      isError: false,
-      isSuccess: true,
-    } as unknown as ReturnType<typeof useWorkItemBoard>)
+  it('shows the board with a column per status', async () => {
+    stubApi({
+      columnsBy: 'status',
+      columns: [
+        {
+          key: 'status-a',
+          label: 'Backlog',
+          status: { id: 'status-a', name: 'Backlog', semanticCategory: 'backlog' },
+          items: [card],
+          hasMore: false,
+          total: 1,
+          nextCursor: null,
+          filter: { statusId: 'status-a' },
+        },
+      ],
+    })
     renderPage(`/projects/${projectId}/work-items?view=board`)
-    expect(screen.getByRole('region', { name: 'Backlog column' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Move AW-1 up' })).toBeDisabled()
-    expect(screen.getByRole('combobox', { name: 'Move AW-1 to status' })).toBeVisible()
+
+    const column = await screen.findByRole('region', { name: 'Backlog' })
+    expect(column).toHaveTextContent(hostileTitle)
+    expect(requests.some((url) => url.includes('/work-items/board'))).toBe(true)
   })
 })
 
@@ -478,7 +510,7 @@ describe('Work Item detail', () => {
     expect(screen.getByText('Worker Thread opened')).toBeVisible()
   })
 
-  it('preserves the draft and exposes the authoritative resource on conflict', () => {
+  it('saves one field at a time and says plainly when someone else changed the task first', () => {
     const current = { ...workItem, title: 'Title from another editor', version: 2 }
     const mutate = vi.fn((_input, options) => {
       options.onError(
@@ -489,39 +521,32 @@ describe('Work Item detail', () => {
           details: { currentVersion: 2, current },
         }),
       )
+      options.onSettled?.()
     })
     vi.mocked(useUpdateWorkItem).mockReturnValue({
       mutate,
       reset: vi.fn(),
       isPending: false,
-      isError: true,
+      isError: false,
       isSuccess: false,
-      error: new Error('conflict'),
     } as unknown as ReturnType<typeof useUpdateWorkItem>)
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter
-          initialEntries={[
-            `/projects/${projectId}/work-items/${workItemId}`,
-          ]}
-        >
-          <Routes>
-            <Route
-              element={<WorkItemDetailPage />}
-              path="/projects/:projectId/work-items/:workItemId"
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    )
+    renderDetail()
 
     const title = screen.getByLabelText('Title')
-    fireEvent.change(title, { target: { value: 'My unsaved draft' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    fireEvent.focus(title)
+    fireEvent.change(title, { target: { value: 'My new title' } })
+    fireEvent.blur(title)
 
-    expect(title).toHaveValue('My unsaved draft')
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId,
+        workItemId,
+        idempotencyKey: expect.any(String),
+        patch: { expectedVersion: 1, title: 'My new title' },
+      }),
+      expect.any(Object),
+    )
     expect(screen.getByText('A newer version exists.')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Load latest version' }))
-    expect(title).toHaveValue('Title from another editor')
+    expect(screen.getByText(/your change to title wasn’t saved/)).toBeVisible()
   })
 })

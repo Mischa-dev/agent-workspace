@@ -19,7 +19,10 @@ use super::{
     replies::{InboxItem, InboxListArguments, ReplyToolResult, inbox_list},
     talk::{ConversationSummary, ListFilter, list_rows, summary},
 };
-use crate::{AppState, error::AppError, memory, policy::ActorKind, work_item_labels};
+use crate::{
+    AppState, error::AppError, memory, policy::ActorKind, work_item_labels,
+    work_item_planning::HAS_OPEN_BLOCKER,
+};
 
 const GUIDE_CHARACTERS: usize = 20_000;
 /// The most label names project_open lists.
@@ -42,6 +45,10 @@ pub(super) struct Briefing {
     /// reply_claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reply_requests: Vec<InboxItem>,
+    /// Unread notifications from your inbox: mentions, assignments,
+    /// approvals, runs and pull requests. Change them with
+    /// notification_update; notification_list shows the rest.
+    pub notifications: Vec<super::notifications::NotificationLine>,
     /// Messages that @mention you and that you haven't read.
     pub mentions: Vec<Mention>,
     /// Conversations with messages you haven't read, most recent first.
@@ -196,6 +203,8 @@ pub(super) async fn briefing(
         .into_iter()
         .map(|row| summary(state, principal.actor_id, row))
         .collect();
+        let notifications =
+            super::notifications::unread_lines(state, principal, &projects).await?;
         let tasks = task_lines(state, &projects, principal.actor_id, TaskFilter::Assigned).await?;
         let claims = task_lines(state, &projects, principal.actor_id, TaskFilter::Claimed).await?;
         let thread_updates = sqlx::query_as::<_, ThreadUpdate>(
@@ -244,6 +253,7 @@ pub(super) async fn briefing(
                 },
             },
             reply_requests,
+            notifications,
             mentions,
             unread,
             tasks,
@@ -484,6 +494,7 @@ pub(super) struct TaskOverview {
     pub by_status: Vec<StatusCount>,
     /// The first open tasks in board order: what's next.
     pub next: Vec<TaskLine>,
+    /// Marked blocked, or waiting on a task that isn't finished.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked: Vec<TaskLine>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -677,13 +688,20 @@ async fn project_tasks(
     project_id: Uuid,
     filter: ProjectTaskFilter,
 ) -> Result<Vec<TaskLine>, AppError> {
+    // A task waiting on an unfinished dependency isn't next, however high
+    // it sits on the board; it shows with the blocked ones.
     let (condition, limit) = match filter {
         ProjectTaskFilter::Next => (
-            "status.semantic_category IN ('unstarted', 'started', 'review', 'verification') AND item.blocked_reason IS NULL",
+            format!(
+                "status.semantic_category IN ('unstarted', 'started', 'review', 'verification') AND item.blocked_reason IS NULL AND NOT {HAS_OPEN_BLOCKER}"
+            ),
             10,
         ),
-        ProjectTaskFilter::Blocked => ("item.blocked_reason IS NOT NULL", 10),
-        ProjectTaskFilter::Claimed => ("claim.actor_id IS NOT NULL", 10),
+        ProjectTaskFilter::Blocked => (
+            format!("(item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER})"),
+            10,
+        ),
+        ProjectTaskFilter::Claimed => ("claim.actor_id IS NOT NULL".to_owned(), 10),
     };
     Ok(sqlx::query_as::<_, TaskLine>(&format!(
         r#"

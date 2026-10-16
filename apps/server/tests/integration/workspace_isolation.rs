@@ -95,6 +95,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/inbox",
+    "/api/v1/inbox/summary",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/pages/{id}",
@@ -117,8 +119,10 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/integrations/github",
     "/api/v1/projects/{project_id}/integrations/github/automation",
     "/api/v1/projects/{project_id}/invitations",
+    "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/member-candidates",
     "/api/v1/projects/{project_id}/members",
+    "/api/v1/projects/{project_id}/milestones",
     "/api/v1/projects/{project_id}/provider-accounts",
     "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "/api/v1/projects/{project_id}/repositories",
@@ -129,6 +133,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items",
     "/api/v1/projects/{project_id}/work-items/board",
     "/api/v1/projects/{project_id}/work-items/by-key/{key}",
+    "/api/v1/projects/{project_id}/work-items/groups",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
@@ -1297,6 +1302,22 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/inbox",
+            vec![
+                "/api/v1/inbox".to_owned(),
+                "/api/v1/inbox?view=archived&category=mentions".to_owned(),
+                format!("/api/v1/inbox?projectId={}", a.project),
+            ],
+            vec![],
+            vec![format!("/api/v1/inbox?projectId={}", b.project)],
+        ),
+        case(
+            "/api/v1/inbox/summary",
+            vec!["/api/v1/inbox/summary".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
             "/api/v1/projects",
             vec![
                 "/api/v1/projects".to_owned(),
@@ -1490,6 +1511,24 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![format!("{}/work-items/by-key/WORK-1", p(a))],
             vec![format!("{}/work-items/by-key/WORK-1", p(b))],
             vec![],
+        ),
+        project_route("/api/v1/projects/{project_id}/labels", "/labels"),
+        project_route("/api/v1/projects/{project_id}/milestones", "/milestones"),
+        case(
+            "/api/v1/projects/{project_id}/work-items/groups",
+            ["status", "assignee", "label", "milestone", "parent"]
+                .iter()
+                .map(|by| format!("{}/work-items/groups?groupBy={by}", p(a)))
+                .collect(),
+            vec![format!("{}/work-items/groups?groupBy=label", p(b))],
+            vec![
+                format!("{}/work-items/groups?groupBy=label&q={MARKER}", p(a)),
+                format!(
+                    "{}/work-items/groups?groupBy=assignee&assigneeActorId={}",
+                    p(a),
+                    b.rook
+                ),
+            ],
         ),
     ];
 
@@ -1767,6 +1806,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "label_list",
     "message_history",
     "milestone_list",
+    "notification_list",
     "page_get",
     "page_list",
     "people_search",
@@ -1924,6 +1964,16 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({})],
             vec![json!({"projectId": b.project})],
             vec![],
+        ),
+        case(
+            "notification_list",
+            vec![
+                json!({}),
+                json!({"view": "archived"}),
+                json!({"projectId": a.project}),
+            ],
+            vec![],
+            vec![json!({"projectId": b.project})],
         ),
         case(
             "task_list",

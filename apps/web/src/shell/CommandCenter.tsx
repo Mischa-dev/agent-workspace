@@ -124,7 +124,7 @@ export function CommandCenter() {
       search: () => go('/search'),
       'go-home': () => go('/home'),
       // Messages holds what needs you until the inbox arrives (W6).
-      'go-inbox': () => go('/messages'),
+      'go-inbox': () => go('/inbox'),
       'go-messages': () => go('/messages'),
       'go-tasks': () => inProject('/work-items'),
       'go-board': () => inProject('/work-items?view=board'),

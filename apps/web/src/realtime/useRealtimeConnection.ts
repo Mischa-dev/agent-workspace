@@ -89,6 +89,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
         // DMs and groups live in a Project the client does not list, so
         // refresh the Messages overview on any change.
         void queryClient.invalidateQueries({ queryKey: ['direct'] })
+        // The inbox reads names and previews live, so any change can show there.
+        void queryClient.invalidateQueries({ queryKey: ['inbox'] })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -137,6 +139,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })
+      void queryClient.invalidateQueries({ queryKey: ['inbox'] })
     }
 
     const queueDelta = (
