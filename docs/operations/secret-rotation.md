@@ -162,7 +162,7 @@ the data and release roots).
   `secret-key-init` as root directly: the file would be root's and the service
   couldn't read it. It refuses a path under the data or web root, or inside a
   Git work tree (a checkout, or an `/etc` kept by etckeeper), before it writes
-  any key.
+  any key, and the server won't start with a configured keyring in one.
 - Rotate: `sudo /opt/agent-workspace/current/bin/agent-workspace-service-command secret-key-rotate`.
   It writes a new first key, re-seals every data key under it while the
   server keeps running, and removes keys nothing uses. Back the keyring up

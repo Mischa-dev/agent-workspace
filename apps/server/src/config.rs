@@ -273,6 +273,20 @@ impl AppConfig {
         let workos = workos_config(values, &data_root, &web_root)?;
         let secrets_key_path =
             optional_secret_path(values, "SECRETS_KEY_PATH", &data_root, &web_root, 64 * 1024)?;
+        // The master key opens every stored credential; a checkout (or an
+        // etckeeper `/etc`) could commit it.
+        if let Some(work_tree) = secrets_key_path
+            .as_deref()
+            .and_then(git_work_tree_containing)
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}SECRETS_KEY_PATH"),
+                reason: format!(
+                    "{} is a Git work tree; keep the keyring outside it",
+                    work_tree.display()
+                ),
+            });
+        }
         let metrics_token_path =
             optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
         let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
@@ -462,20 +476,25 @@ pub fn validate_new_secret_location(path: &Path, config: &AppConfig) -> Result<(
                 .into(),
         );
     }
-    let directory = path
-        .parent()
+    path.parent()
         .and_then(|parent| std::fs::canonicalize(parent).ok())
         .ok_or("the directory must exist")?;
-    if let Some(work_tree) = directory
-        .ancestors()
-        .find(|ancestor| std::fs::symlink_metadata(ancestor.join(".git")).is_ok())
-    {
+    if let Some(work_tree) = git_work_tree_containing(path) {
         return Err(format!(
             "{} is a Git work tree; keep the keyring outside it",
             work_tree.display()
         ));
     }
     Ok(())
+}
+
+/// The nearest Git work tree holding `path`'s resolved directory, if any.
+fn git_work_tree_containing(path: &Path) -> Option<PathBuf> {
+    let directory = std::fs::canonicalize(path.parent()?).ok()?;
+    directory
+        .ancestors()
+        .find(|ancestor| std::fs::symlink_metadata(ancestor.join(".git")).is_ok())
+        .map(Path::to_path_buf)
 }
 
 fn validate_secret_file(
@@ -791,6 +810,21 @@ mod tests {
             .expect_err("inside a Git work tree");
         validate_new_secret_location(&base.join("missing/keyring"), &config)
             .expect_err("a directory that doesn't exist");
+        // An existing keyring inside a checkout is refused at startup too.
+        let committed = checkout.join("deep/keyring");
+        std::fs::write(&committed, "k").expect("write keyring");
+        std::fs::set_permissions(
+            &committed,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .expect("owner only");
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_SECRETS_KEY_PATH".to_owned(),
+            committed.to_string_lossy().into_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("keyring in a checkout");
+        assert!(error.to_string().contains("Git work tree"), "{error}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
