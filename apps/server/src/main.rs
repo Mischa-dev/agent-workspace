@@ -120,8 +120,12 @@ async fn main() -> anyhow::Result<()> {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["path"])?;
             let path = std::path::PathBuf::from(required_option(&options, "path")?);
-            if !path.is_absolute() {
-                bail!("--path must be absolute");
+            // Checked before the key exists: a later config check can't take
+            // back a key already written somewhere it can be served or committed.
+            if let Err(reason) =
+                agent_workspace_server::config::validate_new_secret_location(&path, &config)
+            {
+                bail!("--path {}: {reason}", path.display());
             }
             let keyring = agent_workspace_server::secrets::FileKeyring::generate();
             agent_workspace_server::secrets::write_new_keyring(&path, &keyring)

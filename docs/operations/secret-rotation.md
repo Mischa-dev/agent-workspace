@@ -160,7 +160,9 @@ the data and release roots).
   to `agent-workspace.env` with `sudoedit` and restart. On start, agent webhook
   secrets still stored in plaintext move into the store. Don't run
   `secret-key-init` as root directly: the file would be root's and the service
-  couldn't read it.
+  couldn't read it. It refuses a path under the data or web root, or inside a
+  Git work tree (a checkout, or an `/etc` kept by etckeeper), before it writes
+  any key.
 - Rotate: `sudo /opt/agent-workspace/current/bin/agent-workspace-service-command secret-key-rotate`.
   It writes a new first key, re-seals every data key under it while the
   server keeps running, and removes keys nothing uses. Back the keyring up

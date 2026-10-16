@@ -428,6 +428,56 @@ fn optional_secret_path(
     Ok(Some(path))
 }
 
+/// Whether `path` is absolute, has no `.` or `..` parts, and neither its
+/// text nor its resolved directory falls under a served or runtime root.
+fn secret_path_outside_roots(path: &Path, data_root: &Path, web_root: &Path) -> bool {
+    let plain = path
+        .components()
+        .all(|component| matches!(component, Component::RootDir | Component::Normal(_)));
+    // Compare resolved paths too: a symlinked directory could otherwise point
+    // into a served root while the text looks outside it.
+    let resolved = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .zip(path.file_name())
+        .map(|(parent, name)| parent.join(name));
+    let Some(resolved) = resolved else {
+        return false;
+    };
+    path.is_absolute()
+        && plain
+        && [data_root, web_root].into_iter().all(|root| {
+            let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            !path.starts_with(root) && !resolved.starts_with(&canonical)
+        })
+}
+
+/// Where `secret-key-init` may create a keyring: everywhere a configured
+/// secret file may live, and not inside a Git work tree (a checkout, or an
+/// `/etc` kept by etckeeper), where the key could be committed.
+pub fn validate_new_secret_location(path: &Path, config: &AppConfig) -> Result<(), String> {
+    if !secret_path_outside_roots(path, &config.data_root, &config.web_root) {
+        return Err(
+            "the path must be absolute, in an existing directory, and outside the data and web roots"
+                .into(),
+        );
+    }
+    let directory = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .ok_or("the directory must exist")?;
+    if let Some(work_tree) = directory
+        .ancestors()
+        .find(|ancestor| std::fs::symlink_metadata(ancestor.join(".git")).is_ok())
+    {
+        return Err(format!(
+            "{} is a Git work tree; keep the keyring outside it",
+            work_tree.display()
+        ));
+    }
+    Ok(())
+}
+
 fn validate_secret_file(
     key: &str,
     path: &Path,
@@ -435,26 +485,7 @@ fn validate_secret_file(
     web_root: &Path,
     maximum_bytes: u64,
 ) -> Result<(), ConfigError> {
-    let outside_roots = || {
-        // Compare resolved paths: `..` or a symlinked directory could
-        // otherwise point into a served root while the text looks outside it.
-        let resolved = path
-            .parent()
-            .and_then(|parent| std::fs::canonicalize(parent).ok())
-            .zip(path.file_name())
-            .map(|(parent, name)| parent.join(name));
-        let Some(resolved) = resolved else {
-            return false;
-        };
-        [data_root, web_root].into_iter().all(|root| {
-            let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-            !path.starts_with(root) && !resolved.starts_with(&canonical)
-        })
-    };
-    let plain = path
-        .components()
-        .all(|component| matches!(component, Component::RootDir | Component::Normal(_)));
-    if !path.is_absolute() || !plain || !outside_roots() {
+    if !secret_path_outside_roots(path, data_root, web_root) {
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}{key}"),
             reason: "must be an absolute path outside runtime data and release roots".into(),
@@ -732,6 +763,34 @@ mod tests {
         check(base.join("etc/../release/web/keyring")).expect_err("dots anywhere");
         check(base.join("etc/linked-web/keyring")).expect_err("a symlinked directory into it");
         check(web_root.join("keyring")).expect_err("the web root itself");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_new_keyring_stays_out_of_served_roots_and_git_work_trees() {
+        let base = std::env::temp_dir().join(format!("aw-new-secret-{}", uuid::Uuid::new_v4()));
+        let checkout = base.join("checkout");
+        for directory in [
+            base.join("etc"),
+            checkout.join(".git"),
+            checkout.join("deep"),
+        ] {
+            std::fs::create_dir_all(directory).expect("make directory");
+        }
+        let mut config = AppConfig::from_values(&base_values()).expect("valid config");
+        config.web_root = base.join("release/web");
+        config.data_root = base.join("data");
+        std::fs::create_dir_all(&config.web_root).expect("make web root");
+        validate_new_secret_location(&base.join("etc/keyring"), &config)
+            .expect("a plain outside path is fine");
+        validate_new_secret_location(&config.web_root.join("keyring"), &config)
+            .expect_err("the web root");
+        validate_new_secret_location(&base.join("etc/../release/web/keyring"), &config)
+            .expect_err("dots into the web root");
+        validate_new_secret_location(&checkout.join("deep/keyring"), &config)
+            .expect_err("inside a Git work tree");
+        validate_new_secret_location(&base.join("missing/keyring"), &config)
+            .expect_err("a directory that doesn't exist");
         let _ = std::fs::remove_dir_all(&base);
     }
 
