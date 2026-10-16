@@ -35,7 +35,6 @@ export {
   relativeDay,
 } from './time'
 export { DocumentSkeleton, ListSkeleton, PageSkeleton, SettingsSkeleton } from './skeletons'
-export { CommandMenu } from './commandMenu'
 export { filterCommands, matchScore, type CommandItem } from './commandModel'
 export { ToastViewport } from './toast'
 export { clearToasts, dismissToast, showToast, useToasts, type ToastInput, type ToastTone } from './toastStore'

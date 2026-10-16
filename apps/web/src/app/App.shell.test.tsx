@@ -40,7 +40,8 @@ describe('App shell and Project navigation', () => {
     ).toBeVisible()
     const searchButton = screen.getByRole('button', { name: 'Search and commands' })
     fireEvent.click(searchButton)
-    const search = screen.getByRole('combobox', { name: 'Command menu' })
+    // The menu loads on first open.
+    const search = await screen.findByRole('combobox', { name: 'Command menu' })
     expect(search).toHaveFocus()
     fireEvent.change(search, { target: { value: 'beta' } })
     const dialog = screen.getByRole('dialog')

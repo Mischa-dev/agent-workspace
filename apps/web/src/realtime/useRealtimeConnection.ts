@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
+import { currentQueryScopeGeneration } from '../api/queryScope'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
   dropRemovedConversation,
@@ -26,7 +27,7 @@ import {
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
-import { applyWorkItemChange, workItemChange } from './workItemPatches'
+import { workItemChange } from './workItemEvent'
 
 const MAX_RECENT_EVENT_IDS = 512
 const INVALIDATION_DELAY_MS = 40
@@ -276,8 +277,16 @@ export function useRealtimeConnection(): RealtimeContextValue {
           const workItem = workItemChange(envelope)
           if (workItem) {
             // One at a time, in event order: a card's neighbours may be moving too.
+            // The patch code loads with the first such event; a sign-out while
+            // it loads drops the patch rather than touching the next session.
+            const generation = currentQueryScopeGeneration()
             workItemQueue = workItemQueue
-              .then(() => applyWorkItemChange(queryClient, envelope.projectId, workItem))
+              .then(() => import('./workItemPatches'))
+              .then(({ applyWorkItemChange }) =>
+                generation === currentQueryScopeGeneration()
+                  ? applyWorkItemChange(queryClient, envelope.projectId, workItem)
+                  : undefined,
+              )
               .catch(() => undefined)
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
