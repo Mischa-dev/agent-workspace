@@ -177,20 +177,25 @@ creates the spare database `BACKUP_DRILL_DATABASE` (default
 data archive, and prints a report: counts of organizations, projects and
 messages, and the latest migration version. It fails if the restored migration
 version is older than the one recorded just before the dump (it can be newer
-when a migration landed while the dump ran). It then drops the spare
-database.
+when a migration landed while the dump ran). When the restored database holds
+secrets, it fetches the key sets from `BACKUP_KEY_REMOTE`, newest first, and
+fails unless one of them opens every restored secret (the keyring goes
+straight from `age` into the server's checker and never touches the disk). It
+then drops the spare database.
 
 It refuses to restore into the live database, `postgres`, or a template. If
 the spare database already exists it stops, unless you pass `--replace`.
 
-The drill needs the private **data** key. Bring it to the host only for the
-drill and remove it after:
+The drill needs the private **data** key and, once secrets are stored, the
+private **key-backup** key. Bring them to the host only for the drill and
+remove them after:
 
 ```bash
-sudo install -m 0600 /dev/stdin /root/drill-identity.txt   # paste, then Ctrl-D
+sudo install -m 0600 /dev/stdin /root/drill-identity.txt       # paste, then Ctrl-D
+sudo install -m 0600 /dev/stdin /root/key-drill-identity.txt   # paste, then Ctrl-D
 sudo /opt/agent-workspace/current/bin/agent-workspace-restore-drill \
-  --identity /root/drill-identity.txt
-sudo shred -u /root/drill-identity.txt
+  --identity /root/drill-identity.txt --key-identity /root/key-drill-identity.txt
+sudo shred -u /root/drill-identity.txt /root/key-drill-identity.txt
 ```
 
 Options:
@@ -199,6 +204,8 @@ Options:
 - `--set 20261016T033000Z` picks a set instead of the newest.
 - `--from local` uses the local copies instead of the off-host ones.
 - `--database NAME` picks a different spare database name.
+- `--skip-secrets` passes without checking the secrets, and says so in the
+  report. Use it only when the key-backup key isn't at hand.
 
 Run the drill after the first setup, after changing the backup settings, and
 every few months.

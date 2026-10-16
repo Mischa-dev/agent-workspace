@@ -1,11 +1,12 @@
 #!/usr/bin/bash
 # Restore drill: fetch the newest off-host backup set, verify its checksums,
 # decrypt it, restore the dump into a spare database, run sanity queries,
-# report, and drop the spare database (unless --keep).
+# prove the restored secrets open with a backed-up key set, report, and drop
+# the spare database (unless --keep).
 #
 # usage: agent-workspace-restore-drill [--config FILE] [--identity FILE]
-#          [--from remote|local] [--set NAME] [--database NAME]
-#          [--replace] [--keep]
+#          [--key-identity FILE] [--skip-secrets] [--from remote|local]
+#          [--set NAME] [--database NAME] [--replace] [--keep]
 set -euo pipefail
 
 script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
@@ -13,12 +14,14 @@ script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 source "${script_dir}/agent-workspace-backup-lib.sh"
 
 usage() {
-  sed -n '6,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '7,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 64
 }
 
 config="${BACKUP_DEFAULT_CONFIG}"
 identity=""
+key_identity=""
+skip_secrets=false
 from=remote
 set_name=""
 database=""
@@ -28,6 +31,8 @@ while (($# > 0)); do
   case "$1" in
     --config) config="${2:?}"; shift 2 ;;
     --identity) identity="${2:?}"; shift 2 ;;
+    --key-identity) key_identity="${2:?}"; shift 2 ;;
+    --skip-secrets) skip_secrets=true; shift ;;
     --from) from="${2:?}"; shift 2 ;;
     --set) set_name="${2:?}"; shift 2 ;;
     --database) database="${2:?}"; shift 2 ;;
@@ -42,6 +47,8 @@ apply_common_defaults
 : "${BACKUP_DRILL_DATABASE:=agent_workspace_restore_drill}"
 [[ -n "${database}" ]] || database="${BACKUP_DRILL_DATABASE}"
 [[ -n "${identity}" ]] || identity="${BACKUP_AGE_IDENTITY_FILE:-}"
+[[ -n "${key_identity}" ]] || key_identity="${BACKUP_KEY_AGE_IDENTITY_FILE:-}"
+: "${BACKUP_SERVER_BIN:=${BACKUP_RELEASE_BIN}/agent-workspace-server}"
 [[ -n "${identity}" ]] || die "pass --identity or set BACKUP_AGE_IDENTITY_FILE (the private age key)"
 require_file "age identity" "${identity}"
 validate_identifier "drill database" "${database}"
@@ -138,6 +145,46 @@ messages="$(drill_sql 'SELECT count(*) FROM messages')"
 restored_version="$(drill_sql 'SELECT coalesce(max(version), 0) FROM _sqlx_migrations')"
 failed_migrations="$(drill_sql 'SELECT count(*) FROM _sqlx_migrations WHERE NOT success')"
 
+# The dump holds secrets only as ciphertext; they are worth something only if
+# a backed-up key set opens them. Try key sets newest first until one opens
+# every restored secret. The keyring is decrypted straight into the checker's
+# stdin and never written to disk.
+secrets_result="none stored"
+secret_count=0
+if [[ "$(drill_sql "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public' AND tablename = 'secrets'")" == 1 ]]; then
+  secret_count="$(drill_sql 'SELECT count(*) FROM secrets')"
+fi
+if ((secret_count > 0)) && [[ "${skip_secrets}" == true ]]; then
+  secrets_result="${secret_count} stored, NOT CHECKED (--skip-secrets)"
+  log "drill: warning: ${secret_count} restored secrets were not checked against a key backup"
+elif ((secret_count > 0)); then
+  [[ -n "${key_identity}" ]] \
+    || die "${secret_count} secrets restored; pass --key-identity (or set BACKUP_KEY_AGE_IDENTITY_FILE) to prove a key backup opens them, or --skip-secrets"
+  require_file "key age identity" "${key_identity}"
+  require_setting BACKUP_KEY_REMOTE
+  require_transport_tools "${BACKUP_KEY_REMOTE}"
+  [[ -x "${BACKUP_SERVER_BIN}" ]] || die "BACKUP_SERVER_BIN (${BACKUP_SERVER_BIN}) is not executable"
+  export_sql="$("${BACKUP_SERVER_BIN}" secrets-verify-export --print-query)"
+  drill_sql "${export_sql}" >"${work}/secret-rows"
+  key_sets="$(remote_list "${BACKUP_KEY_REMOTE}" | sort -r)"
+  [[ -n "${key_sets}" ]] || die "${secret_count} secrets restored but no key sets are off-host"
+  opened_with=""
+  while IFS= read -r key_set; do
+    fetched="${work}/key-${key_set}"
+    install -d -m 0700 "${fetched}"
+    remote_get_set "${BACKUP_KEY_REMOTE}" "${key_set}" "${fetched}" || continue
+    (cd -- "${fetched}" && sha256sum --status -c SHA256SUMS) || continue
+    if decrypt_stream "${key_identity}" "${fetched}/secrets-key.age" \
+      | "${BACKUP_SERVER_BIN}" secrets-verify-export --rows "${work}/secret-rows" >/dev/null 2>&1; then
+      opened_with="${key_set}"
+      break
+    fi
+  done <<<"${key_sets}"
+  [[ -n "${opened_with}" ]] || die "none of the off-host key sets opens all ${secret_count} restored secrets"
+  secrets_result="${secret_count} stored, all open with key set ${opened_with}"
+  log "drill: restored secrets open with key set ${opened_with}"
+fi
+
 cat <<REPORT
 restore drill report
   set:                ${set_name} (${from})
@@ -148,6 +195,7 @@ restore drill report
   latest migration:   ${restored_version} (at least ${expected_version} expected)
   failed migrations:  ${failed_migrations}
   data archive files: ${data_entries}
+  secrets:            ${secrets_result}
   after the drill:    $([[ "${keep}" == true ]] && echo "kept" || echo "dropped")
 REPORT
 

@@ -1509,9 +1509,112 @@ async fn delete_from_request(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------------------------------------------------------------------------
+// Restore drill check
+
+/// The query the restore drill exports secret rows with: one line per row,
+/// fields separated by `|`, binary columns hex-encoded. Kept here so the
+/// export and [`verify_exported_rows`] can't drift apart.
+pub const EXPORT_ROWS_SQL: &str = "SELECT id, organization_id, master_key_id, \
+    encode(ciphertext, 'hex'), encode(nonce, 'hex'), encode(wrapped_key, 'hex'), \
+    coalesce(encode(wrap_nonce, 'hex'), '') FROM secrets ORDER BY id";
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedRowsReport {
+    pub checked: u64,
+    pub opened: u64,
+    pub failed: u64,
+    /// Master keys the rows name that the keyring doesn't hold.
+    pub missing_key_ids: Vec<String>,
+}
+
+/// Try to open every exported secret row with `keyring`, keeping only the
+/// counts. Values are dropped (and zeroed) as soon as they open; nothing about
+/// them is returned. Used by `secrets-verify-export` in the restore drill.
+pub fn verify_exported_rows(
+    keyring: &FileKeyring,
+    input: &str,
+) -> Result<ExportedRowsReport, SecretError> {
+    let mut report = ExportedRowsReport::default();
+    for line in input.lines().filter(|line| !line.trim().is_empty()) {
+        let fields = line.trim().split('|').collect::<Vec<_>>();
+        let [
+            id,
+            organization_id,
+            master_key_id,
+            ciphertext,
+            nonce,
+            wrapped,
+            wrap_nonce,
+        ] = fields.as_slice()
+        else {
+            return Err(SecretError::Corrupt);
+        };
+        let decode = |field: &str| hex::decode(field).map_err(|_| SecretError::Corrupt);
+        let stored = StoredSecret {
+            id: id.parse().map_err(|_| SecretError::Corrupt)?,
+            organization_id: organization_id.parse().map_err(|_| SecretError::Corrupt)?,
+            ciphertext: decode(ciphertext)?,
+            nonce: decode(nonce)?,
+            wrapped_key: decode(wrapped)?,
+            wrap_nonce: (!wrap_nonce.is_empty())
+                .then(|| decode(wrap_nonce))
+                .transpose()?,
+            master_key_id: (*master_key_id).to_owned(),
+        };
+        report.checked += 1;
+        if !keyring.has_key(&stored.master_key_id) {
+            report.failed += 1;
+            if !report.missing_key_ids.contains(&stored.master_key_id) {
+                report.missing_key_ids.push(stored.master_key_id.clone());
+            }
+            continue;
+        }
+        match open_stored(keyring, &stored) {
+            Ok(_) => report.opened += 1,
+            Err(_) => report.failed += 1,
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_rows_open_only_with_their_keyring() {
+        let keyring = FileKeyring::generate();
+        let organization_id = Uuid::new_v4();
+        let mut export = String::new();
+        for value in ["first value", "  padded\n"] {
+            let id = Uuid::new_v4();
+            let sealed =
+                seal_value(&keyring, id, organization_id, &SecretValue::new(value)).expect("seal");
+            export.push_str(&format!(
+                "{id}|{organization_id}|{}|{}|{}|{}|{}\n",
+                sealed.wrapped.master_key_id,
+                hex::encode(&sealed.ciphertext),
+                hex::encode(sealed.nonce),
+                hex::encode(&sealed.wrapped.ciphertext),
+                sealed.wrapped.nonce.map(hex::encode).unwrap_or_default(),
+            ));
+        }
+        let report = verify_exported_rows(&keyring, &export).expect("verify");
+        assert_eq!((report.checked, report.opened, report.failed), (2, 2, 0));
+
+        let other = FileKeyring::generate();
+        let report = verify_exported_rows(&other, &export).expect("verify");
+        assert_eq!((report.opened, report.failed), (0, 2));
+        assert_eq!(report.missing_key_ids, keyring.key_ids());
+
+        // A row moved to another workspace no longer opens.
+        let moved = export.replacen(&organization_id.to_string(), &Uuid::new_v4().to_string(), 1);
+        let report = verify_exported_rows(&keyring, &moved).expect("verify");
+        assert_eq!(report.failed, 1);
+        assert!(verify_exported_rows(&keyring, "not|a|row").is_err());
+    }
 
     #[test]
     fn a_new_key_id_never_repeats_one_in_the_keyring() {
