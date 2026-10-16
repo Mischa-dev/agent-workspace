@@ -270,6 +270,14 @@ pub(super) async fn task_move(
         .fetch_one(&mut *transaction)
         .await?;
 
+        // An estimate means points or hours by its project's setting; between
+        // projects that differ it isn't carried over.
+        let (_, source_unit) =
+            crate::work_item_workflow::task_settings(&mut transaction, source_project_id).await?;
+        let (_, target_unit) =
+            crate::work_item_workflow::task_settings(&mut transaction, target_project_id).await?;
+        let same_unit = source_unit == target_unit;
+
         let mut notes = Vec::new();
         let mut moved = Vec::new();
         let mut new_ids = std::collections::HashMap::new();
@@ -350,6 +358,12 @@ pub(super) async fn task_move(
                 }
                 None => None,
             };
+            if let (Some(estimate), false) = (task.estimate, same_unit) {
+                notes.push(format!(
+                    "{target_key} estimates in {target_unit}, not {source_unit}, so the estimate of {estimate} {source_unit} on {} wasn't carried over.",
+                    task.key
+                ));
+            }
             let summary = format!("Work Item moved from {}", task.key);
             let outcome = create_work_item(
                 &mut transaction,
@@ -369,7 +383,7 @@ pub(super) async fn task_move(
                         milestone_id,
                         start_date: task.start_date,
                         due_date: task.due_date,
-                        estimate: task.estimate,
+                        estimate: if same_unit { task.estimate } else { None },
                     },
                     activity_summary: &summary,
                     activity_metadata: serde_json::json!({ "movedFrom": task.key }),

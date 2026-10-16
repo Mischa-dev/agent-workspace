@@ -407,7 +407,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     };
     let app = &setup.app;
     let plan = create_project(&setup, "PLAN", "Plan").await;
-    create_project(&setup, "NEXT", "Next").await;
+    let next = create_project(&setup, "NEXT", "Next").await;
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
     let call = |name: &'static str, arguments: Value| {
@@ -549,7 +549,22 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
         "{someday}"
     );
 
-    // A move carries the dates and the estimate.
+    // A move carries the dates; the estimate only between projects that
+    // estimate in the same unit.
+    sqlx::query(
+        "INSERT INTO project_task_settings (project_id, estimate_unit) VALUES ($1, 'hours')",
+    )
+    .bind(next.parse::<Uuid>().expect("project id"))
+    .execute(&setup.pool)
+    .await
+    .expect("estimate unit");
+    let current = call("task_open", json!({"taskId": "PLAN-1"})).await;
+    let sized = call(
+        "task_update",
+        json!({"taskId": "PLAN-1", "expectedVersion": current["value"]["task"]["version"], "estimate": 8}),
+    )
+    .await;
+    assert_eq!(sized["outcome"], "applied", "{sized}");
     let moved = call(
         "task_move",
         json!({"taskId": "PLAN-1", "toProjectId": "NEXT"}),
@@ -559,4 +574,11 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     let carried = call("task_open", json!({"taskId": "NEXT-1"})).await;
     assert_eq!(carried["value"]["dueDate"], "2026-10-20", "{carried}");
     assert_eq!(carried["value"]["startDate"], "2019-12-01");
+    assert_eq!(carried["value"]["estimate"], Value::Null, "{carried}");
+    assert!(
+        moved["value"]["notes"]
+            .to_string()
+            .contains("estimates in hours, not points"),
+        "{moved}"
+    );
 }
