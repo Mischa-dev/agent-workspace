@@ -1012,16 +1012,24 @@ async fn webhooks_say_what_happened_without_message_text() {
                 mara.connection_id
             ),
             None,
-            json!({ "url": format!("http://{address}/wake") }),
+            json!({ "url": "https://runner.example/wake" }),
         )
         .await;
     let secret = webhook["webhookSecret"]
         .as_str()
         .expect("secret")
         .to_owned();
+    // Point it at the local receiver, which only a trusted origin may reach.
+    let origin = format!("http://{address}");
+    sqlx::query("UPDATE external_agent_connections SET webhook_url = $2 WHERE id = $1::uuid")
+        .bind(&mara.connection_id)
+        .bind(format!("{origin}/wake"))
+        .execute(&pool)
+        .await
+        .expect("local webhook");
     let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(agent_workspace_server::replies::run(
-        test_state(pool.clone()),
+        test_state_trusting(pool.clone(), &origin),
         shutdown_receiver,
     ));
     let (_, dm) = owner
@@ -1549,13 +1557,17 @@ async fn mcp(
         .expect("MCP response")
 }
 
-fn test_state(pool: PgPool) -> AppState {
+/// The worker's state, allowed to deliver wakeups to `trusted_origin`.
+fn test_state_trusting(pool: PgPool, trusted_origin: &str) -> AppState {
     let database_url =
         std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database URL for the test state");
-    let config = AppConfig::from_values(&BTreeMap::from([(
-        "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
-        database_url,
-    )]))
+    let config = AppConfig::from_values(&BTreeMap::from([
+        ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), database_url),
+        (
+            "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
+            trusted_origin.to_owned(),
+        ),
+    ]))
     .expect("test configuration");
     let supervisors = SupervisorRegistry::new(&config).expect("supervisors");
     AppState {

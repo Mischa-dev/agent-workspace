@@ -206,7 +206,10 @@ async fn create_connection(
     ApiJson(request): ApiJson<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionMutationResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let webhook_url = validate_webhook_url(request.webhook_url.clone())?;
+    let webhook_url = validate_webhook_url(
+        request.webhook_url.clone(),
+        &state.config.webhook_trusted_origins,
+    )?;
     let normalized = validate_create(request)?;
     let mut transaction = state.pool.begin().await?;
     lock_project(&mut transaction, project_id).await?;
@@ -288,16 +291,16 @@ async fn create_connection(
     }))
 }
 
-/// A trimmed http(s) webhook URL up to 500 characters, or None when empty.
-fn validate_webhook_url(url: Option<String>) -> Result<Option<String>, AppError> {
+/// A trimmed webhook URL that passes the delivery checks, or None when empty.
+fn validate_webhook_url(
+    url: Option<String>,
+    trusted_origins: &[String],
+) -> Result<Option<String>, AppError> {
     let url = url
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
     if let Some(url) = &url {
-        let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
-        if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
-            return Err(AppError::Validation("webhook URL"));
-        }
+        crate::replies::validate_webhook_url(url, trusted_origins)?;
     }
     Ok(url)
 }
@@ -413,12 +416,10 @@ pub async fn set_webhook_for_host(
     config: &crate::config::AppConfig,
     connection_id: Uuid,
     url: &str,
+    trusted_origins: &[String],
     typed_wakeups: bool,
 ) -> Result<String, AppError> {
-    let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
-    if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
-        return Err(AppError::Validation("webhook URL"));
-    }
+    crate::replies::validate_webhook_url(url, trusted_origins)?;
     let secret = crate::replies::new_webhook_secret();
     let mut transaction = pool.begin().await?;
     let secret_id = crate::secrets::put_webhook_secret(
@@ -576,7 +577,7 @@ async fn set_webhook(
     ApiJson(request): ApiJson<WebhookRequest>,
 ) -> Result<Json<WebhookResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let url = validate_webhook_url(request.url)?;
+    let url = validate_webhook_url(request.url, &state.config.webhook_trusted_origins)?;
     let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
     let mut transaction = state.pool.begin().await?;
     lock_project(&mut transaction, project_id).await?;

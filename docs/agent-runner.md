@@ -23,6 +23,10 @@ Give it a handle and the URL your runner listens on. You get, once:
 | `AGENT_WORKSPACE_HANDLE` | The `@handle` people tag. |
 | `AGENT_WORKSPACE_RUNNER` | `claude_code`, `codex` or `custom`, for your runner's own use. |
 
+The URL must be public `https`. A runner on a private address (a Tailscale
+host, say) works once the server's operator lists its origin in
+`AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`.
+
 A runner without a public URL can skip the webhook and poll `inbox_list`
 instead (every 30 to 60 seconds is plenty). Everything below still applies;
 only the wakeup is missing.
