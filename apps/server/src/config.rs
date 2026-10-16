@@ -108,6 +108,10 @@ pub struct AppConfig {
     /// `.agent-workspace-secrets/` in the working directory is created on
     /// first use; unset elsewhere, encrypted secrets are unavailable.
     pub secrets_key_path: Option<PathBuf>,
+    /// Who push services contact about this server's Web Push (N3): a
+    /// `mailto:` or `https:` URL. Unset, the public origin when it's https,
+    /// else a mailto at the server's host.
+    pub push_contact: Option<String>,
     /// The bearer token `/metrics` requires (O2), as an owner-only file.
     pub metrics_token_path: Option<PathBuf>,
     /// Background jobs run at once in this process (F9).
@@ -292,6 +296,18 @@ impl AppConfig {
                 ),
             });
         }
+        let push_contact = Some(optional(values, "PUSH_CONTACT", ""))
+            .filter(|contact| !contact.is_empty());
+        if push_contact.as_deref().is_some_and(|contact| {
+            !(contact.starts_with("mailto:") || contact.starts_with("https://"))
+                || contact.len() > 200
+                || contact.chars().any(|c| c.is_control() || c.is_whitespace())
+        }) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}PUSH_CONTACT"),
+                reason: "use a mailto: or https: URL".into(),
+            });
+        }
         let metrics_token_path =
             optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
         let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
@@ -327,6 +343,7 @@ impl AppConfig {
             workos,
             log_filter,
             secrets_key_path,
+            push_contact,
             metrics_token_path,
             job_concurrency,
         })

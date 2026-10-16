@@ -223,13 +223,26 @@ pub async fn deliver(
     if !first {
         return Ok(false);
     }
+    // N4: a muted project or group writes nothing; in-app off but push on
+    // writes the row straight to the archive, for the push to open.
+    let decision = crate::notification_settings::decide(
+        transaction,
+        notification.recipient_actor_id,
+        notification.project_id,
+        notification.kind,
+    )
+    .await?;
+    if decision.nothing() {
+        return Ok(false);
+    }
     let notification_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO notifications (
             id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
             actor_id, conversation_id, message_id, work_item_id, comment_id,
-            agent_run_id, approval_id, pull_request_id, detail, group_key
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            agent_run_id, approval_id, pull_request_id, detail, group_key, archived_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                  CASE WHEN $17 THEN NULL ELSE now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
         DO UPDATE SET
             kind = EXCLUDED.kind,
@@ -262,8 +275,24 @@ pub async fn deliver(
     .bind(notification.pull_request_id)
     .bind(&notification.detail)
     .bind(&notification.group_key)
+    .bind(decision.in_app)
     .fetch_one(&mut **transaction)
     .await?;
+    if decision.push {
+        let organization_id =
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(notification.project_id)
+                .fetch_one(&mut **transaction)
+                .await?;
+        crate::push::enqueue_delivery(
+            transaction,
+            organization_id,
+            notification_id,
+            notification.recipient_actor_id,
+            &notification.dedupe_key,
+        )
+        .await?;
+    }
     sqlx::query(
         r#"
         INSERT INTO notification_occurrences (
@@ -953,6 +982,10 @@ pub struct NotificationView {
     /// Set when the notification is about an approval that can be answered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalView>,
+    /// Where its Launch action goes, for notifications that have one (a
+    /// capacity alert opens the account's ready tasks).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_href: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1368,6 +1401,12 @@ fn view(row: NotificationRow) -> NotificationView {
         }),
         _ => None,
     };
+    let launch_href = row
+        .detail
+        .get("launchHref")
+        .and_then(serde_json::Value::as_str)
+        .filter(|href| href.starts_with('/'))
+        .map(str::to_owned);
     // Kinds that belong to no project (capacity alerts) name their place.
     let project_name = row
         .detail
@@ -1404,6 +1443,7 @@ fn view(row: NotificationRow) -> NotificationView {
         created_at: row.created_at,
         href,
         approval,
+        launch_href,
     }
 }
 

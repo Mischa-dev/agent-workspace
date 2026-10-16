@@ -184,9 +184,57 @@ impl SettingDef {
 
 const RUN_SCOPES: &[Scope] = &[Scope::Workspace, Scope::User, Scope::Project];
 const TEAM_SCOPES: &[Scope] = &[Scope::Workspace, Scope::Project];
+const PERSONAL_SCOPES: &[Scope] = &[Scope::Workspace, Scope::User];
 
 /// Every setting. Add lines; don't reorder.
 pub const REGISTRY: &[SettingDef] = &[
+    SettingDef {
+        key: "notifications.quiet_hours",
+        label: "Quiet hours",
+        description: "Hold push notifications overnight; they arrive when quiet hours end.",
+        kind: SettingType::Bool,
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "false",
+    },
+    SettingDef {
+        key: "notifications.quiet_hours_start",
+        label: "Quiet hours start",
+        description: "When quiet hours begin, in minutes after midnight.",
+        kind: SettingType::Integer { min: 0, max: 1439 },
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "1320",
+    },
+    SettingDef {
+        key: "notifications.quiet_hours_end",
+        label: "Quiet hours end",
+        description: "When quiet hours end, in minutes after midnight.",
+        kind: SettingType::Integer { min: 0, max: 1439 },
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "420",
+    },
+    SettingDef {
+        key: "notifications.time_zone",
+        label: "Time zone",
+        description: "The time zone quiet hours follow, such as Europe/Berlin. Unset, UTC.",
+        kind: SettingType::Identifier { optional: true },
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "null",
+    },
+    SettingDef {
+        key: "notifications.digest",
+        label: "Email digest",
+        description: "How often email collects what you missed.",
+        kind: SettingType::Choice {
+            options: &["off", "daily", "weekly"],
+        },
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "\"off\"",
+    },
     SettingDef {
         key: "run.harness",
         label: "Harness",

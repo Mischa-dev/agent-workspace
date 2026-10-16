@@ -1799,14 +1799,20 @@ mod tests {
             }
         }))
         .expect("usage report");
-        let keys = report
+        let mut keys = report
             .windows
             .iter()
             .map(|window| window.key.as_str())
             .collect::<Vec<_>>();
+        keys.sort_unstable();
         assert_eq!(keys, ["codex.primary", "codex.secondary", "othermodel.secondary"]);
-        assert_eq!(report.windows[1].used_percent, 100);
-        assert!(report.windows[1].limit_reached);
+        let weekly = report
+            .windows
+            .iter()
+            .find(|window| window.key == "codex.secondary")
+            .expect("weekly window");
+        assert_eq!(weekly.used_percent, 100);
+        assert!(weekly.limit_reached);
         assert_eq!(report.plan.as_deref(), Some("pro"));
         let credits = report.reset_credits.expect("banked resets");
         assert_eq!(credits.available, 2);
