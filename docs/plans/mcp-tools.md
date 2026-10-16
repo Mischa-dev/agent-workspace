@@ -569,4 +569,6 @@ Differences from the plan:
 - `workflow_update` isn't built. Projects still check their statuses against the default workflow, so editing statuses needs that check redesigned first.
 - Pages as MCP resources aren't built.
 
-The tool count is 71.
+There were 71 tools at the end of Phase 5. Tests no longer pin the count
+(so branches that each add a tool merge in either order); they check that
+every tool has a description and well-formed schemas instead.
