@@ -620,30 +620,50 @@ async fn execute(state: &AppState, registry: &JobRegistry, job: Job, lease: Dura
     }
 }
 
-/// Extend the lease every third of its length. Returns only if the lease
-/// was lost (another worker took the job after a pause too long to renew).
+/// Extend the lease every third of its length. Returns when the lease is
+/// lost: another worker took the job, or renewals kept failing until the
+/// lease may have expired (so another worker may take it). Returning cancels
+/// the handler, so two workers never run the same job at once.
 async fn renew_lease(pool: PgPool, id: Uuid, token: Uuid, lease: Duration) {
+    let mut renewed_at = tokio::time::Instant::now();
     loop {
         tokio::time::sleep(lease / 3).await;
-        let renewed = sqlx::query(
-            r#"
-            UPDATE background_jobs
-            SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
-            WHERE id = $1 AND lease_token = $2 AND state = 'running'
-            "#,
+        let renewed = tokio::time::timeout(
+            lease / 6,
+            sqlx::query(
+                r#"
+                UPDATE background_jobs
+                SET lease_expires_at = now() + make_interval(secs => $3), updated_at = now()
+                WHERE id = $1 AND lease_token = $2 AND state = 'running'
+                "#,
+            )
+            .bind(id)
+            .bind(token)
+            .bind(lease.as_secs_f64())
+            .execute(&pool),
         )
-        .bind(id)
-        .bind(token)
-        .bind(lease.as_secs_f64())
-        .execute(&pool)
         .await;
         match renewed {
-            Ok(result) if result.rows_affected() == 1 => {}
-            Ok(_) => return,
-            // A database blip: keep trying until the lease would be gone.
-            Err(_) => {}
+            Ok(Ok(result)) if result.rows_affected() == 1 => {
+                renewed_at = tokio::time::Instant::now();
+            }
+            Ok(Ok(_)) => return,
+            // A database blip: keep trying while the lease still holds.
+            Ok(Err(_)) | Err(_) => {
+                if !lease_still_held(renewed_at.elapsed(), lease) {
+                    tracing::warn!(job_id = %id, "could not renew a job's lease in time; stopping it");
+                    return;
+                }
+            }
         }
     }
+}
+
+/// Whether a lease last renewed `since_renewed` ago is sure to still hold
+/// through one more try: a wait of a third of its length plus a renewal
+/// that may take a sixth.
+fn lease_still_held(since_renewed: Duration, lease: Duration) -> bool {
+    since_renewed + lease / 3 + lease / 6 < lease
 }
 
 async fn finish(pool: &PgPool, job: &Job, result: Result<(), JobError>) -> Result<(), AppError> {
@@ -811,6 +831,15 @@ pub async fn queue_stats(pool: &PgPool) -> Result<QueueStats, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_handler_stops_before_a_lease_it_cannot_renew_runs_out() {
+        let lease = Duration::from_secs(30);
+        assert!(lease_still_held(Duration::from_secs(10), lease));
+        assert!(lease_still_held(Duration::from_secs(14), lease));
+        assert!(!lease_still_held(Duration::from_secs(15), lease));
+        assert!(!lease_still_held(Duration::from_secs(45), lease));
+    }
 
     #[test]
     fn backoff_grows_and_is_capped() {
