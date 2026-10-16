@@ -6,7 +6,7 @@ import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '.
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import { accountSettingsHref, projectSettingsHref } from '../settings/paths'
+import { projectSettingsHref } from '../settings/paths'
 import { useProject, useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
@@ -125,7 +125,7 @@ export function CommandCenter() {
       search: () => go('/search'),
       'go-home': () => go('/home'),
       // Messages holds what needs you until the inbox arrives (W6).
-      'go-inbox': () => go('/messages'),
+      'go-inbox': () => go('/inbox'),
       'go-messages': () => go('/messages'),
       'go-tasks': () => inProject('/work-items'),
       'go-board': () => inProject('/work-items?view=board'),
@@ -135,7 +135,7 @@ export function CommandCenter() {
         const project = currentRef.current
         go(project ? projectSettingsHref(project.id) : '/settings')
       },
-      'go-appearance': () => go(accountSettingsHref('appearance')),
+      'go-appearance': () => go('/settings/account/appearance'),
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
@@ -280,10 +280,8 @@ export function CommandCenter() {
       { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['inbox', 'dms'], onSelect: go('/messages') },
       { id: 'g:agents', group: 'Go to', label: 'Agents', icon: 'bot', onSelect: go('/messages/agents') },
       { id: 'g:search', group: 'Go to', label: 'Search', icon: 'search', shortcut: '/', onSelect: go('/search') },
-      { id: 'g:appearance', group: 'Go to', label: 'Appearance', icon: 'palette', shortcut: 'G A', keywords: ['theme', 'dark', 'light', 'density'], onSelect: go(accountSettingsHref('appearance')) },
-      { id: 'g:settings', group: 'Go to', label: 'Settings', icon: 'settings', keywords: ['account', 'profile', 'workspace', 'members', 'preferences'], onSelect: go('/settings') },
-      { id: 'g:security', group: 'Go to', label: 'Security', icon: 'shield-check', keywords: ['password', 'sessions', 'two-factor', '2fa', 'sign out'], onSelect: go(accountSettingsHref('security')) },
-      { id: 'g:api-tokens', group: 'Go to', label: 'API tokens', icon: 'key', keywords: ['token', 'mcp', 'credential'], onSelect: go(accountSettingsHref('api-tokens')) },
+      { id: 'g:appearance', group: 'Go to', label: 'Appearance', icon: 'palette', shortcut: 'G A', keywords: ['theme', 'dark', 'light', 'density'], onSelect: go('/settings/account/appearance') },
+      { id: 'g:settings', group: 'Go to', label: 'Settings', icon: 'settings', keywords: ['account', 'profile', 'workspace', 'security', 'tokens'], onSelect: go('/settings') },
     )
 
     const listed = new Set(projects.map((project) => project.id))

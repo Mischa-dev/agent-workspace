@@ -541,6 +541,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
         MessageSend
     ),
+    // A person changes only their own notifications; every row is also
+    // checked against what they can still see.
+    boundary_route!(
+        "notifications",
+        Post,
+        "/api/v1/inbox/update",
+        SessionAuthentication
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -878,6 +886,7 @@ mod tests {
         ("replies", include_str!("replies.rs")),
         ("message_edits", include_str!("message_edits.rs")),
         ("reactions", include_str!("reactions.rs")),
+        ("notifications", include_str!("notifications.rs")),
         ("github", include_str!("github.rs")),
         ("github/connect", include_str!("github/connect.rs")),
         ("invitations", include_str!("invitations.rs")),

@@ -74,6 +74,7 @@ pub struct ProjectView {
     version: i64,
     capabilities: ProjectCapabilities,
     navigation: NavigationView,
+    /// Unread notifications in this project's inbox for the caller.
     attention_count: u32,
 }
 
@@ -271,10 +272,15 @@ async fn list_projects(
     .bind(search)
     .fetch_all(&state.pool)
     .await?;
+    let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;
     let projects = rows
         .into_iter()
-        .map(project_view)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|row| {
+            let mut view = project_view(row)?;
+            view.attention_count = attention.get(&view.id).copied().unwrap_or(0);
+            Ok(view)
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
     Ok(Json(ProjectsResponse { projects }))
 }
 
@@ -804,7 +810,13 @@ async fn fetch_project(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_project_action(principal, &row, Action::ProjectView)?;
-    project_view(row)
+    let mut view = project_view(row)?;
+    view.attention_count = crate::notifications::attention_counts(&state.pool, principal.actor_id)
+        .await?
+        .get(&project_id)
+        .copied()
+        .unwrap_or(0);
+    Ok(view)
 }
 
 async fn fetch_project_row(

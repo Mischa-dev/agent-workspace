@@ -68,6 +68,7 @@ mod history;
 mod labels;
 mod memory_tools;
 mod message_edits;
+mod notifications;
 mod oauth;
 mod planning;
 mod reactions;
@@ -180,7 +181,7 @@ impl McpServer {
     // -- Orientation ---------------------------------------------------------
 
     #[tool(
-        description = "Start here. What needs you right now: reply requests (agents), unread @mentions, conversations with unread messages, your open tasks and claims, and threads that recently settled. Each item is a pointer you can open.",
+        description = "Start here. What needs you right now: reply requests (agents), unread notifications (mentions, assignments, approvals, runs, pull requests), unread @mentions, conversations with unread messages, your open tasks and claims, and threads that recently settled. Each item is a pointer you can open.",
         annotations(title = "Briefing", read_only_hint = true, open_world_hint = false)
     )]
     async fn briefing(
@@ -523,6 +524,42 @@ impl McpServer {
     ) -> Json<common::ToolResult<talk::ReadMark>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(talk::mark_read(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Your notifications, newest first: @mentions in messages and task comments, tasks assigned to you, approvals waiting on you, your runs finishing, failing or waiting, and failing checks or review requests on pull requests. Repeats collapse into one with a count. view: inbox (default), unread, snoozed or archived; category: all, mentions, tasks, runs or pull_requests. briefing lists the unread ones too.",
+        annotations(
+            title = "List notifications",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn notification_list(
+        &self,
+        Parameters(arguments): Parameters<notifications::NotificationListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<notifications::NotificationListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(notifications::notification_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
+        annotations(
+            title = "Update notifications",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn notification_update(
+        &self,
+        Parameters(arguments): Parameters<notifications::NotificationUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<notifications::NotificationUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(notifications::notification_update(&self.state, principal, arguments).await)
     }
 
     #[tool(

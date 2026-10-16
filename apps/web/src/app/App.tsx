@@ -38,6 +38,7 @@ const MilestonesPage = lazy(() => import('../work-items/MilestonesPage').then((m
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
+const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 // Only development builds include the kit page; production drops the import.
 const DevUiPage = import.meta.env.DEV
@@ -94,6 +95,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/home"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <InboxPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/inbox"
                   />
                   <Route
                     element={

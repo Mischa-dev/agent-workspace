@@ -34,6 +34,7 @@ pub enum OutboxResourceKind {
     ReadState,
     AgentRun,
     WorkItem,
+    Notification,
 }
 
 impl OutboxResourceKind {
@@ -45,6 +46,7 @@ impl OutboxResourceKind {
             Self::ReadState => "read_state",
             Self::AgentRun => "agent_run",
             Self::WorkItem => "work_item",
+            Self::Notification => "notification",
         }
     }
 
@@ -56,6 +58,7 @@ impl OutboxResourceKind {
             "read_state" => Ok(Self::ReadState),
             "agent_run" => Ok(Self::AgentRun),
             "work_item" => Ok(Self::WorkItem),
+            "notification" => Ok(Self::Notification),
             _ => Err(OutboxEventError::MalformedMetadata),
         }
     }
@@ -184,6 +187,15 @@ pub struct ProjectMembershipUpdatedPayload {
     pub version: i64,
 }
 
+/// Someone's notifications changed (one was added or came back unread). The
+/// recipient's ID only: delivered to them alone, and browsers refetch the
+/// inbox over HTTP.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationsUpdatedPayload {
+    pub actor_id: Uuid,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutboxEventPayload {
     ConversationCreated(ConversationCreatedPayload),
@@ -198,6 +210,7 @@ pub enum OutboxEventPayload {
     AgentRunUpdated(AgentRunUpdatedPayload),
     WorkItemUpdated(WorkItemUpdatedPayload),
     ProjectMembershipUpdated(ProjectMembershipUpdatedPayload),
+    NotificationsUpdated(NotificationsUpdatedPayload),
 }
 
 impl OutboxEventPayload {
@@ -215,6 +228,7 @@ impl OutboxEventPayload {
             Self::AgentRunUpdated(_) => "conversation.agent_run.updated",
             Self::WorkItemUpdated(_) => "work_item.updated",
             Self::ProjectMembershipUpdated(_) => "project.membership.updated",
+            Self::NotificationsUpdated(_) => "notifications.updated",
         }
     }
 
@@ -234,7 +248,8 @@ impl OutboxEventPayload {
             // scope and goes only to them (see recipient_actor_id).
             Self::ConversationMemberRemoved(_)
             | Self::WorkItemUpdated(_)
-            | Self::ProjectMembershipUpdated(_) => None,
+            | Self::ProjectMembershipUpdated(_)
+            | Self::NotificationsUpdated(_) => None,
         }
     }
 
@@ -245,6 +260,7 @@ impl OutboxEventPayload {
             // but realtime delivery must target only the Actor that owns it.
             Self::ReadStateUpdated(payload) => Some(payload.actor_id),
             Self::ConversationMemberRemoved(payload) => Some(payload.actor_id),
+            Self::NotificationsUpdated(payload) => Some(payload.actor_id),
             _ => None,
         }
     }
@@ -263,6 +279,7 @@ impl OutboxEventPayload {
             Self::AgentRunUpdated(_) => OutboxResourceKind::AgentRun,
             Self::WorkItemUpdated(_) => OutboxResourceKind::WorkItem,
             Self::ProjectMembershipUpdated(_) => OutboxResourceKind::Project,
+            Self::NotificationsUpdated(_) => OutboxResourceKind::Notification,
         }
     }
 
@@ -282,6 +299,8 @@ impl OutboxEventPayload {
             Self::AgentRunUpdated(payload) => payload.agent_run_id,
             Self::WorkItemUpdated(payload) => payload.work_item_id,
             Self::ProjectMembershipUpdated(payload) => payload.project_id,
+            // Keyed by recipient, like read state.
+            Self::NotificationsUpdated(payload) => payload.actor_id,
         }
     }
 
@@ -349,6 +368,7 @@ impl OutboxEventPayload {
             Self::AgentRunUpdated(payload) => serde_json::to_value(payload),
             Self::WorkItemUpdated(payload) => serde_json::to_value(payload),
             Self::ProjectMembershipUpdated(payload) => serde_json::to_value(payload),
+            Self::NotificationsUpdated(payload) => serde_json::to_value(payload),
         }
         .map_err(|_| OutboxEventError::MalformedPayload)?;
         validate_payload_size(&value)?;
@@ -392,6 +412,9 @@ impl OutboxEventPayload {
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             "project.membership.updated" => Self::ProjectMembershipUpdated(
+                serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
+            ),
+            "notifications.updated" => Self::NotificationsUpdated(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
             _ => return Err(OutboxEventError::UnknownEventType),
@@ -485,6 +508,10 @@ impl ClaimedOutboxEvent {
 
     pub fn event_cursor(&self) -> i64 {
         self.event_cursor
+    }
+
+    pub fn project_id(&self) -> Uuid {
+        self.project_id
     }
 
     pub fn attempt_count(&self) -> i32 {

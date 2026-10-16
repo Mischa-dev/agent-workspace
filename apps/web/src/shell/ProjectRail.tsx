@@ -6,7 +6,6 @@ import { isApiError } from '../api/errors'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import { accountSettingsHref } from '../settings/paths'
 import { useProjects, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
@@ -103,6 +102,8 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // Every notification belongs to a project, so the inbox's unread count is the sum.
+  const inboxUnread = (projectsQuery.data?.projects ?? []).reduce((sum, project) => sum + project.attentionCount, 0)
   const pinned = projects.filter((project) => project.navigation.pinned)
   const recent = projects
     .filter((project) => !project.navigation.pinned)
@@ -157,6 +158,14 @@ export function ProjectRail({
     <>
       <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
         <UtilityTile active={location.pathname === '/home'} icon="home" label="Home" onClick={onNavigate} to="/home" />
+        <UtilityTile
+          active={location.pathname === '/inbox'}
+          badge={inboxUnread}
+          icon="inbox"
+          label="Inbox"
+          onClick={onNavigate}
+          to="/inbox"
+        />
         <UtilityTile
           active={inMessages}
           badge={unreadConversations}
@@ -224,8 +233,7 @@ export function ProjectRail({
           items={[
             { heading: user.displayName },
             { label: 'Settings', icon: 'settings', onSelect: () => { onNavigate(); navigate('/settings', { state: settingsState }) } },
-            { label: 'Security', icon: 'shield-check', onSelect: () => { onNavigate(); navigate(accountSettingsHref('security')) } },
-            { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate(accountSettingsHref('appearance')) } },
+            { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/account/appearance') } },
             { separator: true },
             { label: 'Sign out', icon: 'log-out', onSelect: () => void signOut() },
           ]}
