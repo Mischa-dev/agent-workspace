@@ -468,8 +468,8 @@ Launch button and dialog.
 - The Environments page and run defaults are settings pages that W8's settings
   area links to; until W8 is on main they sit in today's project settings.
 - 'Start when a window resets' uses W9's usage windows once they're on main.
-- W9's capacity alerts and push notifications have a Launch action. Whichever
-  of W7 and W9 merges second points it at the Launch dialog.
+- W9's capacity alerts open a list of an account's ready tasks. Whichever of
+  W7 and W9 merges second adds the Launch button to each one.
 
 **Done when:** One click on a task starts a Codex Cloud task in the project's
 default environment with its defaults, and its status and pull request show in
@@ -526,9 +526,9 @@ page.
 
 **Seams:**
 
-- The alert's Launch action opens W7's Launch dialog. Until that's on main it
-  opens the project's ready tasks, and whichever of W7 and W9 merges second
-  points it at the dialog. The one-tap batch comes in W13.
+- The alert's Launch action opens the account's ready tasks across its
+  projects. Each task gets W7's Launch button; whichever of W7 and W9 merges
+  second adds it. The one-tap batch comes in W13.
 - Notification and alert settings go into W8's settings area once it's on
   main.
 
@@ -569,7 +569,7 @@ from settings.
 
 #### W11. Views and data
 
-*5 items · Starts when W3 has merged · 2 add a migration*
+*5 items · Starts when W1 and W3 have merged · 2 add a migration*
 
 The rest of what a whole project needs: saved views, My work, a timeline,
 import and export, and templates.
@@ -589,8 +589,9 @@ pinned views, and the My work, timeline and import pages.
 
 **Done when:** Ready for agents is one click from the sidebar and agents can
 read it; Monday starts on My work; dragging a milestone shows what slips; 300
-GitHub issues import with their labels; and a project made from a template
-arrives with its workflow and defaults.
+GitHub issues import with their labels; a project made from a template arrives
+with its workflow and defaults; and a weekly recurring task appears on
+schedule.
 
 ### Wave 3: Your harnesses and the payoff
 
@@ -1425,13 +1426,15 @@ commit.
 
 #### T10. Templates and recurring tasks
 
-*In [W11](#w11-views-and-data) Views and data · Needs T5, T4 · Migration*
+*In [W11](#w11-views-and-data) Views and data · Needs T5, T4, F9 · Migration*
 
 Task templates with criteria and subtasks, project templates (workflow,
-labels, channels, default settings) and recurring tasks.
+labels, channels, default settings) and recurring tasks, which F9's job queue
+creates on schedule.
 
 **Done when:** A project made from a template arrives with its workflow,
-labels and defaults.
+labels and defaults, and a weekly recurring task appears each week, even
+across a restart.
 
 
 ### V. Task views: seeing a whole project
@@ -1681,9 +1684,12 @@ open). A badge on the rail.
 C4 · Migration*
 
 Web Push with keys from S1, a subscription per device, push and
-notification-click handlers in `sw.js` with actions (Open, and Launch, which
-opens the Launch dialog from C4, or the project's ready tasks until C4 is on
-main), and a test button per device. Works for the installed app on iOS.
+notification-click handlers in `sw.js` with actions (Open, and Launch), and a
+test button per device. A capacity alert belongs to an account that may serve
+several projects, so its Launch opens that account on the account page with
+the ready tasks (open, unblocked, repository set) in every project it can run,
+each with C4's Launch button once that's on main. Works for the installed app
+on iOS.
 
 **Done when:** Your phone shows the capacity alert with a Launch button.
 

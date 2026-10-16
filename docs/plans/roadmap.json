@@ -277,7 +277,7 @@
       "seams": [
         "The Environments page and run defaults are settings pages that W8's settings area links to; until W8 is on main they sit in today's project settings.",
         "'Start when a window resets' uses W9's usage windows once they're on main.",
-        "W9's capacity alerts and push notifications have a Launch action. Whichever of W7 and W9 merges second points it at the Launch dialog."
+        "W9's capacity alerts open a list of an account's ready tasks. Whichever of W7 and W9 merges second adds the Launch button to each one."
       ],
       "done": "One click on a task starts a Codex Cloud task in the project's default environment with its defaults, and its status and pull request show in the task's thread; '@codex fix the flaky test' does the same; and ten queued tasks start as capacity frees up, blocked ones last.",
       "needs": [
@@ -323,7 +323,7 @@
       ],
       "owns": "New usage and push modules (windows, the polling job, alert rules, Web Push), the push handlers in sw.js, and the usage section of the account page.",
       "seams": [
-        "The alert's Launch action opens W7's Launch dialog. Until that's on main it opens the project's ready tasks, and whichever of W7 and W9 merges second points it at the dialog. The one-tap batch comes in W13.",
+        "The alert's Launch action opens the account's ready tasks across its projects. Each task gets W7's Launch button; whichever of W7 and W9 merges second adds it. The one-tap batch comes in W13.",
         "Notification and alert settings go into W8's settings area once it's on main."
       ],
       "done": "The account page shows every window with a live countdown, including a plan with only a weekly window, and your phone shows 'Codex weekly limit resets in 2 h · 38% unused' with a Launch button.",
@@ -374,8 +374,9 @@
       "seams": [
         "The timeline shows suggested dependencies once W10's graph is on main."
       ],
-      "done": "Ready for agents is one click from the sidebar and agents can read it; Monday starts on My work; dragging a milestone shows what slips; 300 GitHub issues import with their labels; and a project made from a template arrives with its workflow and defaults.",
+      "done": "Ready for agents is one click from the sidebar and agents can read it; Monday starts on My work; dragging a milestone shows what slips; 300 GitHub issues import with their labels; a project made from a template arrives with its workflow and defaults; and a weekly recurring task appears on schedule.",
       "needs": [
+        "W1",
         "W3"
       ]
     },
@@ -1142,11 +1143,12 @@
       "id": "T10",
       "area": "T",
       "title": "Templates and recurring tasks",
-      "what": "Task templates with criteria and subtasks, project templates (workflow, labels, channels, default settings) and recurring tasks.",
-      "done": "A project made from a template arrives with its workflow, labels and defaults.",
+      "what": "Task templates with criteria and subtasks, project templates (workflow, labels, channels, default settings) and recurring tasks, which F9's job queue creates on schedule.",
+      "done": "A project made from a template arrives with its workflow, labels and defaults, and a weekly recurring task appears each week, even across a restart.",
       "deps": [
         "T5",
-        "T4"
+        "T4",
+        "F9"
       ],
       "migration": true,
       "workstream": "W11",
@@ -1409,7 +1411,7 @@
       "id": "N3",
       "area": "N",
       "title": "Push to phone and desktop",
-      "what": "Web Push with keys from S1, a subscription per device, push and notification-click handlers in sw.js with actions (Open, and Launch, which opens the Launch dialog from C4, or the project's ready tasks until C4 is on main), and a test button per device. Works for the installed app on iOS.",
+      "what": "Web Push with keys from S1, a subscription per device, push and notification-click handlers in sw.js with actions (Open, and Launch), and a test button per device. A capacity alert belongs to an account that may serve several projects, so its Launch opens that account on the account page with the ready tasks (open, unblocked, repository set) in every project it can run, each with C4's Launch button once that's on main. Works for the installed app on iOS.",
       "done": "Your phone shows the capacity alert with a Launch button.",
       "deps": [
         "N1",
