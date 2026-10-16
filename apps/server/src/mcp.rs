@@ -1938,9 +1938,25 @@ pub struct CredentialMetadata {
     pub replaced_by_credential_id: Option<Uuid>,
 }
 
+/// Who asked for a credential change: the host command line, or a person
+/// in the browser (their own personal API tokens).
+#[derive(Clone, Copy, Debug)]
+pub enum CredentialIssuer {
+    HostCli,
+    Browser { session_id: Uuid },
+}
+
 pub async fn issue_credential(
     pool: &sqlx::PgPool,
     command: IssueCredentialCommand,
+) -> Result<IssuedCredential, AppError> {
+    issue_credential_as(pool, command, CredentialIssuer::HostCli).await
+}
+
+pub async fn issue_credential_as(
+    pool: &sqlx::PgPool,
+    command: IssueCredentialCommand,
+    issuer: CredentialIssuer,
 ) -> Result<IssuedCredential, AppError> {
     validate_issue_command(pool, &command).await?;
     let (token, token_prefix, token_digest) = generate_token();
@@ -1973,6 +1989,7 @@ pub async fn issue_credential(
         credential_id,
         &command.client_name,
         "mcp.credential.create",
+        issuer,
     )
     .await?;
     transaction.commit().await?;
@@ -2025,6 +2042,21 @@ pub async fn revoke_credential(
     credential_id: Uuid,
     expected_version: i64,
 ) -> Result<CredentialMetadata, AppError> {
+    revoke_credential_as(
+        pool,
+        credential_id,
+        expected_version,
+        CredentialIssuer::HostCli,
+    )
+    .await
+}
+
+pub async fn revoke_credential_as(
+    pool: &sqlx::PgPool,
+    credential_id: Uuid,
+    expected_version: i64,
+    issuer: CredentialIssuer,
+) -> Result<CredentialMetadata, AppError> {
     let mut transaction = pool.begin().await?;
     let row = credential_metadata_for_update(&mut transaction, credential_id).await?;
     if row.version != expected_version || row.status != "active" {
@@ -2051,6 +2083,7 @@ pub async fn revoke_credential(
         credential_id,
         &row.client_name,
         "mcp.credential.revoke",
+        issuer,
     )
     .await?;
     transaction.commit().await?;
@@ -2126,6 +2159,7 @@ pub async fn replace_credential(
         credential_id,
         &row.client_name,
         "mcp.credential.replace",
+        CredentialIssuer::HostCli,
     )
     .await?;
     transaction.commit().await?;
@@ -2291,17 +2325,24 @@ async fn insert_credential_audit(
     credential_id: Uuid,
     client_name: &str,
     action: &str,
+    issuer: CredentialIssuer,
 ) -> Result<(), AppError> {
+    let (authentication_class, channel, session_id) = match issuer {
+        CredentialIssuer::HostCli => ("host_cli", "host_cli", None),
+        CredentialIssuer::Browser { session_id } => {
+            ("password_session", "browser", Some(session_id))
+        }
+    };
     sqlx::query(
         r#"
         INSERT INTO audit_events (
-            id, actor_id, project_id, authentication_class, action,
+            id, actor_id, project_id, session_id, authentication_class, action,
             target_kind, target_id, outcome, channel, client_name,
             mcp_credential_id, metadata
         )
         VALUES (
-            $1, $2, $3, 'host_cli', $4,
-            'mcp_credential', $5, 'succeeded', 'host_cli', $6,
+            $1, $2, $3, $7, $8, $4,
+            'mcp_credential', $5, 'succeeded', $9, $6,
             $5, '{}'::jsonb
         )
         "#,
@@ -2312,6 +2353,9 @@ async fn insert_credential_audit(
     .bind(action)
     .bind(credential_id)
     .bind(client_name)
+    .bind(session_id)
+    .bind(authentication_class)
+    .bind(channel)
     .execute(&mut **transaction)
     .await?;
     Ok(())

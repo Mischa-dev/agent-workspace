@@ -354,6 +354,12 @@ async fn finish_callback(
         },
     )
     .await?;
+    crate::account_security::record_sign_in_method(
+        &mut tx,
+        established.principal.session_id,
+        "workos",
+    )
+    .await?;
     sqlx::query("UPDATE sessions SET workos_session_id=$2,workos_checked_at=now(),absolute_expires_at=now()+interval '24 hours',idle_expires_at=now()+interval '24 hours' WHERE id=$1")
         .bind(established.principal.session_id).bind(claims.sid).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_events (id,actor_id,session_id,authentication_class,action,target_kind,target_id,outcome) VALUES ($1,$2,$3,'workos_session','authentication.workos','user',$4,'succeeded')")
@@ -661,7 +667,7 @@ async fn provider_session_active(
     }
     Ok(false)
 }
-pub(super) async fn revoke_provider_session(state: &AppState, session_id: Uuid) {
+pub(crate) async fn revoke_provider_session(state: &AppState, session_id: Uuid) {
     let Some(config) = &state.config.workos else {
         return;
     };

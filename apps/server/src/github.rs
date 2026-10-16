@@ -74,8 +74,10 @@ const PERMITTED_EVENTS: [&str; 6] = [
     "repository",
 ];
 
+mod connect;
+
 pub fn router() -> Router<AppState> {
-    Router::new()
+    connect::routes(Router::new())
         .route(
             "/api/v1/projects/{project_id}/integrations/github",
             get(github_status),
@@ -1227,6 +1229,20 @@ async fn sync_installation(
     let repositories =
         load_requested_repositories(&mut transaction, project_id, &requested_repository_ids)
             .await?;
+    let typed_installation_id = i64::try_from(request.installation_id)
+        .map_err(|_| AppError::Validation("installationId"))?;
+    // Where people can sign in to GitHub, only installations the workspace
+    // proved access to can be linked; knowing the number is not enough.
+    if github_config.connect.is_some()
+        && !connect::workspace_claims_installation(
+            &mut transaction,
+            project_id,
+            typed_installation_id,
+        )
+        .await?
+    {
+        return Err(AppError::NotFound("github_installation"));
+    }
     transaction.commit().await?;
     if repositories.len() != requested_repository_ids.len() {
         return Err(AppError::NotFound("repository"));
@@ -1273,6 +1289,15 @@ async fn sync_installation(
             .await?;
     if current_repositories != repositories {
         return Err(AppError::Conflict("repository", "changed_during_sync"));
+    }
+    if github_config.connect.is_none() {
+        connect::record_operator_claim(
+            &mut transaction,
+            project_id,
+            principal.actor_id,
+            &installation,
+        )
+        .await?;
     }
     let actor_id = ensure_github_actor(&mut transaction, project_id).await?;
     let installation_id = persist_installation(
@@ -5238,6 +5263,7 @@ mod tests {
             webhook_previous_secret_path: None,
             api_base_url: "https://api.github.com".to_owned(),
             api_version: GITHUB_API_VERSION.to_owned(),
+            connect: None,
         };
         let mut installation = GitHubInstallation {
             id: 150_232_852,

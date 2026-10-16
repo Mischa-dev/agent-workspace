@@ -634,7 +634,8 @@ async fn lock_and_require_other_owners(
 /// Keeps a human's Organization role in step with their Project roles: managing
 /// members requires an Organization admin, so a Project owner or admin anywhere
 /// in the Organization is one, and someone who is neither anywhere is not.
-/// Owners are never changed here.
+/// Owners are never changed here, nor a role an owner set on the
+/// workspace's Members page (`role_explicit`).
 async fn sync_organization_role(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
@@ -656,6 +657,7 @@ async fn sync_organization_role(
         FROM next
         WHERE organization_id = $1 AND actor_id = $2
           AND organization_memberships.role IN ('admin', 'member')
+          AND NOT organization_memberships.role_explicit
           AND organization_memberships.role <> next.role
         "#,
     )
