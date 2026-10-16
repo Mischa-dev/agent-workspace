@@ -277,6 +277,31 @@ remote_get_set() {
   esac
 }
 
+# Whether the remote copy of set $2 is whole and the same as the local set
+# in $3: its SHA256SUMS matches the local one and every file in it checks
+# out. The remote host does the hashing, so nothing large is transferred.
+remote_set_verified() {
+  local spec="$1" name="$2" local_set="$3" remote_sums
+  [[ "${name}" =~ ${SET_NAME_PATTERN} ]] || die "bad set name ${name}"
+  [[ -s "${local_set}/SHA256SUMS" ]] || return 1
+  parse_remote "${spec}"
+  case "${remote_kind}" in
+    local)
+      [[ -f "${remote_path}/${name}/SHA256SUMS" ]] || return 1
+      cmp -s -- "${local_set}/SHA256SUMS" "${remote_path}/${name}/SHA256SUMS" || return 1
+      (cd -- "${remote_path}/${name}" && sha256sum --status -c SHA256SUMS)
+      ;;
+    ssh)
+      build_ssh_command
+      remote_sums="$(remote_shell cat -- "${remote_path}/${name}/SHA256SUMS" 2>/dev/null)" || return 1
+      [[ "${remote_sums}" == "$(<"${local_set}/SHA256SUMS")" ]] || return 1
+      # shellcheck disable=SC2016 # $1 expands on the remote host.
+      remote_shell sh -c 'cd -- "$1" && sha256sum --status -c SHA256SUMS' sh \
+        "${remote_path}/${name}"
+      ;;
+  esac
+}
+
 remote_delete_set() {
   local spec="$1" name="$2"
   [[ "${name}" =~ ${SET_NAME_PATTERN} ]] || die "bad set name ${name}"

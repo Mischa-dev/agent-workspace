@@ -49,8 +49,11 @@ encryption.
 A remote is either `ssh:[user@]host:/path` (rsync over ssh, the default) or
 `local:/path` (a directory on this machine; for tests or a removable disk).
 Uploads land as `<set>.partial` and are renamed when complete. If an upload
-fails, the next run uploads the missed set too. A local set is pruned only
-when the remote also holds it.
+fails, the next run uploads the missed set too. Each run checks every local
+set's off-host copy (the remote host re-hashes it against `SHA256SUMS`, so
+nothing large is transferred) and replaces any copy that is missing or
+doesn't check out. A local set is pruned only when its off-host copy checks
+out.
 
 ## Retention
 
