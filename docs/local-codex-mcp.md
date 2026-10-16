@@ -139,7 +139,9 @@ and writes still pass ordinary membership, archive, resource, and scope policy.
 Clients cannot submit authorship. Writes use optimistic versions and stable
 request IDs; on conflict, refetch, inspect the current projection and changed
 fields, and retry only when the returned category permits it. MCP never creates
-an Agent Workspace Thread or hosted run.
+an Agent Workspace Thread. A person can start a hosted Codex run on an
+existing thread with `run_start`, on their own Codex account; an agent uses
+`run_request` instead, which a person approves.
 
 - `401` at `/api/v1/mcp`: log in again, restore the client environment, or
   inspect expiry/revocation with safe metadata. Browser cookies do not work.
