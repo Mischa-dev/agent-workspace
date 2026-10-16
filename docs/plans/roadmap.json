@@ -137,7 +137,7 @@
         "O2's alerts go to the log until W6's notifications are on main.",
         "O1's scripts land in the PR; switching the host's backup service over is a deploy step for Mischa."
       ],
-      "done": "A project's setting overrides the workspace's and the API says where each value came from; a saved key never shows up in a database dump, an API response, a log line or a run's environment; a job scheduled for later survives a restart and runs once; a restore drill works from the off-host copy; and the isolation suite covers every existing list, search and MCP read tool.",
+      "done": "A project's setting overrides the workspace's and the API says where each value came from; a saved key never shows up in a database dump, an API response, a log line or a run's environment; a job scheduled for later survives a restart and its retries reuse one idempotency key; a restore drill works from the off-host copy; and the isolation suite covers every existing list, search and MCP read tool.",
       "needs": []
     },
     {
@@ -580,8 +580,8 @@
       "id": "F9",
       "area": "F",
       "title": "Background jobs",
-      "what": "One durable job queue in PostgreSQL (FOR UPDATE SKIP LOCKED, retries with backoff, run-at times, unique keys, a dead state) with a small worker pool. The outbox publisher, reply webhooks and run scheduler stay as they are; new background work (usage polling, AI jobs, notification fan-out, push delivery, the launch queue, automations, outgoing webhooks) uses this instead of another hand-written loop. HTTP calls happen outside row locks, which also settles the open risk PR #128 noted for webhooks.",
-      "done": "A job scheduled for later runs exactly once, survives a restart and retries on failure, with tests.",
+      "what": "One durable job queue in PostgreSQL (FOR UPDATE SKIP LOCKED, retries with backoff, run-at times, unique keys, a dead state) with a small worker pool. The outbox publisher, reply webhooks and run scheduler stay as they are; new background work (usage polling, AI jobs, notification fan-out, push delivery, the launch queue, automations, outgoing webhooks) uses this instead of another hand-written loop. HTTP calls happen outside row locks, which also settles the open risk PR #128 noted for webhooks. Delivery is at least once, because a worker can crash after a remote call succeeds and before the job is marked done. So a job is leased to one worker at a time, and every handler with an outside effect (a push, a launch, a webhook) sends a stable idempotency key made from the job id, passes it to the remote API where the API takes one, and checks what it already did before acting again.",
+      "done": "A job scheduled for later survives a restart, retries on failure and is never held by two workers at once, and a handler that crashes after its outside call sends the same idempotency key when it retries, with tests.",
       "deps": [
         "F4"
       ],
@@ -791,7 +791,7 @@
       "id": "H6",
       "area": "H",
       "title": "Claude Code adapter",
-      "what": "Run Claude Code headless in the run's worktree under your own Claude login or API key from S1, turn its streamed JSON events into neutral events, and send its permission prompts to the approvals UI. Check the current CLI and Agent SDK when building.",
+      "what": "Run Claude Code headless in the run's worktree under your own Claude login or an API key from S1, handed over without putting it in the environment (through a key helper the CLI calls, if it has one), turn its streamed JSON events into neutral events, and send its permission prompts to the approvals UI. Check the current CLI and Agent SDK when building.",
       "done": "In a thread, pick Claude Code instead of Codex and get the same run card, approvals and pull request.",
       "deps": [
         "H2",
@@ -806,8 +806,8 @@
       "id": "H7",
       "area": "H",
       "title": "Command-line harness adapter",
-      "what": "A configured adapter for any harness that runs as a command: an argument template, environment variables from S1 secrets, the run's worktree as its folder, and a small JSON-lines protocol on stdout for progress, messages, approvals and results. The fastest way to try one of your own harnesses on the host.",
-      "done": "A 50-line script harness takes a task to a pull request.",
+      "what": "A configured adapter for any harness that runs as a command: an argument template, the S1 secrets it names handed over on an inherited file descriptor (never as environment variables, which every child process inherits and diagnostics print), the run's worktree as its folder, and a small JSON-lines protocol on stdout for progress, messages, approvals and results. The fastest way to try one of your own harnesses on the host.",
+      "done": "A 50-line script harness takes a task to a pull request, and the secret it was given appears nowhere in its environment.",
       "deps": [
         "H2",
         "H3"
@@ -1730,7 +1730,7 @@
       "id": "X4",
       "area": "X",
       "title": "Outgoing webhooks",
-      "what": "Workspace subscriptions to events (task, run, pull request, message), signed and retried, with a delivery log and PR #128's address checks.",
+      "what": "Workspace subscriptions to events (task, run, pull request, message), signed and retried, with a delivery log and PR #128's address checks. Each delivery carries one id across its retries, so a receiver can drop a repeat.",
       "done": "An external service hears about every finished run.",
       "deps": [
         "F9"

@@ -253,9 +253,9 @@ W8's.
 **Done when:** A project's setting overrides the workspace's and the API says
 where each value came from; a saved key never shows up in a database dump, an
 API response, a log line or a run's environment; a job scheduled for later
-survives a restart and runs once; a restore drill works from the off-host
-copy; and the isolation suite covers every existing list, search and MCP read
-tool.
+survives a restart and its retries reuse one idempotency key; a restore drill
+works from the off-host copy; and the isolation suite covers every existing
+list, search and MCP read tool.
 
 #### W2. Harness platform
 
@@ -838,10 +838,17 @@ The outbox publisher, reply webhooks and run scheduler stay as they are; new
 background work (usage polling, AI jobs, notification fan-out, push delivery,
 the launch queue, automations, outgoing webhooks) uses this instead of another
 hand-written loop. HTTP calls happen outside row locks, which also settles the
-open risk PR #128 noted for webhooks.
+open risk PR #128 noted for webhooks. Delivery is at least once, because a
+worker can crash after a remote call succeeds and before the job is marked
+done. So a job is leased to one worker at a time, and every handler with an
+outside effect (a push, a launch, a webhook) sends a stable idempotency key
+made from the job id, passes it to the remote API where the API takes one, and
+checks what it already did before acting again.
 
-**Done when:** A job scheduled for later runs exactly once, survives a restart
-and retries on failure, with tests.
+**Done when:** A job scheduled for later survives a restart, retries on
+failure and is never held by two workers at once, and a handler that crashes
+after its outside call sends the same idempotency key when it retries, with
+tests.
 
 #### F10. Docs that match the code
 
@@ -1070,9 +1077,10 @@ projects.
 *In [W12](#w12-your-harnesses) Your harnesses · Needs H2, H4, S1*
 
 Run Claude Code headless in the run's worktree under your own Claude login or
-API key from S1, turn its streamed JSON events into neutral events, and send
-its permission prompts to the approvals UI. Check the current CLI and Agent
-SDK when building.
+an API key from S1, handed over without putting it in the environment (through
+a key helper the CLI calls, if it has one), turn its streamed JSON events into
+neutral events, and send its permission prompts to the approvals UI. Check the
+current CLI and Agent SDK when building.
 
 **Done when:** In a thread, pick Claude Code instead of Codex and get the same
 run card, approvals and pull request.
@@ -1082,12 +1090,14 @@ run card, approvals and pull request.
 *In [W12](#w12-your-harnesses) Your harnesses · Needs H2, H3*
 
 A configured adapter for any harness that runs as a command: an argument
-template, environment variables from S1 secrets, the run's worktree as its
-folder, and a small JSON-lines protocol on stdout for progress, messages,
-approvals and results. The fastest way to try one of your own harnesses on the
-host.
+template, the S1 secrets it names handed over on an inherited file descriptor
+(never as environment variables, which every child process inherits and
+diagnostics print), the run's worktree as its folder, and a small JSON-lines
+protocol on stdout for progress, messages, approvals and results. The fastest
+way to try one of your own harnesses on the host.
 
-**Done when:** A 50-line script harness takes a task to a pull request.
+**Done when:** A 50-line script harness takes a task to a pull request, and
+the secret it was given appears nowhere in its environment.
 
 #### H8. Several runs at once
 
@@ -1912,7 +1922,8 @@ personal tokens with scopes (S7), and a docs page.
 Migration*
 
 Workspace subscriptions to events (task, run, pull request, message), signed
-and retried, with a delivery log and PR #128's address checks.
+and retried, with a delivery log and PR #128's address checks. Each delivery
+carries one id across its retries, so a receiver can drop a repeat.
 
 **Done when:** An external service hears about every finished run.
 
