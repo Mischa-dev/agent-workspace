@@ -28,6 +28,7 @@ pub mod message_content;
 pub mod message_edits;
 pub mod metrics;
 pub mod migration_preflight;
+pub mod notifications;
 pub mod outbox;
 pub mod policy;
 pub mod policy_inventory;
@@ -101,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .merge(replies::router())
         .merge(message_edits::router())
         .merge(reactions::router())
+        .merge(notifications::router())
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(github::router())

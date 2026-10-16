@@ -50,5 +50,11 @@ export function useProjectConversationSidebar(
     enabled: Boolean(projectId),
     staleTime: 15_000,
     retry: false,
+    // Moving between channels changes the key; keep showing this project's
+    // last list while the new one loads instead of an empty sidebar.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === projectId && previousQuery.queryKey[4] === mode
+        ? previous
+        : undefined,
   })
 }

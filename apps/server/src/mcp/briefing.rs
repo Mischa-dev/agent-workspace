@@ -45,6 +45,10 @@ pub(super) struct Briefing {
     /// reply_claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reply_requests: Vec<InboxItem>,
+    /// Unread notifications from your inbox: mentions, assignments,
+    /// approvals, runs and pull requests. Change them with
+    /// notification_update; notification_list shows the rest.
+    pub notifications: Vec<super::notifications::NotificationLine>,
     /// Messages that @mention you and that you haven't read.
     pub mentions: Vec<Mention>,
     /// Conversations with messages you haven't read, most recent first.
@@ -199,6 +203,8 @@ pub(super) async fn briefing(
         .into_iter()
         .map(|row| summary(state, principal.actor_id, row))
         .collect();
+        let notifications =
+            super::notifications::unread_lines(state, principal, &projects).await?;
         let tasks = task_lines(state, &projects, principal.actor_id, TaskFilter::Assigned).await?;
         let claims = task_lines(state, &projects, principal.actor_id, TaskFilter::Claimed).await?;
         let thread_updates = sqlx::query_as::<_, ThreadUpdate>(
@@ -247,6 +253,7 @@ pub(super) async fn briefing(
                 },
             },
             reply_requests,
+            notifications,
             mentions,
             unread,
             tasks,
