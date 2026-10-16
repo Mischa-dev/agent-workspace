@@ -94,6 +94,20 @@ pub async fn clean_external_events(
     })
 }
 
+/// Held while a retained worktree is removed, and by the scheduler while it
+/// claims one for a retry, so a cleanup never deletes a worktree a retry is
+/// taking over.
+pub async fn lock_repository_retention(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("repository-retention:{repository_id}"))
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
 pub async fn clean_worktrees(
     pool: &PgPool,
     data_root: &Path,
@@ -133,10 +147,7 @@ pub async fn clean_worktrees(
         }
 
         let mut transaction = pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("repository-retention:{}", candidate.repository_id))
-            .execute(&mut *transaction)
-            .await?;
+        lock_repository_retention(&mut transaction, candidate.repository_id).await?;
         if !candidate_is_current(&mut transaction, &candidate).await? {
             transaction.rollback().await?;
             continue;
