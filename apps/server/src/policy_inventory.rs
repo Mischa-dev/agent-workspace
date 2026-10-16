@@ -25,6 +25,8 @@ pub enum MutationAction {
     OAuthProtocol,
     McpProtocol,
     GithubWebhook,
+    /// Browser error reports: counted and logged, never stored.
+    ClientTelemetry,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +60,55 @@ macro_rules! boundary_route {
 }
 
 pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
+    policy_route!(
+        "settings",
+        Put,
+        "/api/v1/settings/values/{key}",
+        SettingsManage
+    ),
+    policy_route!(
+        "settings",
+        Post,
+        "/api/v1/settings/values/{key}/reset",
+        SettingsManage
+    ),
+    policy_route!(
+        "secrets",
+        Put,
+        "/api/v1/organizations/{organization_id}/secrets/{name}",
+        SettingsManage
+    ),
+    policy_route!(
+        "secrets",
+        Delete,
+        "/api/v1/organizations/{organization_id}/secrets/{name}",
+        SettingsManage
+    ),
+    policy_route!(
+        "secrets",
+        Put,
+        "/api/v1/organizations/{organization_id}/personal-secrets/{name}",
+        SettingsManage
+    ),
+    policy_route!(
+        "secrets",
+        Delete,
+        "/api/v1/organizations/{organization_id}/personal-secrets/{name}",
+        SettingsManage
+    ),
+    policy_route!(
+        "secrets",
+        Put,
+        "/api/v1/projects/{project_id}/secrets/{name}",
+        SettingsManage
+    ),
+    policy_route!(
+        "secrets",
+        Delete,
+        "/api/v1/projects/{project_id}/secrets/{name}",
+        SettingsManage
+    ),
+    boundary_route!("metrics", Post, "/api/v1/client-errors", ClientTelemetry),
     boundary_route!(
         "auth/workos",
         Post,
@@ -564,6 +615,9 @@ mod tests {
         ("external_agents", include_str!("external_agents.rs")),
         ("memory", include_str!("memory.rs")),
         ("connected_apps", include_str!("connected_apps.rs")),
+        ("settings", include_str!("settings.rs")),
+        ("secrets", include_str!("secrets.rs")),
+        ("metrics", include_str!("metrics.rs")),
     ];
 
     #[test]

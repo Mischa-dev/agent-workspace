@@ -1,0 +1,210 @@
+#!/usr/bin/bash
+# Daily encrypted backup: database dump plus the data that cannot be rebuilt,
+# encrypted with age, checksummed, copied off the host, and pruned.
+#
+# usage: agent-workspace-backup [--config /etc/agent-workspace/backup.env]
+set -euo pipefail
+
+script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# shellcheck source=agent-workspace-backup-lib.sh
+source "${script_dir}/agent-workspace-backup-lib.sh"
+
+config="${BACKUP_DEFAULT_CONFIG}"
+while (($# > 0)); do
+  case "$1" in
+    --config)
+      config="${2:?--config needs a path}"
+      shift 2
+      ;;
+    *)
+      echo "usage: agent-workspace-backup [--config FILE]" >&2
+      exit 64
+      ;;
+  esac
+done
+
+load_config "${config}"
+apply_common_defaults
+: "${BACKUP_DATA_ROOT:=/var/lib/agent-workspace}"
+# Provider account homes and uploaded files. Repository mirrors and worktrees
+# are left out: they are re-cloned from GitHub.
+: "${BACKUP_DATA_PATHS:=attachments artifacts codex/profiles}"
+: "${BACKUP_DATA_EXCLUDES:=}"
+: "${BACKUP_LOCAL_KEEP_DAYS:=7}"
+: "${BACKUP_REMOTE_KEEP_DAYS:=30}"
+: "${BACKUP_KEEP_MIN:=3}"
+require_setting BACKUP_AGE_RECIPIENTS_FILE
+require_setting BACKUP_REMOTE
+require_file BACKUP_AGE_RECIPIENTS_FILE "${BACKUP_AGE_RECIPIENTS_FILE}"
+validate_count BACKUP_LOCAL_KEEP_DAYS "${BACKUP_LOCAL_KEEP_DAYS}"
+validate_count BACKUP_REMOTE_KEEP_DAYS "${BACKUP_REMOTE_KEEP_DAYS}"
+validate_count BACKUP_KEEP_MIN "${BACKUP_KEEP_MIN}"
+(( BACKUP_KEEP_MIN >= 1 )) || die "BACKUP_KEEP_MIN must be at least 1"
+parse_remote "${BACKUP_REMOTE}"
+if [[ -n "${BACKUP_KEY_REMOTE:-}" ]]; then
+  require_separate_remotes "${BACKUP_REMOTE}" "${BACKUP_KEY_REMOTE}"
+fi
+# Refuse before any dump exists: one identity able to open both a dump and the
+# secrets key would defeat keeping them apart.
+if [[ -n "${BACKUP_KEY_AGE_RECIPIENTS_FILE:-}" ]]; then
+  require_file BACKUP_KEY_AGE_RECIPIENTS_FILE "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+  require_separate_recipients "${BACKUP_AGE_RECIPIENTS_FILE}" "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+fi
+[[ "${BACKUP_LOCAL_DIR}" == /* ]] || die "BACKUP_LOCAL_DIR must be absolute"
+[[ "${BACKUP_DATA_ROOT}" == /* ]] || die "BACKUP_DATA_ROOT must be absolute"
+require_tools age tar gzip sha256sum flock
+require_transport_tools "${BACKUP_REMOTE}"
+[[ -x "${BACKUP_PG_DUMP}" ]] || die "BACKUP_PG_DUMP (${BACKUP_PG_DUMP}) is not executable"
+[[ -x "${BACKUP_PSQL}" ]] || die "BACKUP_PSQL (${BACKUP_PSQL}) is not executable"
+
+read -r -a data_paths <<<"${BACKUP_DATA_PATHS}"
+read -r -a data_excludes <<<"${BACKUP_DATA_EXCLUDES}"
+for path in "${data_paths[@]}"; do
+  [[ "${path}" =~ ${SAFE_PATH_PATTERN} && "${path}" != /* && "/${path}/" != */../* ]] \
+    || die "BACKUP_DATA_PATHS entry ${path} must be a plain relative path"
+done
+
+take_lock backup
+umask 0077
+install -d -m 0700 "${BACKUP_LOCAL_DIR}"
+
+name="$(new_set_name)"
+work="${BACKUP_LOCAL_DIR}/${name}.partial"
+[[ ! -e "${work}" && ! -e "${BACKUP_LOCAL_DIR}/${name}" ]] || die "set ${name} already exists"
+cleanup() {
+  rm -rf -- "${work:?}"
+}
+trap cleanup EXIT
+install -d -m 0700 "${work}"
+log "backup ${name} started"
+
+# Record the schema version before the dump starts. It is read in its own
+# snapshot, so a migration that lands while pg_dump runs can make the dump
+# newer than this; migrations only move forward, so the restore drill checks
+# that the restored version is at least this one.
+migration_version="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q \
+  -v ON_ERROR_STOP=1 -c 'SELECT coalesce(max(version), 0) FROM _sqlx_migrations')"
+[[ "${migration_version}" =~ ^[0-9]+$ ]] || die "could not read the migration version"
+
+# A master key rotation re-seals secrets in batches, so a dump taken while one
+# runs could hold secrets under both the old and the new key, and no single
+# backed-up keyring would open it. The dump holds the server's one-rotation
+# lock (secrets.rs ONE_ROTATION_LOCK) on a session of its own, so it sees the
+# secrets entirely before or entirely after a rotation; the key backups on
+# either side of it hold the matching keyring.
+coproc rotation_lock {
+  PGDATABASE="${BACKUP_DATABASE}" exec "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1
+}
+lock_pid="${rotation_lock_PID:?}"
+lock_output="${rotation_lock[0]}"
+lock_input="${rotation_lock[1]}"
+printf '%s\n' "SELECT 'locked' FROM (SELECT pg_advisory_lock(470127786, 3)) AS held;" \
+  >&"${lock_input}"
+IFS= read -r locked <&"${lock_output}" || true
+[[ "${locked}" == locked ]] || die "could not take the key rotation lock"
+
+# The dump is streamed straight into age; no plaintext copy touches the disk.
+PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PG_DUMP}" --format=custom \
+  | encrypt_stream "${BACKUP_AGE_RECIPIENTS_FILE}" "${work}/database.dump.age"
+# The same session must still hold the lock now. If it dropped, a rotation
+# may have run during the dump, so the dump is discarded (the trap removes
+# the partial set) rather than kept with keys no backup holds together.
+held=""
+# A dead session's pipe must fail the write, not kill the script.
+trap '' PIPE
+{
+  printf '%s\n' "SELECT 'held' FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND classid = 470127786 AND objid = 3 AND objsubid = 2 AND granted;" \
+    >&"${lock_input}" && IFS= read -r held <&"${lock_output}"
+} 2>/dev/null || true
+trap - PIPE
+[[ "${held}" == held ]] || die "lost the key rotation lock during the dump; discarding it"
+# Closing the session releases the lock.
+exec {lock_input}>&-
+wait "${lock_pid}" || die "the key rotation lock session failed; discarding the dump"
+test -s "${work}/database.dump.age" || die "database dump is empty"
+log "database dump encrypted ($(stat -c %s "${work}/database.dump.age") bytes)"
+
+present=()
+for path in "${data_paths[@]}"; do
+  if [[ -e "${BACKUP_DATA_ROOT}/${path}" ]]; then
+    present+=("${path}")
+  else
+    log "skipping ${path}: not present under ${BACKUP_DATA_ROOT}"
+  fi
+done
+tar_args=(--create --gzip --file=- --directory="${BACKUP_DATA_ROOT}"
+  --numeric-owner --warning=no-file-changed --warning=no-file-removed)
+for pattern in "${data_excludes[@]}"; do
+  tar_args+=("--exclude=${pattern}")
+done
+if ((${#present[@]} == 0)); then
+  # Still write an (empty) archive so every set has the same shape.
+  tar_args+=(--files-from=/dev/null)
+else
+  tar_args+=(-- "${present[@]}")
+fi
+# GNU tar exits 1 when a file changed while it was read; the app keeps
+# running during the backup, so that is a warning, not a failure.
+set +e
+tar "${tar_args[@]}" | encrypt_stream "${BACKUP_AGE_RECIPIENTS_FILE}" "${work}/data.tar.gz.age"
+statuses=("${PIPESTATUS[@]}")
+set -e
+((statuses[0] <= 1)) || die "tar failed with status ${statuses[0]}"
+((statuses[1] == 0)) || die "age failed while encrypting the data archive"
+((statuses[0] == 0)) || log "warning: some files changed while they were archived"
+log "data archive encrypted ($(stat -c %s "${work}/data.tar.gz.age") bytes): ${present[*]:-nothing}"
+
+release=""
+if [[ -L "${BACKUP_RELEASE_BIN%/bin}" ]]; then
+  release="$(basename -- "$(readlink -f -- "${BACKUP_RELEASE_BIN%/bin}")")"
+fi
+{
+  printf 'format=1\n'
+  printf 'created_utc=%s\n' "${name}"
+  printf 'database=%s\n' "${BACKUP_DATABASE}"
+  printf 'migration_version=%s\n' "${migration_version}"
+  printf 'release=%s\n' "${release}"
+  printf 'data_paths=%s\n' "${present[*]:-}"
+} >"${work}/backup-info"
+(cd -- "${work}" && sha256sum -- database.dump.age data.tar.gz.age backup-info >SHA256SUMS)
+sync -f "${work}/SHA256SUMS"
+mv -T -- "${work}" "${BACKUP_LOCAL_DIR}/${name}"
+trap - EXIT
+log "backup ${name} written to ${BACKUP_LOCAL_DIR}/${name}"
+
+# Upload this set, plus any local set whose off-host copy is missing or
+# doesn't check out (a failed run, or a damaged destination).
+remote_names="$(remote_list "${BACKUP_REMOTE}")"
+local_names="$(local_list "${BACKUP_LOCAL_DIR}")"
+while IFS= read -r pending; do
+  [[ -n "${pending}" ]] || continue
+  remote_set_verified "${BACKUP_REMOTE}" "${pending}" "${BACKUP_LOCAL_DIR}/${pending}" && continue
+  if grep -qxF -- "${pending}" <<<"${remote_names}"; then
+    log "off-host copy of ${pending} doesn't check out; replacing it"
+    remote_delete_set "${BACKUP_REMOTE}" "${pending}"
+  fi
+  remote_put_set "${BACKUP_REMOTE}" "${BACKUP_LOCAL_DIR}/${pending}"
+  log "backup ${pending} copied off-host"
+done <<<"${local_names}"
+remote_set_verified "${BACKUP_REMOTE}" "${name}" "${BACKUP_LOCAL_DIR}/${name}" ||
+  die "off-host copy of ${name} doesn't check out after upload"
+remote_names="$(remote_list "${BACKUP_REMOTE}")"
+
+# Prune only after the new set is safely off the host. A local set is
+# deleted only when the remote copy checks out against it.
+local_prunable="$(select_prunable "${BACKUP_LOCAL_KEEP_DAYS}" "${BACKUP_KEEP_MIN}" <<<"${local_names}")"
+while IFS= read -r old; do
+  [[ -n "${old}" ]] || continue
+  remote_set_verified "${BACKUP_REMOTE}" "${old}" "${BACKUP_LOCAL_DIR}/${old}" || continue
+  rm -rf -- "${BACKUP_LOCAL_DIR:?}/${old}"
+  log "pruned local set ${old}"
+done <<<"${local_prunable}"
+
+remote_prunable="$(select_prunable "${BACKUP_REMOTE_KEEP_DAYS}" "${BACKUP_KEEP_MIN}" <<<"${remote_names}")"
+while IFS= read -r old; do
+  [[ -n "${old}" ]] || continue
+  remote_delete_set "${BACKUP_REMOTE}" "${old}"
+  log "pruned off-host set ${old}"
+done <<<"${remote_prunable}"
+
+log "backup ${name} finished"
