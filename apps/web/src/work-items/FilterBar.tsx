@@ -119,7 +119,11 @@ export function FilterBar({
             <SelectField
               aria-label="Columns"
               className="aw-filterbar__select"
-              onChange={(event) => update((current) => ({ ...current, columnsBy: event.target.value as BoardColumnsBy }))}
+              onChange={(event) => {
+                const columnsBy = event.target.value as BoardColumnsBy
+                // Lanes by the same field as the columns would leave only the diagonal.
+                update((current) => ({ ...current, columnsBy, lanes: current.lanes === columnsBy ? 'none' : current.lanes }))
+              }}
               prefix={<TaskGlyph name="group" />}
               value={state.columnsBy}
             >
@@ -136,7 +140,7 @@ export function FilterBar({
               prefix={<TaskGlyph name="lanes" />}
               value={state.lanes}
             >
-              {LANE_FIELDS.map((field) => (
+              {LANE_FIELDS.filter((field) => field.value !== state.columnsBy).map((field) => (
                 <option key={field.value} value={field.value}>
                   {field.value === 'none' ? field.label : `Lanes by ${field.label.toLocaleLowerCase()}`}
                 </option>

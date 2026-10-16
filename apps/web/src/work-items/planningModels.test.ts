@@ -97,6 +97,8 @@ describe('board moves', () => {
     expect(move.patch).toEqual({ addLabelIds: ['ui'], removeLabelIds: ['bug'] })
     expect(move.apply(card('1')).labels.map((label) => label.id)).toEqual(['ui'])
     expect(fieldMove('assignee', 'a1', 'none', 'Unassigned').patch).toEqual({ assigneeActorId: null })
+    const cleared = fieldMove('label', 'bug', 'none', 'No label', undefined, ['bug', 'ui'])
+    expect(cleared.patch).toEqual({ removeLabelIds: ['bug', 'ui'] })
   })
 
   it('shows the move at once and puts the board back when the server refuses', async () => {

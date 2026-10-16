@@ -34,7 +34,15 @@ export type FieldMove = {
 type Field = BoardColumnsBy | Exclude<LaneBy, 'none'>
 
 /** The change that moving a card from group `fromKey` to group `toKey` of `field` means. */
-export function fieldMove(field: Field, fromKey: string, toKey: string, toLabel: string, status?: BoardColumn['status']): FieldMove {
+/** `labelIds` are the card's labels now; a drop on "No label" removes them all. */
+export function fieldMove(
+  field: Field,
+  fromKey: string,
+  toKey: string,
+  toLabel: string,
+  status?: BoardColumn['status'],
+  labelIds: string[] = [],
+): FieldMove {
   const none = toKey === 'none'
   switch (field) {
     case 'status':
@@ -66,7 +74,7 @@ export function fieldMove(field: Field, fromKey: string, toKey: string, toLabel:
         apply: (card) => ({ ...card, itemType: { id: toKey, name: toLabel } }),
       }
     case 'label': {
-      const remove = fromKey !== 'none' && fromKey !== toKey ? [fromKey] : []
+      const remove = none ? labelIds : fromKey !== 'none' && fromKey !== toKey ? [fromKey] : []
       const add = !none && fromKey !== toKey ? [toKey] : []
       return {
         patch: { ...(add.length ? { addLabelIds: add } : {}), ...(remove.length ? { removeLabelIds: remove } : {}) },

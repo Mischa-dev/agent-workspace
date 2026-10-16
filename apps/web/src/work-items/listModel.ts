@@ -114,13 +114,16 @@ export function readListState(parameters: URLSearchParams): ListState {
   if (filters.assigneeActorId) delete filters.unassigned
   const groupBy = parameters.get('groupBy')
   const task = parameters.get('task')
+  const columnsBy = oneOf(parameters.get('columnsBy'), COLUMN_FIELDS, 'status')
+  const lanes = oneOf(parameters.get('lanes'), LANE_FIELDS, 'none')
   return {
     view: parameters.get('view') === 'board' ? 'board' : 'list',
     filters: filters as FilterValues,
     sort: oneOf(parameters.get('sort'), SORTS, 'newest'),
     groupBy: GROUPINGS.some((option) => option.value === groupBy) ? (groupBy as WorkItemGroupBy) : null,
-    columnsBy: oneOf(parameters.get('columnsBy'), COLUMN_FIELDS, 'status'),
-    lanes: oneOf(parameters.get('lanes'), LANE_FIELDS, 'none'),
+    columnsBy,
+    // Lanes by the column field would leave only the diagonal cells.
+    lanes: lanes === columnsBy ? 'none' : lanes,
     task: task && task.length <= 100 ? task : null,
   }
 }

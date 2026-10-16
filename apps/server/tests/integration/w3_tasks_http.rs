@@ -757,6 +757,27 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         ))
         .await;
     assert_eq!(shelved_now["status"]["name"], "Review");
+
+    // The estimate unit can't change under tasks that carry estimates.
+    create_task(owner, project, json!({ "title": "Sized", "estimate": 8 })).await;
+    let (_, current) = owner.get(&uri).await;
+    let (status, refused) = owner
+        .put(
+            &uri,
+            json!({
+                "expectedVersion": current["version"],
+                "statuses": without_qa,
+                "types": types,
+                "transitions": "all",
+                "estimateUnit": "hours"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(
+        refused["error"]["details"]["field"], "estimateUnit",
+        "{refused}"
+    );
 }
 
 #[tokio::test]

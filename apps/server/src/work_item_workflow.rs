@@ -380,10 +380,33 @@ pub async fn replace_workflow(
         }));
     }
     let estimate_unit = match document.estimate_unit.as_deref() {
-        None => current_unit,
+        None => current_unit.clone(),
         Some(unit @ ("points" | "hours")) => unit.to_owned(),
         Some(_) => return Ok(Err(invalid("estimateUnit", "Use points or hours."))),
     };
+    // A number means points or hours by this setting, so changing it while
+    // tasks carry estimates would silently change what those estimates say.
+    if estimate_unit != current_unit {
+        let estimated = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM work_items WHERE project_id = $1 AND estimate IS NOT NULL",
+        )
+        .bind(project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if estimated > 0 {
+            let tasks = if estimated == 1 {
+                "task has an estimate"
+            } else {
+                "tasks have estimates"
+            };
+            return Ok(Err(invalid(
+                "estimateUnit",
+                format!(
+                    "{estimated} {tasks} in {current_unit}. Clear them before switching to {estimate_unit}, so no estimate changes meaning."
+                ),
+            )));
+        }
+    }
     let existing_statuses =
         definitions(transaction, "work_item_statuses", "status_id", project_id).await?;
     let existing_types = definitions(transaction, "work_item_types", "type_id", project_id).await?;

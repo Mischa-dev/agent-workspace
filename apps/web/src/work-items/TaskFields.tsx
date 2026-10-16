@@ -149,7 +149,7 @@ export function EstimateField({
     if (trimmed === text) return
     if (!trimmed) return onSave(null)
     const parsed = Number(trimmed)
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 10000) {
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
       setInvalid(true)
       setDraft(text)
       return
@@ -177,7 +177,7 @@ export function EstimateField({
       <span className="aw-estimate__unit">{unit}</span>
       {invalid ? (
         <span className="aw-estimate__note" id="estimate-note" role="alert">
-          Use a number from 0 to 10,000.
+          Use a number from 0 to 100,000.
         </span>
       ) : null}
     </span>

@@ -77,8 +77,10 @@ export function WorkItemsPage() {
   }
 
   const archived = Boolean(project.data.archivedAt)
+  // Viewers and workers read tasks but don't change them.
+  const readOnly = archived || !['owner', 'admin', 'member'].includes(project.data.role)
   const hasFilters = activeFilterKeys(state).length > 0 || Boolean(state.filters.q)
-  const newButton = archived ? null : (
+  const newButton = readOnly ? null : (
     <Button disabled={!workflow.data} icon="plus" onClick={() => setCreateOpen(true)} ref={createButtonRef} variant="primary">
       New work item
     </Button>
@@ -127,7 +129,7 @@ export function WorkItemsPage() {
         ) : null}
         {workflow.data && state.view === 'list' ? (
           <WorkItemList
-            disabled={archived}
+            disabled={readOnly}
             emptyAction={newButton}
             hasFilters={hasFilters}
             notify={notify}
@@ -143,7 +145,7 @@ export function WorkItemsPage() {
         ) : null}
         {workflow.data && state.view === 'board' ? (
           <WorkItemBoard
-            disabled={archived}
+            disabled={readOnly}
             notify={notify}
             onClosePanel={closeTask}
             onManageLabels={() => setManagingLabels(true)}

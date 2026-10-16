@@ -113,9 +113,10 @@ export function WorkItemBoard({
         : anchor.afterId
           ? others.findIndex((item) => item.id === anchor.afterId) + 1
           : 0
-      const columnChange = sameColumn ? null : fieldMove(columnsBy, from.key, to.key, to.label, to.status)
+      const labelIds = card.labels.map((label) => label.id)
+      const columnChange = sameColumn ? null : fieldMove(columnsBy, from.key, to.key, to.label, to.status, labelIds)
       const laneLabel = lanes.find((entry) => entry.key === target.laneKey)?.label ?? ''
-      const laneChange = laneChanged && state.lanes !== 'none' ? fieldMove(state.lanes, lane.key, target.laneKey, laneLabel) : null
+      const laneChange = laneChanged && state.lanes !== 'none' ? fieldMove(state.lanes, lane.key, target.laneKey, laneLabel, undefined, labelIds) : null
       const change = (item: WorkItemCard) => (laneChange ? laneChange.apply(columnChange ? columnChange.apply(item) : item) : columnChange ? columnChange.apply(item) : item)
 
       // A status move and a lane change are two saves. When the move saves but
