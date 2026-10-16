@@ -108,6 +108,7 @@ pub fn router(state: AppState) -> Router {
         .merge(invitations::router())
         .merge(memberships::router())
         .merge(work_items::router())
+        .merge(ai::http::router())
         .merge(memory::router())
         .merge(search::router())
         .merge(connected_apps::router())

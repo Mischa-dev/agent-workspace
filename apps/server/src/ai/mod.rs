@@ -20,13 +20,17 @@
 
 pub mod detect;
 pub mod gateway;
+pub mod http;
 pub mod prompts;
+pub mod plans;
 pub mod providers;
 pub mod ready;
 pub mod schema;
+pub mod summaries;
 pub mod suggestions;
 
 /// The AI jobs, for `jobs::default_registry`.
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
     detect::register_jobs(registry);
+    plans::register_jobs(registry);
 }
