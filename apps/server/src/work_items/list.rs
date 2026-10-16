@@ -382,8 +382,7 @@ pub(super) fn saved_query_spec(
             }
         }
     }
-    let encoded =
-        serde_urlencoded::to_string(&list).map_err(|_| AppError::Validation("query"))?;
+    let encoded = serde_urlencoded::to_string(&list).map_err(|_| AppError::Validation("query"))?;
     let query: TaskListQuery =
         serde_urlencoded::from_str(&encoded).map_err(|_| AppError::Validation("query"))?;
     Ok(ListSpec {

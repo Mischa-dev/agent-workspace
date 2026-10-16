@@ -41,7 +41,8 @@ use crate::{
 const MAX_VIEWS: i64 = 100;
 const MAX_NAME_CHARACTERS: usize = 80;
 /// List columns a view can show or hide (select and title always show).
-pub(crate) const VIEW_FIELDS: [&str; 6] = ["priority", "key", "status", "details", "due", "assignee"];
+pub(crate) const VIEW_FIELDS: [&str; 6] =
+    ["priority", "key", "status", "details", "due", "assignee"];
 
 /// A view every project has.
 pub(crate) struct BuiltinView {
@@ -63,7 +64,11 @@ pub(crate) const BUILTIN_VIEWS: [BuiltinView; 4] = [
     BuiltinView {
         key: "ready_for_agents",
         name: "Ready for agents",
-        query: &[("ready", "true"), ("claimed", "false"), ("sort", "priority")],
+        query: &[
+            ("ready", "true"),
+            ("claimed", "false"),
+            ("sort", "priority"),
+        ],
     },
     BuiltinView {
         key: "blocked",
@@ -202,7 +207,9 @@ pub(crate) fn query_params(query: &Value) -> BTreeMap<String, String> {
         .map(|object| {
             object
                 .iter()
-                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -308,8 +315,7 @@ pub(super) async fn list_views(
     if membership.project_archived_at.is_none() {
         ensure_builtin_views(&state.pool, project_id).await?;
     }
-    let can_share =
-        capabilities(&membership)?.edit && membership.project_archived_at.is_none();
+    let can_share = capabilities(&membership)?.edit && membership.project_archived_at.is_none();
     let rows = visible_views(&state.pool, project_id, principal.actor_id).await?;
     Ok(Json(ViewsResponse {
         views: rows
@@ -370,7 +376,9 @@ pub(crate) fn normalize_view_name(value: &str) -> Option<String> {
     (!name.is_empty() && name.chars().count() <= MAX_NAME_CHARACTERS).then_some(name)
 }
 
-pub(crate) fn normalize_fields(fields: Option<&[String]>) -> Result<Option<Vec<String>>, &'static str> {
+pub(crate) fn normalize_fields(
+    fields: Option<&[String]>,
+) -> Result<Option<Vec<String>>, &'static str> {
     let Some(fields) = fields else {
         return Ok(None);
     };
@@ -439,7 +447,10 @@ pub(super) async fn create_view(
     ApiJson(request): ApiJson<CreateViewRequest>,
 ) -> Result<Response, AppError> {
     let Some(name) = normalize_view_name(&request.name) else {
-        return Ok(invalid("name", "Give the view a name of 1 to 80 characters."));
+        return Ok(invalid(
+            "name",
+            "Give the view a name of 1 to 80 characters.",
+        ));
     };
     check_layout(&request.layout)?;
     let fields = normalize_fields(request.fields.as_deref()).map_err(AppError::Validation)?;
@@ -543,7 +554,12 @@ pub(super) async fn update_view(
     let name = match request.name.as_deref() {
         Some(value) => match normalize_view_name(value) {
             Some(name) => Some(name),
-            None => return Ok(invalid("name", "Give the view a name of 1 to 80 characters.")),
+            None => {
+                return Ok(invalid(
+                    "name",
+                    "Give the view a name of 1 to 80 characters.",
+                ));
+            }
         },
         None => None,
     };
@@ -584,7 +600,10 @@ pub(super) async fn update_view(
     let owner = match request.shared {
         Some(true) if !sharing => return Err(AppError::Forbidden),
         Some(false) if row.builtin.is_some() => {
-            return Ok(invalid("shared", "Built-in views stay shared with the project."));
+            return Ok(invalid(
+                "shared",
+                "Built-in views stay shared with the project.",
+            ));
         }
         Some(false) if row.owner_actor_id.is_none() && !sharing => {
             return Err(AppError::Forbidden);
@@ -593,7 +612,8 @@ pub(super) async fn update_view(
         Some(false) => Some(principal.actor_id),
         None => row.owner_actor_id,
     };
-    if owner != row.owner_actor_id && count_views(&mut write, project_id, owner).await? >= MAX_VIEWS {
+    if owner != row.owner_actor_id && count_views(&mut write, project_id, owner).await? >= MAX_VIEWS
+    {
         return Ok(refusal(
             StatusCode::CONFLICT,
             "too_many_views",
@@ -634,9 +654,14 @@ pub(super) async fn update_view(
         json!({}),
     )
     .await?;
-    let row = view_for_update(&mut write.transaction, project_id, view_id, principal.actor_id)
-        .await?
-        .ok_or(AppError::Internal("saved view just changed is missing"))?;
+    let row = view_for_update(
+        &mut write.transaction,
+        project_id,
+        view_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::Internal("saved view just changed is missing"))?;
     let view = saved_view(row, principal.actor_id, sharing);
     write.finish(StatusCode::OK, &view).await
 }
@@ -696,7 +721,9 @@ pub(super) async fn delete_view(
         json!({}),
     )
     .await?;
-    write.finish(StatusCode::OK, &json!({ "deleted": true })).await
+    write
+        .finish(StatusCode::OK, &json!({ "deleted": true }))
+        .await
 }
 
 pub(super) async fn pin_view(
@@ -719,9 +746,14 @@ pub(super) async fn pin_view(
         )
         .await
     );
-    view_for_update(&mut write.transaction, project_id, view_id, principal.actor_id)
-        .await?
-        .ok_or(AppError::NotFound("saved_view"))?;
+    view_for_update(
+        &mut write.transaction,
+        project_id,
+        view_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::NotFound("saved_view"))?;
     sqlx::query(
         r#"
         INSERT INTO saved_view_pins (project_id, view_id, actor_id, pinned, position)
@@ -739,9 +771,14 @@ pub(super) async fn pin_view(
     .bind(request.position)
     .execute(&mut *write.transaction)
     .await?;
-    let row = view_for_update(&mut write.transaction, project_id, view_id, principal.actor_id)
-        .await?
-        .ok_or(AppError::Internal("saved view just pinned is missing"))?;
+    let row = view_for_update(
+        &mut write.transaction,
+        project_id,
+        view_id,
+        principal.actor_id,
+    )
+    .await?
+    .ok_or(AppError::Internal("saved view just pinned is missing"))?;
     let view = saved_view(row, principal.actor_id, can_share(&write)?);
     write.finish(StatusCode::OK, &view).await
 }
@@ -887,14 +924,13 @@ async fn my_work_section(
     order: &str,
 ) -> Result<MyWorkSection, AppError> {
     let select = MY_WORK_SELECT.replace("{HAS_OPEN_BLOCKER}", HAS_OPEN_BLOCKER);
-    let items = sqlx::query_as::<_, MyWorkTask>(&format!(
-        "{select} {condition} ORDER BY {order} LIMIT $3"
-    ))
-    .bind(reader)
-    .bind(projects)
-    .bind(MY_WORK_LIMIT)
-    .fetch_all(pool)
-    .await?;
+    let items =
+        sqlx::query_as::<_, MyWorkTask>(&format!("{select} {condition} ORDER BY {order} LIMIT $3"))
+            .bind(reader)
+            .bind(projects)
+            .bind(MY_WORK_LIMIT)
+            .fetch_all(pool)
+            .await?;
     let total = sqlx::query_scalar::<_, i64>(&format!(
         r#"SELECT count(*) FROM work_items item
            JOIN work_item_statuses status
@@ -952,7 +988,9 @@ pub(super) async fn get_my_work(
         .rate_limits
         .check_expensive_read(principal.session_id)?;
     let projects = my_projects(&state.pool, principal.actor_id).await?;
-    Ok(Json(my_work(&state.pool, principal.actor_id, &projects).await?))
+    Ok(Json(
+        my_work(&state.pool, principal.actor_id, &projects).await?,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,7 +1232,11 @@ mod tests {
     #[test]
     fn fields_are_known_columns_each_once() {
         assert_eq!(
-            normalize_fields(Some(&["due".to_owned(), "due".to_owned(), "key".to_owned()])),
+            normalize_fields(Some(&[
+                "due".to_owned(),
+                "due".to_owned(),
+                "key".to_owned()
+            ])),
             Ok(Some(vec!["due".to_owned(), "key".to_owned()]))
         );
         assert_eq!(normalize_fields(Some(&["title".to_owned()])), Err("fields"));
@@ -1203,7 +1245,10 @@ mod tests {
 
     #[test]
     fn view_names_are_one_short_line() {
-        assert_eq!(normalize_view_name("  Ready   now ").as_deref(), Some("Ready now"));
+        assert_eq!(
+            normalize_view_name("  Ready   now ").as_deref(),
+            Some("Ready now")
+        );
         assert!(normalize_view_name("   ").is_none());
         assert!(normalize_view_name(&"x".repeat(81)).is_none());
     }

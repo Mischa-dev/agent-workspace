@@ -10,7 +10,7 @@ CREATE TABLE task_templates (
     name TEXT NOT NULL CHECK (
         char_length(name) BETWEEN 1 AND 80 AND name = btrim(name)
     ),
-    title TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 200),
+    title TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 240),
     description TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 20000),
     type_id UUID,
     priority TEXT NOT NULL DEFAULT 'no_priority' CHECK (

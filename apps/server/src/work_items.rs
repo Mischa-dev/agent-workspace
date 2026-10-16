@@ -86,6 +86,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 
 mod list;
 mod planning;
+pub(crate) mod templates;
 pub(crate) mod views;
 
 pub fn router() -> Router<AppState> {
@@ -185,6 +186,26 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/views/{view_id}/pin",
             axum::routing::post(views::pin_view),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/task-templates",
+            get(templates::get_templates).post(templates::create_template),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/task-templates/{template_id}",
+            axum::routing::patch(templates::update_template),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
+            axum::routing::post(templates::apply_template_route),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/recurring-tasks",
+            axum::routing::post(templates::create_recurring),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+            axum::routing::patch(templates::update_recurring).delete(templates::delete_recurring),
         )
         .route("/api/v1/my-work", get(views::get_my_work))
         .route(

@@ -717,6 +717,66 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/views",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/views/{view_id}",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Delete,
+        "/api/v1/projects/{project_id}/views/{view_id}",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/views/{view_id}/pin",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/task-templates",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/task-templates/{template_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/recurring-tasks",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Delete,
+        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
         Put,
         "/api/v1/projects/{project_id}/work-item-workflow",
         ProjectManage
