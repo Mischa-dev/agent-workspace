@@ -6,7 +6,7 @@ import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '.
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import { useProjects, useUpdateProjectNavigation } from '../projects/hooks'
+import { useProjectSearch, useProjects, useUpdateProjectNavigation } from '../projects/hooks'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -77,6 +77,8 @@ export function CommandCenter() {
   const sidebar = useProjectConversationSidebar(state.open === 'commands' ? current?.id ?? '' : '')
   const [query, setQuery] = useState('')
   const tasks = useTaskResults(state.open === 'commands' ? query : '', projects, current)
+  // The rail lists the first 100 Projects; the server finds the rest by name.
+  const projectSearch = useProjectSearch(state.open === 'commands' ? query : '')
   const currentRef = useRef(current)
   useEffect(() => {
     currentRef.current = current
@@ -266,7 +268,11 @@ export function CommandCenter() {
       { id: 'g:account', group: 'Go to', label: 'Account settings', icon: 'settings', keywords: ['profile', 'password', 'connected apps'], onSelect: go('/settings/account') },
     )
 
-    for (const project of projects) {
+    const listed = new Set(projects.map((project) => project.id))
+    const found = (projectSearch.data?.projects ?? []).filter(
+      (project) => !project.archivedAt && !listed.has(project.id),
+    )
+    for (const project of [...projects, ...found]) {
       list.push({
         id: `pr:${project.id}`,
         group: 'Projects',
@@ -274,6 +280,7 @@ export function CommandCenter() {
         hint: project.key,
         mark: <ProjectInitials project={project} size={20} />,
         keywords: [project.key],
+        matched: !listed.has(project.id),
         onSelect: go(projectLocationHref(project.id, project.navigation.location)),
       })
     }
@@ -331,7 +338,7 @@ export function CommandCenter() {
       })
     }
     return list
-  }, [current, direct.data, navigate, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, navigate, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, tasks.data, theme, updateNavigation])
 
   // With nothing typed, show where you'd most likely go; everything else is a search away.
   const visibleItems = useMemo(() => {

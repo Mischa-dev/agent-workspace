@@ -84,6 +84,33 @@ describe('work item live patches', () => {
     expect(added !== 'refetch' && added !== 'unchanged' && added.data.items.map((item) => item.number)).toEqual([3, 2, 1])
   })
 
+  it('keeps the newer detail when an older fetch answers last', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const detailKey = queryKeys.workItem(projectId, id(1))
+    const boardKey = [...queryKeys.workItems(projectId, { cursor: undefined }), 'board']
+    queryClient.setQueryData(boardKey, board())
+    queryClient.setQueryData(detailKey, { ...card(1), description: '', createdAt: '2026-10-16T09:00:00Z' })
+    const answers: Array<(version: number) => void> = []
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      answers.push((version) => resolve(new Response(
+        JSON.stringify({ ...card(1, todo, version), description: '', createdAt: '2026-10-16T09:00:00Z' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )))
+    })))
+    const placement = { statusId: todo.id, archived: false, afterId: null, beforeId: id(2) }
+    const older = applyWorkItemChange(queryClient, projectId, { workItemId: id(1), version: 2, placement })
+    const newer = applyWorkItemChange(queryClient, projectId, { workItemId: id(1), version: 3, placement })
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    answers[1](3)
+    await newer
+    answers[0](2)
+    await older
+
+    expect(queryClient.getQueryData(detailKey)).toMatchObject({ version: 3 })
+    const shown = queryClient.getQueryData<WorkItemBoardResponse>(boardKey)!.columns[0].items[0]
+    expect(shown.version).toBe(3)
+  })
+
   it('moves a card on an open board without refetching the board', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const boardKey = [...queryKeys.workItems(projectId, { cursor: undefined }), 'board']

@@ -243,7 +243,10 @@ export async function applyWorkItemChange(
   }
 
   if (item) {
-    if (!cachedDetail || cachedDetail.version <= item.version) queryClient.setQueryData(detailKey, item)
+    // Read the cache again: a newer event's fetch may have landed while this one waited.
+    const latest = queryClient.getQueryData<WorkItem>(detailKey)
+    if (latest && latest.version > item.version) item = latest
+    else queryClient.setQueryData(detailKey, item)
   } else if (cachedDetail) {
     void queryClient.invalidateQueries({ queryKey: detailKey, exact: true })
   }
