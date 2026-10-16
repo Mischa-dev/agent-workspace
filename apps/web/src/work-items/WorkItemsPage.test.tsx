@@ -158,6 +158,7 @@ const card = {
   subtaskCount: 0,
   subtasksDone: 0,
   claimedBy: null,
+  boardOrder: '0000000001:00000000000000000000',
 }
 let requests: string[] = []
 

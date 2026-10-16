@@ -5,7 +5,7 @@ import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, MessageSkeleton, actorKind, Avatar } from '../ui'
 import { listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
-import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
+import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { allowedStatuses } from './pickerModel'
 import { boardQuery, type ListState } from './listModel'
@@ -126,7 +126,9 @@ export function WorkItemBoard({
         if (others.length) anchor = { afterId: others[others.length - 1].id }
       }
       const others = to.items.filter((item) => item.id !== cardId)
-      const columnIndex = anchor.beforeId
+      const columnIndex = columnsBy !== 'status'
+        ? orderedIndex(others, card)
+        : anchor.beforeId
         ? others.findIndex((item) => item.id === anchor.beforeId)
         : anchor.afterId
           ? others.findIndex((item) => item.id === anchor.afterId) + 1
@@ -208,7 +210,11 @@ export function WorkItemBoard({
       // Keep the held card visible in place while the pointer is outside every cell.
       return activeDrag.keyboard || target ? without : cards
     }
-    const at = Math.max(0, Math.min(target.index, without.length))
+    // Only a status board keeps the spot a card is dropped on; elsewhere the slot shows where it will land.
+    const ordered = columnsBy !== 'status' && draggedCard
+    const at = ordered
+      ? orderedIndex(without.flatMap((entry) => ('card' in entry ? [entry.card] : [])), draggedCard)
+      : Math.max(0, Math.min(target.index, without.length))
     const insert: Entry = activeDrag.keyboard && draggedCard ? { card: draggedCard, dragId: activeDrag.dragId } : { slot: true }
     return [...without.slice(0, at), insert, ...without.slice(at)]
   }

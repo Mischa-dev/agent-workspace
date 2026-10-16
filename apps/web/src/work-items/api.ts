@@ -227,6 +227,7 @@ export function normalizeCard(value: unknown): WorkItemCard {
     subtaskCount: number(wire.subtaskCount),
     subtasksDone: number(wire.subtasksDone),
     claimedBy: actorRef(wire.claimedBy),
+    boardOrder: nullableString(wire.boardOrder) ?? '',
     ...(group ? { group: { key: string(group.key), label: string(group.label) } } : {}),
   }
 }

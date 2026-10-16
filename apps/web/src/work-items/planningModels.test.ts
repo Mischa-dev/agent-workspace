@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
-import { applyMove, dropAnchor, fieldMove, lanesFor, runOptimisticMove } from './boardModel'
+import { applyMove, dropAnchor, fieldMove, lanesFor, orderedIndex, runOptimisticMove } from './boardModel'
 import { changeSentence, formatChanges } from './historyFormat'
 import type { WorkItemBoardResponse, WorkItemCard, WorkItemWorkflow } from './types'
 import { addStatus, draftFromWorkflow, draftProblem, removeStatus, setAllowAny, togglePair, workflowUpdate } from './workflowModel'
@@ -34,6 +34,7 @@ function card(id: string): WorkItemCard {
     subtaskCount: 0,
     subtasksDone: 0,
     claimedBy: null,
+    boardOrder: '0000000001:00000000000000000000',
   }
 }
 
@@ -77,6 +78,14 @@ describe('history changes', () => {
 })
 
 describe('board moves', () => {
+  it('places a card by manual order on boards not grouped by status', () => {
+    const at = (id: string, order: string) => ({ ...card(id), boardOrder: order })
+    const column = [at('a', '1:1'), at('b', '1:3'), at('c', '2:0')]
+    expect(orderedIndex(column, at('x', '1:2'))).toBe(1)
+    expect(orderedIndex(column, at('x', '3:0'))).toBe(3)
+    expect(orderedIndex([...column, at('x', '1:2')], at('x', '1:2'))).toBe(1)
+  })
+
   it('anchors a drop to the card it lands above, or below the last card', () => {
     const items = board.columns[0].items
     expect(dropAnchor(items, '3', 0)).toEqual({ beforeId: '1' })

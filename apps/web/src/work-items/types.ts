@@ -180,6 +180,8 @@ export type WorkItemCard = Pick<
   subtaskCount: number
   subtasksDone: number
   claimedBy: ActorRef | null
+  /** Manual order (status, then rank) as a string that sorts the same way. Boards not grouped by status keep it. */
+  boardOrder: string
   /** Which group the row is in, when the list was grouped. */
   group?: { key: string; label: string }
 }

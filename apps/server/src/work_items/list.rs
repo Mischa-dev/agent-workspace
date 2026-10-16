@@ -963,6 +963,10 @@ pub(super) struct TaskCard {
     subtask_count: i64,
     subtasks_done: i64,
     claimed_by: Option<serde_json::Value>,
+    /// Where the card sits in manual order (status, then rank), as a string
+    /// that sorts the same way. Boards grouped by anything but status keep
+    /// this order, so a moved card can be shown where it will land.
+    board_order: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     group: Option<GroupRef>,
 }
@@ -1000,6 +1004,8 @@ struct CardRow {
     subtask_count: i64,
     subtasks_done: i64,
     claimed_by: Option<serde_json::Value>,
+    status_position: i32,
+    board_rank: i64,
 }
 
 /// The cards for `ids`, in that order (an ID may repeat when grouped by
@@ -1020,6 +1026,7 @@ pub(super) async fn cards(
             item.id, item.project_id, project.project_key, item.number, item.title,
             item.type_id, item_type.name AS type_name,
             item.status_id, status.name AS status_name, status.semantic_category,
+            status.position AS status_position, item.board_rank,
             item.priority, item.assignee_actor_id,
             assignee.display_name AS assignee_display_name,
             assignee.handle AS assignee_handle,
@@ -1123,6 +1130,8 @@ fn clone_row(row: &CardRow) -> CardRow {
         subtask_count: row.subtask_count,
         subtasks_done: row.subtasks_done,
         claimed_by: row.claimed_by.clone(),
+        status_position: row.status_position,
+        board_rank: row.board_rank,
     }
 }
 
@@ -1192,8 +1201,17 @@ fn card(
         subtask_count: row.subtask_count,
         subtasks_done: row.subtasks_done,
         claimed_by: row.claimed_by,
+        board_order: board_order(row.status_position, row.board_rank),
         group,
     })
+}
+
+/// Status position, then rank, as fixed-width digits so that comparing the
+/// strings compares the pair. The rank is shifted to be non-negative.
+fn board_order(status_position: i32, board_rank: i64) -> String {
+    let position = i64::from(status_position) - i64::from(i32::MIN);
+    let rank = i128::from(board_rank) - i128::from(i64::MIN);
+    format!("{position:010}:{rank:020}")
 }
 
 fn limit(value: Option<u16>) -> i64 {
@@ -1516,6 +1534,18 @@ pub(super) async fn get_work_item_board(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_order_sorts_like_status_then_rank() {
+        let mut pairs = [(2, -5), (1, i64::MAX), (1, i64::MIN), (2, 7), (1, 0)];
+        let mut keys = pairs.map(|(position, rank)| board_order(position, rank));
+        pairs.sort_unstable();
+        keys.sort();
+        assert_eq!(
+            keys,
+            pairs.map(|(position, rank)| board_order(position, rank))
+        );
+    }
 
     #[test]
     fn task_numbers_are_found_in_searches() {

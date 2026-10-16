@@ -194,3 +194,12 @@ export async function runOptimisticMove<T>(
     throw error
   }
 }
+
+/**
+ * Where a card lands among `items` on a board not grouped by status. Those
+ * boards keep manual order (status, then rank), and a field change doesn't
+ * touch it, so the card goes where that order puts it, not where it was dropped.
+ */
+export function orderedIndex(items: WorkItemCard[], card: WorkItemCard): number {
+  return items.filter((item) => item.id !== card.id && item.boardOrder < card.boardOrder).length
+}

@@ -33,6 +33,7 @@ function card(id: string, group?: string): WorkItemCard {
     subtaskCount: 0,
     subtasksDone: 0,
     claimedBy: null,
+    boardOrder: '0000000001:00000000000000000000',
     ...(group ? { group: { key: group, label: group.toUpperCase() } } : {}),
   }
 }
