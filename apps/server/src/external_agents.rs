@@ -348,11 +348,9 @@ pub async fn set_webhook_for_host(
     config: &crate::config::AppConfig,
     connection_id: Uuid,
     url: &str,
+    trusted_origins: &[String],
 ) -> Result<String, AppError> {
-    let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
-    if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
-        return Err(AppError::Validation("webhook URL"));
-    }
+    crate::replies::validate_webhook_url(url, trusted_origins)?;
     let secret = crate::replies::new_webhook_secret();
     let mut transaction = pool.begin().await?;
     let secret_id = crate::secrets::put_webhook_secret(
@@ -512,10 +510,7 @@ async fn set_webhook(
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
     if let Some(url) = &url {
-        let parsed = reqwest::Url::parse(url).map_err(|_| AppError::Validation("webhook URL"))?;
-        if !matches!(parsed.scheme(), "https" | "http") || url.len() > 500 {
-            return Err(AppError::Validation("webhook URL"));
-        }
+        crate::replies::validate_webhook_url(url, &state.config.webhook_trusted_origins)?;
     }
     let secret = url.as_ref().map(|_| crate::replies::new_webhook_secret());
     let mut transaction = state.pool.begin().await?;
