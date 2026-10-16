@@ -88,9 +88,6 @@ export function useRealtimeConnection(): RealtimeContextValue {
         // DMs and groups live in a Project the client does not list, so
         // refresh the Messages overview on any change.
         void queryClient.invalidateQueries({ queryKey: ['direct'] })
-        // Thread boards are keyed by conversation, outside the project, and
-        // change with threads: new ones, renames, replies, removed origins.
-        void queryClient.invalidateQueries({ queryKey: ['threads'] })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -136,7 +133,6 @@ export function useRealtimeConnection(): RealtimeContextValue {
     const refetchAuthenticatedState = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
       void queryClient.invalidateQueries({ queryKey: ['direct'] })
-      void queryClient.invalidateQueries({ queryKey: ['threads'] })
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })

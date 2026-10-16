@@ -152,14 +152,14 @@ export function PageDetailPage() {
 
 function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }) {
   const queryClient = useQueryClient()
-  const page = useQuery({ queryKey: memoryKeys.page(pageId), queryFn: () => getPage(pageId) })
+  const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId) })
   const [editing, setEditing] = useState(() => new URLSearchParams(window.location.search).get('edit') === '1')
   const [viewing, setViewing] = useState<{ version: number; title: string; body: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const canEdit = Boolean(pages.data?.canEdit)
   const refresh = async (saved: Page) => {
-    queryClient.setQueryData(memoryKeys.page(pageId), saved)
+    queryClient.setQueryData(memoryKeys.page(projectId, pageId), saved)
     await queryClient.invalidateQueries({ queryKey: memoryKeys.pages(projectId) })
   }
   if (page.isPending) return <DocumentSkeleton label="Loading page" />
@@ -199,7 +199,7 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
       {current.archived ? <Banner tone="offline">This page is archived.</Banner> : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {editing ? (
-        <PageEditor onCancel={() => setEditing(false)} onSaved={async (saved) => { await refresh(saved); setEditing(false) }} page={current} />
+        <PageEditor projectId={projectId} onCancel={() => setEditing(false)} onSaved={async (saved) => { await refresh(saved); setEditing(false) }} page={current} />
       ) : viewing ? (
         <Section
           actions={
@@ -266,10 +266,12 @@ function PageEditor({
   onCancel,
   onSaved,
   page,
+  projectId,
 }: {
   onCancel: () => void
   onSaved: (page: Page) => Promise<void>
   page: Page
+  projectId: string
 }) {
   const [title, setTitle] = useState(page.title)
   const [body, setBody] = useState(page.body)
@@ -294,7 +296,7 @@ function PageEditor({
       .catch((reason: unknown) => {
         if (isApiError(reason) && reason.status === 409) {
           // Fetch their version underneath; the draft stays in the editor.
-          void queryClient.invalidateQueries({ queryKey: memoryKeys.page(page.id) })
+          void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, page.id) })
           setError('Someone saved a newer version while you were editing. Your text is still here: save again to replace theirs, or cancel to read it.')
           return
         }

@@ -133,12 +133,14 @@ export function ThreadBoard({
   conversationId,
   onClose,
   onOpen,
+  projectId,
 }: {
   conversationId: string
+  projectId: string
   onClose: () => void
   onOpen: (thread: ThreadSummary) => void
 }) {
-  const threads = useThreads(conversationId)
+  const threads = useThreads(projectId, conversationId)
   const [filter, setFilter] = useState<Filter>('open')
   const shown = (threads.data ?? []).filter((thread) =>
     filter === 'all' ? true : filter === 'open' ? !isSettled(thread.status) : isSettled(thread.status),

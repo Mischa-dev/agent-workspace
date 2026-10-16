@@ -63,7 +63,7 @@ export function DirectConversationPage() {
   const [threadDialog, setThreadDialog] = useState<{ messageId: string; text: string; author: string } | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const openThreadId = searchParams.get('thread')
-  const threads = useThreads(conversationId)
+  const threads = useThreads(projectId, conversationId)
   const refreshThreads = useRefreshThreads()
   const page = timeline.data
   const viewerId = session.user.actorId
@@ -273,6 +273,7 @@ export function DirectConversationPage() {
         ) : boardOpen ? (
           <ThreadBoard
             conversationId={conversationId}
+            projectId={projectId}
             onClose={() => setBoardOpen(false)}
             onOpen={(thread) => {
               setBoardOpen(false)

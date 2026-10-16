@@ -31,7 +31,7 @@ export function useArchiveConversation({
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
     void queryClient.invalidateQueries({ queryKey: ['project', projectId, 'conversation', conversationId] })
-    void queryClient.invalidateQueries({ queryKey: ['threads'] })
+    void queryClient.invalidateQueries({ queryKey: ['project', projectId, 'threads'] })
   }
   return useInstantMutation({
     mutationFn: (expectedVersion: number) => archiveConversation({ conversationId, kind, expectedVersion }),

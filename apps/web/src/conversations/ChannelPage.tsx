@@ -68,7 +68,7 @@ export function ChannelPage() {
     else next.delete('thread')
     setSearchParams(next)
   }
-  const threadStatuses = useThreads(channelId)
+  const threadStatuses = useThreads(projectId, channelId)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const project = useProject(projectId)
@@ -258,6 +258,7 @@ export function ChannelPage() {
             conversationId={channelId}
             onClose={() => setBoardOpen(false)}
             onOpen={(thread) => openThread(thread.id)}
+            projectId={projectId}
           />
         ) : undefined
       }
