@@ -24,7 +24,9 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // measure 762,524 raw / 243,021 gzip bytes, up 118,744 / 36,457. Nearly all
   // of it is in the lazily loaded WorkItemsPage, TaskDetail, Milestones and
   // Project settings chunks; the entry chunk gains only a route and a link.
-  javascriptRawBytes: 748 * 1024,
+  // W3's review fixes (archived and locked targets, serialized task saves,
+  // exact key search, droppable lanes) bring it to 766,447 / 244,218.
+  javascriptRawBytes: 752 * 1024,
   javascriptGzipBytes: 240 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
