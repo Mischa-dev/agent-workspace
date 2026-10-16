@@ -5,7 +5,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
-import { useInboxSummary } from '../inbox/summary'
 import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
@@ -93,7 +92,6 @@ export function ProjectRail({
   const projectsQuery = useProjects()
   const direct = useDirectOverview()
   const unreadConversations = direct.data?.conversations.filter((conversation) => conversation.unread).length ?? 0
-  const inboxUnread = useInboxSummary().data?.unreadCount ?? 0
   const switchProject = useSwitchProject()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -101,6 +99,8 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // Every notification belongs to a project, so the inbox's unread count is the sum.
+  const inboxUnread = (projectsQuery.data?.projects ?? []).reduce((sum, project) => sum + project.attentionCount, 0)
   const pinned = projects.filter((project) => project.navigation.pinned)
   const recent = projects
     .filter((project) => !project.navigation.pinned)

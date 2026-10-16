@@ -1,10 +1,16 @@
-import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
-import { inboxKeys, invalidateInbox } from './summary'
 
-export { affectsInbox, inboxKeys, invalidateInbox, useInboxSummary } from './summary'
+export const inboxKeys = {
+  root: ['inbox'] as const,
+  list: (view: InboxView, category: InboxCategory) => ['inbox', 'list', view, category] as const,
+}
+
+export function invalidateInbox(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: inboxKeys.root })
+}
 
 export type InboxView = 'inbox' | 'unread' | 'snoozed' | 'archived'
 export type InboxCategory = 'all' | 'mentions' | 'tasks' | 'runs' | 'pull_requests'
@@ -189,10 +195,6 @@ export function useUpdateInbox(view: InboxView, category: InboxCategory) {
     },
     onError: (_error, _update, context) => {
       if (context?.previous) queryClient.setQueryData(key, context.previous)
-    },
-    onSuccess: (result) => {
-      const unread = asRecord(result).unreadCount
-      if (typeof unread === 'number') queryClient.setQueryData(inboxKeys.summary, { unreadCount: unread })
     },
     onSettled: () => {
       invalidateInbox(queryClient)
