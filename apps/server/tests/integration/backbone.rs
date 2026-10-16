@@ -360,6 +360,60 @@ async fn a_job_whose_worker_died_runs_again_and_recurring_jobs_queue_their_next_
     assert!(next, "the next run waits for the interval");
 }
 
+#[tokio::test]
+async fn a_handler_that_crashes_after_its_outside_call_retries_with_the_same_key() {
+    let Some(setup) = backbone("backbone_idempotency").await else {
+        return;
+    };
+    // The "remote system": the keys it has seen, and the effects it applied.
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let applied = Arc::new(AtomicUsize::new(0));
+    let mut registry = JobRegistry::new();
+    let (remote, effects) = (seen.clone(), applied.clone());
+    registry.register("test.push", move |context| {
+        let (remote, effects) = (remote.clone(), effects.clone());
+        async move {
+            let key = context.job.idempotency_key();
+            let mut keys = remote.lock().expect("remote");
+            if !keys.contains(&key) {
+                effects.fetch_add(1, Ordering::SeqCst);
+            }
+            keys.push(key);
+            if context.job.attempts == 1 {
+                // The call landed, then the worker failed before recording it.
+                return Err(JobError::retry("lost the response"));
+            }
+            Ok(())
+        }
+    });
+    let id = created(
+        jobs::enqueue(&setup.pool, NewJob::new("test.push"))
+            .await
+            .expect("enqueue"),
+    );
+    jobs::run_due(&setup.state, &registry, &options())
+        .await
+        .expect("first attempt");
+    sqlx::query("UPDATE background_jobs SET run_at = now() WHERE id = $1")
+        .bind(id)
+        .execute(&setup.pool)
+        .await
+        .expect("make due");
+    jobs::run_due(&setup.state, &registry, &options())
+        .await
+        .expect("retry");
+    assert_eq!(job_state(&setup.pool, id).await.0, "succeeded");
+    let keys = seen.lock().expect("remote").clone();
+    assert_eq!(keys.len(), 2, "both attempts reached the remote");
+    assert_eq!(keys[0], keys[1], "the retry reused the first attempt's key");
+    assert_eq!(keys[0], format!("aw-job-{id}"));
+    assert_eq!(
+        applied.load(Ordering::SeqCst),
+        1,
+        "the effect happened once"
+    );
+}
+
 /// Captures every log line written while it's the default subscriber.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);

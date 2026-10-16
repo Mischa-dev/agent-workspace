@@ -8,10 +8,13 @@
 //! lock. A lease that runs out (the process died) makes the job claimable
 //! again; a finished attempt only counts if it still holds its lease token.
 //!
-//! Delivery is at least once with a lease, which in practice means once: a
-//! handler runs again only after a crash or a lost lease, so handlers that
-//! touch the outside world should be idempotent (use the job id as the
-//! idempotency key).
+//! Delivery is at least once. A job is leased to one worker at a time, but
+//! a handler can crash after its outside call and before its result is
+//! recorded, and then it runs again. So every handler with an outside effect
+//! (a push, a launch, a webhook) sends [`Job::idempotency_key`], which is the
+//! same on every attempt: it passes the key to the remote API where the API
+//! takes one, and checks what it already did under that key before acting
+//! again.
 //!
 //! The outbox publisher, reply webhooks, GitHub jobs and the run scheduler
 //! keep their own loops. New background work (usage polling, AI jobs,
@@ -214,6 +217,19 @@ pub struct Job {
 }
 
 impl Job {
+    /// A key that stays the same across every attempt of this job, for
+    /// remote APIs that deduplicate (an `Idempotency-Key` header, a client
+    /// request id) and for checking what an earlier attempt already did.
+    pub fn idempotency_key(&self) -> String {
+        format!("aw-job-{}", self.id)
+    }
+
+    /// The idempotency key for one of several outside calls in this job,
+    /// such as one per recipient.
+    pub fn idempotency_key_for(&self, step: &str) -> String {
+        format!("aw-job-{}-{step}", self.id)
+    }
+
     /// The payload as a typed value.
     pub fn payload_as<T: DeserializeOwned>(&self) -> Result<T, JobError> {
         serde_json::from_value(self.payload.clone())
