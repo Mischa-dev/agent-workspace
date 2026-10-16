@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { dayKey, dayLabel, eventLabel, formatFullDate, formatTime } from './timeFormat'
+import { dayKey, dayLabel, eventLabel, formatFullDate, formatRelative, formatTime } from './time'
 
 describe('timeline time formatting', () => {
   beforeEach(() => vi.stubEnv('TZ', 'UTC'))
@@ -29,5 +29,16 @@ describe('timeline time formatting', () => {
   it('humanizes event identifiers', () => {
     expect(eventLabel('run_started')).toBe('Run started')
     expect(eventLabel('')).toBe('')
+  })
+
+  it('says how long ago something happened, then falls back to the date', () => {
+    const now = new Date('2026-10-15T12:00:00Z')
+    expect(formatRelative('2026-10-15T11:59:40Z', now)).toBe('just now')
+    expect(formatRelative('2026-10-15T11:55:00Z', now)).toBe('5 min ago')
+    expect(formatRelative('2026-10-15T09:00:00Z', now)).toBe('3 hr ago')
+    expect(formatRelative('2026-10-14T12:00:00Z', now)).toBe('1 day ago')
+    expect(formatRelative('2026-10-15T12:10:00Z', now)).toBe('in 10 min')
+    expect(formatRelative('2026-09-01T12:00:00Z', now)).not.toContain('ago')
+    expect(formatRelative('nope', now)).toBe('')
   })
 })

@@ -1,10 +1,10 @@
-import { Button, ErrorState, MessageSkeleton } from '../ui'
+import { Button, ErrorState, PageSkeleton } from '../ui'
 
 /** Shown inside the shell while a Project page loads. */
 export function ProjectPageLoading({ label = 'Loading Project' }: { label?: string }) {
   return (
     <div aria-busy="true" className="aw-page">
-      <MessageSkeleton label={label} rows={4} />
+      <PageSkeleton label={label} />
     </div>
   )
 }

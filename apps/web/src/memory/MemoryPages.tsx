@@ -13,15 +13,16 @@ import {
   Button,
   Checkbox,
   EmptyState,
-  MessageSkeleton,
+  DocumentSkeleton,
+  ListSkeleton,
   PageHeader,
   Row,
   RowList,
   Section,
   StatusChip,
-  TextArea,
   TextField,
 } from '../ui'
+import { Markdown, MarkdownEditor } from '../ui/markdown'
 import {
   createPage,
   getPage,
@@ -92,7 +93,7 @@ function PagesList({ projectId }: { projectId: string }) {
         What’s true for this project now: how it works, conventions, plans. People and agents both read and edit these, and every
         version is kept.
       </PageHeader>
-      {pages.isPending ? <MessageSkeleton label="Loading pages" rows={2} /> : null}
+      {pages.isPending ? <ListSkeleton label="Loading pages" rows={3} /> : null}
       {pages.isError ? <Banner tone="danger">Pages didn’t load.</Banner> : null}
       {pages.data && pages.data.pages.length === 0 ? (
         <EmptyState icon="list" title="No pages yet">
@@ -150,17 +151,17 @@ export function PageDetailPage() {
 
 function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }) {
   const queryClient = useQueryClient()
-  const page = useQuery({ queryKey: memoryKeys.page(pageId), queryFn: () => getPage(pageId) })
+  const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId) })
   const [editing, setEditing] = useState(() => new URLSearchParams(window.location.search).get('edit') === '1')
   const [viewing, setViewing] = useState<{ version: number; title: string; body: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const canEdit = Boolean(pages.data?.canEdit)
   const refresh = async (saved: Page) => {
-    queryClient.setQueryData(memoryKeys.page(pageId), saved)
+    queryClient.setQueryData(memoryKeys.page(projectId, pageId), saved)
     await queryClient.invalidateQueries({ queryKey: memoryKeys.pages(projectId) })
   }
-  if (page.isPending) return <MessageSkeleton label="Loading page" rows={3} />
+  if (page.isPending) return <DocumentSkeleton label="Loading page" />
   if (page.isError || !page.data) return <Banner tone="danger">This page didn’t load.</Banner>
   const current = page.data
   const restore = (version: number) => {
@@ -197,7 +198,7 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
       {current.archived ? <Banner tone="offline">This page is archived.</Banner> : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {editing ? (
-        <PageEditor onCancel={() => setEditing(false)} onSaved={async (saved) => { await refresh(saved); setEditing(false) }} page={current} />
+        <PageEditor projectId={projectId} onCancel={() => setEditing(false)} onSaved={async (saved) => { await refresh(saved); setEditing(false) }} page={current} />
       ) : viewing ? (
         <Section
           actions={
@@ -214,10 +215,14 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
           }
           title={`Version ${viewing.version}: ${viewing.title}`}
         >
-          <div className="aw-doc">{viewing.body || 'This version was empty.'}</div>
+          <Markdown className="aw-doc" empty="This version was empty." source={viewing.body} />
         </Section>
       ) : (
-        <div className="aw-doc">{current.body || (canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.')}</div>
+        <Markdown
+          className="aw-doc"
+          empty={canEdit ? 'Nothing here yet. Choose Edit to write it.' : 'Nothing here yet.'}
+          source={current.body}
+        />
       )}
       <Section description="Every save is kept. Open an old version to read it or put it back." title="History">
         <RowList label="Versions">
@@ -260,10 +265,12 @@ function PageEditor({
   onCancel,
   onSaved,
   page,
+  projectId,
 }: {
   onCancel: () => void
   onSaved: (page: Page) => Promise<void>
   page: Page
+  projectId: string
 }) {
   const [title, setTitle] = useState(page.title)
   const [body, setBody] = useState(page.body)
@@ -271,6 +278,7 @@ function PageEditor({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const save = (event: FormEvent) => {
     event.preventDefault()
     if (!title.trim() || busy) return
@@ -284,23 +292,25 @@ function PageEditor({
       note: note.trim() || undefined,
     })
       .then(onSaved)
-      .catch((reason: unknown) =>
-        setError(
-          isApiError(reason) && reason.status === 409
-            ? 'Someone changed this page while you were editing. Copy your text, reload, and try again.'
-            : errorText(reason, 'The page wasn’t saved.'),
-        ),
-      )
+      .catch((reason: unknown) => {
+        if (isApiError(reason) && reason.status === 409) {
+          // Fetch their version underneath; the draft stays in the editor.
+          void queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, page.id) })
+          setError('Someone saved a newer version while you were editing. Your text is still here: save again to replace theirs, or cancel to read it.')
+          return
+        }
+        setError(errorText(reason, 'The page wasn’t saved.'))
+      })
       .finally(() => setBusy(false))
   }
   return (
     <form className="aw-page-editor" onSubmit={save}>
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <TextField label="Title" maxLength={200} onChange={(event) => setTitle(event.target.value)} value={title} />
-      <TextArea
-        hint="Plain text or Markdown."
+      <MarkdownEditor
+        hint="Markdown: headings, lists, - [ ] checklists, ``` code, links. Task keys like AWD-12 link to the task."
         label="Page"
-        onChange={(event) => setBody(event.target.value)}
+        onChange={setBody}
         rows={20}
         value={body}
       />
@@ -357,7 +367,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
         visible to the people in it.
       </PageHeader>
       <Checkbox checked={showSuperseded} label="Show replaced decisions" onChange={setShowSuperseded} />
-      {decisions.isPending ? <MessageSkeleton label="Loading decisions" rows={2} /> : null}
+      {decisions.isPending ? <ListSkeleton label="Loading decisions" rows={3} /> : null}
       {decisions.isError ? <Banner tone="danger">Decisions didn’t load.</Banner> : null}
       {decisions.data && decisions.data.decisions.length === 0 ? (
         <EmptyState icon="check" title="No decisions yet">
@@ -381,7 +391,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
               }
               title={<span id={decision.id}>{decision.title}</span>}
             >
-              {decision.detail ? <p className="aw-row__text">{decision.detail}</p> : null}
+              {decision.detail ? <Markdown className="aw-row__text" source={decision.detail} /> : null}
             </Row>
           ))}
         </RowList>
@@ -391,7 +401,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
           <form className="aw-page-editor" onSubmit={record}>
             {error ? <Banner tone="danger">{error}</Banner> : null}
             <TextField label="What was decided" maxLength={300} onChange={(event) => setTitle(event.target.value)} value={title} />
-            <TextArea label="Why (optional)" onChange={(event) => setDetail(event.target.value)} rows={3} value={detail} />
+            <MarkdownEditor label="Why (optional)" onChange={setDetail} rows={3} value={detail} />
             <div className="aw-form__actions">
               <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">
                 Record decision

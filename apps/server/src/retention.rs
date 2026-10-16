@@ -94,6 +94,20 @@ pub async fn clean_external_events(
     })
 }
 
+/// Held while a retained worktree is removed, and by the scheduler while it
+/// claims one for a retry, so a cleanup never deletes a worktree a retry is
+/// taking over.
+pub async fn lock_repository_retention(
+    transaction: &mut Transaction<'_, Postgres>,
+    repository_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("repository-retention:{repository_id}"))
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
 pub async fn clean_worktrees(
     pool: &PgPool,
     data_root: &Path,
@@ -133,10 +147,7 @@ pub async fn clean_worktrees(
         }
 
         let mut transaction = pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(format!("repository-retention:{}", candidate.repository_id))
-            .execute(&mut *transaction)
-            .await?;
+        lock_repository_retention(&mut transaction, candidate.repository_id).await?;
         if !candidate_is_current(&mut transaction, &candidate).await? {
             transaction.rollback().await?;
             continue;
@@ -252,3 +263,112 @@ fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> boo
     Path::new(&candidate.mirror_path) == expected_mirror
         && Path::new(&candidate.worktree_path) == expected_worktree
 }
+
+/// O3: the retention commands, run on a schedule as background jobs
+/// instead of by hand. The host commands still work for a dry run.
+pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
+    registry.register(EXTERNAL_EVENTS_JOB, |context| async move {
+        // Each pass deletes one bounded batch; keep going until nothing
+        // expired is left, so a busy server never falls behind for good.
+        let started = std::time::Instant::now();
+        let mut removed = 0;
+        let remaining = loop {
+            let result = clean_external_events(&context.state.pool, true).await?;
+            removed += result.removed_events;
+            if result.remaining_expired_events == 0
+                || result.removed_events == 0
+                || started.elapsed() > std::time::Duration::from_secs(8 * 60)
+            {
+                break result.remaining_expired_events;
+            }
+        };
+        tracing::info!(removed, remaining, "trimmed expired agent events");
+        if remaining > 0 {
+            crate::metrics::alert(crate::metrics::Alert {
+                key: "retention_behind",
+                subject: EXTERNAL_EVENTS_JOB.to_owned(),
+                detail: format!(
+                    "Agent event retention removed {removed} rows and still has {remaining} expired rows left."
+                ),
+            });
+        }
+        Ok(())
+    });
+    registry.every(
+        EXTERNAL_EVENTS_JOB,
+        std::time::Duration::from_secs(6 * 60 * 60),
+    );
+    registry.register_with_timeout(
+        WORKTREES_JOB,
+        std::time::Duration::from_secs(30 * 60),
+        |context| async move {
+            // Run the cleanup as its own task: if the job times out, only
+            // this wait is dropped. A removal in progress keeps its
+            // transaction and locks until git is done, so a retry waits
+            // for it instead of racing it.
+            let pool = context.state.pool.clone();
+            let data_root = context.state.config.data_root.clone();
+            let result =
+                tokio::spawn(async move { clean_worktrees(&pool, &data_root, true).await })
+                    .await
+                    .map_err(|_| AppError::Internal("join worktree retention"))??;
+            tracing::info!(
+                removed = result.removed_worktrees,
+                preserved = result.preserved_worktrees,
+                "removed retained worktrees past their retention"
+            );
+            Ok(())
+        },
+    );
+    registry.every(WORKTREES_JOB, std::time::Duration::from_secs(24 * 60 * 60));
+    registry.register(DATABASE_WINDOWS_JOB, |context| async move {
+        let removed = clean_database_windows(&context.state.pool).await?;
+        tracing::info!(removed, "trimmed rows past their retention windows");
+        Ok(())
+    });
+    registry.every(
+        DATABASE_WINDOWS_JOB,
+        std::time::Duration::from_secs(24 * 60 * 60),
+    );
+}
+
+pub const DATABASE_WINDOWS_JOB: &str = "retention.database_windows";
+
+/// The fixed database windows of docs/operations/retention.md, the same
+/// statements `agent-workspace-host-maintenance retention-cleanup --apply
+/// true` runs, under the same advisory lock so the two never overlap.
+/// Returns how many rows changed.
+pub async fn clean_database_windows(pool: &PgPool) -> Result<i64, AppError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(470127786, 1)")
+        .execute(&mut *transaction)
+        .await?;
+    let changed = sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH
+        expired_idempotency AS (DELETE FROM idempotency_keys WHERE expires_at <= now() - interval '1 day' RETURNING 1),
+        expired_invitations AS (UPDATE project_invitations SET status='revoked', revoked_at=now(), version=version+1, updated_at=now() WHERE status='active' AND expires_at <= now() RETURNING 1),
+        oauth_authorization_codes AS (DELETE FROM mcp_oauth_authorization_codes WHERE (used_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '1 day' RETURNING 1),
+        oauth_access_tokens AS (DELETE FROM mcp_oauth_access_tokens WHERE (revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '7 days' RETURNING 1),
+        refresh_eligible AS (SELECT id FROM mcp_oauth_refresh_tokens WHERE (used_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at <= now()) AND created_at <= now() - interval '30 days' FOR UPDATE),
+        refresh_links AS (UPDATE mcp_oauth_refresh_tokens SET rotated_to_token_id=NULL WHERE rotated_to_token_id IN (SELECT id FROM refresh_eligible) RETURNING 1),
+        oauth_refresh_tokens AS (DELETE FROM mcp_oauth_refresh_tokens WHERE id IN (SELECT id FROM refresh_eligible) RETURNING 1),
+        published_outbox AS (DELETE FROM outbox_events WHERE published_at <= now() - interval '30 days' RETURNING 1),
+        completed_temporary_jobs AS (DELETE FROM github_jobs WHERE state IN ('completed', 'exhausted') AND updated_at <= now() - interval '30 days' RETURNING 1)
+        SELECT (SELECT count(*) FROM expired_idempotency)
+             + (SELECT count(*) FROM expired_invitations)
+             + (SELECT count(*) FROM oauth_authorization_codes)
+             + (SELECT count(*) FROM oauth_access_tokens)
+             + (SELECT count(*) FROM oauth_refresh_tokens)
+             + (SELECT count(*) FROM published_outbox)
+             + (SELECT count(*) FROM completed_temporary_jobs)
+        "#,
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(changed)
+}
+
+pub const EXTERNAL_EVENTS_JOB: &str = "retention.external_events";
+pub const WORKTREES_JOB: &str = "retention.worktrees";

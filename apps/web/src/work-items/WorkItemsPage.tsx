@@ -75,6 +75,19 @@ export function WorkItemsPage() {
   const { projectId = '' } = useParams()
   const [parameters, setParameters] = useSearchParams()
   const [createOpen, setCreateOpen] = useState(false)
+  // C and the command menu's "Create task" land here with ?create=task.
+  const createRequested = parameters.get('create') === 'task'
+  const [handledCreate, setHandledCreate] = useState(false)
+  if (createRequested !== handledCreate) {
+    setHandledCreate(createRequested)
+    if (createRequested) setCreateOpen(true)
+  }
+  useEffect(() => {
+    if (!createRequested) return
+    const next = new URLSearchParams(parameters)
+    next.delete('create')
+    setParameters(next, { replace: true })
+  }, [createRequested, parameters, setParameters])
   const createButtonRef = useRef<HTMLButtonElement>(null)
   const view = parameters.get('view') === 'board' ? 'board' : 'list'
   const project = useProject(projectId)

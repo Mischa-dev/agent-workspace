@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest'
+
+import { filterCommands, type CommandItem } from '../ui'
+import { pageTitleFor, unreadCount } from './documentTitleModel'
+import { createShortcutMatcher, parseTaskKey } from './shortcuts'
+
+function key(value: string, extra: Partial<KeyboardEvent> = {}) {
+  return { key: value, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, isComposing: false, target: document.body, ...extra }
+}
+
+describe('keyboard shortcuts', () => {
+  it('runs single keys and G sequences outside text fields only', () => {
+    let now = 0
+    const press = createShortcutMatcher(() => now)
+    expect(press(key('k', { metaKey: true }))).toBe('command-menu')
+    expect(press(key('c'))).toBe('create-task')
+    expect(press(key('?', { shiftKey: true }))).toBe('shortcut-sheet')
+    expect(press(key('g'))).toBeNull()
+    expect(press(key('i'))).toBe('go-inbox')
+    expect(press(key('g'))).toBeNull()
+    now = 5_000
+    expect(press(key('t'))).toBeNull()
+
+    const field = document.createElement('input')
+    document.body.appendChild(field)
+    expect(press(key('c', { target: field }))).toBeNull()
+    // ⌘K still opens the menu while typing.
+    expect(press(key('k', { ctrlKey: true, target: field }))).toBe('command-menu')
+    field.remove()
+  })
+
+  it('reads task keys in any case and rejects look-alikes', () => {
+    expect(parseTaskKey('awd-12')).toEqual({ projectKey: 'AWD', number: 12, key: 'AWD-12' })
+    expect(parseTaskKey('AWD-0')).toBeNull()
+    expect(parseTaskKey('12-AWD')).toBeNull()
+    expect(parseTaskKey('settings')).toBeNull()
+  })
+})
+
+describe('command menu filtering', () => {
+  const item = (id: string, label: string, extra: Partial<CommandItem> = {}): CommandItem => ({
+    id,
+    label,
+    group: 'Go to',
+    onSelect: () => undefined,
+    ...extra,
+  })
+
+  it('puts prefix matches first and keeps server results', () => {
+    const items = [item('a', 'Project settings'), item('b', 'Settings', { keywords: ['preferences'] }), item('c', 'Home'), item('d', 'Fix login', { matched: true })]
+    expect(filterCommands(items, 'set').map((candidate) => candidate.id)).toEqual(['b', 'a', 'd'])
+    expect(filterCommands(items, 'prefer').map((candidate) => candidate.id)).toEqual(['b', 'd'])
+    expect(filterCommands(items, '')).toHaveLength(4)
+  })
+})
+
+describe('document title', () => {
+  const projects = [{ id: 'p1', name: 'Agent Workspace', attentionCount: 2, archivedAt: null }, { id: 'p2', name: 'Old', attentionCount: 5, archivedAt: '2026-01-01' }]
+
+  it('counts what needs you, skipping archived Projects', () => {
+    expect(unreadCount(projects, [{ unread: true }, { unread: false }])).toBe(3)
+  })
+
+  it('names the page and its Project', () => {
+    expect(pageTitleFor('/projects/p1/work-items', '?view=board', projects, null)).toBe('Board · Agent Workspace')
+    expect(pageTitleFor('/projects/p1/channels/c1', '', projects, '#general')).toBe('#general · Agent Workspace')
+    expect(pageTitleFor('/messages', '', projects, null)).toBe('Messages')
+  })
+})
