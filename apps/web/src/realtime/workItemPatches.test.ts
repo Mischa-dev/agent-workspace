@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
+import { resetQueryScope } from '../api/queryScope'
 import type { WorkItemBoardResponse, WorkItemCard, WorkItemListResponse } from '../work-items/types'
 import { applyWorkItemChange, patchBoard, patchList, workItemChange } from './workItemPatches'
 
@@ -167,5 +168,34 @@ describe('work item live patches', () => {
     expect(ids(queryClient.getQueryData<WorkItemBoardResponse>(boardKey)!)).toEqual([[2, 3], [1, 4, 5]])
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(false)
     expect(queryClient.getQueryData(queryKeys.workItem(projectId, id(1)))).toMatchObject({ version: 2 })
+  })
+  it('refetches a wildcard search, which only the server can match', () => {
+    const list: WorkItemListResponse = { items: [card(2)], nextCursor: null }
+    expect(patchList(list, card(2, todo, 2), id(2), { q: '100%' })).toBe('refetch')
+  })
+
+  it('writes nothing once the session ends mid-fetch', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const boardKey = [...queryKeys.workItems(projectId, { cursor: undefined }), 'board']
+    queryClient.setQueryData(boardKey, board())
+    let answer: (() => void) | undefined
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      answer = () => resolve(new Response(
+        JSON.stringify({ ...card(1, doing, 2), description: '', createdAt: '2026-10-16T09:00:00Z' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ))
+    })))
+    const applied = applyWorkItemChange(queryClient, projectId, {
+      workItemId: id(1),
+      version: 2,
+      placement: { statusId: doing.id, archived: false, afterId: null, beforeId: id(4) },
+    })
+    await vi.waitFor(() => expect(answer).toBeDefined())
+    queryClient.clear()
+    resetQueryScope()
+    answer!()
+    await applied
+
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
   })
 })

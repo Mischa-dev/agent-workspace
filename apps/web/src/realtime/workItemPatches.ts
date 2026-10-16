@@ -2,6 +2,7 @@ import type { Query, QueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { ApiError } from '../api/errors'
+import { currentQueryScopeGeneration } from '../api/queryScope'
 import { getWorkItem } from '../work-items/api'
 import type {
   WorkItem,
@@ -117,7 +118,8 @@ export function patchList(
   const present = index >= 0 ? list.items[index] : undefined
   if (present && card && present.version > card.version) return 'unchanged'
   const matches = card ? cardMatchesFilters(card, filters) : false
-  if (matches === null) return present && card ? replaceAt(list, index, card) : 'refetch'
+  // A wildcard search: only the server knows whether the card still belongs.
+  if (matches === null) return 'refetch'
   if (!matches) {
     if (!present) return 'unchanged'
     // A shorter page with more behind it would leave a gap: let the next task in.
@@ -232,6 +234,7 @@ export async function applyWorkItemChange(
   // Nothing on screen holds this task and no view could gain it: nothing to do.
   if (!cachedDetail && views.length === 0) return
 
+  const generation = currentQueryScopeGeneration()
   let item: WorkItem | null
   if (cachedDetail && cachedDetail.version >= change.version) {
     item = cachedDetail
@@ -244,10 +247,13 @@ export async function applyWorkItemChange(
       if (error instanceof ApiError && (error.status === 404 || error.status === 403)) {
         item = null
       } else {
+        if (generation !== currentQueryScopeGeneration()) return
         void queryClient.invalidateQueries({ queryKey: root })
         return
       }
     }
+    // The session ended or changed while this waited: its caches are gone.
+    if (generation !== currentQueryScopeGeneration()) return
   }
 
   if (item) {

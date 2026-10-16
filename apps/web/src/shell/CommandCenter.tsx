@@ -6,7 +6,7 @@ import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '.
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
-import { useProject, useProjectSearch, useProjects, useUpdateProjectNavigation } from '../projects/hooks'
+import { useProject, useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
@@ -80,6 +80,7 @@ export function CommandCenter() {
   const current = useRouteProject(projects, projectsQuery.isSuccess)
   const direct = useDirectOverview()
   const { mutateAsync: updateNavigation } = useUpdateProjectNavigation()
+  const { mutateAsync: switchProject } = useSwitchProject()
   const sidebar = useProjectConversationSidebar(state.open === 'commands' ? current?.id ?? '' : '')
   const [query, setQuery] = useState('')
   const tasks = useTaskResults(state.open === 'commands' ? query : '', current)
@@ -288,7 +289,19 @@ export function CommandCenter() {
         mark: <ProjectInitials project={project} size={20} />,
         keywords: [project.key],
         matched: !listed.has(project.id),
-        onSelect: go(projectLocationHref(project.id, project.navigation.location)),
+        onSelect: () => {
+          const href = projectLocationHref(project.id, project.navigation.location)
+          if (!project.capabilities.navigationWrite) return navigate(href)
+          // Record the switch so the rail's recent Projects stay in order.
+          void switchProject({
+            projectId: project.id,
+            expectedVersion: project.navigation.version,
+            navigation: project.navigation,
+          }).then(
+            (result) => navigate(result.href),
+            () => navigate(href),
+          )
+        },
       })
     }
 
@@ -345,7 +358,7 @@ export function CommandCenter() {
       })
     }
     return list
-  }, [current, direct.data, navigate, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, navigate, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
   // With nothing typed, show where you'd most likely go; everything else is a search away.
   const visibleItems = useMemo(() => {
