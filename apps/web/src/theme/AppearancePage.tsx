@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
-import { useAuthenticatedSession } from '../auth/session'
-import { AppShell } from '../shell/AppShell'
 import {
   ActorTag,
   Avatar,
@@ -176,8 +174,8 @@ function ThemePreview() {
   )
 }
 
-export function AppearancePage() {
-  const session = useAuthenticatedSession()
+/** Account › Appearance in settings. */
+export default function AppearancePage() {
   const theme = useTheme()
   const [mode, setMode] = useState<'main' | 'all'>('main')
   const [pasted, setPasted] = useState('')
@@ -226,8 +224,7 @@ export function AppearancePage() {
   const presetName = THEME_PRESETS.find((preset) => preset.id === theme.preset)?.name ?? 'Indigo'
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-appearance">
+      <div className="aw-appearance">
         <PageHeader
           actions={
             <Button icon="undo" onClick={theme.resetAppearance} variant="ghost">
@@ -237,7 +234,7 @@ export function AppearancePage() {
           icon="palette"
           title="Appearance"
         >
-          Start from a preset, then change any color. Changes apply everywhere as you make them and stay on this device.
+          Start from a preset, then change any color. Changes apply as you make them and follow you to every device you sign in on.
         </PageHeader>
 
         <div className="aw-appearance__layout">
@@ -410,6 +407,5 @@ export function AppearancePage() {
           </div>
         </div>
       </div>
-    </AppShell>
   )
 }

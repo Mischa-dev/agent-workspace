@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod account;
+pub mod account_security;
 pub mod api;
+pub mod audit_log;
 pub mod auth;
 pub mod bootstrap;
 pub mod config;
@@ -56,6 +58,7 @@ pub mod work_item_labels;
 pub mod work_item_planning;
 pub mod work_item_workflow;
 pub mod work_items;
+pub mod workspace;
 
 use std::sync::Arc;
 
@@ -97,6 +100,7 @@ pub fn router(state: AppState) -> Router {
         }))
         .merge(api::router())
         .merge(account::router())
+        .merge(account_security::router())
         .merge(conversations::router())
         .merge(direct::router())
         .merge(replies::router())
@@ -108,6 +112,8 @@ pub fn router(state: AppState) -> Router {
         .merge(github::router())
         .merge(invitations::router())
         .merge(memberships::router())
+        .merge(workspace::router())
+        .merge(audit_log::router())
         .merge(work_items::router())
         .merge(memory::router())
         .merge(search::router())
