@@ -1916,7 +1916,7 @@ fn actor_kind(value: &str) -> Option<ActorKind> {
 /// its blockers are done, its account has a free slot and its thread is
 /// free, rechecking the person's access as it goes. Blocked launches wait,
 /// so they start last.
-pub(crate) async fn drain(state: &AppState) -> Result<usize, AppError> {
+pub async fn drain(state: &AppState) -> Result<usize, AppError> {
     // One drain at a time; the lock goes with the transaction, so a crash
     // can't leave it held.
     let mut guard = state.pool.begin().await?;

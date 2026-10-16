@@ -93,6 +93,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/pins",
     "/api/v1/conversations/{id}/threads",
     "/api/v1/conversations/{id}/timeline",
+    "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
     "/api/v1/organizations/{organization_id}/personal-secrets",
@@ -116,8 +117,10 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/external-execution-requests",
     "/api/v1/projects/{project_id}/integrations/github",
     "/api/v1/projects/{project_id}/integrations/github/automation",
+    "/api/v1/projects/{project_id}/environments",
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
+    "/api/v1/projects/{project_id}/launches",
     "/api/v1/projects/{project_id}/member-candidates",
     "/api/v1/projects/{project_id}/members",
     "/api/v1/projects/{project_id}/milestones",
@@ -135,6 +138,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
     "/api/v1/search",
     "/api/v1/settings/effective",
@@ -1103,6 +1107,43 @@ async fn build_workspace(
         let (status, written) = send(app, browser.request("PUT", &uri, None, body)).await;
         assert!(status.is_success(), "{label} PUT {uri}: {status} {written}");
     }
+    // An environment and a queued launch (W7), started far ahead so the
+    // queue leaves it waiting.
+    let uri = format!("/api/v1/projects/{project}/environments");
+    let (status, written) = send(
+        app,
+        browser.request(
+            "POST",
+            &uri,
+            None,
+            json!({
+                "name": format!("Cloud{m}"),
+                "harness": "codex_cloud",
+                "providerEnvironmentId": "env-launch",
+                "setupNotes": format!("Notes{m}"),
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{label} POST {uri}: {status} {written}");
+    let uri = format!("/api/v1/projects/{project}/launches");
+    let start_at = (chrono::Utc::now() + chrono::Duration::days(20)).to_rfc3339();
+    let (status, written) = send(
+        app,
+        browser.request(
+            "POST",
+            &uri,
+            Some(&format!("launch-{label}")),
+            json!({
+                "workItemIds": [task],
+                "startWhen": "at",
+                "startAt": start_at,
+                "prompt": format!("Ship it{m}"),
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{label} POST {uri}: {status} {written}");
 
     World {
         marker,
@@ -1495,6 +1536,11 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         project_route("/api/v1/projects/{project_id}/labels", "/labels"),
+        project_route("/api/v1/projects/{project_id}/launches", "/launches"),
+        project_route(
+            "/api/v1/projects/{project_id}/environments",
+            "/environments",
+        ),
         project_route("/api/v1/projects/{project_id}/milestones", "/milestones"),
         case(
             "/api/v1/projects/{project_id}/work-items/groups",
@@ -1526,6 +1572,10 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         (
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
             "/claim",
+        ),
+        (
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
+            "/launch",
         ),
         (
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
@@ -1624,6 +1674,15 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         vec![
             format!("/api/v1/conversations/{}/pins", b.channel),
             format!("/api/v1/conversations/{}/pins", b.dm),
+        ],
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/conversations/{conversation_id}/agent-sessions",
+        vec![format!("/api/v1/conversations/{}/agent-sessions", a.thread)],
+        vec![
+            format!("/api/v1/conversations/{}/agent-sessions", b.thread),
+            format!("/api/v1/conversations/{}/agent-sessions", b.dm),
         ],
         vec![],
     ));
@@ -1783,9 +1842,11 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "conversation_open",
     "conversation_read",
     "decision_list",
+    "environment_list",
     "external_event_poll",
     "inbox_list",
     "label_list",
+    "launch_list",
     "message_history",
     "milestone_list",
     "page_get",
@@ -1862,6 +1923,8 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("workflow_get"),
         by_project("project_members"),
         by_project("label_list"),
+        by_project("launch_list"),
+        by_project("environment_list"),
         by_project("page_list"),
         by_project("decision_list"),
         by_project("milestone_list"),
