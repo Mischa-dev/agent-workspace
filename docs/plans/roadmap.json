@@ -1,0 +1,1887 @@
+{
+  "generated": "2026-10-16",
+  "source": "docs/plans/roadmap.md",
+  "waves": [
+    {
+      "wave": 0,
+      "name": "Runway",
+      "gives": "Green CI on the Red Hat runner, cloud sessions that can run every test, and pull requests that don't collide. Small; starts with wave 1 and merges first."
+    },
+    {
+      "wave": 1,
+      "name": "Foundations and the first things you'll notice",
+      "gives": "The plumbing (jobs, secrets, settings, the harness adapter), task views that hold a whole project, Cmd+K and instant changes, tag-an-agent finished, and an inbox."
+    },
+    {
+      "wave": 2,
+      "name": "Launch, capacity and AI planning",
+      "gives": "Launch to Codex Cloud with your defaults, reset alerts on your phone, one settings area, AI dependency suggestions, saved views and import. Usable day to day from here."
+    },
+    {
+      "wave": 3,
+      "name": "Your harnesses and the payoff",
+      "gives": "Claude Code and your own harnesses, run pages with logs and cost, one tap to use capacity before a reset, Home and onboarding, the API and automations."
+    },
+    {
+      "wave": 4,
+      "name": "Opening up",
+      "gives": "Self-hosting, the open-source release and the SaaS, when you decide."
+    }
+  ],
+  "areas": [
+    {
+      "code": "F",
+      "name": "Foundations",
+      "goal": "Make parallel work safe"
+    },
+    {
+      "code": "S",
+      "name": "Settings, secrets and accounts",
+      "goal": "One place to set things once"
+    },
+    {
+      "code": "H",
+      "name": "Harnesses and execution",
+      "goal": "Any harness, any model"
+    },
+    {
+      "code": "C",
+      "name": "Environments and launching",
+      "goal": "One click to the right place"
+    },
+    {
+      "code": "U",
+      "name": "Usage, limits and capacity",
+      "goal": "Know what you have and use it"
+    },
+    {
+      "code": "T",
+      "name": "Tasks at project scale",
+      "goal": "The server side of a whole project"
+    },
+    {
+      "code": "V",
+      "name": "Task views",
+      "goal": "Seeing a whole project"
+    },
+    {
+      "code": "AI",
+      "name": "AI planning",
+      "goal": "Dependencies and blockers found for you"
+    },
+    {
+      "code": "N",
+      "name": "Notifications and the inbox",
+      "goal": "Hear about what matters, anywhere"
+    },
+    {
+      "code": "A",
+      "name": "Agents in conversations",
+      "goal": "Tag an agent and it does the work"
+    },
+    {
+      "code": "P",
+      "name": "Polish",
+      "goal": "Feels like a product"
+    },
+    {
+      "code": "X",
+      "name": "Extensibility",
+      "goal": "Plug in your own harnesses"
+    },
+    {
+      "code": "O",
+      "name": "Operations, open source and SaaS",
+      "goal": "Keep it running, and ready to open up"
+    }
+  ],
+  "workstreams": [
+    {
+      "id": "W0",
+      "wave": 0,
+      "name": "Runway",
+      "goal": "Clear the way for many agents at once: the older pull requests settled, main green on the Red Hat runner, cloud sessions that can test, and changes that don't collide.",
+      "items": [
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F10"
+      ],
+      "owns": "The checks F4 changes (`tests/integration/m6_mcp_foundation.rs`, `scripts/web-budget-lib.mjs`, `migration_preflight.rs`), the cloud setup script and `.claude/settings.json`, and the docs F10 names. `tools/ci/` and `.github/workflows/` belong to PR #131 until it merges.",
+      "seams": [
+        "F1 needs Mischa: merge or close the five older open pull requests. If #125 is still open when W5 starts, W5 takes it over.",
+        "F2 is PR #131, from making the Red Hat host the CI runner.",
+        "Wave 1 starts at the same time. Its workstreams name migrations by timestamp from day one and merge main once W0 lands."
+      ],
+      "done": "Main is green on the Red Hat runner, no pull request from before the roadmap is still open, a fresh cloud session runs every test, and two branches that each add a migration, a tool and a route merge in either order.",
+      "needs": []
+    },
+    {
+      "id": "W1",
+      "wave": 1,
+      "name": "Backbone",
+      "goal": "The plumbing everything else uses, and what keeps it safe to run: background jobs, encrypted secrets, settings that inherit, backups you can restore, metrics, and the two-workspace isolation tests.",
+      "items": [
+        "F9",
+        "S1",
+        "S2",
+        "O1",
+        "O2",
+        "O3",
+        "O7"
+      ],
+      "owns": "New server modules for jobs, secrets and settings; scheduling in `retention.rs`; the metrics endpoint; the isolation suite under `tests/integration/`; the backup scripts in `deploy/redhat/`; and moving the webhook secret out of `external_agents.rs`. No settings screens: those are W8's.",
+      "seams": [
+        "Post the Rust interfaces (enqueue a job, store and use a secret, resolve a setting) in the draft PR on day one, so W2 can code against them before this merges.",
+        "O2's alerts go to the log until W6's notifications are on main.",
+        "O1's scripts land in the PR; switching the host's backup service over is a deploy step for Mischa."
+      ],
+      "done": "A project's setting overrides the workspace's and the API says where each value came from; a saved key never shows up in a database dump, an API response, a log line or a run's environment; a job scheduled for later survives a restart and its retries reuse one idempotency key; a restore drill works from the off-host copy; and the isolation suite covers every existing list, search and MCP read tool.",
+      "needs": []
+    },
+    {
+      "id": "W2",
+      "wave": 1,
+      "name": "Harness platform",
+      "goal": "Codex becomes one adapter among many, runs carry a model, reasoning level and speed, and provider accounts belong to people instead of projects.",
+      "items": [
+        "F8",
+        "H1",
+        "H2",
+        "S6",
+        "H3",
+        "H4",
+        "H8"
+      ],
+      "owns": "`provider.rs` and `provider/`, `scheduler.rs`, `execution.rs`, `execution_setup.rs`, `profile_runtime.rs`, `recovery.rs`, `runs.rs`, `account.rs`, the branch prefix in `git_runtime.rs`, the run and execution profile tables, and `apps/web/src/execution/`.",
+      "seams": [
+        "Settings (S2) and secrets (S1) come from W1. Until W1 merges, a run's settings come from the request and the adapter's defaults, and an account keeps only its login state; whichever merges second wires them together.",
+        "Agent sessions (A3) wait for W7, which builds on this adapter."
+      ],
+      "done": "Codex runs behave as before, through the adapter; a run started with a model, reasoning level and speed shows them on its card and Codex received them; one Codex sign-in works in every project; two runs go at once on one account; and the demo adapter passes the same contract tests as Codex.",
+      "needs": []
+    },
+    {
+      "id": "W3",
+      "wave": 1,
+      "name": "Tasks",
+      "goal": "A whole project fits in the task list: the planning model complete on the web and MCP, fast at 10,000 tasks, and a list, board, task panel and milestones page that make it easy to work through.",
+      "items": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6",
+        "T7",
+        "T8",
+        "V1",
+        "V2",
+        "V3",
+        "V4",
+        "V9"
+      ],
+      "owns": "`work_items.rs`, `work_item_commands.rs`, `work_item_labels.rs`, the task tools in `mcp/` (planning, labels, tasks, task batches, moves, workflow, criteria), `apps/web/src/work-items/` and `work.css`, and the pickers V1 adds to `apps/web/src/ui/` as new files.",
+      "seams": [
+        "W4 changes the UI kit and query keys everywhere except `apps/web/src/work-items/`, which moves to project-first query keys here.",
+        "Markdown (P4), toasts with undo (F6) and patched live updates (F7) come from W4. Until they're on main, descriptions stay plain text and changes refetch; whichever merges second switches over.",
+        "The task panel's Launch button comes with W7.",
+        "Watchers (T5) hear about changes through W6's notifications. Whichever of W3 and W6 merges second adds the watched-task kind to the fan-out."
+      ],
+      "done": "On the 10,000-task fixture the list, board and task_list answer in under 200 ms; workflow, dates, dependencies, milestones, labels and bulk edits work from both the web and MCP; and 20 tasks can be triaged from the keyboard.",
+      "needs": []
+    },
+    {
+      "id": "W4",
+      "wave": 1,
+      "name": "App shell and polish",
+      "goal": "The app feels like a product: Cmd+K to go anywhere, instant changes with undo and clear errors, Markdown, threads beside channels, live updates that patch in place, and smoke tests in a real browser.",
+      "items": [
+        "F5",
+        "F6",
+        "F7",
+        "P1",
+        "P2",
+        "P4",
+        "P6",
+        "P8",
+        "N5"
+      ],
+      "owns": "`apps/web/src/ui/` apart from V1's pickers, and `app/`, `shell/`, `realtime/`, `styles/`, `theme/`, `conversations/`, `threads/` and `direct/ThreadPanel.tsx` under `apps/web/src/`; splitting `App.test.tsx`; the Playwright setup; and the event payloads in `outbox.rs` that F7 needs.",
+      "seams": [
+        "Leave `apps/web/src/work-items/` to W3, which adopts the kit, Markdown and patched updates once they're on main.",
+        "W5 adds agent status lines and Stop inside conversations. Move shared components without rewriting them, and merge main often.",
+        "P8's flows for a demo run and the inbox follow once W2 and W6 are on main."
+      ],
+      "done": "Cmd+K reaches every page and common action; no screen says to reload, and archive can be undone; descriptions, pages and comments render Markdown; channel threads open beside the channel; a change in one tab shows in another without a refetch; and CI runs the browser smoke tests.",
+      "needs": []
+    },
+    {
+      "id": "W5",
+      "wave": 1,
+      "name": "Agents in conversations",
+      "goal": "Finish `docs/plans/agent-tag.md`: a tagged agent shows progress, takes follow-ups in its thread, answers a channel tag in a new thread and stops when told, and adding a runner is one form.",
+      "items": [
+        "A1",
+        "A2",
+        "A4",
+        "A5",
+        "A6",
+        "A7"
+      ],
+      "owns": "`replies.rs`, `external_agents.rs`, `external_events.rs`, `external_execution.rs`, `mcp/replies.rs`, `mcp/agents.rs`, `conversations/ReplyStatus.tsx` and the agent status line, `apps/web/src/external-agents/`, and `docs/agent-runner.md`.",
+      "seams": [
+        "Starts from draft PR #125 (A1): merge it first, or branch from it.",
+        "Stop (A5) cancels the claimed request and typed wakeups (A6) say what happened; both add the agent's session once W7's A3 lands.",
+        "W1 moves the webhook secret into the secrets store; leave how it's stored to W1."
+      ],
+      "done": "A tagged agent posts progress and interim messages, picks up 'also fix the test' in its thread, answers a channel tag in a new thread, and stops when someone presses Stop; and adding a runner is one form on the Agents page.",
+      "needs": []
+    },
+    {
+      "id": "W6",
+      "wave": 1,
+      "name": "Notifications",
+      "goal": "People hear about what matters: mentions, assignments, approvals and run results land in an inbox with a badge.",
+      "items": [
+        "N1",
+        "N2"
+      ],
+      "owns": "A new notifications module and table, the fan-out from outbox events, any event payloads in `outbox.rs` it needs for approvals, pull request checks and review requests, attention_count in `projects.rs`, notifications in `mcp/briefing.rs`, and a new `apps/web/src/inbox/`.",
+      "seams": [
+        "Notifications are written in the outbox publisher's transaction, so they don't wait for W1's job queue.",
+        "W4 also adds payloads to `outbox.rs` (for F7). Add lines next to related ones, as F4 says, so either can merge first.",
+        "Uses W4's toasts and skeletons if they're on main, and plain states otherwise.",
+        "Changes to watched tasks need W3's watchers (T5). Whichever of W3 and W6 merges second adds that kind.",
+        "Capacity alerts (W9) and AI suggestions (W10) add their own kinds later."
+      ],
+      "done": "A comment mention reaches the person and the project's attention count; mentions, assignments, approvals waiting and finished runs land in the inbox with a badge on the rail; and a morning's notifications clear from the keyboard.",
+      "needs": []
+    },
+    {
+      "id": "W7",
+      "wave": 2,
+      "name": "Launch",
+      "goal": "Moment 1: a project knows its environments and run defaults, and one click, or '@codex do X', starts a run on the host or in Codex Cloud, with its progress and pull request in the task's thread.",
+      "items": [
+        "C1",
+        "C2",
+        "C4",
+        "C5",
+        "C6",
+        "A3",
+        "A8"
+      ],
+      "owns": "New environments, launch and launch-queue modules, the Codex Cloud adapter in `provider/`, the agent sessions table (A3), task_launch, and the Launch button and dialog.",
+      "seams": [
+        "The Environments page and run defaults are settings pages that W8's settings area links to; until W8 is on main they sit in today's project settings.",
+        "'Start when a window resets' uses W9's usage windows once they're on main.",
+        "W9's capacity alerts open a list of an account's ready tasks. Whichever of W7 and W9 merges second adds the Launch button to each one."
+      ],
+      "done": "One click on a task starts a Codex Cloud task in the project's default environment with its defaults, and its status and pull request show in the task's thread; '@codex fix the flaky test' does the same; and ten queued tasks start as capacity frees up, blocked ones last.",
+      "needs": [
+        "W1",
+        "W2",
+        "W5"
+      ]
+    },
+    {
+      "id": "W8",
+      "wave": 2,
+      "name": "Settings and accounts",
+      "goal": "One settings area for your account, the workspace and each project, showing what's inherited; GitHub connected in three clicks; members, roles, invitations, API tokens, two-factor and the audit log.",
+      "items": [
+        "S3",
+        "S4",
+        "S5",
+        "S7",
+        "S8",
+        "S9"
+      ],
+      "owns": "A new `apps/web/src/settings/` that replaces `projects/ProjectSettingsPage.tsx`, the `github/` and `repositories/` screens, `memberships.rs`, `invitations.rs`, the GitHub App install flow in `github.rs`, account security in `auth/`, and the audit log API.",
+      "seams": [
+        "Post a small registry for settings pages on day one, so W7 (environments), W9 (notifications and alert rules) and W10 (AI and models) each add a line."
+      ],
+      "done": "Every setting is reachable from /settings and old links redirect; a project setting shows the value it inherits and can override it; a repository connects in three clicks without copying an ID; a new person joins the workspace once; and passwords, sessions and API tokens need no command line.",
+      "needs": [
+        "W1",
+        "W4"
+      ]
+    },
+    {
+      "id": "W9",
+      "wave": 2,
+      "name": "Capacity and push",
+      "goal": "The first half of moment 2: every plan window tracked in the background with a countdown, capacity alerts, push to your phone, and notification settings.",
+      "items": [
+        "U1",
+        "U3",
+        "U6",
+        "N3",
+        "N4"
+      ],
+      "owns": "New usage and push modules (windows, the polling job, alert rules, Web Push), the push handlers in sw.js, and the usage section of the account page.",
+      "seams": [
+        "The alert's Launch action opens the account's ready tasks across its projects. Each task gets W7's Launch button; whichever of W7 and W9 merges second adds it. The one-tap batch comes in W13.",
+        "Notification and alert settings go into W8's settings area once it's on main."
+      ],
+      "done": "The account page shows every window with a live countdown, including a plan with only a weekly window, and your phone shows 'Codex weekly limit resets in 2 h · 38% unused' with a Launch button.",
+      "needs": [
+        "W1",
+        "W2",
+        "W6"
+      ]
+    },
+    {
+      "id": "W10",
+      "wave": 2,
+      "name": "AI planning",
+      "goal": "Moment 3's brain: the model gateway on your key from settings, suggested dependencies and blockers in a review queue and on a graph, ready-and-next ranking, plan to tasks, and triage on create.",
+      "items": [
+        "AI1",
+        "AI2",
+        "AI3",
+        "AI4",
+        "AI5",
+        "AI6",
+        "V7"
+      ],
+      "owns": "A new AI module with its prompts and fixtures, the ai_suggestions table, readiness and ranking, the AI and models settings page, and the dependency graph page.",
+      "seams": [
+        "W13's one-tap batch uses AI5's ranking.",
+        "The AI and models page goes into W8's settings area once it's on main."
+      ],
+      "done": "On a 200-task project, suggested dependencies arrive in a review queue and on the graph, and accepting one updates the ready list; this roadmap's JSON becomes tasks, milestones and dependencies through plan to tasks; and it all runs against a fake provider in tests and your Anthropic key from settings.",
+      "needs": [
+        "W1",
+        "W3"
+      ]
+    },
+    {
+      "id": "W11",
+      "wave": 2,
+      "name": "Views and data",
+      "goal": "The rest of what a whole project needs: saved views, My work, a timeline, import and export, and templates.",
+      "items": [
+        "V5",
+        "V6",
+        "V8",
+        "T9",
+        "T10"
+      ],
+      "owns": "New views, import and export, and templates modules, the sidebar's pinned views, and the My work, timeline and import pages.",
+      "seams": [
+        "The timeline shows suggested dependencies once W10's graph is on main."
+      ],
+      "done": "Ready for agents is one click from the sidebar and agents can read it; Monday starts on My work; dragging a milestone shows what slips; 300 GitHub issues import with their labels; a project made from a template arrives with its workflow and defaults; and a weekly recurring task appears on schedule.",
+      "needs": [
+        "W1",
+        "W3"
+      ]
+    },
+    {
+      "id": "W12",
+      "wave": 3,
+      "name": "Your harnesses",
+      "goal": "Moment 4: Claude Code and your own harnesses run exactly like Codex, every run has a page with its log, diff and cost, and agents become profiles you create from templates.",
+      "items": [
+        "H5",
+        "U2",
+        "H6",
+        "C3",
+        "H7",
+        "X1",
+        "X2",
+        "A9",
+        "A10"
+      ],
+      "owns": "New adapters in `provider/` (Claude Code, its cloud, the command line), run event payloads and the run page, token and cost records, the runner SDKs as new TypeScript and Python packages, `docs/harness-guide.md`, harness registration, and agent profiles.",
+      "seams": [
+        "W13's usage page shows cost, and W14's automations launch agent profiles, once this is on main."
+      ],
+      "done": "In a thread you pick Claude Code or your own harness instead of Codex and get the same run card, approvals and pull request; a 50-line script harness and a 100-line SDK harness both take a task to a pull request and show in the Launch dialog with their own models; and every run shows its log, diff, tokens and cost.",
+      "needs": [
+        "W1",
+        "W2",
+        "W5",
+        "W7"
+      ]
+    },
+    {
+      "id": "W13",
+      "wave": 3,
+      "name": "Payoff and finish",
+      "goal": "Moment 2 in full (one tap launches the batch the alert suggests), the usage page, a real Home, onboarding, and a polish pass over every area.",
+      "items": [
+        "U4",
+        "U5",
+        "P3",
+        "P5",
+        "P7"
+      ],
+      "owns": "The suggested batch, the usage page, `HomePage.tsx`, the onboarding path, and the polish checklist in `docs/frontend/`. The polish pass touches every area, so it comes last and merges main first; pages that land after it (W12, W14) pass the checklist in their own workstream.",
+      "seams": [
+        "Cost per project on the usage page comes from W12 once it's on main."
+      ],
+      "done": "Tapping Launch on the capacity alert starts the batch, each task in its own project's environment; Home answers 'what's going on?' in one look; a new workspace reaches its first launched run without leaving the onboarding path; and each area passes the polish checklist.",
+      "needs": [
+        "W2",
+        "W4",
+        "W6",
+        "W7",
+        "W8",
+        "W9",
+        "W10"
+      ]
+    },
+    {
+      "id": "W14",
+      "wave": 3,
+      "name": "Automations and API",
+      "goal": "Everything scriptable: a versioned public API with tokens, outgoing webhooks, and automations that launch agents on events and schedules.",
+      "items": [
+        "X3",
+        "X4",
+        "X5"
+      ],
+      "owns": "The public API and its OpenAPI document, outgoing webhooks and their delivery log, and the automation rules and builder.",
+      "seams": [
+        "Automations launch a harness with the project's defaults, and an agent profile once W12 is on main."
+      ],
+      "done": "A script with a personal token can do what the web app does; an external service hears about every finished run; and 'when a PR's checks fail, launch an agent on it' works with nobody watching.",
+      "needs": [
+        "W1",
+        "W6",
+        "W7",
+        "W8",
+        "W11"
+      ]
+    },
+    {
+      "id": "W15",
+      "wave": 4,
+      "name": "Open up",
+      "goal": "When you decide to open it up (D1): self-hosting in one command, the open-source release, sign-up and email, billing, more than one server, containers for other people's code, and semantic search if full-text falls short.",
+      "items": [
+        "O8",
+        "O9",
+        "O4",
+        "O5",
+        "O6",
+        "C7",
+        "AI7"
+      ],
+      "owns": "Decided when it starts. It may well split in two: self-hosting and the open-source release first, then the SaaS.",
+      "seams": [
+        "Principle 8 keeps this short: by then every workstream has scoped its data to the workspace, used the job queue and kept machine names in configuration."
+      ],
+      "done": "A stranger can clone the repository, start it with docker compose up and use it, and a hosted workspace can sign up, pay and run agents in containers.",
+      "needs": [
+        "W1",
+        "W7",
+        "W8",
+        "W10",
+        "W12"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "F1",
+      "area": "F",
+      "title": "Land or close the open pull requests",
+      "what": "Five PRs from before this roadmap are open: #125 (agent progress and interim replies, item A1), #128 (webhook address checks and origin validation), #112 (run controls respect private threads), #123 (sidebar after archiving) and #108 (CI script fixes, draft). Bring each up to date with main, re-run the checks, then merge or close. #128 matters before agents get more webhooks, and #112 before runs get more controls.",
+      "done": "No PR from before this roadmap is still open, and main contains #112 and #128.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W0",
+      "soft": []
+    },
+    {
+      "id": "F2",
+      "area": "F",
+      "title": "Make main CI green and keep it green",
+      "what": "Every push to main since October 5 has failed while PR runs passed. Two causes, fixed in PR #131: a cancelled run left the machine lock held for 90 minutes while runs give up after 45 (tools/ci/run.sh:88), and new rustls advisories failed cargo-deny. Once it merges, also run both areas on PRs that touch migrations, the API or shared types (a PR runs only the areas it touches, tools/ci/changed-areas.sh), and run Rust and web checks one after the other on the laptop under the 8G cap.",
+      "done": "Five pushes to main in a row are green, and every PR's CI starts on the Red Hat runner without anyone touching it.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W0",
+      "soft": []
+    },
+    {
+      "id": "F3",
+      "area": "F",
+      "title": "Cloud sessions can build and test",
+      "what": "Workstreams will mostly be built by agents in the cloud: Claude Code cloud sessions (Rust 1.97.1, Node 22 and PostgreSQL 16, but no setup) and Codex Cloud tasks. Add one setup script that starts PostgreSQL, creates a test database, installs web dependencies with the pinned pnpm and warms the cargo build. Run it from a SessionStart hook (.claude/settings.json), and use it as the Codex Cloud environment's setup script, checking what that image already has. An export dies with the hook's process, so it saves AGENT_WORKSPACE_DATABASE_URL where later commands see it: appended to CLAUDE_ENV_FILE in a Claude session, and to the shell profile in Codex Cloud. It installs the Node in .node-version (24.18.1) when the image has another and the download is allowed, and the web checks keep passing on Node 22 for a session where it isn't.",
+      "done": "A fresh Claude cloud session and a fresh Codex Cloud task both run cargo test --workspace and corepack pnpm check with no manual steps, and their integration tests reach PostgreSQL instead of skipping.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W0",
+      "soft": []
+    },
+    {
+      "id": "F4",
+      "area": "F",
+      "title": "Changes that don't collide",
+      "what": "Parallel PRs will all want migration 0055, all edit the exact MCP tool count (tests/integration/m6_mcp_foundation.rs:293) and all raise the one total in the web byte budget (scripts/web-budget-lib.mjs). Name new migrations by timestamp (20261020143000_settings.sql), which sqlx orders after 0054; check migration_pending's version ranges still hold. Wave-1 workstreams use timestamp names from the start, so this only has to make the checks accept them. Replace the exact tool count with a check that every tool has a description and valid schemas. Budget the entry chunk and each route chunk instead of the total, so a new lazy route doesn't touch the budget file.",
+      "done": "Two branches that each add a migration, a tool and a route merge in either order without edits.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W0",
+      "soft": []
+    },
+    {
+      "id": "F5",
+      "area": "F",
+      "title": "Web groundwork",
+      "what": "Make every query key start with the project, so realtime refreshes pages, decisions, claims and pickers too (WorkItemDetailPage.tsx:164, memory/api.ts:73, SearchPage.tsx:39). Fix the .aw-board class shared by the threads drawer and the task board (threadBoard.tsx:150, work.css:240). Split App.test.tsx (2,005 lines) by area so parallel PRs stop colliding in it.",
+      "done": "Changing a page or a claim in one tab updates another, and no test file is over 800 lines.",
+      "deps": [
+        "F4"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "F6",
+      "area": "F",
+      "title": "UI kit additions",
+      "what": "Add the shared components the rest of the app needs: Toast with Undo, a CommandMenu base, skeletons shaped like their page (MessageSkeleton is used 51 times for everything), and one relative-time formatter (four copies exist). A dev-only /dev/ui page shows each component in every theme. The pickers for the task views (Popover, Combobox, DatePicker, Table) are built with them in V1.",
+      "done": "No settings or list page shows a chat-shaped skeleton, and dates are formatted in one place.",
+      "deps": [
+        "F5"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "F7",
+      "area": "F",
+      "title": "Live updates that patch instead of refetch",
+      "what": "Any task change refetches every project query today (realtime/useRealtimeConnection.ts:82-100). Outbox events carry the id, version and changed fields, and the web patches cached lists, boards and detail views in place, refetching only when it can't. Needed before projects hold thousands of tasks.",
+      "done": "Moving a card on one screen moves it on another without refetching the list.",
+      "deps": [
+        "F5"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "F8",
+      "area": "F",
+      "title": "Free Codex supervisor slots",
+      "what": "The supervisor registry holds at most CODEX_HOST_CONCURRENCY_LIMIT profiles (default 1) and releases one only on logout (provider/codex_app_server.rs:296, account.rs:422), so opening a second person's account page can block runs until a restart. Release idle supervisors, and read account status and limits without taking a run slot (needed for U1's background polling).",
+      "done": "Opening any number of account pages never blocks a run, with a test.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W2",
+      "soft": []
+    },
+    {
+      "id": "F9",
+      "area": "F",
+      "title": "Background jobs",
+      "what": "One durable job queue in PostgreSQL (FOR UPDATE SKIP LOCKED, retries with backoff, run-at times, unique keys, a dead state) with a small worker pool. The outbox publisher, reply webhooks and run scheduler stay as they are, and so does notification fan-out, which N1 writes in the outbox publisher's transaction; new background work (usage polling, AI jobs, push delivery, the launch queue, automations, outgoing webhooks) uses this instead of another hand-written loop. HTTP calls happen outside row locks, which also settles the open risk PR #128 noted for webhooks. Delivery is at least once, because a worker can crash after a remote call succeeds and before the job is marked done. So a job is leased to one worker at a time, and every handler with an outside effect (a push, a launch, a webhook) sends a stable idempotency key made from the job id, passes it to the remote API where the API takes one, and checks what it already did before acting again.",
+      "done": "A job scheduled for later survives a restart, retries on failure and is never held by two workers at once, and a handler that crashes after its outside call sends the same idempotency key when it retries, with tests.",
+      "deps": [
+        "F4"
+      ],
+      "migration": true,
+      "workstream": "W1",
+      "soft": []
+    },
+    {
+      "id": "F10",
+      "area": "F",
+      "title": "Docs that match the code",
+      "what": "This roadmap's PR points AGENTS.md here. Still to do: mark docs/frontend/current-feature-inventory.md as historical (it describes August), fix docs/local-codex-mcp.md:139 (run_start now creates runs), and note in workspace-merge-plan.md that this roadmap carries its Phase 4.",
+      "done": "AGENTS.md, the plans and the code agree.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W0",
+      "soft": []
+    },
+    {
+      "id": "S1",
+      "area": "S",
+      "title": "Encrypted secrets",
+      "what": "A secrets table for anything the server must use later: provider API keys (your Anthropic key goes here, entered in settings), webhook signing secrets, push keys. Envelope encryption with AES-256-GCM: a master key file read the way the GitHub key is (config.rs:389), a data key per secret, a key id so the master key can rotate, and a secret-key-rotate command. Secrets are write-only: the API returns the name, the last four characters, who added it and when it was last used. Move external_agent_connections.webhook_secret (plaintext since 0038) into it.",
+      "done": "A test proves a saved key never appears in a database dump, an API response, a log line or a run's environment, except the one adapter call that needs it.",
+      "deps": [
+        "F4"
+      ],
+      "migration": true,
+      "workstream": "W1",
+      "soft": []
+    },
+    {
+      "id": "S2",
+      "area": "S",
+      "title": "Settings that inherit",
+      "what": "One settings table (scope: workspace, project or user; key; JSON value; version) and a typed registry in Rust where each key declares its type, allowed scopes, default and validation. A value resolves from the launch override, then the project, then the person's own setting, then the workspace, then the built-in default, and always reports where it came from. HTTP GET /settings/effective?projectId= and an MCP settings_get. Changes are people-only: owners and admins change the workspace's and a project's settings, and every member changes their own.",
+      "done": "A project overrides the default model, the UI says it overrides the workspace, and Reset falls back to the workspace value; a member who isn't an admin can change their own settings and nobody else's.",
+      "deps": [
+        "F4"
+      ],
+      "migration": true,
+      "workstream": "W1",
+      "soft": []
+    },
+    {
+      "id": "S3",
+      "area": "S",
+      "title": "One settings area",
+      "what": "Replace the project settings tabs with /settings and a left nav in three groups. Account: profile, security, notifications, appearance, provider accounts, connected apps, API tokens. Workspace: general, members, agents, AI and models, keys, environments, GitHub, audit log. Project: general, workflow, labels, repositories, environments and defaults, agents, automation. One field component shows the inherited value and an override switch. Settings has its own search.",
+      "done": "Every existing setting is reachable from the new nav, and old links redirect.",
+      "deps": [
+        "F6",
+        "S2"
+      ],
+      "migration": false,
+      "workstream": "W8",
+      "soft": []
+    },
+    {
+      "id": "S4",
+      "area": "S",
+      "title": "Manage the workspace",
+      "what": "Org roles are derived from project roles (memberships.rs:638) and nothing can rename an org. Add rename, a members list for people and agents, org roles, ownership transfer, invitations to the workspace rather than one project, and leaving. Fix the Direct space always picking your earliest org (direct.rs:956).",
+      "done": "A new person joins the workspace once and can then be added to any project.",
+      "deps": [
+        "S3"
+      ],
+      "migration": true,
+      "workstream": "W8",
+      "soft": []
+    },
+    {
+      "id": "S5",
+      "area": "S",
+      "title": "Connect GitHub properly",
+      "what": "Replace the numeric installation and repository ID fields (GitHubIntegrationSettings.tsx:273, RepositorySettings.tsx:189) with the GitHub App install flow: a signed state, the setup callback, user OAuth to list the installations you can actually reach, and a repository picker that adds the repo to the project in one step. This also stops anyone who knows an installation ID from linking it.",
+      "done": "Connect a repository in three clicks without copying an ID, and a test shows another account can't claim your installation.",
+      "deps": [],
+      "migration": true,
+      "workstream": "W8",
+      "soft": []
+    },
+    {
+      "id": "S6",
+      "area": "S",
+      "title": "Provider accounts belong to you",
+      "what": "Execution profiles are per project and per person (execution.rs:482), so you sign in to Codex again in every project and usage can't be added up. Make provider accounts belong to the user (several allowed, such as personal and work), keep login state in the account's private home and API keys in S1, and let each project choose which of your accounts its runs use. Migrate existing profiles.",
+      "done": "Sign in to Codex once and start runs in any project.",
+      "deps": [
+        "H1"
+      ],
+      "migration": true,
+      "workstream": "W2",
+      "soft": [
+        "S1"
+      ]
+    },
+    {
+      "id": "S7",
+      "area": "S",
+      "title": "Account security and API tokens",
+      "what": "Change your password, see your sessions and sign out elsewhere, create personal API tokens with scopes and expiry (today only the mcp-credential-create command can), and turn on TOTP two-factor for password sign-in.",
+      "done": "No routine account task needs the server command line.",
+      "deps": [
+        "S3"
+      ],
+      "migration": true,
+      "workstream": "W8",
+      "soft": []
+    },
+    {
+      "id": "S8",
+      "area": "S",
+      "title": "Audit log",
+      "what": "audit_events is written everywhere and read nowhere. Add a workspace page and API with filters for who, which app, what kind and when.",
+      "done": "You can see what an agent changed yesterday and through which app.",
+      "deps": [
+        "S3"
+      ],
+      "migration": false,
+      "workstream": "W8",
+      "soft": []
+    },
+    {
+      "id": "S9",
+      "area": "S",
+      "title": "Appearance follows you",
+      "what": "Theme, density and text size live in the browser (theme/preferences.ts:49). Store them on the account and keep the pre-paint script reading a cached copy.",
+      "done": "Your theme is the same on the laptop and the phone.",
+      "deps": [
+        "S2"
+      ],
+      "migration": false,
+      "workstream": "W8",
+      "soft": []
+    },
+    {
+      "id": "H1",
+      "area": "H",
+      "title": "Open the schema to any provider",
+      "what": "The database allows only codex_app_server on local_project_host at binary version 0.146.0, and those columns can't change (0009:162). Replace the checks with validation in code against the registered adapters, allow version ranges, rename codex_home_path to home_path, let each adapter set its branch prefix (git_runtime.rs:708 requires codex/run-), and take the word Codex out of shared run messages (provider.rs:224, scheduler.rs:21, api.rs:269). No behaviour change.",
+      "done": "All tests pass, and a second adapter kind can be stored.",
+      "deps": [
+        "F4"
+      ],
+      "migration": true,
+      "workstream": "W2",
+      "soft": []
+    },
+    {
+      "id": "H2",
+      "area": "H",
+      "title": "The harness adapter interface",
+      "what": "There is no provider trait: provider.rs mixes run bookkeeping with Codex calls. Define a HarnessAdapter: start or resume a session, start and interrupt a turn, a stream of neutral events (promote the private ProviderEvent set), answer an approval or question, read history for recovery, account status and login, and usage windows. Codex App Server becomes the first adapter and the demo executor (scheduler.rs:418) the second, so scheduler and recovery tests run without Codex. Split it: the trait and Codex move first, the demo adapter and tests second.",
+      "done": "Codex runs behave exactly as before, and the demo adapter passes the scheduler and recovery tests.",
+      "deps": [
+        "H1"
+      ],
+      "migration": false,
+      "workstream": "W2",
+      "soft": []
+    },
+    {
+      "id": "H3",
+      "area": "H",
+      "title": "Capabilities and the model catalog",
+      "what": "Each adapter publishes a manifest: its models (id, name, context size, reasoning levels, speed options, prices), its features (streaming, approvals, resume, cloud, several attempts, runs at once) and a JSON Schema for any extra options. The catalog refreshes from the provider when it can list models and can be edited when it can't. Settings and the Launch dialog draw from the manifest, so a new harness needs no web code.",
+      "done": "The default-model picker lists Codex's models from the catalog, with nothing about Codex in web code.",
+      "deps": [
+        "H2"
+      ],
+      "migration": true,
+      "workstream": "W2",
+      "soft": [
+        "S2"
+      ]
+    },
+    {
+      "id": "H4",
+      "area": "H",
+      "title": "Run settings: model, reasoning, speed",
+      "what": "Runs have no model or effort today; Codex gets only the thread, folder and prompt (provider/codex_app_server.rs:542). Add agent_runs.config, resolved from the settings cascade and the launch overrides and frozen at start: harness, model, reasoning level, speed, attempts, sandbox, approval policy and extra options. The Codex adapter sends model and effort when it starts the thread and turn, and maps speed to its service tier option. The run card shows what was used.",
+      "done": "A run started on high reasoning says so on its card, and Codex received it.",
+      "deps": [
+        "H3"
+      ],
+      "migration": true,
+      "workstream": "W2",
+      "soft": [
+        "S2"
+      ]
+    },
+    {
+      "id": "H5",
+      "area": "H",
+      "title": "See what a run did",
+      "what": "Run events are stored with empty payloads and nothing shows commands, output or diffs. Store payloads with redaction and size caps, and add a run page: a step timeline, a log view, the diff of the run's branch against its base, files changed, tests run, and tokens from the provider's usage events (dropped today as ProviderEvent::Ignored). A Runs page lists every run across your projects.",
+      "done": "You can review a run's work without opening its worktree.",
+      "deps": [
+        "H2"
+      ],
+      "migration": true,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "H6",
+      "area": "H",
+      "title": "Claude Code adapter",
+      "what": "Run Claude Code headless in the run's worktree under your own Claude login or an API key from S1, handed over without putting it in the environment (through a key helper the CLI calls, if it has one), turn its streamed JSON events into neutral events, and send its permission prompts to the approvals UI. Check the current CLI and Agent SDK when building.",
+      "done": "In a thread, pick Claude Code instead of Codex and get the same run card, approvals and pull request.",
+      "deps": [
+        "H2",
+        "H4",
+        "S1"
+      ],
+      "migration": false,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "H7",
+      "area": "H",
+      "title": "Command-line harness adapter",
+      "what": "A configured adapter for any harness that runs as a command: an argument template, the S1 secrets it names handed over on an inherited file descriptor (never as environment variables, which every child process inherits and diagnostics print), the run's worktree as its folder, and a small JSON-lines protocol on stdout for progress, messages, approvals and results. The fastest way to try one of your own harnesses on the host.",
+      "done": "A 50-line script harness takes a task to a pull request, and the secret it was given appears nowhere in its environment.",
+      "deps": [
+        "H2",
+        "H3"
+      ],
+      "migration": false,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "H8",
+      "area": "H",
+      "title": "Several runs at once",
+      "what": "A profile runs one turn at a time (max_active_turns = 1, 0009:451) and one host-wide cap covers everything (scheduler.rs:109). Take concurrency per adapter and per account from the manifest, keep a host cap only for local runs, and let cloud runs skip it.",
+      "done": "Two tasks run at once on one Codex account, and cloud runs never wait on the host cap.",
+      "deps": [
+        "H2",
+        "S6"
+      ],
+      "migration": true,
+      "workstream": "W2",
+      "soft": []
+    },
+    {
+      "id": "C1",
+      "area": "C",
+      "title": "Environments",
+      "what": "An environment says where a run executes: this host (today's local worktrees), a provider's cloud (a Codex Cloud or Claude Code cloud environment), a connected runner (your own harness), or later a container you control. Each project lists its environments with the adapter, the provider's environment ID, the repository and branch, setup notes and a default. Import them from the provider where it can list them; otherwise paste the ID and test it.",
+      "done": "A project's default environment is 'Codex Cloud · agent-workspace', and launching preselects it.",
+      "deps": [
+        "H3",
+        "S2"
+      ],
+      "migration": true,
+      "workstream": "W7",
+      "soft": []
+    },
+    {
+      "id": "C2",
+      "area": "C",
+      "title": "Codex Cloud adapter",
+      "what": "Start a Codex Cloud task with codex cloud exec --env <id> [--attempts N] under your Codex login, follow it with codex cloud list --json (status, URL, summary), and keep the task as the run's external session with a link. Bring the result back as a pull request, either opened by Codex or by applying the diff to a worktree and publishing through the GitHub App. Map its statuses to run states and recover by task ID after a restart. The CLI changes often, so check its current commands when building.",
+      "done": "Launch on a task starts a Codex Cloud task in the project's environment, and its status and pull request show in the task's thread.",
+      "deps": [
+        "C1",
+        "H2",
+        "S6"
+      ],
+      "migration": false,
+      "workstream": "W7",
+      "soft": []
+    },
+    {
+      "id": "C3",
+      "area": "C",
+      "title": "Claude Code cloud adapter",
+      "what": "The same as C2 for Claude Code's cloud sessions and environments, or Claude running in a managed sandbox through the Agent SDK. Check which launch API exists when building.",
+      "done": "Claude Code runs in its cloud environment from the same Launch button.",
+      "deps": [
+        "C1",
+        "H6"
+      ],
+      "migration": false,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "C4",
+      "area": "C",
+      "title": "The Launch button",
+      "what": "One click on a task, or several selected tasks, starts a run with the project's defaults. Shift-click or the menu opens a dialog with harness, environment, account, model, reasoning, speed and attempts filled in from the effective settings. The prompt is built from the task (title, description, criteria, linked pages, project guide) and can be edited in a preview. It opens or reuses the task's thread. MCP gets task_launch.",
+      "done": "One click on a task starts a run with the defaults, and the task shows it running.",
+      "deps": [
+        "H4",
+        "C1"
+      ],
+      "migration": false,
+      "workstream": "W7",
+      "soft": []
+    },
+    {
+      "id": "C5",
+      "area": "C",
+      "title": "Launch queue",
+      "what": "Queue launches to start now, at a set time, when an account's window resets, or when the tasks blocking them finish. The queue respects per-account concurrency and dependency order and drains by itself. A queue view shows what's waiting and why. When a queued launch is about to start, it checks again that the person who queued it can still reach the project (actor_can_access_project), the provider account and the environment; one that fails is cancelled, and the person is told why.",
+      "done": "Queue ten tasks and they start as capacity frees up, blocked ones last; a launch queued by someone removed from the project never starts.",
+      "deps": [
+        "C4",
+        "F9"
+      ],
+      "migration": true,
+      "workstream": "W7",
+      "soft": [
+        "U1"
+      ]
+    },
+    {
+      "id": "C6",
+      "area": "C",
+      "title": "Launch prompt templates",
+      "what": "A per-project launch template in Markdown with fields such as {{task.title}}, {{task.criteria}} and {{project.guide}}, kept as a versioned setting, plus additions per harness.",
+      "done": "Editing the template changes the next launch's prompt preview.",
+      "deps": [
+        "C4",
+        "S2"
+      ],
+      "migration": false,
+      "workstream": "W7",
+      "soft": []
+    },
+    {
+      "id": "C7",
+      "area": "C",
+      "title": "Containers you control",
+      "what": "Run any command-line harness in an isolated container on the host (rootless Podman, no host files, network only to allowed hosts) or at a sandbox provider, built from a project setup script. Needed once other people's code runs on your host or a harness needs its own toolchain. Required before the SaaS runs anyone's code on your servers (D1); until then, see D3.",
+      "done": "A custom harness runs in a container that can't read the host's files or credentials.",
+      "deps": [
+        "C1",
+        "H7"
+      ],
+      "migration": true,
+      "workstream": "W15",
+      "soft": []
+    },
+    {
+      "id": "U1",
+      "area": "U",
+      "title": "Usage windows",
+      "what": "A general model of plan limits: each provider account has windows (a five-hour session, a week, a month of credits) with percent used, limit, reset time and when it was read. Adapters report them. Codex already exposes its primary and secondary windows with reset times through account/rateLimits/read (provider/codex_app_server.rs:1066), but the app reads them only when the account page opens, and that page shows just the first window's percentage. Poll in the background without taking a run slot (F8), also take limits from run events, and let accounts whose provider reports nothing set a schedule by hand ('resets Mondays at 09:00').",
+      "done": "The account page shows every window with a live countdown, including a plan that has only a weekly window.",
+      "deps": [
+        "S6",
+        "H2",
+        "F9",
+        "F8"
+      ],
+      "migration": true,
+      "workstream": "W9",
+      "soft": []
+    },
+    {
+      "id": "U2",
+      "area": "U",
+      "title": "Tokens and cost",
+      "what": "Record tokens in, out and cached for each run from the adapter's usage events, price them from the model catalog, and total them per project, account and day.",
+      "done": "Every run and project shows its tokens and estimated cost.",
+      "deps": [
+        "H3",
+        "H5"
+      ],
+      "migration": true,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "U3",
+      "area": "U",
+      "title": "Capacity alerts",
+      "what": "Rules per account: a window resets within X hours with Y% unused; a window is above 90%; a limit was hit and resets at a given time; for Codex, banked resets available or about to expire. On by default and editable.",
+      "done": "You get 'Codex weekly limit resets in 2 h · 38% unused' in the inbox and on your phone.",
+      "deps": [
+        "U1",
+        "N1"
+      ],
+      "migration": false,
+      "workstream": "W9",
+      "soft": []
+    },
+    {
+      "id": "U4",
+      "area": "U",
+      "title": "Use it before it resets",
+      "what": "The alert carries a suggested batch: ready tasks across your projects (dependencies done, criteria written, repository and default environment set) whose project can run on the alert's account: a harness that account serves and an environment it can reach. They're ranked by priority and by how much they unblock, and sized to that account's capacity left. One tap launches the batch, each task in its own project's environment with its defaults but on the alert's account; Review opens the batch to edit first.",
+      "done": "Tapping Launch on the alert starts the batch in the right environments, every run on the account whose window is about to reset.",
+      "deps": [
+        "U3",
+        "C5",
+        "AI5"
+      ],
+      "migration": false,
+      "workstream": "W13",
+      "soft": []
+    },
+    {
+      "id": "U5",
+      "area": "U",
+      "title": "Usage page",
+      "what": "For each account: windows over time, runs per window, cost per project, the next resets, and how much went unused last cycle.",
+      "done": "One page answers how much of each plan you use and how much you waste.",
+      "deps": [
+        "U1"
+      ],
+      "migration": false,
+      "workstream": "W13",
+      "soft": [
+        "U2"
+      ]
+    },
+    {
+      "id": "U6",
+      "area": "U",
+      "title": "Banked resets",
+      "what": "Show Codex's banked rate-limit resets and when they expire, and spend one after a confirmation, because it can't be undone.",
+      "done": "A spent reset shows as a refilled window.",
+      "deps": [
+        "U1"
+      ],
+      "migration": false,
+      "workstream": "W9",
+      "soft": []
+    },
+    {
+      "id": "T1",
+      "area": "T",
+      "title": "Web API for planning",
+      "what": "Labels, subtasks, milestones, dependencies, blocked state and claims exist only as MCP tools (mcp/planning.rs, mcp/labels.rs). Add HTTP routes that call the same command functions.",
+      "done": "The web client can do everything the task, label and milestone tools do.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T2",
+      "area": "T",
+      "title": "Dependencies and milestones everywhere",
+      "what": "task_depend writes only an audit row, and milestone_write writes no activity or event (mcp/planning.rs:292, 592). Write activity, bump versions and emit events; include blockers, blocked tasks, a ready flag and the milestone in task_open, task_list and the HTTP views; make project_open's next list skip blocked tasks; check cycles with a recursive query instead of loading every edge in the project.",
+      "done": "Blocking a task shows in its activity and updates other screens live.",
+      "deps": [
+        "T1"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T3",
+      "area": "T",
+      "title": "More kinds of links between tasks",
+      "what": "Add relates-to and duplicates (with close as duplicate), and blocks across projects in the same workspace, checked against what each reader can see.",
+      "done": "A duplicate closes with a link to the original.",
+      "deps": [
+        "T2"
+      ],
+      "migration": true,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T4",
+      "area": "T",
+      "title": "Your own workflow",
+      "what": "Every create checks that the project's statuses exactly match the built-in set (work_items.rs:764), so no project can change its workflow. Remove that check, keep the semantic categories, and let owners add, rename, reorder and retire statuses and types and edit transitions. Ship workflow_update and a settings page.",
+      "done": "A project adds a QA status between Review and Done, and tasks move through it.",
+      "deps": [
+        "T1"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T5",
+      "area": "T",
+      "title": "Dates, estimates and watchers",
+      "what": "Add start and due dates, an estimate (points or hours, chosen per project) and watchers who hear about changes through N1's notifications. Keep one assignee plus agent claims.",
+      "done": "Tasks sort by due date, and watchers are notified of changes.",
+      "deps": [
+        "T1"
+      ],
+      "migration": true,
+      "workstream": "W3",
+      "soft": [
+        "N1"
+      ]
+    },
+    {
+      "id": "T6",
+      "area": "T",
+      "title": "Fast at 10,000 tasks",
+      "what": "The list sorts only newest first, search is an unindexed ILIKE (work_items.rs:1020), a board column stops at 100 cards, and task_list ranks every open task on each call (mcp/tasks.rs:565). Add keyset cursors for every sort, a trigram index, per-column board paging, a stored board position, label filters by join, and a seeded 10,000-task fixture to measure against.",
+      "done": "List, board and task_list answer in under 200 ms on the 10,000-task fixture.",
+      "deps": [
+        "F4"
+      ],
+      "migration": true,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T7",
+      "area": "T",
+      "title": "Bulk edits from the web",
+      "what": "Expose task_update_many's all-or-nothing batch over HTTP for status, assignee, labels, milestone, priority and archive.",
+      "done": "Select 40 tasks and move them in one request.",
+      "deps": [
+        "T1"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T8",
+      "area": "T",
+      "title": "Before and after in history",
+      "what": "Activity records which fields changed but not the old and new title, description, priority or assignee (work_item_commands.rs:2216). Store both, with a diff for descriptions.",
+      "done": "History reads 'Priority High → Urgent'.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "T9",
+      "area": "T",
+      "title": "Import and export",
+      "what": "Import a Markdown plan, GitHub issues (through the App) or a CSV from Linear or Jira with a mapping preview, all through ordinary commands. Export a project as JSON and CSV.",
+      "done": "Import 300 GitHub issues with their labels in one preview and commit.",
+      "deps": [
+        "T1",
+        "T5"
+      ],
+      "migration": false,
+      "workstream": "W11",
+      "soft": []
+    },
+    {
+      "id": "T10",
+      "area": "T",
+      "title": "Templates and recurring tasks",
+      "what": "Task templates with criteria and subtasks, project templates (workflow, labels, channels, default settings) and recurring tasks, which F9's job queue creates on schedule.",
+      "done": "A project made from a template arrives with its workflow, labels and defaults, and a weekly recurring task appears each week, even across a restart.",
+      "deps": [
+        "T5",
+        "T4",
+        "F9"
+      ],
+      "migration": true,
+      "workstream": "W11",
+      "soft": []
+    },
+    {
+      "id": "V1",
+      "area": "V",
+      "title": "List view",
+      "what": "Add Popover, Combobox (searchable single and multi select for people, labels and statuses), DatePicker and a Table with a sticky header and keyboard navigation to the UI kit, as new files. Then the list: dense rows; sort; group by status, assignee, priority, label, milestone, parent or type, with collapsible groups; a filter bar with chips for every field, including labels, milestone, blocked, ready, claimed and dates; search that waits for typing to pause and replaces the URL instead of adding a history entry per keystroke (WorkItemsPage.tsx:106); clear filters; virtualized rows.",
+      "done": "Group 2,000 tasks by milestone and scroll smoothly.",
+      "deps": [
+        "T1",
+        "T6"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": [
+        "F6"
+      ]
+    },
+    {
+      "id": "V2",
+      "area": "V",
+      "title": "Keyboard and inline editing",
+      "what": "Change status, priority, assignee, labels and milestone straight from a row or card; select with Shift and Cmd; a bulk action bar; keys to move and act (J and K, X, S, A, L, P, Enter).",
+      "done": "Triage 20 tasks without the mouse.",
+      "deps": [
+        "V1",
+        "T7"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "V3",
+      "area": "V",
+      "title": "Task panel and detail page",
+      "what": "Open any task in a side panel from lists, boards and links. Rebuild the detail page (1,183 lines) from small parts: each field saves when changed instead of one Save bar, Markdown description, subtasks, dependencies and milestone, editable labels, live claim and run status, and the Launch button once C4 lands.",
+      "done": "Edit a task from the board without leaving it.",
+      "deps": [
+        "T1",
+        "T2"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": [
+        "P4"
+      ]
+    },
+    {
+      "id": "V4",
+      "area": "V",
+      "title": "Board",
+      "what": "Columns by any field, swimlanes, reordering within a column (a drop only appends today), touch dragging, instant moves, and paging per column.",
+      "done": "Reorder cards within a column on a phone.",
+      "deps": [
+        "V1"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": [
+        "F7"
+      ]
+    },
+    {
+      "id": "V5",
+      "area": "V",
+      "title": "Saved views",
+      "what": "Named views (filters, sort, grouping, layout, visible fields), personal or shared with the project, pinned in the sidebar. Ship four: My tasks, Ready for agents, Blocked, Recently changed. MCP gets view_list and task_list by view.",
+      "done": "Ready for agents is one click from the sidebar, and agents can read it.",
+      "deps": [
+        "V1"
+      ],
+      "migration": true,
+      "workstream": "W11",
+      "soft": []
+    },
+    {
+      "id": "V6",
+      "area": "V",
+      "title": "My work",
+      "what": "One personal view across every project: assigned to you, claimed by your agents, waiting for your review.",
+      "done": "Monday morning starts on one page.",
+      "deps": [
+        "V1"
+      ],
+      "migration": false,
+      "workstream": "W11",
+      "soft": []
+    },
+    {
+      "id": "V7",
+      "area": "V",
+      "title": "Dependency graph",
+      "what": "An interactive graph for a project or milestone: the ready frontier highlighted, the critical path, AI-suggested links dashed with accept and dismiss, a click opens the task panel. Load the layout library only on this page.",
+      "done": "See what blocks a release and accept a suggested dependency from the graph.",
+      "deps": [
+        "T2",
+        "V3"
+      ],
+      "migration": false,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "V8",
+      "area": "V",
+      "title": "Timeline",
+      "what": "Milestones and tasks on a time axis from their dates and estimates, with dependency arrows and drag to reschedule.",
+      "done": "Drag a milestone and see what slips.",
+      "deps": [
+        "T5"
+      ],
+      "migration": false,
+      "workstream": "W11",
+      "soft": [
+        "V7"
+      ]
+    },
+    {
+      "id": "V9",
+      "area": "V",
+      "title": "Milestones page",
+      "what": "Milestones with progress, target date and overdue state; each opens as a filtered view.",
+      "done": "Every milestone's progress at a glance.",
+      "deps": [
+        "T2",
+        "V1"
+      ],
+      "migration": false,
+      "workstream": "W3",
+      "soft": []
+    },
+    {
+      "id": "AI1",
+      "area": "AI",
+      "title": "Model gateway",
+      "what": "A small server module for short AI jobs that works with any provider: Anthropic, OpenAI and any OpenAI-compatible endpoint (OpenRouter, Ollama, vLLM), and Google. Keys come from S1 at workspace level with a project override. It asks for structured output against a JSON Schema, validates it and retries once, logs usage per call, stops at a monthly budget per workspace, and never logs prompt or message text. Prompts are versioned files in the repository with test fixtures. Settings pick a provider and model for quick jobs and for deep ones.",
+      "done": "A job runs against a fake provider in tests and against your Anthropic key from settings.",
+      "deps": [
+        "S1",
+        "S2",
+        "F9"
+      ],
+      "migration": true,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "AI2",
+      "area": "AI",
+      "title": "Dependency and blocker detection",
+      "what": "An ai_suggestions table (blocks, relates to, duplicates, blocked reason, parent) with confidence, a one-line reason, the evidence used, status, and the model and prompt version. It runs when tasks are created or edited (batched), on Analyze project, and nightly. Cheap signals pick candidates first (full-text similarity, references between tasks, shared milestone or labels), then the model judges them in batches. A dismissed pair is never suggested again. Accepting writes through task_depend, shown as via AI. A per-project switch applies suggestions above a confidence threshold automatically (off by default). It also reads conversations for 'waiting on X' and suggests the block. Runs with no person behind them (on edit, nightly, auto-apply) read only tasks and conversations every project member can see, never DMs, private groups or private threads. A person's own Analyze may use what they can see, but its suggestions stay visible to that person only. Each suggestion keeps its sources, and conversation_visible_to is checked again whenever one is shown or accepted.",
+      "done": "On a 200-task project, suggestions arrive in a review queue, and accepting one updates the graph and the ready list; nobody outside a private thread ever sees a suggestion drawn from it.",
+      "deps": [
+        "AI1",
+        "T2"
+      ],
+      "migration": true,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "AI3",
+      "area": "AI",
+      "title": "Plan to tasks",
+      "what": "Paste a plan or pick a page and get a proposed tree of tasks with criteria, labels, milestones and dependencies; edit the preview, then commit through task_create_many. A plan bigger than one call (100 tasks) commits in batches, and links between batches are added once every task exists. The import keeps its own record of each batch and the tasks it made, since the tool only replays a request for 24 hours, so resuming an import at any time skips the batches that finished.",
+      "done": "This roadmap's 103 items import as tasks, milestones and dependencies in one go, and resuming a half-finished import a day later creates nothing twice.",
+      "deps": [
+        "AI1",
+        "V3"
+      ],
+      "migration": true,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "AI4",
+      "area": "AI",
+      "title": "Triage on create",
+      "what": "When a task is created, suggest labels, priority, type, parent and likely duplicates as chips to accept.",
+      "done": "A new bug report arrives labelled and linked to its duplicate.",
+      "deps": [
+        "AI2"
+      ],
+      "migration": false,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "AI5",
+      "area": "AI",
+      "title": "Ready and next",
+      "what": "A readiness check per task: dependencies done, criteria written, repository and environment set, a real description. Rank ready tasks by priority, how many tasks they unblock, and milestone date. Mostly rules; AI writes missing criteria on request. U4 and 'what should I launch next?' use it.",
+      "done": "Ready for agents is sorted by what unblocks the most.",
+      "deps": [
+        "T2"
+      ],
+      "migration": false,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "AI6",
+      "area": "AI",
+      "title": "Summaries",
+      "what": "On request, summarize a long thread or a task's history and suggest the thread's outcome.",
+      "done": "Catch me up on a 200-message thread gives five lines.",
+      "deps": [
+        "AI1"
+      ],
+      "migration": false,
+      "workstream": "W10",
+      "soft": []
+    },
+    {
+      "id": "AI7",
+      "area": "AI",
+      "title": "Semantic search",
+      "what": "Embeddings through the gateway, stored with pgvector or beside the database, for search and as another candidate source for AI2. Only once full-text search clearly falls short.",
+      "done": "Searching 'theme colours' finds a message that said 'palette'.",
+      "deps": [
+        "AI1"
+      ],
+      "migration": true,
+      "workstream": "W15",
+      "soft": []
+    },
+    {
+      "id": "N1",
+      "area": "N",
+      "title": "Notifications for people",
+      "what": "A notifications table per recipient (kind, subject, actor, source conversation and message, group key, read, archived, snoozed), filled from outbox events: @mentions in messages and task comments (comment mentions are stored but never shown today), assignments, approvals waiting, runs finished, failed or waiting, failing PR checks and review requests, changes to tasks you watch (T5), and later capacity alerts and AI suggestions. Repeats collapse into one. attention_count stops being hard-coded to 0 (projects.rs:479). The MCP briefing includes them. Rows hold ids, not message text: the inbox, push and the briefing build each title and preview from its source when they read it, checking the reader's current access each time (actor_can_access_project for the project, conversation_visible_to for a conversation, pull_request_visible_to for a pull request), and hide a notification whose source the reader can no longer see. Notifications are written in the outbox publisher's transaction, so they need no job queue; fan-out moves to a job if volume calls for it.",
+      "done": "A comment @mention reaches the person and the project's attention count, and someone removed from a private group or a project stops seeing its notifications.",
+      "deps": [],
+      "migration": true,
+      "workstream": "W6",
+      "soft": [
+        "F9"
+      ]
+    },
+    {
+      "id": "N2",
+      "area": "N",
+      "title": "Inbox",
+      "what": "An inbox page: notifications grouped by subject, a preview pane, read, unread, archive and snooze, filters, keyboard, and actions in place (approve, launch, open). A badge on the rail.",
+      "done": "Clear a morning's notifications from the keyboard.",
+      "deps": [
+        "N1"
+      ],
+      "migration": false,
+      "workstream": "W6",
+      "soft": [
+        "F6"
+      ]
+    },
+    {
+      "id": "N3",
+      "area": "N",
+      "title": "Push to phone and desktop",
+      "what": "Web Push with keys from S1, a subscription per device, push and notification-click handlers in sw.js with actions (Open, and Launch), and a test button per device. A capacity alert belongs to an account that may serve several projects, so its Launch opens that account on the account page with the ready tasks (open, unblocked, repository set) in every project it can run, each with C4's Launch button once that's on main. Works for the installed app on iOS.",
+      "done": "Your phone shows the capacity alert with a Launch button.",
+      "deps": [
+        "N1",
+        "S1"
+      ],
+      "migration": true,
+      "workstream": "W9",
+      "soft": [
+        "C4"
+      ]
+    },
+    {
+      "id": "N4",
+      "area": "N",
+      "title": "Notification settings",
+      "what": "Per kind and channel (in app, push, email), quiet hours, mute per project, digest frequency.",
+      "done": "Mute a project's run notifications but keep its mentions.",
+      "deps": [
+        "N1",
+        "S2"
+      ],
+      "migration": false,
+      "workstream": "W9",
+      "soft": []
+    },
+    {
+      "id": "N5",
+      "area": "N",
+      "title": "Toasts, titles and badges",
+      "what": "Toasts for results that happen in the background ('Run finished · Open PR'), page titles with unread counts (index.html has one fixed title), and favicon and app badge counts.",
+      "done": "A finished run shows a toast, and the tab title counts unread.",
+      "deps": [
+        "F6"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "A1",
+      "area": "A",
+      "title": "Progress and interim messages",
+      "what": "Piece 1 of docs/plans/agent-tag.md, already built as draft PR #125: reply_progress, and reply_send with final: false.",
+      "done": "#125 is merged.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W5",
+      "soft": []
+    },
+    {
+      "id": "A2",
+      "area": "A",
+      "title": "Follow-ups stick to the thread",
+      "what": "agent-tag.md piece 2: a person's next message in a thread where an agent was tagged reaches that agent without a new mention, queued behind a claimed request rather than replacing it.",
+      "done": "'Also fix the test' reaches the agent already working in the thread, and never an agent who can't see it.",
+      "deps": [
+        "A1"
+      ],
+      "migration": true,
+      "workstream": "W5",
+      "soft": []
+    },
+    {
+      "id": "A3",
+      "area": "A",
+      "title": "Agent sessions",
+      "what": "agent-tag.md piece 3, widened: one sessions table for external runners and for harness runs, so a thread knows its Claude Code, Codex Cloud or custom harness session and links to it. Keep it separate from Agent Runs and provider sessions, as AGENTS.md requires.",
+      "done": "A thread header shows 'Codex · Open session' whichever way the work started.",
+      "deps": [
+        "A1",
+        "H2"
+      ],
+      "migration": true,
+      "workstream": "W7",
+      "soft": []
+    },
+    {
+      "id": "A4",
+      "area": "A",
+      "title": "Tags in a channel open a thread",
+      "what": "agent-tag.md piece 4, plus agents' status lines in project channels and their threads (today only DMs and groups show them).",
+      "done": "Tag @codex in a channel and the answer arrives in a new thread under the message.",
+      "deps": [
+        "A1"
+      ],
+      "migration": false,
+      "workstream": "W5",
+      "soft": []
+    },
+    {
+      "id": "A5",
+      "area": "A",
+      "title": "Stop",
+      "what": "agent-tag.md piece 5: a Stop button on a working agent's status line that the runner hears at once. It cancels the claimed request, and also the agent's session once A3 lands.",
+      "done": "Stop ends the agent's work, and its next call is refused with a clear reason.",
+      "deps": [
+        "A1"
+      ],
+      "migration": true,
+      "workstream": "W5",
+      "soft": []
+    },
+    {
+      "id": "A6",
+      "area": "A",
+      "title": "Typed wakeups",
+      "what": "agent-tag.md piece 6: webhooks say what happened (requested, follow-up, cancelled, launch) and where, still with no message text, and name the agent's session once A3 lands. inbox.available keeps working for one release.",
+      "done": "A runner routes a wakeup without a round trip.",
+      "deps": [
+        "A1"
+      ],
+      "migration": false,
+      "workstream": "W5",
+      "soft": [
+        "A3"
+      ]
+    },
+    {
+      "id": "A7",
+      "area": "A",
+      "title": "Runner contract and presets",
+      "what": "agent-tag.md piece 7: docs/agent-runner.md for the protocol, and presets on the Agents page for Claude Code, Codex and a custom runner, ending on the token, webhook secret and settings to copy.",
+      "done": "Adding a runner is one form.",
+      "deps": [
+        "A6"
+      ],
+      "migration": false,
+      "workstream": "W5",
+      "soft": []
+    },
+    {
+      "id": "A8",
+      "area": "A",
+      "title": "Tag to launch",
+      "what": "Tagging an agent backed by a harness (@codex do X) launches a run with the project's defaults in that thread; tagging an external runner wakes it. One rule for people: tag an agent and it does the work.",
+      "done": "'@codex fix the flaky test' in a thread starts a Codex Cloud run there when that's the project default.",
+      "deps": [
+        "A3",
+        "C4"
+      ],
+      "migration": false,
+      "workstream": "W7",
+      "soft": []
+    },
+    {
+      "id": "A9",
+      "area": "A",
+      "title": "Agent profiles",
+      "what": "An agent becomes a profile: name and avatar, harness, default model settings, instructions, allowed tools and environment. Templates such as Reviewer, Planner and Fixer. Agent cards show current work from claims and sessions.",
+      "done": "Create a Reviewer agent from a template and tag it on a pull request.",
+      "deps": [
+        "H3",
+        "A3"
+      ],
+      "migration": true,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "A10",
+      "area": "A",
+      "title": "Agent presence",
+      "what": "Live state per agent (idle, working on AWD-12, waiting for you) in the sidebar and on agent cards, replacing the hard-coded online dot (ProjectRail.tsx:261).",
+      "done": "You can see which agents are busy without opening anything.",
+      "deps": [
+        "A3"
+      ],
+      "migration": false,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "P1",
+      "area": "P",
+      "title": "Command palette and shortcuts",
+      "what": "Cmd+K only finds projects today (ProjectRail.tsx:115). Make it the way to go anywhere (projects, tasks by key, channels, people, pages, settings) and do anything (create a task, launch, assign, change status, switch theme), with actions for the current selection, a `?` shortcut sheet, and global keys (C to create, G then I for the inbox). Task keys work as URLs (/AWD-12).",
+      "done": "Everything common is reachable from Cmd+K.",
+      "deps": [
+        "F6"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "P2",
+      "area": "P",
+      "title": "Instant changes, undo and clear errors",
+      "what": "One way to write mutations: instant cache updates, error toasts instead of 'Reload the page' (WorkItemDetailPage.tsx:813), Undo for archive, move and bulk changes, and busy states. Move ThreadPage's eight direct request calls onto it.",
+      "done": "No screen tells you to reload, and archive can be undone.",
+      "deps": [
+        "F6"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "P3",
+      "area": "P",
+      "title": "Home",
+      "what": "Home becomes a real start page: what needs you (from the inbox), agents working now, capacity windows with countdowns, your tasks, recent projects.",
+      "done": "Home answers 'what's going on?' in one look.",
+      "deps": [
+        "N2",
+        "U1"
+      ],
+      "migration": false,
+      "workstream": "W13",
+      "soft": []
+    },
+    {
+      "id": "P4",
+      "area": "P",
+      "title": "Markdown",
+      "what": "Pages say Markdown but render plain text (pages.css:1571). Add a safe renderer (no raw HTML) for descriptions, pages and comments, an editor with preview and a small toolbar, task keys that turn into links, and code highlighting loaded only when needed.",
+      "done": "A task description with a checklist and code renders properly.",
+      "deps": [
+        "F6"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "P5",
+      "area": "P",
+      "title": "Onboarding",
+      "what": "A first-run path: name the workspace, connect GitHub and pick a repository, connect a provider account, choose an environment and defaults, create or import the first tasks, add an agent. Empty states point to the next step.",
+      "done": "A new workspace reaches its first launched run without leaving the path.",
+      "deps": [
+        "S3",
+        "S5",
+        "S6",
+        "C1"
+      ],
+      "migration": false,
+      "workstream": "W13",
+      "soft": []
+    },
+    {
+      "id": "P6",
+      "area": "P",
+      "title": "Threads beside the channel",
+      "what": "Project channels open threads as a full page while DMs use a side panel (direct/ThreadPanel.tsx). Use the panel everywhere with one thread component.",
+      "done": "Open a thread in a project channel without losing your place.",
+      "deps": [
+        "P2"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": []
+    },
+    {
+      "id": "P7",
+      "area": "P",
+      "title": "Finish each area",
+      "what": "One pass per area (conversations, tasks, settings, agents), repeated as areas land: skeletons shaped like the page, consistent dates, no raw markup outside the kit (WorkOsAgentSettings.tsx), the agent's name instead of a hard-coded 'Codex', phone layouts, and big files split (ThreadPage.tsx is 1,128 lines). The error boundary reports errors instead of dropping them (AppErrorBoundary.tsx:13). Workstreams that merge after this one run the same checklist on their own pages before they're marked ready.",
+      "done": "Each area passes a short checklist kept in docs/frontend.",
+      "deps": [
+        "F6",
+        "P2"
+      ],
+      "migration": false,
+      "workstream": "W13",
+      "soft": []
+    },
+    {
+      "id": "P8",
+      "area": "P",
+      "title": "Smoke tests in a real browser",
+      "what": "A few Playwright flows (sign in, create and move a task, start a run on the demo adapter, read the inbox) and screenshots of key pages in light and dark, run in CI's web area. They catch what many parallel PRs break; they are not a test matrix.",
+      "done": "CI fails when sign-in or the task board breaks in a real browser.",
+      "deps": [
+        "F3"
+      ],
+      "migration": false,
+      "workstream": "W4",
+      "soft": [
+        "H2",
+        "N2"
+      ]
+    },
+    {
+      "id": "X1",
+      "area": "X",
+      "title": "Runner SDKs and the harness guide",
+      "what": "TypeScript and Python packages for the runner side: verify the signature, claim, bind the session, stream progress and events, post interim and final results, handle Stop. An example harness and docs/harness-guide.md.",
+      "done": "A new harness written with the SDK in under 100 lines takes a task to a pull request.",
+      "deps": [
+        "A7"
+      ],
+      "migration": false,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "X2",
+      "area": "X",
+      "title": "Register a harness",
+      "what": "A workspace registers a custom harness, either a connected runner (X1) or a command-line adapter (H7), with a manifest of models, options and features. It then shows in settings, the Launch dialog and agent profiles exactly like Codex.",
+      "done": "Your harness is a choice in the Launch dialog with its own models and options.",
+      "deps": [
+        "H3",
+        "A7",
+        "H7"
+      ],
+      "migration": true,
+      "workstream": "W12",
+      "soft": []
+    },
+    {
+      "id": "X3",
+      "area": "X",
+      "title": "Public API",
+      "what": "A versioned REST API with an OpenAPI document generated from the Rust types, personal tokens with scopes (S7), and a docs page. docs/task-platform/api-contract.md is a starting point.",
+      "done": "A script with a personal token can do what the web app does.",
+      "deps": [
+        "S7"
+      ],
+      "migration": false,
+      "workstream": "W14",
+      "soft": []
+    },
+    {
+      "id": "X4",
+      "area": "X",
+      "title": "Outgoing webhooks",
+      "what": "Subscriptions to a workspace's events (task, run, pull request, message), each owned by the person or connected app that made it and delivering only what that owner can see now: access is checked again on every delivery, and a message event goes through conversation_visible_to for the owner. Signed and retried, with a delivery log and PR #128's address checks. Each delivery carries one id across its retries, so a receiver can drop a repeat.",
+      "done": "An external service hears about every finished run, and never about a message in a conversation its subscription's owner can't see.",
+      "deps": [
+        "F9"
+      ],
+      "migration": true,
+      "workstream": "W14",
+      "soft": []
+    },
+    {
+      "id": "X5",
+      "area": "X",
+      "title": "Automations",
+      "what": "Rules with a trigger (an event, a schedule, a capacity window), conditions (a saved view's filters) and actions (launch an agent with the project's run defaults, or an agent profile once A9 is on main; set a field; notify; post a message). For example: launch when a task labelled agent becomes Ready; launch an agent on a PR whose checks fail; post a standup every weekday at 9. A builder in project settings plus MCP tools. Each rule acts as the person or app that made it, and before every action it checks that actor's current access to the project and to any account, environment or conversation the action uses (principle 9). A rule that fails the check is turned off, and its owner, or a project admin if the owner has left, is told why.",
+      "done": "'When a PR's checks fail, launch an agent on it' works without anyone watching, and a rule whose maker left the project stops instead of acting for them.",
+      "deps": [
+        "C5",
+        "N1",
+        "V5"
+      ],
+      "migration": true,
+      "workstream": "W14",
+      "soft": [
+        "A9"
+      ]
+    },
+    {
+      "id": "O1",
+      "area": "O",
+      "title": "Backups you can restore",
+      "what": "Daily dumps stay on the same disk forever and skip the data root (agent-workspace-daily-backup.service). Encrypt them and copy them off the host, include what can't be rebuilt (provider account homes; the secrets master key kept separately), prune old dumps, and rehearse a restore with a script.",
+      "done": "A restore drill on a spare database succeeds from the off-host copy.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W1",
+      "soft": []
+    },
+    {
+      "id": "O2",
+      "area": "O",
+      "title": "Metrics and error tracking",
+      "what": "A metrics endpoint (requests, job queue, run states, outbox lag, webhook failures, AI spend), error reporting from the browser and the server, and alerts to you through notifications (in the log until N1 lands).",
+      "done": "A failing background job notifies you before you notice it.",
+      "deps": [
+        "F9"
+      ],
+      "migration": false,
+      "workstream": "W1",
+      "soft": [
+        "N1"
+      ]
+    },
+    {
+      "id": "O3",
+      "area": "O",
+      "title": "Retention on a schedule",
+      "what": "Run the existing retention commands as jobs instead of by hand.",
+      "done": "Old events and logs are trimmed without anyone remembering to.",
+      "deps": [
+        "F9"
+      ],
+      "migration": false,
+      "workstream": "W1",
+      "soft": []
+    },
+    {
+      "id": "O4",
+      "area": "O",
+      "title": "Sign-up and email",
+      "what": "For the SaaS later (D1). Email on accounts, verification, password reset, invitation emails and digests through an SMTP or provider adapter, and public sign-up, switched off by default for self-hosted installs.",
+      "done": "A stranger can sign up, verify and reset a password alone.",
+      "deps": [
+        "S7"
+      ],
+      "migration": true,
+      "workstream": "W15",
+      "soft": []
+    },
+    {
+      "id": "O5",
+      "area": "O",
+      "title": "Billing and plans",
+      "what": "For the SaaS later (D1). Plans, seats or usage pricing, a payment provider, and limits enforced per workspace, built on the usage that U2 and AI1 already record per workspace. Absent from self-hosted installs.",
+      "done": "A workspace can upgrade and its limits change.",
+      "deps": [
+        "O4",
+        "U2"
+      ],
+      "migration": true,
+      "workstream": "W15",
+      "soft": []
+    },
+    {
+      "id": "O6",
+      "area": "O",
+      "title": "More than one server",
+      "what": "For the SaaS later (D1). The realtime hub, rate limits, MCP sessions and background loops live in one process (realtime.rs, rate_limit.rs, mcp.rs:1646). Share what must be shared through PostgreSQL LISTEN/NOTIFY or a small broker.",
+      "done": "Two server processes behind one address behave like one.",
+      "deps": [
+        "F9"
+      ],
+      "migration": false,
+      "workstream": "W15",
+      "soft": []
+    },
+    {
+      "id": "O7",
+      "area": "O",
+      "title": "Two-workspace isolation tests",
+      "what": "The SaaS will hold many workspaces in one database, so leaks between them must be caught from now on, not audited later. A test fixture builds two workspaces with look-alike people, agents, projects, tasks, DMs and pages, and a suite checks that every list, search, task view, MCP tool and realtime event in one never shows the other's. Each new feature adds its cases (see 'How an agent runs a workstream').",
+      "done": "The suite covers every existing list and search route and MCP read tool, and fails if one leaks across workspaces.",
+      "deps": [],
+      "migration": false,
+      "workstream": "W1",
+      "soft": []
+    },
+    {
+      "id": "O8",
+      "area": "O",
+      "title": "Self-host in one command",
+      "what": "For the open-source release (D1). There's no container image today, and the first admin comes from an interactive command (bootstrap-admin). Add a container image and a compose file (the app plus PostgreSQL) that start a working install, first-run setup in the browser that creates the first admin and generates the secrets master key, a configuration reference with safe defaults, and upgrade notes. An empty database isn't enough to open setup, since anyone who reaches a fresh install first would own it. On first start the server writes a one-time setup code to a file in its data folder that only the host can read, and logs the file's path but never the code (AGENTS.md keeps secrets out of logs). Setup asks for the code, which stops working once the first admin exists. The Red Hat scripts stay in deploy/redhat as one example of a host.",
+      "done": "On a fresh machine, docker compose up and a browser get you to a working workspace, and setup refuses anyone without the code from the host.",
+      "deps": [
+        "S1",
+        "S3"
+      ],
+      "migration": false,
+      "workstream": "W15",
+      "soft": []
+    },
+    {
+      "id": "O9",
+      "area": "O",
+      "title": "Open-source release",
+      "what": "Choose a license (D8), move what's specific to your machines out of the code (hostnames and Tailscale addresses in tools/ci/run.sh and deploy/redhat, paths under /home/bot) into configuration or a private deploy repository, check the git history for anything private, and add a README for strangers, CONTRIBUTING, a security policy and public docs.",
+      "done": "A stranger can clone the repository, follow the README and run it, and nothing in it points at your machines.",
+      "deps": [
+        "O8"
+      ],
+      "migration": false,
+      "workstream": "W15",
+      "soft": []
+    }
+  ]
+}
