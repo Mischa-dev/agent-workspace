@@ -19,11 +19,12 @@ use super::{
     McpPrincipal,
     common::{ToolResult, accessible_project_ids_in, parse_id, public_url},
     tasks::{command_actor, resolve_tasks},
-    writes::{WriteAccess, check_write_access},
+    writes::{WriteAccess, check_access_for, check_write_access},
 };
 use crate::{
     AppState,
     error::AppError,
+    policy::Action,
     work_item_commands::valid_estimate,
     work_item_planning::{
         self, Direction, LinkRefusal, MAX_LINKS_PER_CALL, MilestoneChange, MilestoneRefusal,
@@ -602,9 +603,10 @@ pub(super) async fn task_watch(
     let project_id = principal.project_id;
     let result = async {
         let mut transaction = state.pool.begin().await?;
-        if let Some(refusal) =
-            access_refusal(check_write_access(&mut transaction, principal).await?)
-        {
+        // Anyone who can see a task may watch it, as in the app.
+        if let Some(refusal) = access_refusal(
+            check_access_for(&mut transaction, principal, Action::WorkItemView).await?,
+        ) {
             return Ok(refusal);
         }
         let Some(task) = own_task_ref(&mut transaction, project_id, task_id).await? else {

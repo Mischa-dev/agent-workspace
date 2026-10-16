@@ -1432,6 +1432,23 @@ async fn update_many(
                 }),
             }
         }
+        // Every task whose start date would fall after the new due date is
+        // listed, not just the first one reached while applying.
+        if let Some(Some(due)) = change.due_date
+            && current.start_date.is_some_and(|start| start > due)
+        {
+            problems.push(
+                BatchProblem::new(
+                    index,
+                    "dueDate",
+                    format!(
+                        "{key} starts after that due date. {}",
+                        super::writes::DATES_MESSAGE
+                    ),
+                )
+                .with_task(&key),
+            );
+        }
         if !delta.add.is_empty() {
             let plan =
                 work_item_labels::plan(&mut transaction, project_id, *task_id, &delta).await?;

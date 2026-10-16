@@ -165,9 +165,12 @@ export function applyMove(
         if (column.key !== toColumnKey) total = Math.max(0, total - 1)
       }
       if (column.key === toColumnKey) {
+        // On a label board the task may already be in the target column; it moves there, not twice.
+        const already = column.key !== fromKey && items.some((item) => item.id === cardId)
+        if (already) items = items.filter((item) => item.id !== cardId)
         const at = toIndex === null ? items.length : Math.max(0, Math.min(toIndex, items.length))
         items = [...items.slice(0, at), card, ...items.slice(at)]
-        if (column.key !== fromKey) total += 1
+        if (column.key !== fromKey && !already) total += 1
       }
       return items === column.items ? column : { ...column, items, total }
     }),

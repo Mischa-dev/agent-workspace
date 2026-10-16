@@ -1987,6 +1987,17 @@ pub(super) async fn check_write_access(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
 ) -> Result<WriteAccess, AppError> {
+    check_access_for(transaction, principal, Action::McpWrite).await
+}
+
+/// `check_write_access` with the role checked for `action` instead, for the
+/// few writes a role below member may make (watching a task it can see).
+/// The credential still needs write scope.
+pub(super) async fn check_access_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    action: Action,
+) -> Result<WriteAccess, AppError> {
     if !principal.can_write() {
         return Ok(WriteAccess::ReadOnly);
     }
@@ -2011,7 +2022,7 @@ pub(super) async fn check_write_access(
     let decision = authorize_mutation(
         &mcp_actor(principal, String::new()),
         &membership,
-        Action::McpWrite,
+        action,
         None,
     )?;
     Ok(if matches!(decision, Decision::Allow) {

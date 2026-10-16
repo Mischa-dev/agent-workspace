@@ -118,7 +118,7 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
 
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
-    let (_, mara) = agent_in(&setup, &work, "Mara", "mara").await;
+    let (mara_id, mara) = agent_in(&setup, &work, "Mara", "mara").await;
     let mara_session = initialize(app, &mara).await.expect("Mara MCP");
     let call = |name: &'static str, arguments: Value| {
         let codex = codex.clone();
@@ -272,6 +272,22 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
             .any(|watcher| watcher["handle"] == "mara"),
         "{watched}"
     );
+    // A viewer may watch what they can see, as in the app.
+    let set_role = |role: &'static str| {
+        sqlx::query(
+            "UPDATE project_memberships SET role = $3 WHERE project_id = $1 AND actor_id = $2",
+        )
+        .bind(work.parse::<Uuid>().expect("work id"))
+        .bind(mara_id)
+        .bind(role)
+        .execute(&setup.pool)
+    };
+    set_role("viewer").await.expect("make Mara a viewer");
+    let unwatched = as_mara("task_watch", json!({"taskId": "WORK-3", "watching": false})).await;
+    assert_eq!(unwatched["outcome"], "ok", "{unwatched}");
+    let rewatched = as_mara("task_watch", json!({"taskId": "WORK-3"})).await;
+    assert_eq!(rewatched["value"]["watching"], true, "{rewatched}");
+    set_role("member").await.expect("make Mara a member again");
     let duplicate = call(
         "task_relate",
         json!({"taskId": "WORK-2", "otherTaskId": "WORK-1", "kind": "duplicates", "close": true}),
@@ -537,6 +553,20 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     )
     .await;
     assert_eq!(updated["outcome"], "applied", "{updated}");
+    // A due date before a task's start is found before anything is applied.
+    let early = call(
+        "task_update_many",
+        json!({"taskIds": ["PLAN-2", "PLAN-1"], "dueDate": "2019-01-01"}),
+    )
+    .await;
+    assert_ne!(early["outcome"], "ok", "{early}");
+    assert_eq!(early["problems"][0]["field"], "dueDate", "{early}");
+    assert!(
+        early
+            .to_string()
+            .contains("PLAN-1 starts after that due date"),
+        "{early}"
+    );
     let bulk = call(
         "task_update_many",
         json!({"taskIds": ["PLAN-2", "PLAN-3"], "milestone": "v1", "dueDate": ""}),

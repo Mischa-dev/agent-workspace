@@ -78,6 +78,19 @@ describe('history changes', () => {
 })
 
 describe('board moves', () => {
+  it('moves a card into a label column that already shows it without copying it', () => {
+    const board = {
+      columns: [
+        { key: 'a', label: 'A', total: 1, items: [card('t')] },
+        { key: 'b', label: 'B', total: 2, items: [card('u'), card('t')] },
+      ],
+    } as unknown as WorkItemBoardResponse
+    const moved = applyMove(board, 't', 'b', 0, (item) => item, 'a')
+    expect(moved.columns[0].items).toEqual([])
+    expect(moved.columns[1].items.map((item) => item.id)).toEqual(['t', 'u'])
+    expect(moved.columns[1].total).toBe(2)
+  })
+
   it('places a card by manual order on boards not grouped by status', () => {
     const at = (id: string, order: string) => ({ ...card(id), boardOrder: order })
     const column = [at('a', '1:1'), at('b', '1:3'), at('c', '2:0')]
