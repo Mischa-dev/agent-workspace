@@ -37,11 +37,22 @@ export function WorkItemsPage() {
   const workflow = useWorkItemWorkflow(projectId)
   const { notice, notify } = useNotice()
   const savedFilters = project.data?.navigation.filters
-  const shouldRestore =
-    parameters.size === 0 &&
-    project.isSuccess &&
-    project.data.navigation.location.kind === 'work_items' &&
-    Boolean(savedFilters && Object.keys(savedFilters).length > 0)
+  // The remembered view comes back only when the page is entered with an
+  // empty URL, once per project. Later, a URL emptied by the person (back to
+  // the default view, last filter cleared) stays empty.
+  const [entry, setEntry] = useState<{ projectId: string; restore: boolean } | null>(null)
+  if (project.isSuccess && entry?.projectId !== projectId) {
+    setEntry({
+      projectId,
+      restore:
+        parameters.size === 0 &&
+        project.data.navigation.location.kind === 'work_items' &&
+        Boolean(savedFilters && Object.keys(savedFilters).length > 0),
+    })
+  } else if (entry?.restore && parameters.size > 0) {
+    setEntry({ ...entry, restore: false })
+  }
+  const shouldRestore = entry?.projectId === projectId && entry.restore && parameters.size === 0
 
   useEffect(() => {
     if (shouldRestore && savedFilters) setParameters(parametersFromRemembered(savedFilters), { replace: true })

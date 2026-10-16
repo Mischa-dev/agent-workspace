@@ -26,23 +26,34 @@ export const SEARCH_DELAY = 250
 export function useDebouncedSearch(urlValue: string, update: UpdateListState, delay = SEARCH_DELAY) {
   const [text, setText] = useState(urlValue)
   const [synced, setSynced] = useState(urlValue)
-  const [typing, setTyping] = useState(false)
+  // What our own last write put in the URL, until the URL shows it.
+  const [sent, setSent] = useState<string | null>(null)
+  // Counts URL changes from elsewhere; each one cancels unsent typing.
+  const [outside, setOutside] = useState(0)
   const pending = useRef<number | undefined>(undefined)
-  // The URL changed from elsewhere (Back, Clear filters): show that.
   if (synced !== urlValue) {
     setSynced(urlValue)
-    if (!typing) setText(urlValue)
+    setSent(null)
+    // The URL changed from elsewhere (Back, Clear filters): it wins over
+    // anything typed but not yet sent.
+    if (sent === null || urlValue !== sent) {
+      setText(urlValue)
+      setOutside((count) => count + 1)
+    }
   }
+  useEffect(() => {
+    window.clearTimeout(pending.current)
+    pending.current = undefined
+  }, [outside])
   useEffect(() => () => window.clearTimeout(pending.current), [])
   const change = useCallback(
     (value: string) => {
       setText(value)
-      setTyping(true)
       window.clearTimeout(pending.current)
       pending.current = window.setTimeout(() => {
         pending.current = undefined
-        setTyping(false)
         const query = value.trim() ? value.slice(0, 120) : undefined
+        setSent(query ?? '')
         update((current) => withFilter(current, 'q', query), { replace: true })
       }, delay)
     },

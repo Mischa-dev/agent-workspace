@@ -1070,6 +1070,8 @@ pub async fn set_watching(
     Ok(rows.rows_affected() > 0)
 }
 
+/// Everyone watching a task. Watchers are active project members, so the
+/// project's membership bounds the list; it isn't cut short.
 pub async fn watchers(
     connection: &mut PgConnection,
     project_id: Uuid,
@@ -1084,7 +1086,6 @@ pub async fn watchers(
           ON membership.project_id = watcher.project_id AND membership.actor_id = watcher.actor_id
         WHERE watcher.project_id = $1 AND watcher.work_item_id = $2 AND membership.enabled
         ORDER BY lower(membership.display_name), actor.id
-        LIMIT 100
         "#,
     )
     .bind(project_id)

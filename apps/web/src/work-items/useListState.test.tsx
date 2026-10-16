@@ -50,4 +50,19 @@ describe('search box', () => {
     expect(screen.getByRole('status', { name: 'Location' })).toBeEmptyDOMElement()
     expect(input).toHaveValue('')
   })
+
+  it('drops unsent typing when the URL changes from elsewhere', () => {
+    render(
+      <MemoryRouter initialEntries={['/list', '/list?q=old']} initialIndex={1}>
+        <Search />
+      </MemoryRouter>,
+    )
+    const input = screen.getByRole('textbox', { name: 'Search' })
+    expect(input).toHaveValue('old')
+    fireEvent.change(input, { target: { value: 'older' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(input).toHaveValue('')
+    act(() => vi.advanceTimersByTime(SEARCH_DELAY))
+    expect(screen.getByRole('status', { name: 'Location' })).toBeEmptyDOMElement()
+  })
 })
