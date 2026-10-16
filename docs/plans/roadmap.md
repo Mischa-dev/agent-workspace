@@ -476,7 +476,7 @@ default environment with its defaults, and its status and pull request show in
 the task's thread; '@codex fix the flaky test' does the same; and ten queued
 tasks start as capacity frees up, blocked ones last.
 
-#### W8. Settings and accounts
+#### W8. Settings and accounts (#141)
 
 *6 items · Starts when W1 and W4 have merged · 3 add a migration*
 
@@ -484,12 +484,12 @@ One settings area for your account, the workspace and each project, showing
 what's inherited; GitHub connected in three clicks; members, roles,
 invitations, API tokens, two-factor and the audit log.
 
-- [ ] [S3](#s3-one-settings-area) One settings area
-- [ ] [S4](#s4-manage-the-workspace) Manage the workspace
-- [ ] [S5](#s5-connect-github-properly) Connect GitHub properly
-- [ ] [S7](#s7-account-security-and-api-tokens) Account security and API tokens
-- [ ] [S8](#s8-audit-log) Audit log
-- [ ] [S9](#s9-appearance-follows-you) Appearance follows you
+- [x] [S3](#s3-one-settings-area) One settings area
+- [x] [S4](#s4-manage-the-workspace) Manage the workspace
+- [x] [S5](#s5-connect-github-properly) Connect GitHub properly
+- [x] [S7](#s7-account-security-and-api-tokens) Account security and API tokens
+- [x] [S8](#s8-audit-log) Audit log
+- [x] [S9](#s9-appearance-follows-you) Appearance follows you
 
 **Owns:** A new `apps/web/src/settings/` that replaces
 `projects/ProjectSettingsPage.tsx`, the `github/` and `repositories/` screens,

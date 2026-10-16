@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { useProjects } from '../projects/hooks'
+import { projectSettingsHref } from '../settings/paths'
 import { closeCommandMenu, openCommandMenu, openShortcutSheet, useCommandState } from './commandStore'
 import { createShortcutMatcher, type ShortcutAction } from './shortcuts'
 import { projectPath, useRouteProject } from './useRouteProject'
@@ -62,8 +63,11 @@ export function CommandCenter() {
       'go-board': () => inProject('/work-items?view=board'),
       'go-pages': () => inProject('/pages'),
       'go-decisions': () => inProject('/decisions'),
-      'go-settings': () => inProject('/settings'),
-      'go-appearance': () => go('/settings/appearance'),
+      'go-settings': () => {
+        const project = currentRef.current
+        go(project ? projectSettingsHref(project.id) : '/settings')
+      },
+      'go-appearance': () => go('/settings/account/appearance'),
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return

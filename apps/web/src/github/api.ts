@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import type { Repository } from '../repositories/api'
 
 export type GitHubInstallationRepository = {
   id: string
@@ -83,4 +84,57 @@ export function updateGitHubAutomationSettings(
     `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/automation`,
     { method: 'PUT', idempotencyKey: crypto.randomUUID(), json: input },
   )
+}
+
+// ---------------------------------------------------------------------------
+// Connecting through the GitHub App install flow (no IDs to copy)
+
+export type GitHubConnectedInstallation = {
+  installationId: number
+  accountLogin: string
+  targetType: 'User' | 'Organization'
+  claimedByDisplayName: string
+  claimedAt: string
+}
+
+export type GitHubConnection = {
+  configured: boolean
+  /** False when the host hasn't set the App's slug and OAuth client. */
+  connectAvailable: boolean
+  appSlug: string | null
+  installations: GitHubConnectedInstallation[]
+  capabilities: { manage: boolean }
+}
+
+export type GitHubAvailableRepository = {
+  installationId: number
+  accountLogin: string
+  githubRepositoryId: number
+  owner: string
+  name: string
+  fullName: string
+  defaultBranch: string
+  private: boolean
+  description: string | null
+  added: boolean
+}
+
+const githubPath = (projectId: string, rest: string) =>
+  `/api/v1/projects/${encodeURIComponent(projectId)}/integrations/github/${rest}`
+
+export function getGitHubConnection(projectId: string) {
+  return requestJson<GitHubConnection>(githubPath(projectId, 'connection'))
+}
+
+/** Where to send the browser: GitHub's install page, or its sign-in to prove access to an existing installation. */
+export function startGitHubConnect(projectId: string, mode: 'install' | 'authorize') {
+  return requestJson<{ url: string }>(githubPath(projectId, 'connect'), { method: 'POST', json: { mode } })
+}
+
+export function listAvailableGitHubRepositories(projectId: string) {
+  return requestJson<{ repositories: GitHubAvailableRepository[] }>(githubPath(projectId, 'available-repositories'))
+}
+
+export function addGitHubRepository(projectId: string, input: { installationId: number; githubRepositoryId: number }) {
+  return requestJson<Repository>(githubPath(projectId, 'repositories'), { method: 'POST', json: input })
 }

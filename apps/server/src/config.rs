@@ -132,6 +132,30 @@ pub struct GitHubConfig {
     pub webhook_previous_secret_path: Option<PathBuf>,
     pub api_base_url: String,
     pub api_version: String,
+    /// For connecting through the App's install page (S5); unset, people
+    /// can't connect GitHub from settings.
+    pub connect: Option<GitHubConnectConfig>,
+}
+
+/// The App's public name and its OAuth client, which let a person install
+/// the App and prove which installations they can reach.
+#[derive(Clone)]
+pub struct GitHubConnectConfig {
+    /// The App's URL name: `github.com/apps/<slug>`.
+    pub app_slug: String,
+    pub client_id: String,
+    pub client_secret_path: PathBuf,
+}
+
+impl fmt::Debug for GitHubConnectConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GitHubConnectConfig")
+            .field("app_slug", &self.app_slug)
+            .field("client_id", &self.client_id)
+            .field("client_secret_path", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl fmt::Debug for GitHubConfig {
@@ -150,6 +174,7 @@ impl fmt::Debug for GitHubConfig {
             )
             .field("api_base_url", &self.api_base_url)
             .field("api_version", &self.api_version)
+            .field("connect", &self.connect)
             .finish()
     }
 }
@@ -419,6 +444,16 @@ fn github_config(
         });
     }
 
+    let connect = github_connect_config(values, data_root, web_root)?;
+    if let Some(connect) = &connect
+        && [&private_key_path, &webhook_secret_path].contains(&&connect.client_secret_path)
+    {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_CLIENT_SECRET_PATH"),
+            reason: "must be distinct from every other GitHub secret path".into(),
+        });
+    }
+
     Ok(Some(GitHubConfig {
         app_id,
         private_key_path,
@@ -426,6 +461,69 @@ fn github_config(
         webhook_previous_secret_path,
         api_base_url,
         api_version,
+        connect,
+    }))
+}
+
+/// The App's slug, OAuth client id and client-secret file, all or none.
+fn github_connect_config(
+    values: &BTreeMap<String, String>,
+    data_root: &Path,
+    web_root: &Path,
+) -> Result<Option<GitHubConnectConfig>, ConfigError> {
+    let value = |suffix: &str| {
+        values
+            .get(&format!("{PREFIX}{suffix}"))
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let slug = value("GITHUB_APP_SLUG");
+    let client_id = value("GITHUB_CLIENT_ID");
+    let secret = value("GITHUB_CLIENT_SECRET_PATH");
+    let (slug, client_id, secret) = match (slug, client_id, secret) {
+        (None, None, None) => return Ok(None),
+        (Some(slug), Some(client_id), Some(secret)) => (slug, client_id, secret),
+        _ => {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}GITHUB_APP_SLUG"),
+                reason:
+                    "GitHub App slug, client ID, and client-secret path must be configured together"
+                        .into(),
+            });
+        }
+    };
+    if !(1..=100).contains(&slug.len())
+        || !slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_APP_SLUG"),
+            reason: "must be the App's URL name: lower-case letters, digits and hyphens".into(),
+        });
+    }
+    if !(1..=100).contains(&client_id.len())
+        || !client_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
+    {
+        return Err(ConfigError::Invalid {
+            key: format!("{PREFIX}GITHUB_CLIENT_ID"),
+            reason: "must be the App's client ID".into(),
+        });
+    }
+    let client_secret_path = PathBuf::from(secret);
+    validate_secret_file(
+        "GITHUB_CLIENT_SECRET_PATH",
+        &client_secret_path,
+        data_root,
+        web_root,
+        4096,
+    )?;
+    Ok(Some(GitHubConnectConfig {
+        app_slug: slug,
+        client_id,
+        client_secret_path,
     }))
 }
 
