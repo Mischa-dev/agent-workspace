@@ -129,15 +129,30 @@ impl RunConfig {
             None => None,
         };
         // Account defaults for reasoning and speed only apply when the model
-        // they were chosen for is still the one in use.
+        // they were chosen for is still the one in use, and only while that
+        // model still offers them; otherwise the model's own default is used.
+        // Values named at launch are checked strictly below.
         let defaults_apply =
             launch_model.is_none() || launch_model.as_deref() == account_defaults.model.as_deref();
-        let pick = |launch: &Option<String>, account: &Option<String>| {
-            launch
+        let account_default = |value: &Option<String>, offered: &dyn Fn(&str) -> bool| {
+            value
                 .clone()
-                .or_else(|| defaults_apply.then(|| account.clone()).flatten())
+                .filter(|value| defaults_apply && offered(value))
         };
-        let reasoning = pick(&self.reasoning, &account_defaults.reasoning)
+        let reasoning = self
+            .reasoning
+            .clone()
+            .or_else(|| {
+                account_default(&account_defaults.reasoning, &|level| {
+                    model.is_none_or(|model| {
+                        model.reasoning_levels.is_empty()
+                            || model
+                                .reasoning_levels
+                                .iter()
+                                .any(|offered| offered == level)
+                    })
+                })
+            })
             .or_else(|| model.and_then(|model| model.default_reasoning.clone()));
         if let (Some(level), Some(model)) = (&reasoning, model)
             && !model.reasoning_levels.is_empty()
@@ -145,7 +160,14 @@ impl RunConfig {
         {
             return Err(InvalidRunConfig("reasoning"));
         }
-        let speed = pick(&self.speed, &account_defaults.speed)
+        let speed = self
+            .speed
+            .clone()
+            .or_else(|| {
+                account_default(&account_defaults.speed, &|speed| {
+                    model.is_none_or(|model| model.speeds.iter().any(|option| option.id == speed))
+                })
+            })
             .or_else(|| model.and_then(|model| model.default_speed.clone()));
         if let (Some(speed), Some(model)) = (&speed, model)
             && !model.speeds.iter().any(|option| &option.id == speed)
@@ -347,6 +369,32 @@ mod tests {
         assert!(
             serde_json::from_value::<RunConfig>(json!({"model": "x", "secret": "y"})).is_err(),
             "unknown fields are refused"
+        );
+    }
+
+    #[test]
+    fn account_defaults_the_model_no_longer_offers_fall_back_to_its_own() {
+        let manifest = demo_manifest();
+        // Chosen while fast-model was the default; deep-model offers neither.
+        let account = RunConfig {
+            reasoning: Some("high".to_owned()),
+            speed: Some("priority".to_owned()),
+            ..RunConfig::default()
+        };
+        let resolved = RunConfig::default()
+            .resolve(&account, &manifest, &catalog())
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(resolved.model.as_deref(), Some("deep-model"));
+        assert_eq!(resolved.reasoning.as_deref(), Some("medium"));
+        assert_eq!(resolved.speed, None);
+        // Named at launch, the same values are still refused.
+        let launch = RunConfig {
+            reasoning: Some("high".to_owned()),
+            ..RunConfig::default()
+        };
+        assert_eq!(
+            launch.resolve(&account, &manifest, &catalog()).err(),
+            Some(InvalidRunConfig("reasoning"))
         );
     }
 }

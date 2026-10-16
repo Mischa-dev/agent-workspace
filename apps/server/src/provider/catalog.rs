@@ -150,6 +150,20 @@ pub async fn pickable_models(
         .collect())
 }
 
+/// Serializes every change to one harness's catalog in a workspace, so
+/// refreshes and edits see each other's rows when checking the cap.
+async fn lock_catalog(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
+    adapter_kind: &str,
+) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("harness-catalog:{organization_id}:{adapter_kind}"))
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
 /// The reported models that fit beside the `kept` ones without the catalog
 /// passing `MAX_CATALOG_MODELS`, in the harness's order.
 fn within_cap<'a>(models: &'a [ModelEntry], kept: &[String]) -> Vec<&'a ModelEntry> {
@@ -178,10 +192,7 @@ pub async fn store_refresh(
     models: &[ModelEntry],
 ) -> Result<usize, AppError> {
     let mut transaction = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("harness-catalog:{organization_id}:{adapter_kind}"))
-        .execute(&mut *transaction)
-        .await?;
+    lock_catalog(&mut transaction, organization_id, adapter_kind).await?;
     // Edited and hand-added models stay whatever the harness reports, so
     // they take their room in the cap before any new model does.
     let kept = sqlx::query_scalar::<_, String>(
@@ -283,21 +294,19 @@ pub async fn save_overrides(
     overrides: &ModelOverrides,
     actor_id: Uuid,
 ) -> Result<(), AppError> {
+    let choose_default = overrides.is_default == Some(true);
+    let overrides = serde_json::to_value(overrides)
+        .map_err(|_| AppError::Internal("serialize catalog overrides"))?;
+    let mut transaction = pool.begin().await?;
+    lock_catalog(&mut transaction, organization_id, adapter_kind).await?;
+    // Counted under the lock so concurrent additions can't pass the cap.
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM harness_models WHERE organization_id = $1 AND adapter_kind = $2",
     )
     .bind(organization_id)
     .bind(adapter_kind)
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await?;
-    let choose_default = overrides.is_default == Some(true);
-    let overrides = serde_json::to_value(overrides)
-        .map_err(|_| AppError::Internal("serialize catalog overrides"))?;
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("harness_models:{organization_id}:{adapter_kind}"))
-        .execute(&mut *transaction)
-        .await?;
     if choose_default {
         // A new default replaces whichever model a person chose before.
         sqlx::query(
