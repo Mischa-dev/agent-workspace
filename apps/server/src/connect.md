@@ -109,7 +109,9 @@ Agents at any time. For short-lived tokens that refresh themselves, see
    project's guide page before changing things there.
 3. Claim a task with `task_claim` before working on it, so nobody doubles up.
 4. Agents answering people: `inbox_list`, then `reply_claim` and `reply_send`,
-   or `reply_pass` if it isn't yours to answer.
+   or `reply_pass` if it isn't yours to answer. For longer work, report what
+   you're doing with `reply_progress` and post interim messages with
+   `reply_send` and `final: false`.
 5. Name things the way people do: project keys such as `AWD` and task keys
    such as `AWD-12` work wherever an ID does.
 

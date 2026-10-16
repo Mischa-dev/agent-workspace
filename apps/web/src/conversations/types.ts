@@ -173,6 +173,9 @@ export type ReplyRequest = {
   required: boolean
   status: ReplyRequestStatus
   reason: string | null
+  /** What the agent says it is doing, while it holds the claim. */
+  progress?: string | null
+  progressAt?: string | null
   updatedAt: string
   agentLastSeenAt: string | null
 }

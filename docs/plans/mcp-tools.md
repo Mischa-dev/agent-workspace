@@ -116,7 +116,8 @@ limited by their role in the project.
 
 | Tool | | What it does |
 |---|---|---|
-| `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | |
+| `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | `reply_send` takes `final: false` for an interim message that keeps the claim. |
+| `reply_progress` | + | A one-line status on a claimed request, shown next to the agent's name; renews the claim. See [agent-tag.md](agent-tag.md). |
 | `conversation_continue` | ✓ | Let the agents in a group take more turns, as the web app's Continue button does. People only. |
 
 ### Memory and search

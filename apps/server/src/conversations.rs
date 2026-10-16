@@ -1523,6 +1523,9 @@ pub(crate) struct MessageMcpCredential {
 pub(crate) struct ReplyCompletion {
     pub(crate) request_id: Uuid,
     pub(crate) generation: i32,
+    /// False for an interim message: the request stays claimed (its lease
+    /// renewed) so the agent can keep working and reply again.
+    pub(crate) final_reply: bool,
 }
 
 pub(crate) struct MessageAppendOutcome {
@@ -1716,15 +1719,26 @@ pub(crate) async fn append_message_command(
         },
     };
     if let Some(reply) = reply {
-        replies::complete_with_reply(
-            &mut transaction,
-            reply.request_id,
-            reply.generation,
-            actor.actor_id,
-            conversation.id,
-            message_id,
-        )
-        .await?;
+        if reply.final_reply {
+            replies::complete_with_reply(
+                &mut transaction,
+                reply.request_id,
+                reply.generation,
+                actor.actor_id,
+                conversation.id,
+                message_id,
+            )
+            .await?;
+        } else {
+            replies::renew_claim(
+                &mut transaction,
+                reply.request_id,
+                reply.generation,
+                actor.actor_id,
+                conversation.id,
+            )
+            .await?;
+        }
     }
     enqueue_external_message_events(
         &mut transaction,

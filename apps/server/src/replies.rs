@@ -467,6 +467,41 @@ pub(crate) async fn complete_with_reply(
     }
 }
 
+/// Keep the agent's claimed request open after an interim message, renewing
+/// its lease. Fails like `complete_with_reply` when the claim is gone, so the
+/// caller's transaction rolls the message back.
+pub(crate) async fn renew_claim(
+    transaction: &mut Transaction<'_, Postgres>,
+    request_id: Uuid,
+    generation: i32,
+    agent_actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<(), AppError> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE reply_requests
+        SET lease_expires_at = now() + make_interval(mins => $5), updated_at = now()
+        WHERE id = $1 AND generation = $2 AND agent_actor_id = $3
+          AND conversation_id = $4 AND status = 'claimed'
+        "#,
+    )
+    .bind(request_id)
+    .bind(generation)
+    .bind(agent_actor_id)
+    .bind(conversation_id)
+    .bind(LEASE_MINUTES)
+    .execute(&mut **transaction)
+    .await?;
+    if updated.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(AppError::Conflict(
+            "reply request",
+            "not claimed by this agent any more",
+        ))
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyRequestView {
@@ -477,6 +512,9 @@ pub struct ReplyRequestView {
     pub mentioned: bool,
     pub status: String,
     pub reason: Option<String>,
+    /// What the agent says it is doing, while it holds the claim.
+    pub progress: Option<String>,
+    pub progress_at: Option<String>,
     pub updated_at: String,
     /// When the agent last used any of its connections.
     pub agent_last_seen_at: Option<String>,
@@ -493,6 +531,8 @@ struct ReplyRequestRow {
     mentioned: bool,
     status: String,
     reason: Option<String>,
+    progress_text: Option<String>,
+    progress_at: Option<String>,
     updated_at: String,
     agent_last_seen_at: Option<String>,
 }
@@ -508,6 +548,11 @@ pub(crate) async fn timeline_requests(
                membership.display_name AS agent_name,
                membership.handle AS agent_handle,
                request.required, request.mentioned, request.status, request.reason,
+               -- A status describes work in progress, so only a live claim shows one.
+               CASE WHEN request.status = 'claimed' THEN request.progress_text END
+                   AS progress_text,
+               CASE WHEN request.status = 'claimed' THEN request.progress_at::text END
+                   AS progress_at,
                request.updated_at::text AS updated_at,
                (
                    SELECT max(connection.last_used_at)::text
@@ -550,6 +595,8 @@ pub(crate) async fn timeline_requests(
             mentioned: row.mentioned,
             status: row.status,
             reason: row.reason,
+            progress: row.progress_text,
+            progress_at: row.progress_at,
             updated_at: row.updated_at,
             agent_last_seen_at: row.agent_last_seen_at,
         })

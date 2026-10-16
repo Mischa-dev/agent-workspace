@@ -271,9 +271,9 @@ Behavior changes:
 - Threads whose name was suggested from a removed message get a neutral
   name.
 - Reply requests about a removed message are withdrawn, whatever their
-  state. `reply_send`, `reply_claim`, `reply_pass` and `reply_release` on
-  one say the message was removed and no reply is needed, and it can't be
-  retried.
+  state. `reply_send`, `reply_claim`, `reply_progress`, `reply_pass` and
+  `reply_release` on one say the message was removed and no reply is
+  needed, and it can't be retried.
 - Removing an agent from a group, in the web app or with
   `conversation_members`, withdraws its reply requests in the group and its
   threads.
