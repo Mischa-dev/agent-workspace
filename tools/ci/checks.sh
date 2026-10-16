@@ -9,7 +9,11 @@
 # CI_TARGET_DIR, CI_LOCK_DIR, CI_MEMORY_MAX, CI_CPU_WEIGHT.
 set -euo pipefail
 
-areas="${1:-rust,web}"
+areas="${1-rust,web}"
+case "${areas}" in
+  rust,web|rust|web) ;;
+  *) echo "ci: invalid areas '${areas}' (expected rust,web, rust or web)" >&2; exit 2 ;;
+esac
 has() { [[ ",${areas}," == *",$1,"* ]]; }
 
 # Run at low priority, capped, so the machine's owner always comes first.
@@ -101,6 +105,7 @@ report_web() {
 
 # 1. Quick checks: formatting, lint and types, fixtures.
 if has rust; then
+  step "CI script tests" python3 -m unittest discover -s tools/ci -p 'test_*.py'
   rustup toolchain install >/dev/null 2>&1 || true
   step "cargo fmt" cargo fmt --check
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
