@@ -391,6 +391,43 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         .execute(&pool)
         .await
         .expect("restore member project role");
+    // A refresh retried with the same key replays instead of listing again.
+    let refresh_path = format!(
+        "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
+        seed.project_id
+    );
+    let refreshed_at = || {
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            "SELECT refreshed_at FROM harness_catalog_refreshes WHERE organization_id = $1 AND adapter_kind = 'demo'",
+        )
+        .bind(seed.organization_id)
+        .fetch_one(&pool)
+    };
+    let refreshed = send(
+        &application,
+        owner,
+        "POST",
+        &refresh_path,
+        "owner-refresh",
+        json!({}),
+    )
+    .await;
+    assert_eq!(refreshed.0, StatusCode::OK, "{}", refreshed.1);
+    let first_refresh = refreshed_at().await.expect("first refresh recorded");
+    let replayed = send(
+        &application,
+        owner,
+        "POST",
+        &refresh_path,
+        "owner-refresh",
+        json!({}),
+    )
+    .await;
+    assert_eq!(replayed.0, StatusCode::OK, "{}", replayed.1);
+    assert_eq!(
+        refreshed_at().await.expect("refresh still recorded"),
+        first_refresh
+    );
     let inconsistent = send(
         &application,
         owner,

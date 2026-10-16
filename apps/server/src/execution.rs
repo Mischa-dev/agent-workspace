@@ -711,7 +711,9 @@ async fn refresh_catalog(
     ApiPath((project_id, kind)): ApiPath<(Uuid, String)>,
 ) -> Result<Json<HarnessView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    IdempotencyKey::from_headers(&headers)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
+    let scope = idempotency::resource_bound_scope("project", project_id, "catalog_refresh")?;
     let manifest = state
         .supervisors
         .manifest(&kind)
@@ -739,6 +741,24 @@ async fn refresh_catalog(
     if !may_edit_catalog(&principal, &workspace) {
         return Err(AppError::Forbidden);
     }
+    let can_edit = may_edit_catalog(&principal, &workspace);
+    // A retry whose first refresh already landed replays it instead of
+    // asking the harness again. The key is only held once the models are in
+    // hand, below, so a failed listing can be retried with the same key.
+    if let IdempotencyOutcome::Replay(_) = idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(Json(
+            harness_view(&state, workspace.organization_id, &manifest, can_edit).await?,
+        ));
+    }
     let account = sqlx::query_as::<_, crate::provider::ProfileAccount>(
         r#"
         SELECT account.id AS account_id, account.adapter_kind, account.home_path,
@@ -763,7 +783,7 @@ async fn refresh_catalog(
         "harness",
         "sign in to an account for this harness first",
     ))?;
-    transaction.commit().await?;
+    transaction.rollback().await?;
     let mut session = state
         .supervisors
         .acquire_control(&manifest.kind, account.handle())
@@ -774,14 +794,36 @@ async fn refresh_catalog(
         .await
         .map_err(|error| catalog_error(&manifest.kind, error))?;
     drop(session);
-    catalog::store_refresh(
-        &state.pool,
-        workspace.organization_id,
-        &manifest.kind,
-        &models,
+    let mut transaction = state.pool.begin().await?;
+    match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
     )
-    .await?;
-    let can_edit = may_edit_catalog(&principal, &workspace);
+    .await?
+    {
+        // A concurrent retry with the same key stored its refresh first.
+        IdempotencyOutcome::Replay(_) => {}
+        IdempotencyOutcome::Reserved(reservation) => {
+            catalog::store_refresh(
+                &mut transaction,
+                workspace.organization_id,
+                &manifest.kind,
+                &models,
+            )
+            .await?;
+            idempotency::complete(
+                &mut transaction,
+                &reservation,
+                StatusCode::OK,
+                &serde_json::json!({}),
+            )
+            .await?;
+        }
+    }
+    transaction.commit().await?;
     Ok(Json(
         harness_view(&state, workspace.organization_id, &manifest, can_edit).await?,
     ))

@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::manifest::{AdapterManifest, ModelEntry, ModelOverrides};
@@ -184,15 +184,16 @@ fn within_cap<'a>(models: &'a [ModelEntry], kept: &[String]) -> Vec<&'a ModelEnt
 }
 
 /// Replaces what the harness reported, keeping every person's edits. Models
-/// the harness no longer lists are dropped unless someone edited them.
+/// the harness no longer lists are dropped unless someone edited them. Runs
+/// in the caller's transaction so the refresh commits with its idempotency
+/// record.
 pub async fn store_refresh(
-    pool: &PgPool,
+    transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
     adapter_kind: &str,
     models: &[ModelEntry],
 ) -> Result<usize, AppError> {
-    let mut transaction = pool.begin().await?;
-    lock_catalog(&mut transaction, organization_id, adapter_kind).await?;
+    lock_catalog(transaction, organization_id, adapter_kind).await?;
     // Edited and hand-added models stay whatever the harness reports, so
     // they take their room in the cap before any new model does.
     let kept = sqlx::query_scalar::<_, String>(
@@ -204,7 +205,7 @@ pub async fn store_refresh(
     )
     .bind(organization_id)
     .bind(adapter_kind)
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut **transaction)
     .await?;
     let models = within_cap(models, &kept);
     let ids = models
@@ -222,7 +223,7 @@ pub async fn store_refresh(
     .bind(organization_id)
     .bind(adapter_kind)
     .bind(&ids)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query(
         r#"
@@ -236,7 +237,7 @@ pub async fn store_refresh(
     .bind(organization_id)
     .bind(adapter_kind)
     .bind(&ids)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     for (position, model) in models.iter().enumerate() {
         let data = serde_json::to_value(model)
@@ -262,7 +263,7 @@ pub async fn store_refresh(
         .bind(&model.id)
         .bind(data)
         .bind(i32::try_from(position).unwrap_or(i32::MAX))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     }
     sqlx::query(
@@ -278,9 +279,8 @@ pub async fn store_refresh(
     .bind(organization_id)
     .bind(adapter_kind)
     .bind(i32::try_from(models.len()).unwrap_or(i32::MAX))
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    transaction.commit().await?;
     Ok(models.len())
 }
 
