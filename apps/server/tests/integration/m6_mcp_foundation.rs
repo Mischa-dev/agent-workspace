@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use agent_workspace_server::{
     AppState,
@@ -284,13 +287,14 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .and_then(Value::as_array)
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "project_open"))
         .expect("project_open tool");
-    assert_eq!(
+    // No exact tool count, so branches that each add a tool merge in either
+    // order. Every tool must instead describe itself and carry valid schemas.
+    // See docs/plans/mcp-tools.md for the tool list.
+    assert_tools_are_well_formed(
         tools
             .pointer("/result/tools")
             .and_then(Value::as_array)
-            .map(Vec::len),
-        // See docs/plans/mcp-tools.md for the tool list.
-        Some(71)
+            .expect("tool list"),
     );
     assert_eq!(
         project_tool.pointer("/annotations/readOnlyHint"),
@@ -1355,6 +1359,131 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         .execute(&administrative_pool)
         .await
         .expect("drop isolated M6 schema");
+}
+
+/// Every tool has a unique snake_case name, a description, an object input
+/// schema and, when present, an object output schema, and every schema in
+/// them is well formed (see `assert_schema_well_formed`).
+fn assert_tools_are_well_formed(tools: &[Value]) {
+    assert!(!tools.is_empty(), "no tools listed");
+    let mut names = BTreeSet::new();
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap_or_default();
+        assert!(
+            !name.is_empty()
+                && name.starts_with(|c: char| c.is_ascii_lowercase())
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "tool name {name:?} is not snake_case"
+        );
+        assert!(names.insert(name.to_owned()), "tool {name} is listed twice");
+        assert!(
+            tool["description"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty()),
+            "tool {name} has no description"
+        );
+        for (key, required) in [("inputSchema", true), ("outputSchema", false)] {
+            let Some(schema) = tool.get(key) else {
+                assert!(!required, "tool {name} has no {key}");
+                continue;
+            };
+            // Result enums (`ToolResult`) are a `oneOf` of object variants.
+            assert!(
+                schema["type"] == json!("object")
+                    || (!required
+                        && (schema.get("oneOf").is_some() || schema.get("anyOf").is_some())),
+                "{name} {key} is not an object schema: {schema}"
+            );
+            assert_schema_well_formed(schema, schema, &format!("{name}.{key}"));
+        }
+    }
+}
+
+/// A structural JSON Schema check: known types, properties that are schemas,
+/// required names that exist, and `$ref`s that resolve inside the document.
+fn assert_schema_well_formed(root: &Value, schema: &Value, at: &str) {
+    const TYPES: [&str; 7] = [
+        "object", "array", "string", "integer", "number", "boolean", "null",
+    ];
+    let Some(object) = schema.as_object() else {
+        assert!(
+            schema.is_boolean(),
+            "{at}: a schema must be an object or a boolean"
+        );
+        return;
+    };
+    match object.get("type") {
+        None => {}
+        Some(Value::String(kind)) => assert!(TYPES.contains(&kind.as_str()), "{at}: type {kind}"),
+        Some(Value::Array(kinds)) => assert!(
+            !kinds.is_empty()
+                && kinds
+                    .iter()
+                    .all(|kind| kind.as_str().is_some_and(|kind| TYPES.contains(&kind))),
+            "{at}: types {kinds:?}"
+        ),
+        Some(other) => panic!("{at}: type {other}"),
+    }
+    if let Some(reference) = object.get("$ref") {
+        let pointer = reference
+            .as_str()
+            .and_then(|reference| reference.strip_prefix('#'))
+            .unwrap_or_else(|| panic!("{at}: $ref {reference} is not local"));
+        assert!(
+            root.pointer(pointer).is_some(),
+            "{at}: $ref {reference} does not resolve"
+        );
+    }
+    let properties = object.get("properties");
+    if let Some(properties) = properties {
+        let properties = properties
+            .as_object()
+            .unwrap_or_else(|| panic!("{at}: properties is not an object"));
+        for (field, property) in properties {
+            assert_schema_well_formed(root, property, &format!("{at}.{field}"));
+        }
+    }
+    if let Some(required) = object.get("required") {
+        for field in required
+            .as_array()
+            .unwrap_or_else(|| panic!("{at}: required is not a list"))
+        {
+            let field = field
+                .as_str()
+                .unwrap_or_else(|| panic!("{at}: required {field}"));
+            assert!(
+                properties
+                    .and_then(|properties| properties.get(field))
+                    .is_some(),
+                "{at}: required field {field} has no property"
+            );
+        }
+    }
+    for key in ["items", "additionalProperties", "not"] {
+        if let Some(child) = object.get(key) {
+            assert_schema_well_formed(root, child, &format!("{at}/{key}"));
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        if let Some(children) = object.get(key) {
+            let children = children
+                .as_array()
+                .unwrap_or_else(|| panic!("{at}: {key} is not a list"));
+            assert!(!children.is_empty(), "{at}: {key} is empty");
+            for (index, child) in children.iter().enumerate() {
+                assert_schema_well_formed(root, child, &format!("{at}/{key}/{index}"));
+            }
+        }
+    }
+    for key in ["$defs", "definitions"] {
+        if let Some(definitions) = object.get(key).and_then(Value::as_object) {
+            for (definition, child) in definitions {
+                assert_schema_well_formed(root, child, &format!("{at}/{key}/{definition}"));
+            }
+        }
+    }
 }
 
 async fn login(application: &axum::Router) -> String {

@@ -13,8 +13,6 @@ import {
   Button,
   Checkbox,
   EmptyState,
-  Markdown,
-  MarkdownEditor,
   DocumentSkeleton,
   ListSkeleton,
   PageHeader,
@@ -24,6 +22,7 @@ import {
   StatusChip,
   TextField,
 } from '../ui'
+import { Markdown, MarkdownEditor } from '../ui/markdown'
 import {
   createPage,
   getPage,

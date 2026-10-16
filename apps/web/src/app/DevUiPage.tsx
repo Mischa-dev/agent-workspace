@@ -15,8 +15,6 @@ import {
   ErrorState,
   IconButton,
   ListSkeleton,
-  Markdown,
-  MarkdownEditor,
   MessageSkeleton,
   PageHeader,
   PageSkeleton,
@@ -30,6 +28,7 @@ import {
   type BannerTone,
   type ChipTone,
 } from '../ui'
+import { Markdown, MarkdownEditor } from '../ui/markdown'
 
 const SAMPLE_MARKDOWN = `## Ship the toast
 - [x] Toast with Undo

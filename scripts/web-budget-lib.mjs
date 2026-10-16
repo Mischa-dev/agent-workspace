@@ -1,35 +1,30 @@
 import { gzipSync } from 'node:zlib'
-import { lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
+// The budget holds the code every page load downloads (what index.html loads
+// before the app can paint) and each lazily loaded chunk on its own, never a
+// grand total, so a branch that adds a lazy route doesn't edit this file.
+// Raise a limit only when that part really grows, and say why next to it.
 export const WEB_ASSET_LIMITS = Object.freeze({
-  // Raised from 500/160 KiB for the redesign's shell, components and icons (+62 KiB raw, +22 KiB gzip).
-  // Account settings and the shared member picker bring the measured bundle to
-  // 571,778 raw bytes and 180,817 gzip bytes. Keep the raw ceiling and allow
-  // 2 KiB more gzip for these added routes and controls.
-  // Google and WorkOS agent controls measure 574,498 raw / 181,586 gzip bytes.
-  // Allow 2 KiB raw for these controls; retain the compressed transfer limit.
-  // The agent interface (connected apps, thread status and board, DM threads,
-  // pages, decisions, pins and search) measures 605,885 raw / 192,439 gzip
-  // bytes, most of it in lazily loaded routes.
-  // Mobile support (the service worker, one phone drawer, swipes, the keyboard
-  // viewport, reconnect on resume) adds 9,350 raw / 5,358 gzip bytes over
-  // 607,316 / 193,011, measuring 616,666 / 198,369; sw.js alone is 3,524 / 1,406.
-  // Editing and removing messages, their history, reactions, live updates of
-  // older pages and mark-unread (MCP Phase 3) measure 642,380 / 206,161, all
-  // in the lazily loaded conversation routes.
-  // The app shell (command menu, shortcuts, toasts with Undo, skeletons, tab
-  // titles and badges, the thread side panel, live task patches) and the
-  // Markdown renderer and editor measure 696,486 / 223,840 after review fixes
-  // (task-key disambiguation, lookup errors); code highlighting loads only
-  // with a code block.
-  javascriptRawBytes: 684 * 1024,
-  javascriptGzipBytes: 220 * 1024,
-  // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
-  // Lowered from 104 KiB once pass two removed the legacy stylesheet.
-  // The kit (toasts, command menu, shortcut sheet, skeletons) and Markdown
-  // styles bring it to 112,083.
-  cssRawBytes: 110 * 1024,
+  // index.html's scripts and module preloads: the entry chunk, the shared UI
+  // chunk and theme-boot.js. Measured 388,329 raw / 120,899 gzip bytes when
+  // the budget moved to per-chunk limits (October 2026). The app shell (command
+  // menu, shortcuts, toasts with Undo, tab titles and badges, live task
+  // patches) brings it to 423,687 / 130,474; Markdown loads with its routes.
+  initialJavascriptRawBytes: 420 * 1024,
+  initialJavascriptGzipBytes: 132 * 1024,
+  // index.html's stylesheets: the design system's five theme presets,
+  // components and page layouts. Measured 101,925 raw bytes; the UI kit
+  // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles
+  // bring it to 112,083.
+  initialCssRawBytes: 112 * 1024,
+  // Any other script (each lazy route or shared lazy chunk, sw.js). The
+  // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
+  chunkJavascriptRawBytes: 48 * 1024,
+  chunkJavascriptGzipBytes: 16 * 1024,
+  // Any stylesheet a lazy chunk loads.
+  chunkCssRawBytes: 32 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
@@ -41,17 +36,63 @@ export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
       gzipBytes: gzipSync(bytes, { level: 9, mtime: 0 }).length,
     }
   })
+  const initial = initialAssets(distRoot)
+  const isInitial = ({ file }) => initial.has(file)
   const javascript = files.filter(({ file }) => file.endsWith('.js'))
   const css = files.filter(({ file }) => file.endsWith('.css'))
   const totals = {
+    initialJavascriptRawBytes: sum(javascript.filter(isInitial), 'bytes'),
+    initialJavascriptGzipBytes: sum(javascript.filter(isInitial), 'gzipBytes'),
+    initialCssRawBytes: sum(css.filter(isInitial), 'bytes'),
     javascriptRawBytes: sum(javascript, 'bytes'),
     javascriptGzipBytes: sum(javascript, 'gzipBytes'),
     cssRawBytes: sum(css, 'bytes'),
   }
-  const violations = Object.entries(limits)
-    .filter(([name, limit]) => totals[name] > limit)
-    .map(([name, limit]) => ({ name, observed: totals[name], limit }))
-  return { compression: 'gzip level 9, per emitted asset', files, totals, limits, violations }
+  const violations = []
+  for (const name of ['initialJavascriptRawBytes', 'initialJavascriptGzipBytes', 'initialCssRawBytes']) {
+    if (limits[name] !== undefined && totals[name] > limits[name]) {
+      violations.push({ name, observed: totals[name], limit: limits[name] })
+    }
+  }
+  const chunkChecks = [
+    [javascript, 'bytes', 'chunkJavascriptRawBytes'],
+    [javascript, 'gzipBytes', 'chunkJavascriptGzipBytes'],
+    [css, 'bytes', 'chunkCssRawBytes'],
+  ]
+  for (const [records, key, name] of chunkChecks) {
+    const limit = limits[name]
+    if (limit === undefined) continue
+    for (const record of records) {
+      if (!isInitial(record) && record[key] > limit) {
+        violations.push({ name, file: record.file, observed: record[key], limit })
+      }
+    }
+  }
+  return {
+    compression: 'gzip level 9, per emitted asset',
+    initial: [...initial].sort(),
+    files,
+    totals,
+    limits,
+    violations,
+  }
+}
+
+// The scripts, module preloads and stylesheets index.html loads itself.
+function initialAssets(distRoot) {
+  const indexPath = join(distRoot, 'index.html')
+  const initial = new Set()
+  if (!existsSync(indexPath)) return initial
+  const html = readFileSync(indexPath, 'utf8')
+  for (const [tag] of html.matchAll(/<(?:script|link)\b[^>]*>/gi)) {
+    const isScript = /^<script/i.test(tag)
+    const rel = /\brel\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1]?.toLowerCase()
+    if (!isScript && rel !== 'modulepreload' && rel !== 'stylesheet') continue
+    const reference = /\b(?:src|href)\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1]
+    if (!reference || /^[a-z][a-z0-9+.-]*:/i.test(reference) || reference.startsWith('//')) continue
+    initial.add(reference.replace(/^\.?\//, '').split(/[?#]/)[0])
+  }
+  return initial
 }
 
 function walkRegularFiles(root) {
