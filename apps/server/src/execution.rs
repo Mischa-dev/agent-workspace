@@ -85,6 +85,8 @@ struct ExecutionWorkerRow {
     membership_enabled: bool,
     profile_status: Option<String>,
     profile_account_state: Option<String>,
+    /// Whether the profile's connection is enabled and its harness installed.
+    profile_usable: Option<bool>,
     profile_owner_actor_status: Option<String>,
     profile_owner_membership_enabled: Option<bool>,
     provider_kind: String,
@@ -280,6 +282,7 @@ async fn list_execution_workers(
             membership.enabled AS membership_enabled,
             profile.status AS profile_status,
             profile.account_state AS profile_account_state,
+            profile.usable AS profile_usable,
             profile_owner.status AS profile_owner_actor_status,
             profile_owner_membership.enabled AS profile_owner_membership_enabled,
             connection.kind AS provider_kind,
@@ -297,13 +300,25 @@ async fn list_execution_workers(
           ON connection.project_id = worker.project_id
          AND connection.id = worker.provider_connection_id
         LEFT JOIN LATERAL (
-            SELECT candidate.*
+            SELECT candidate.*,
+                   COALESCE(candidate_connection.enabled
+                            AND candidate_account.adapter_kind = ANY($4), false) AS usable
             FROM execution_profiles candidate
+            LEFT JOIN provider_connections candidate_connection
+              ON candidate_connection.project_id = candidate.project_id
+             AND candidate_connection.id = candidate.provider_connection_id
+            LEFT JOIN provider_accounts candidate_account
+              ON candidate_account.id = candidate.provider_account_id
             WHERE candidate.project_id = worker.project_id
               AND candidate.owner_actor_id = $2
             -- Any of the person's profiles can drive the worker, whichever
-            -- harness it was set up with, so readiness looks at all of them.
+            -- harness it was set up with, so readiness looks at all of them,
+            -- ranking first the ones a run could actually start with.
             ORDER BY
+                (candidate.status = 'available'
+                 AND candidate.account_state = 'authenticated'
+                 AND COALESCE(candidate_connection.enabled
+                              AND candidate_account.adapter_kind = ANY($4), false)) DESC,
                 (candidate.status = 'available'
                  AND candidate.account_state = 'authenticated') DESC,
                 candidate.preferred DESC,
@@ -323,6 +338,13 @@ async fn list_execution_workers(
     .bind(project_id)
     .bind(principal.actor_id)
     .bind(MAX_EXECUTION_RESOURCES)
+    .bind(
+        state
+            .supervisors
+            .manifests()
+            .map(|manifest| manifest.kind.clone())
+            .collect::<Vec<_>>(),
+    )
     .fetch_all(&mut *transaction)
     .await?;
 
@@ -424,15 +446,6 @@ async fn register_personal_execution_profile(
     let request_hash = RequestHash::for_value(&request)?;
     let scope =
         idempotency::resource_bound_scope("project", project_id, "execution_profile_register")?;
-    let adapter_kind = request
-        .adapter_kind
-        .clone()
-        .unwrap_or_else(|| CODEX_KIND.to_owned());
-    let manifest = state
-        .supervisors
-        .manifest(&adapter_kind)
-        .cloned()
-        .ok_or(AppError::Validation("adapterKind"))?;
     // Naming an account checks it belongs to the caller before anything is
     // reserved.
     let named_account = match request.provider_account_id {
@@ -442,6 +455,20 @@ async fn register_personal_execution_profile(
         ),
         None => None,
     };
+    // A named account decides the harness; naming a different one is refused.
+    let adapter_kind = match (&request.adapter_kind, &named_account) {
+        (Some(kind), Some(account)) if kind != &account.adapter_kind => {
+            return Err(AppError::Validation("adapterKind"));
+        }
+        (_, Some(account)) => account.adapter_kind.clone(),
+        (Some(kind), None) => kind.clone(),
+        (None, None) => CODEX_KIND.to_owned(),
+    };
+    let manifest = state
+        .supervisors
+        .manifest(&adapter_kind)
+        .cloned()
+        .ok_or(AppError::Validation("adapterKind"))?;
     let mut transaction = state.pool.begin().await?;
     let access = require_project_action(
         &mut transaction,
@@ -697,11 +724,13 @@ async fn refresh_catalog(
         ));
     }
     let mut transaction = state.pool.begin().await?;
+    // Same boundary as the other catalog edits: the project is visible and
+    // the caller may edit the workspace catalog.
     require_project_action(
         &mut transaction,
         &principal,
         project_id,
-        Action::ExecutionProfileManage,
+        Action::ProjectView,
     )
     .await?;
     let workspace = workspace_access(&mut transaction, &principal, project_id).await?;
@@ -1003,6 +1032,7 @@ fn execution_worker_view(
     } else if !row.provider_enabled
         || registry.manifest(&row.provider_kind).is_none()
         || profile_status == Some(ExecutionProfileStatus::Unavailable)
+        || row.profile_usable == Some(false)
         || account_state == Some(AccountState::Unknown)
     {
         ExecutionWorkerStatus::Unavailable

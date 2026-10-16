@@ -360,6 +360,37 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         "{}",
         member_refresh.1
     );
+    // A workspace admin who only views this project may still refresh; here
+    // it stops at needing a signed-in account, not at permissions.
+    sqlx::query("UPDATE organization_memberships SET role = 'admin' WHERE actor_id = (SELECT actor_id FROM project_memberships WHERE handle = 'w2-member')")
+        .execute(&pool)
+        .await
+        .expect("make member a workspace admin");
+    sqlx::query("UPDATE project_memberships SET role = 'viewer' WHERE handle = 'w2-member'")
+        .execute(&pool)
+        .await
+        .expect("make member a project viewer");
+    let admin_refresh = send(
+        &application,
+        member,
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
+            seed.project_id
+        ),
+        "admin-viewer-refresh",
+        json!({}),
+    )
+    .await;
+    assert_eq!(admin_refresh.0, StatusCode::CONFLICT, "{}", admin_refresh.1);
+    sqlx::query("UPDATE organization_memberships SET role = 'member' WHERE actor_id = (SELECT actor_id FROM project_memberships WHERE handle = 'w2-member')")
+        .execute(&pool)
+        .await
+        .expect("restore member workspace role");
+    sqlx::query("UPDATE project_memberships SET role = 'member' WHERE handle = 'w2-member'")
+        .execute(&pool)
+        .await
+        .expect("restore member project role");
     let inconsistent = send(
         &application,
         owner,
@@ -472,6 +503,18 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     .await;
     assert!(retried.0.is_success(), "retry use: {}", retried.1);
     assert_eq!(retried.2["preferred"], false);
+
+    // Naming an account of one harness while asking for another is refused.
+    let mismatched = send(
+        &application,
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{}/execution-profiles", seed.project_id),
+        "mismatched-profile",
+        json!({"adapterKind": "codex_app_server", "providerAccountId": account_id}),
+    )
+    .await;
+    assert_eq!(mismatched.0, StatusCode::BAD_REQUEST, "{}", mismatched.1);
 
     // Managers see a teammate's profile but not the private account behind it.
     sqlx::query("UPDATE project_memberships SET role = 'admin' WHERE handle = 'w2-member'")
