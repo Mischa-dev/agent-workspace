@@ -50,11 +50,9 @@ test('creates a task and moves it across the board', async ({ page }) => {
   await dialog.getByLabel('Type').selectOption({ label: 'Task' })
   await dialog.getByRole('button', { name: 'Create work item' }).click()
 
-  // Creating opens the new item; its key is the Project key plus a number.
+  // Creating opens the new item.
   await expect(page).toHaveURL(/\/work-items\/[^/]+$/)
   await expect(page.getByText(title).first()).toBeVisible()
-  const key = (await page.getByText(new RegExp(`^${seeded.projectKey}-\\d+$`)).first().textContent())?.trim()
-  expect(key).toMatch(new RegExp(`^${seeded.projectKey}-\\d+$`))
 
   await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/work-items`)
   await page.getByRole('radiogroup', { name: 'View' }).getByRole('radio', { name: 'Board' }).click()
@@ -65,6 +63,10 @@ test('creates a task and moves it across the board', async ({ page }) => {
 
   // New items start in Backlog.
   await expect(card('Backlog')).toBeVisible()
+  // Its key is the Project key plus a number. Read it off the card itself,
+  // since the seeded item sits on the same board.
+  const key = (await card('Backlog').textContent())?.match(new RegExp(`${seeded.projectKey}-\\d+`))?.[0]
+  expect(key).toMatch(new RegExp(`^${seeded.projectKey}-\\d+$`))
 
   // Move with the keyboard-friendly status menu: Backlog → Ready.
   await card('Backlog').getByLabel(`Move ${key} to status`).selectOption({ label: 'Ready' })
