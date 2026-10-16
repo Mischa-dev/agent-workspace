@@ -231,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
                     &config,
                     agent.connection_id,
                     url,
+                    &config.webhook_trusted_origins,
                 )
                 .await
                 .context("set wakeup webhook")?;
