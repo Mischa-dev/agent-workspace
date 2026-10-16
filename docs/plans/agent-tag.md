@@ -47,9 +47,11 @@ needs a few more things.
 
 ## The pieces, in build order
 
-Each one is its own small PR and is useful without the next.
+Pieces 1, 2 and 4 to 7 shipped together as roadmap workstream W5; the
+protocol a runner implements is [docs/agent-runner.md](../agent-runner.md).
+Piece 3 (sessions) is roadmap item A3, built with Launch (W7).
 
-### 1. Progress and interim messages (PR open)
+### 1. Progress and interim messages (built, W5)
 
 - `reply_progress(requestId, generation, status)`: a one-line status (up to
   200 characters, like "Running the server tests") shown under the agent's
@@ -62,7 +64,7 @@ Each one is its own small PR and is useful without the next.
   updated 2 min ago".
 - Migration: `reply_requests.progress_text`, `progress_at`.
 
-### 2. Follow-ups stick to the thread
+### 2. Follow-ups stick to the thread (built, W5)
 
 - When a person writes in a thread where an agent was tagged and hasn't
   finished being asked (a pending or claimed request, or a reply in the last
@@ -74,7 +76,7 @@ Each one is its own small PR and is useful without the next.
 - Tests: a follow-up reaches only agents already in the thread; it never
   reaches an agent who can't see the thread.
 
-### 3. Agent sessions
+### 3. Agent sessions (roadmap A3, in W7)
 
 - A small `agent_sessions` table: agent, thread, runner kind (`claude_code`,
   `codex`, other), an opaque external session reference, an optional `https`
@@ -84,7 +86,7 @@ Each one is its own small PR and is useful without the next.
   result and the wakeup carry the existing binding so the runner resumes it.
 - The thread header shows "Claude · Open session".
 
-### 4. Channel tags open a thread
+### 4. Channel tags open a thread (built, W5)
 
 - A tagged top-level channel message: at claim time the server starts a
   thread from the message (the same code as `thread_start`) and moves the
@@ -94,13 +96,13 @@ Each one is its own small PR and is useful without the next.
   Today only DMs, groups and their threads do (`ReplyStatusList`), so a tag
   in a project thread gives no sign the agent picked it up.
 
-### 5. Stop
+### 5. Stop (built, W5)
 
 - A Stop button on a working agent's status line. The request becomes
   `cancelled`; the runner's next `reply_*` call gets a conflict that says it
   was stopped, and a `reply.cancelled` webhook goes out at once.
 
-### 6. Typed wakeups
+### 6. Typed wakeups (built, W5)
 
 - The webhook body gains `event` (`reply.requested`, `reply.followup`,
   `reply.cancelled`), `conversationId`, `threadId`, `sessionRef` and the
@@ -109,7 +111,7 @@ Each one is its own small PR and is useful without the next.
 - `inbox.available` stays accepted by existing bridges (Nyx, Muse) for one
   release.
 
-### 7. Setup and the runner contract
+### 7. Setup and the runner contract (built, W5)
 
 - On the Agents page, "Add Claude Code" and "Add Codex" presets: handle
   (`@claude`, `@codex`), webhook URL, and a result screen with the token,

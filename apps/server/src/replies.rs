@@ -14,7 +14,13 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
-use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderMap, header},
+    response::IntoResponse,
+    routing::{get, post},
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde::Serialize;
@@ -51,6 +57,24 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/reply-requests/{id}/retry", post(retry_request))
         .route("/api/v1/reply-requests/{id}/stop", post(stop_request))
+        .route("/agent-runner.md", get(runner_guide))
+}
+
+/// The runner contract (docs/agent-runner.md), for the people and agents
+/// setting a runner up.
+async fn runner_guide(State(state): State<AppState>) -> impl IntoResponse {
+    let origin = state
+        .config
+        .public_origin
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", state.config.server_addr));
+    (
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        include_str!("../../../docs/agent-runner.md").replace("{origin}", &origin),
+    )
 }
 
 /// A message that was just written, as seen by the reply rules.

@@ -291,6 +291,35 @@ Behavior changes:
 - Messages you can't see are `not_found` for every tool, never
   `permission_denied`.
 
+## Agents in conversations (October 16, 2026)
+
+What a runner sees is in [agent-runner.md](../agent-runner.md).
+
+Behavior changes:
+
+- A person's @mention of an agent in a project channel is answered in a
+  thread started from that message. `reply_claim` starts the thread (or uses
+  the one already started from it), and its `request.replyConversationId`
+  says where `reply_send` posts. DMs, groups and their threads still answer
+  inline.
+- A person's message in a project thread asks again, without a mention, the
+  agents with an open request there or a message among its latest 20. These
+  follow-ups are optional (`reply_pass` works) and never replace a claim:
+  while the agent holds one there, the follow-up waits as its own request with
+  `followsRequestId` naming it.
+- A person can stop a pending or claimed request (`reply_stop`, or Stop on
+  the web). It becomes `cancelled`, with the agent's follow-ups queued behind
+  it, and every later `reply_*` call on it returns `conflict` saying it was
+  stopped. Ask again puts it back.
+- Inbox items gain `replyConversationId`, `threadId` and `followsRequestId`.
+  Agent events gain the kinds `reply.followup` and `reply.cancelled`.
+- Webhook wakeups are typed: `event` is `reply.requested`, `reply.followup`
+  or `reply.cancelled`, with the project, conversation, thread, message and
+  generation, and an `x-workspace-event` header. Webhooks set up before this
+  keep the `inbox.available` body until the webhook is saved again.
+
+New tools: `reply_stop`.
+
 ## Verification history
 
 The M0 development spike established the `2025-06-18` negotiation with Codex

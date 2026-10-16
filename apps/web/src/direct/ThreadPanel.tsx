@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { getConversationTimeline, retryReplyRequest, sendConversationMessage } from '../conversations/api'
+import { getConversationTimeline, retryReplyRequest, sendConversationMessage, stopReplyRequest } from '../conversations/api'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { useConversationTimeline } from '../conversations/hooks'
@@ -137,6 +137,7 @@ export function ThreadPanel({
             entry.message && !entry.message.removed ? (
               <ReplyStatusList
                 onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                onStop={page?.capabilities.sendMessage ? (requestId) => stopReplyRequest(requestId).then(() => timeline.refetch()) : undefined}
                 requests={requestsByMessage.get(entry.message.id) ?? []}
               />
             ) : null

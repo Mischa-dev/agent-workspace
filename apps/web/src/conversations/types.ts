@@ -139,7 +139,8 @@ export type ConversationTimelinePage = {
     version: number
   }
   capabilities: ConversationCapabilities
-  /** DMs and groups: who has been asked to answer, and how it's going. */
+  /** Which agents have been asked to answer, and how it's going. A thread also
+   * lists the channel tags answered in it. */
   replyRequests: ReplyRequest[]
   /** Groups: agent messages left before a person has to say Continue. */
   agentTurnsRemaining: number | null
@@ -165,6 +166,7 @@ export type ReplyRequestStatus =
   | 'passed'
   | 'released'
   | 'expired'
+  | 'cancelled'
 
 export type ReplyRequest = {
   id: string
@@ -178,6 +180,10 @@ export type ReplyRequest = {
   progressAt?: string | null
   updatedAt: string
   agentLastSeenAt: string | null
+  /** A channel tag is answered in this thread, once the agent picks it up. */
+  threadId?: string | null
+  /** A follow-up queued behind the request the agent is working on. */
+  followsRequestId?: string | null
 }
 
 export type MentionSearchPage = {

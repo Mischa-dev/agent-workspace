@@ -15,13 +15,17 @@ import { searchWorkItemReferences } from '../work-items/api'
 import {
   archiveConversation,
   getConversationTimeline,
+  retryReplyRequest,
   searchMentionableActors,
   sendConversationMessage,
+  stopReplyRequest,
 } from './api'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ConversationHeader } from './ConversationHeader'
 import type { ComposerSubmission } from './composerModel'
 import { useConversationTimeline, useProjectConversationSidebar } from './hooks'
+import { ReplyStatusList } from './ReplyStatus'
+import { groupReplyRequests } from './replyStatusModel'
 import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
 import { useMessageActions } from './MessageActions'
 import { StructuredComposer } from './StructuredComposer'
@@ -69,6 +73,7 @@ export function ChannelPage() {
   const [archiveError, setArchiveError] = useState<string | null>(null)
   const [firstUnread, setFirstUnread] = useState<{ channelId: string; sequence: number | null }>({ channelId: '', sequence: null })
   const page = timeline.data
+  const requestsByMessage = useMemo(() => groupReplyRequests(page?.replyRequests ?? []), [page?.replyRequests])
   const validBoundary =
     page?.conversation.projectId === projectId && page.conversation.id === channelId && page.conversation.kind === 'channel'
 
@@ -314,7 +319,17 @@ export function ChannelPage() {
           firstUnreadSequence={firstUnread.channelId === channelId ? firstUnread.sequence : null}
           renderExtras={(entry) => {
             const threads = entry.message ? linkedThreadsByMessage.get(entry.message.id) ?? [] : []
-            return threads.map((thread) => (
+            const requests = entry.message && !entry.message.removed ? requestsByMessage.get(entry.message.id) ?? [] : []
+            return [
+              requests.length ? (
+                <ReplyStatusList
+                  key="replies"
+                  onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                  onStop={page?.capabilities.sendMessage ? (requestId) => stopReplyRequest(requestId).then(() => timeline.refetch()) : undefined}
+                  requests={requests}
+                />
+              ) : null,
+              ...threads.map((thread) => (
               <Link className="aw-threadlink" key={thread.id} to={threadRoute(thread.id)}>
                 <Icon name="messages" size={14} />
                 <span className="aw-threadlink__name">{thread.name}</span>
@@ -326,7 +341,8 @@ export function ChannelPage() {
                 <Icon className="aw-threadlink__chev" name="chevron-right" size={14} />
                 <span className="visually-hidden">, open thread</span>
               </Link>
-            ))
+              )),
+            ]
           }}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
