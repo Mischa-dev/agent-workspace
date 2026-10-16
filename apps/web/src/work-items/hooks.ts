@@ -6,10 +6,8 @@ import {
   createAcceptanceCriterion,
   createWorkItemComment,
   getWorkItem,
-  getWorkItemBoard,
   getWorkItemWorkflow,
   listWorkItems,
-  moveWorkItem,
   getWorkItemTimeline,
   removeAcceptanceCriterion,
   searchAssignableActors,
@@ -31,19 +29,13 @@ export function useWorkItems(projectId: string, filters: WorkItemFilters) {
   })
 }
 
-export function useWorkItemBoard(projectId: string, filters: WorkItemFilters, enabled = true) {
-  return useQuery({
-    queryKey: [...queryKeys.workItems(projectId, { ...filters, cursor: undefined }), 'board'],
-    queryFn: () => getWorkItemBoard(projectId, filters),
-    enabled: Boolean(projectId) && enabled,
-  })
-}
-
+/** One task. While it's on screen it refreshes every half minute, so a claim shows as it starts and ends. */
 export function useWorkItem(projectId: string, workItemId: string) {
   return useQuery({
     queryKey: queryKeys.workItem(projectId, workItemId),
     queryFn: () => getWorkItem(projectId, workItemId),
     enabled: Boolean(projectId && workItemId),
+    refetchInterval: 30_000,
   })
 }
 
@@ -97,10 +89,6 @@ export function useUpdateWorkItem() {
       void invalidate(item.projectId)
     },
   })
-}
-
-export function useMoveWorkItem() {
-  return useWorkItemChildMutation(moveWorkItem)
 }
 
 export function useSetWorkItemArchived() {

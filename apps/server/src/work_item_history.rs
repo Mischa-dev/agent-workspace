@@ -1,0 +1,395 @@
+//! Before and after in task history (docs/plans/roadmap.md, T8).
+//!
+//! A change's activity payload keeps `changedFields` as before and adds
+//! `changes`, keyed by field, with what the field was and what it became:
+//! `{"priority": {"from": "high", "to": "urgent"}}`. Fields that name
+//! something (assignee, type, milestone, parent) store its ID, like every
+//! other payload, so a reader sees a name only when it looks it up.
+//! Descriptions store a line diff instead of both texts, cut to fit the
+//! payload's 8 KB limit.
+//!
+//! `label_changes` turns the IDs into names for the web timeline;
+//! MCP history reads the same payload through its own lookups.
+
+use std::collections::{BTreeSet, HashMap};
+
+use serde_json::{Map, Value, json};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::error::AppError;
+
+/// Longest text kept on each side of a one-line change (title, blocker).
+const MAX_TEXT_CHARACTERS: usize = 300;
+/// Most bytes a description diff may take in a payload.
+const DIFF_BUDGET_BYTES: usize = 4_500;
+/// Lines of unchanged text kept around each change.
+const CONTEXT_LINES: usize = 1;
+/// Above this many cells the diff skips the full comparison and shows the
+/// changed middle as removed and added.
+const MAX_DIFF_CELLS: usize = 2_000_000;
+
+/// The before and after of every field a change touched, in the order they
+/// were recorded.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FieldChanges {
+    fields: Map<String, Value>,
+}
+
+impl FieldChanges {
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    pub fn into_map(self) -> Map<String, Value> {
+        self.fields
+    }
+
+    /// Records a change between two JSON values, if they differ.
+    pub fn value(&mut self, field: &str, from: Value, to: Value) {
+        if from != to {
+            self.fields
+                .insert(field.to_owned(), json!({ "from": from, "to": to }));
+        }
+    }
+
+    /// A one-line text field, cut to a readable length on each side.
+    pub fn text(&mut self, field: &str, from: Option<&str>, to: Option<&str>) {
+        if from == to {
+            return;
+        }
+        let cut = |text: Option<&str>| text.map(|text| Value::String(cut_text(text)));
+        self.value(
+            field,
+            cut(from).unwrap_or(Value::Null),
+            cut(to).unwrap_or(Value::Null),
+        );
+    }
+
+    pub fn id(&mut self, field: &str, from: Option<Uuid>, to: Option<Uuid>) {
+        if from != to {
+            self.value(field, json!(from), json!(to));
+        }
+    }
+
+    pub fn description(&mut self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        let (diff, truncated) = line_diff(from, to, DIFF_BUDGET_BYTES);
+        self.fields.insert(
+            "description".to_owned(),
+            json!({ "diff": diff, "truncated": truncated }),
+        );
+    }
+}
+
+fn cut_text(text: &str) -> String {
+    if text.chars().count() <= MAX_TEXT_CHARACTERS {
+        return text.to_owned();
+    }
+    let mut cut = text
+        .chars()
+        .take(MAX_TEXT_CHARACTERS - 1)
+        .collect::<String>();
+    cut.push('…');
+    cut
+}
+
+/// A line diff of `from` against `to`: changed lines start with "-" or "+",
+/// unchanged context lines with " ", and skipped stretches of unchanged text
+/// show as " …". The second value is true when it was cut to `budget` bytes.
+pub fn line_diff(from: &str, to: &str, budget: usize) -> (String, bool) {
+    let old = from.lines().collect::<Vec<_>>();
+    let new = to.lines().collect::<Vec<_>>();
+    let prefix = old
+        .iter()
+        .zip(&new)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let old_middle = &old[prefix..old.len() - suffix];
+    let new_middle = &new[prefix..new.len() - suffix];
+
+    // (tag, line) for the whole text, then trimmed to context.
+    let mut operations: Vec<(char, &str)> = Vec::with_capacity(old.len() + new.len());
+    operations.extend(old[..prefix].iter().map(|line| (' ', *line)));
+    if old_middle.len().saturating_mul(new_middle.len()) > MAX_DIFF_CELLS {
+        operations.extend(old_middle.iter().map(|line| ('-', *line)));
+        operations.extend(new_middle.iter().map(|line| ('+', *line)));
+    } else {
+        operations.extend(middle_operations(old_middle, new_middle));
+    }
+    operations.extend(old[old.len() - suffix..].iter().map(|line| (' ', *line)));
+
+    let changed = operations
+        .iter()
+        .enumerate()
+        .filter(|(_, (tag, _))| *tag != ' ')
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let near_change = |index: usize| {
+        changed
+            .iter()
+            .any(|changed| changed.abs_diff(index) <= CONTEXT_LINES)
+    };
+    let mut lines = Vec::new();
+    let mut skipping = false;
+    for (index, (tag, line)) in operations.iter().enumerate() {
+        if *tag == ' ' && !near_change(index) {
+            if !skipping {
+                lines.push(" …".to_owned());
+                skipping = true;
+            }
+            continue;
+        }
+        skipping = false;
+        lines.push(format!("{tag}{line}"));
+    }
+    let mut diff = String::new();
+    for line in lines {
+        let needed = line.len() + usize::from(!diff.is_empty());
+        if diff.len() + needed > budget {
+            return (diff, true);
+        }
+        if !diff.is_empty() {
+            diff.push('\n');
+        }
+        diff.push_str(&line);
+    }
+    (diff, false)
+}
+
+/// Removals and additions turning `old` into `new`, by longest common
+/// subsequence.
+fn middle_operations<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str)> {
+    let rows = old.len() + 1;
+    let columns = new.len() + 1;
+    let mut lengths = vec![0_u32; rows * columns];
+    for i in (0..old.len()).rev() {
+        for j in (0..new.len()).rev() {
+            lengths[i * columns + j] = if old[i] == new[j] {
+                lengths[(i + 1) * columns + j + 1] + 1
+            } else {
+                lengths[(i + 1) * columns + j].max(lengths[i * columns + j + 1])
+            };
+        }
+    }
+    let mut operations = Vec::with_capacity(old.len() + new.len());
+    let (mut i, mut j) = (0, 0);
+    while i < old.len() && j < new.len() {
+        if old[i] == new[j] {
+            operations.push((' ', old[i]));
+            i += 1;
+            j += 1;
+        } else if lengths[(i + 1) * columns + j] >= lengths[i * columns + j + 1] {
+            operations.push(('-', old[i]));
+            i += 1;
+        } else {
+            operations.push(('+', new[j]));
+            j += 1;
+        }
+    }
+    operations.extend(old[i..].iter().map(|line| ('-', *line)));
+    operations.extend(new[j..].iter().map(|line| ('+', *line)));
+    operations
+}
+
+/// The fields whose `changes` hold IDs, and what each names.
+const ID_FIELDS: [(&str, IdKind); 5] = [
+    ("assignee", IdKind::Member),
+    ("type", IdKind::Type),
+    ("status", IdKind::Status),
+    ("milestone", IdKind::Milestone),
+    ("parent", IdKind::Task),
+];
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum IdKind {
+    Member,
+    Type,
+    Status,
+    Milestone,
+    Task,
+}
+
+/// Rewrites the `changes` of activity payloads from one project for a reader
+/// of that project: IDs become names (a member's name, a status, a task's
+/// key), and a status move recorded as `previousStatusId`/`statusId` is added
+/// as `changes.status`. Something that no longer exists reads as null.
+pub async fn label_changes(
+    pool: &PgPool,
+    project_id: Uuid,
+    payloads: &mut [&mut Value],
+) -> Result<(), AppError> {
+    for payload in payloads.iter_mut() {
+        let status = (
+            uuid_at(payload, "previousStatusId"),
+            uuid_at(payload, "statusId").or_else(|| uuid_at(payload, "newStatusId")),
+        );
+        if let (Some(from), Some(to)) = status
+            && from != to
+            && let Some(object) = payload.as_object_mut()
+        {
+            let changes = object
+                .entry("changes")
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(changes) = changes.as_object_mut() {
+                changes
+                    .entry("status")
+                    .or_insert_with(|| json!({ "from": from, "to": to }));
+            }
+        }
+    }
+    let mut wanted: HashMap<IdKind, BTreeSet<Uuid>> = HashMap::new();
+    for payload in payloads.iter() {
+        let Some(changes) = payload.get("changes") else {
+            continue;
+        };
+        for (field, kind) in ID_FIELDS {
+            if let Some(change) = changes.get(field) {
+                for side in ["from", "to"] {
+                    if let Some(id) = uuid_at(change, side) {
+                        wanted.entry(kind).or_default().insert(id);
+                    }
+                }
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let mut names: HashMap<Uuid, String> = HashMap::new();
+    for (kind, ids) in &wanted {
+        let ids = ids.iter().copied().collect::<Vec<_>>();
+        let query = match kind {
+            IdKind::Member => {
+                "SELECT actor_id, display_name FROM project_memberships WHERE project_id = $1 AND actor_id = ANY($2)"
+            }
+            IdKind::Type => {
+                "SELECT id, name FROM work_item_types WHERE project_id = $1 AND id = ANY($2)"
+            }
+            IdKind::Status => {
+                "SELECT id, name FROM work_item_statuses WHERE project_id = $1 AND id = ANY($2)"
+            }
+            IdKind::Milestone => {
+                "SELECT id, name FROM project_milestones WHERE project_id = $1 AND id = ANY($2)"
+            }
+            IdKind::Task => {
+                "SELECT item.id, project.project_key || '-' || item.number FROM work_items item JOIN projects project ON project.id = item.project_id WHERE item.project_id = $1 AND item.id = ANY($2)"
+            }
+        };
+        let rows = sqlx::query_as::<_, (Uuid, String)>(query)
+            .bind(project_id)
+            .bind(&ids)
+            .fetch_all(pool)
+            .await?;
+        names.extend(rows);
+    }
+    for payload in payloads.iter_mut() {
+        let Some(changes) = payload.get_mut("changes").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for (field, _) in ID_FIELDS {
+            let Some(change) = changes.get_mut(field).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            for side in ["from", "to"] {
+                if let Some(value) = change.get_mut(side) {
+                    *value = match value.as_str().and_then(|id| id.parse::<Uuid>().ok()) {
+                        Some(id) => names.get(&id).cloned().map_or(Value::Null, Value::String),
+                        None => Value::Null,
+                    };
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn uuid_at(value: &Value, key: &str) -> Option<Uuid> {
+    value.get(key)?.as_str()?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use super::{FieldChanges, line_diff};
+
+    #[test]
+    fn records_only_fields_that_changed() {
+        let mut changes = FieldChanges::default();
+        changes.value("priority", json!("high"), json!("urgent"));
+        changes.value("estimate", json!(3.0), json!(3.0));
+        changes.text("title", Some("Same"), Some("Same"));
+        changes.id("assignee", None, None);
+        let assignee = Uuid::nil();
+        changes.id("milestone", Some(assignee), None);
+        let map = changes.into_map();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["priority"], json!({"from": "high", "to": "urgent"}));
+        assert_eq!(map["milestone"]["to"], json!(null));
+    }
+
+    #[test]
+    fn long_text_is_cut_on_a_character_boundary() {
+        let mut changes = FieldChanges::default();
+        let long = "é".repeat(400);
+        changes.text("blockedReason", None, Some(&long));
+        let to = changes.into_map()["blockedReason"]["to"]
+            .as_str()
+            .expect("cut text")
+            .to_owned();
+        assert_eq!(to.chars().count(), 300);
+        assert!(to.ends_with('…'));
+    }
+
+    #[test]
+    fn diff_shows_changed_lines_with_context() {
+        let from = "one\ntwo\nthree\nfour\nfive\nsix";
+        let to = "one\ntwo\nTHREE\nfour\nfive\nsix\nseven";
+        let (diff, truncated) = line_diff(from, to, 1_000);
+        assert!(!truncated);
+        assert_eq!(diff, " …\n two\n-three\n+THREE\n four\n …\n six\n+seven");
+    }
+
+    #[test]
+    fn diff_of_new_text_is_all_additions() {
+        let (diff, _) = line_diff("", "a\nb", 1_000);
+        assert_eq!(diff, "+a\n+b");
+    }
+
+    #[test]
+    fn diff_is_cut_to_its_budget_on_a_line() {
+        let to = (0..200)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (diff, truncated) = line_diff("", &to, 100);
+        assert!(truncated);
+        assert!(diff.len() <= 100);
+        assert!(diff.lines().all(|line| line.starts_with("+line ")));
+    }
+
+    #[test]
+    fn huge_rewrites_skip_the_full_comparison() {
+        let from = (0..3_000)
+            .map(|line| format!("a{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let to = (0..3_000)
+            .map(|line| format!("b{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (diff, truncated) = line_diff(&from, &to, 200);
+        assert!(truncated);
+        assert!(diff.starts_with("-a0"));
+    }
+}

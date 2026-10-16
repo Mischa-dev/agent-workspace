@@ -124,6 +124,7 @@ async fn relabel(
                 add: &add,
                 remove: &remove,
             }),
+            fields: Default::default(),
             summary: "Labels changed",
             audit_action: "work_item.mcp_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
