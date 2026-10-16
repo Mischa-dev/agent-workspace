@@ -122,6 +122,8 @@ pub enum AppError {
     PayloadTooLarge,
     #[error("development authentication is unavailable")]
     DevelopmentAuthUnavailable,
+    #[error("encrypted secrets are not configured")]
+    SecretsNotConfigured,
     #[error("internal invariant failed: {0}")]
     Internal(&'static str),
 }
@@ -155,6 +157,7 @@ impl AppError {
             Self::RateLimited { .. } => "rate_limited",
             Self::PayloadTooLarge => "payload_too_large",
             Self::DevelopmentAuthUnavailable => "development_auth_unavailable",
+            Self::SecretsNotConfigured => "secrets_not_configured",
             Self::Internal(_) => "internal",
         }
     }
@@ -344,6 +347,12 @@ impl IntoResponse for AppError {
                 "Development authentication is unavailable.",
                 None,
             ),
+            Self::SecretsNotConfigured => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "secrets_not_configured",
+                "This server can't store keys yet: its administrator needs to set up the secrets keyring.",
+                None,
+            ),
             Self::Database(error) => {
                 let (database_code, database_constraint) = error
                     .as_database_error()
@@ -359,6 +368,7 @@ impl IntoResponse for AppError {
                     database_constraint = database_constraint.as_deref().unwrap_or("unavailable"),
                     "request database operation failed"
                 );
+                crate::metrics::server_error("database");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
@@ -368,6 +378,7 @@ impl IntoResponse for AppError {
             }
             Self::Internal(invariant) => {
                 error!(invariant, "request invariant failed");
+                crate::metrics::server_error("internal");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
