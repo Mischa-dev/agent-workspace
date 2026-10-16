@@ -894,6 +894,17 @@ pub(super) async fn milestone_write(
             }
         };
         if !add_ids.is_empty() {
+            // Tasks can't join an archived milestone; refuse rather than
+            // archive it and quietly leave them out.
+            let archived = work_item_planning::milestone(&mut transaction, project_id, milestone_id)
+                .await?
+                .is_some_and(|view| view.archived);
+            if archived {
+                return Ok(ToolResult::invalid(
+                    "addTasks",
+                    "Tasks can't be added to an archived milestone. Add them before archiving it, or restore it first.",
+                ));
+            }
             work_item_planning::move_tasks_to_milestone(
                 &mut transaction,
                 &actor,

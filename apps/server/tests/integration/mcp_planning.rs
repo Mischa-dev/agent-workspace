@@ -573,6 +573,19 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     )
     .await;
     assert_eq!(out["value"]["total"], 2, "{out}");
+    // Archiving and adding at once is refused, and nothing is archived.
+    let refused = call(
+        "milestone_write",
+        json!({"projectId": "PLAN", "milestoneId": milestone["value"]["id"],
+               "archived": true, "addTasks": ["PLAN-3"]}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
+    assert_eq!(
+        listed["value"]["milestones"][0]["archived"], false,
+        "{listed}"
+    );
     let someday = call(
         "task_open",
         json!({"taskId": "PLAN-3", "include": ["history"]}),
