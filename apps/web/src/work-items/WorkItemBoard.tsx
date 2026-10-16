@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, MessageSkeleton, actorKind, Avatar } from '../ui'
-import { listWorkItems, moveWorkItem, updateWorkItem } from './api'
+import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
 import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
@@ -94,9 +94,18 @@ export function WorkItemBoard({
   const lanes = useMemo(() => lanesFor(columns, state.lanes, knownLanes), [columns, knownLanes, state.lanes])
   const canMove = !disabled
   // A lane for an archived milestone or a removed member holds its tasks, but nothing new can join it.
+  // Only a complete, loaded list of lane values can rule a lane out. The
+  // assignee search returns one page, so a full page may be missing active
+  // members; then, as while loading, the server decides.
+  const lanesKnown =
+    state.lanes === 'milestone'
+      ? milestones.data !== undefined
+      : state.lanes === 'assignee'
+        ? assignees.data !== undefined && assignees.data.length < ASSIGNEE_PAGE
+        : true
   const laneDroppable = useCallback(
-    (laneKey: string) => knownLanes.length === 0 || laneKey === 'none' || knownLanes.some((lane) => lane.key === laneKey),
-    [knownLanes],
+    (laneKey: string) => !lanesKnown || knownLanes.length === 0 || laneKey === 'none' || knownLanes.some((lane) => lane.key === laneKey),
+    [knownLanes, lanesKnown],
   )
 
   const cellCards = useCallback(

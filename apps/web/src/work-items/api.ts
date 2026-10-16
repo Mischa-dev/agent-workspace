@@ -397,7 +397,7 @@ export async function searchWorkItemReferences(
   projectId: string,
   query: string,
 ): Promise<ConversationWorkItemReference[]> {
-  const parameters = new URLSearchParams({ q: query, limit: '20' })
+  const parameters = new URLSearchParams({ q: query, limit: String(ASSIGNEE_PAGE) })
   const payload = record(await requestJson<unknown>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/work-item-references?${parameters}`,
   ))
@@ -551,6 +551,9 @@ export async function setWorkItemArchived(input: {
     ),
   )
 }
+
+/** How many assignable people and agents one search returns. */
+export const ASSIGNEE_PAGE = 20
 
 export async function searchAssignableActors(
   projectId: string,

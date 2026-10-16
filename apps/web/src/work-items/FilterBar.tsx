@@ -218,6 +218,7 @@ export function FilterBar({
         </Popover>
       ) : null}
       <TaskSearchPicker
+        allowTypedKey={false}
         anchor={open?.field === 'parent' ? open.anchor : null}
         exclude={[]}
         label="Filter by parent"
