@@ -186,7 +186,8 @@
       "seams": [
         "W4 changes the UI kit and query keys everywhere except `apps/web/src/work-items/`, which moves to project-first query keys here.",
         "Markdown (P4), toasts with undo (F6) and patched live updates (F7) come from W4. Until they're on main, descriptions stay plain text and changes refetch; whichever merges second switches over.",
-        "The task panel's Launch button comes with W7."
+        "The task panel's Launch button comes with W7.",
+        "Watchers (T5) hear about changes through W6's notifications. Whichever of W3 and W6 merges second adds the watched-task kind to the fan-out."
       ],
       "done": "On the 10,000-task fixture the list, board and task_list answer in under 200 ms; workflow, dates, dependencies, milestones, labels and bulk edits work from both the web and MCP; and 20 tasks can be triaged from the keyboard.",
       "needs": []
@@ -252,6 +253,7 @@
         "Notifications are written in the outbox publisher's transaction, so they don't wait for W1's job queue.",
         "W4 also adds payloads to `outbox.rs` (for F7). Add lines next to related ones, as F4 says, so either can merge first.",
         "Uses W4's toasts and skeletons if they're on main, and plain states otherwise.",
+        "Changes to watched tasks need W3's watchers (T5). Whichever of W3 and W6 merges second adds that kind.",
         "Capacity alerts (W9) and AI suggestions (W10) add their own kinds later."
       ],
       "done": "A comment mention reaches the person and the project's attention count; mentions, assignments, approvals waiting and finished runs land in the inbox with a badge on the rail; and a morning's notifications clear from the keyboard.",
@@ -892,8 +894,8 @@
       "id": "C5",
       "area": "C",
       "title": "Launch queue",
-      "what": "Queue launches to start now, at a set time, when an account's window resets, or when the tasks blocking them finish. The queue respects per-account concurrency and dependency order and drains by itself. A queue view shows what's waiting and why.",
-      "done": "Queue ten tasks and they start as capacity frees up, blocked ones last.",
+      "what": "Queue launches to start now, at a set time, when an account's window resets, or when the tasks blocking them finish. The queue respects per-account concurrency and dependency order and drains by itself. A queue view shows what's waiting and why. When a queued launch is about to start, it checks again that the person who queued it can still reach the project (actor_can_access_project), the provider account and the environment; one that fails is cancelled, and the person is told why.",
+      "done": "Queue ten tasks and they start as capacity frees up, blocked ones last; a launch queued by someone removed from the project never starts.",
       "deps": [
         "C4",
         "F9"
@@ -1073,14 +1075,16 @@
       "id": "T5",
       "area": "T",
       "title": "Dates, estimates and watchers",
-      "what": "Add start and due dates, an estimate (points or hours, chosen per project) and watchers who hear about changes. Keep one assignee plus agent claims.",
+      "what": "Add start and due dates, an estimate (points or hours, chosen per project) and watchers who hear about changes through N1's notifications. Keep one assignee plus agent claims.",
       "done": "Tasks sort by due date, and watchers are notified of changes.",
       "deps": [
         "T1"
       ],
       "migration": true,
       "workstream": "W3",
-      "soft": []
+      "soft": [
+        "N1"
+      ]
     },
     {
       "id": "T6",
@@ -1376,7 +1380,7 @@
       "id": "N1",
       "area": "N",
       "title": "Notifications for people",
-      "what": "A notifications table per recipient (kind, subject, actor, source conversation and message, group key, read, archived, snoozed), filled from outbox events: @mentions in messages and task comments (comment mentions are stored but never shown today), assignments, approvals waiting, runs finished, failed or waiting, failing PR checks and review requests, and later capacity alerts and AI suggestions. Repeats collapse into one. attention_count stops being hard-coded to 0 (projects.rs:479). The MCP briefing includes them. Rows hold ids, not message text: the inbox, push and the briefing build each title and preview from its source when they read it, checking the reader's current access each time (actor_can_access_project for the project, conversation_visible_to for a conversation, pull_request_visible_to for a pull request), and hide a notification whose source the reader can no longer see. Notifications are written in the outbox publisher's transaction, so they need no job queue; fan-out moves to a job if volume calls for it.",
+      "what": "A notifications table per recipient (kind, subject, actor, source conversation and message, group key, read, archived, snoozed), filled from outbox events: @mentions in messages and task comments (comment mentions are stored but never shown today), assignments, approvals waiting, runs finished, failed or waiting, failing PR checks and review requests, changes to tasks you watch (T5), and later capacity alerts and AI suggestions. Repeats collapse into one. attention_count stops being hard-coded to 0 (projects.rs:479). The MCP briefing includes them. Rows hold ids, not message text: the inbox, push and the briefing build each title and preview from its source when they read it, checking the reader's current access each time (actor_can_access_project for the project, conversation_visible_to for a conversation, pull_request_visible_to for a pull request), and hide a notification whose source the reader can no longer see. Notifications are written in the outbox publisher's transaction, so they need no job queue; fan-out moves to a job if volume calls for it.",
       "done": "A comment @mention reaches the person and the project's attention count, and someone removed from a private group or a project stops seeing its notifications.",
       "deps": [],
       "migration": true,

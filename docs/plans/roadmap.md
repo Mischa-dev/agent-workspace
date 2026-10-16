@@ -324,6 +324,8 @@ to `apps/web/src/ui/` as new files.
   W4. Until they're on main, descriptions stay plain text and changes refetch;
   whichever merges second switches over.
 - The task panel's Launch button comes with W7.
+- Watchers (T5) hear about changes through W6's notifications. Whichever of W3
+  and W6 merges second adds the watched-task kind to the fan-out.
 
 **Done when:** On the 10,000-task fixture the list, board and `task_list`
 answer in under 200 ms; workflow, dates, dependencies, milestones, labels and
@@ -422,6 +424,8 @@ in `mcp/briefing.rs`, and a new `apps/web/src/inbox/`.
   ones, as F4 says, so either can merge first.
 - Uses W4's toasts and skeletons if they're on main, and plain states
   otherwise.
+- Changes to watched tasks need W3's watchers (T5). Whichever of W3 and W6
+  merges second adds that kind.
 - Capacity alerts (W9) and AI suggestions (W10) add their own kinds later.
 
 **Done when:** A comment mention reaches the person and the project's
@@ -1190,10 +1194,13 @@ task shows it running.
 Queue launches to start now, at a set time, when an account's window resets,
 or when the tasks blocking them finish. The queue respects per-account
 concurrency and dependency order and drains by itself. A queue view shows
-what's waiting and why.
+what's waiting and why. When a queued launch is about to start, it checks
+again that the person who queued it can still reach the project
+(`actor_can_access_project`), the provider account and the environment; one
+that fails is cancelled, and the person is told why.
 
 **Done when:** Queue ten tasks and they start as capacity frees up, blocked
-ones last.
+ones last; a launch queued by someone removed from the project never starts.
 
 #### C6. Launch prompt templates
 
@@ -1351,10 +1358,11 @@ move through it.
 
 #### T5. Dates, estimates and watchers
 
-*In [W3](#w3-tasks) Tasks · Needs T1 · Migration*
+*In [W3](#w3-tasks) Tasks · Needs T1 · Better with N1 · Migration*
 
 Add start and due dates, an estimate (points or hours, chosen per project) and
-watchers who hear about changes. Keep one assignee plus agent claims.
+watchers who hear about changes through N1's notifications. Keep one assignee
+plus agent claims.
 
 **Done when:** Tasks sort by due date, and watchers are notified of changes.
 
@@ -1628,16 +1636,17 @@ A notifications table per recipient (kind, subject, actor, source conversation
 and message, group key, read, archived, snoozed), filled from outbox events:
 @mentions in messages and task comments (comment mentions are stored but never
 shown today), assignments, approvals waiting, runs finished, failed or
-waiting, failing PR checks and review requests, and later capacity alerts and
-AI suggestions. Repeats collapse into one. `attention_count` stops being
-hard-coded to 0 (`projects.rs:479`). The MCP briefing includes them. Rows hold
-ids, not message text: the inbox, push and the briefing build each title and
-preview from its source when they read it, checking the reader's current
-access each time (`actor_can_access_project` for the project,
-`conversation_visible_to` for a conversation, `pull_request_visible_to` for a
-pull request), and hide a notification whose source the reader can no longer
-see. Notifications are written in the outbox publisher's transaction, so they
-need no job queue; fan-out moves to a job if volume calls for it.
+waiting, failing PR checks and review requests, changes to tasks you watch
+(T5), and later capacity alerts and AI suggestions. Repeats collapse into one.
+`attention_count` stops being hard-coded to 0 (`projects.rs:479`). The MCP
+briefing includes them. Rows hold ids, not message text: the inbox, push and
+the briefing build each title and preview from its source when they read it,
+checking the reader's current access each time (`actor_can_access_project` for
+the project, `conversation_visible_to` for a conversation,
+`pull_request_visible_to` for a pull request), and hide a notification whose
+source the reader can no longer see. Notifications are written in the outbox
+publisher's transaction, so they need no job queue; fan-out moves to a job if
+volume calls for it.
 
 **Done when:** A comment @mention reaches the person and the project's
 attention count, and someone removed from a private group or a project stops
