@@ -47,3 +47,4 @@ mod oauth_agent;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod reply_requests;
+mod workspace_isolation;
