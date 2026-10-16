@@ -11,15 +11,6 @@ export const queryKeys = {
   harnesses: (projectId: string) => ['project', projectId, 'harnesses'] as const,
   providerAccounts: (projectId: string) =>
     ['project', projectId, 'provider-accounts'] as const,
-  environments: (projectId: string) =>
-    ['project', projectId, 'environments'] as const,
-  launches: (projectId: string) => ['project', projectId, 'launches'] as const,
-  launchPlan: (projectId: string, workItemId: string, choice: Record<string, unknown> = {}) =>
-    ['project', projectId, 'launches', 'plan', workItemId, choice] as const,
-  agentSessions: (projectId: string, conversationId: string) =>
-    ['project', projectId, 'conversation', conversationId, 'agent-sessions'] as const,
-  projectSettings: (projectId: string) =>
-    ['project', projectId, 'settings'] as const,
   providerAccountStatus: (projectId: string, accountId: string) =>
     ['project', projectId, 'provider-accounts', accountId, 'status'] as const,
   repositories: (projectId: string) =>

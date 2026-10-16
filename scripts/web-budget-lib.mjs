@@ -12,7 +12,8 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // the budget moved to per-chunk limits (October 2026). The app shell (command
   // menu, shortcuts, toasts with Undo, tab titles and badges, live task
   // patches) brings it to 423,687 / 130,474; Markdown loads with its routes.
-  initialJavascriptRawBytes: 420 * 1024,
+  // Launch (W7) adds its lazy route, sidebar link and tab title: 430,446.
+  initialJavascriptRawBytes: 421 * 1024,
   initialJavascriptGzipBytes: 132 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit

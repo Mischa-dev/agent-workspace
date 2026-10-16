@@ -474,7 +474,7 @@ describe('Work Item detail', () => {
     expect(screen.getByText(new RegExp(reason))).toHaveAttribute('id', button.getAttribute('aria-describedby'))
   })
 
-  it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', () => {
+  it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', async () => {
     const launched = {
       id: 'launch-a',
       workItem: { id: workItemId, key: 'AW-1', title: workItem.title },
@@ -504,7 +504,7 @@ describe('Work Item detail', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Launch' }), { shiftKey: true })
-    const prompt = screen.getByLabelText('Prompt')
+    const prompt = await screen.findByLabelText('Prompt')
     expect(prompt).toHaveValue('Do AW-1.')
     fireEvent.change(prompt, { target: { value: 'Do AW-1, and only the parser.' } })
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Launch' }))

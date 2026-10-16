@@ -20,6 +20,17 @@ import {
   type LaunchInput,
 } from './api'
 
+/** Launch's own query keys, under the project like every other so a project switch drops them. */
+const launchKeys = {
+  environments: (projectId: string) => ['project', projectId, 'environments'] as const,
+  launches: (projectId: string) => ['project', projectId, 'launches'] as const,
+  launchPlan: (projectId: string, workItemId: string, choice: Record<string, unknown> = {}) =>
+    ['project', projectId, 'launches', 'plan', workItemId, choice] as const,
+  agentSessions: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'conversation', conversationId, 'agent-sessions'] as const,
+  projectSettings: (projectId: string) => ['project', projectId, 'settings'] as const,
+}
+
 /** Launches waiting or just started change on the server without an event, so look again while any are in flight. */
 const LIVE_REFRESH_MS = 10_000
 
@@ -33,7 +44,7 @@ export function isActiveRun(state: string | null) {
 
 export function useLaunchPlan(projectId: string, workItemId: string, choice: { environmentId?: string; harness?: string } = {}, enabled = true) {
   return useQuery({
-    queryKey: queryKeys.launchPlan(projectId, workItemId, choice),
+    queryKey: launchKeys.launchPlan(projectId, workItemId, choice),
     queryFn: () => getLaunchPlan(projectId, workItemId, choice),
     enabled: enabled && Boolean(projectId && workItemId),
     refetchInterval: (query) => (query.state.data && inFlight(query.state.data.launches) ? LIVE_REFRESH_MS : false),
@@ -42,7 +53,7 @@ export function useLaunchPlan(projectId: string, workItemId: string, choice: { e
 
 export function useLaunchList(projectId: string) {
   return useQuery({
-    queryKey: queryKeys.launches(projectId),
+    queryKey: launchKeys.launches(projectId),
     queryFn: () => listLaunches(projectId),
     enabled: Boolean(projectId),
     refetchInterval: (query) =>
@@ -56,7 +67,7 @@ export function useCreateLaunches(projectId: string) {
     mutationFn: ({ input, idempotencyKey }: { input: LaunchInput; idempotencyKey: string }) =>
       createLaunches(projectId, input, idempotencyKey),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.launches(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
     },
   })
@@ -66,13 +77,13 @@ export function useCancelLaunch(projectId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (launchId: string) => cancelLaunch(projectId, launchId),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.launches(projectId) }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) }),
   })
 }
 
 export function useEnvironments(projectId: string) {
   return useQuery({
-    queryKey: queryKeys.environments(projectId),
+    queryKey: launchKeys.environments(projectId),
     queryFn: () => listEnvironments(projectId),
     enabled: Boolean(projectId),
   })
@@ -84,8 +95,8 @@ export function useSaveEnvironment(projectId: string) {
     mutationFn: ({ environmentId, input }: { environmentId?: string; input: EnvironmentInput }) =>
       environmentId ? updateEnvironment(projectId, environmentId, input) : createEnvironment(projectId, input),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.environments(projectId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.launches(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.environments(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
     },
   })
 }
@@ -105,15 +116,15 @@ export function useEnvironmentAction(projectId: string) {
       return null
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.environments(projectId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.launches(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.environments(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
     },
   })
 }
 
 export function useAgentSessions(projectId: string, conversationId: string, enabled = true) {
   return useQuery({
-    queryKey: queryKeys.agentSessions(projectId, conversationId),
+    queryKey: launchKeys.agentSessions(projectId, conversationId),
     queryFn: () => listAgentSessions(conversationId),
     enabled: enabled && Boolean(conversationId),
     refetchInterval: (query) =>
@@ -123,7 +134,7 @@ export function useAgentSessions(projectId: string, conversationId: string, enab
 
 export function useProjectSettings(projectId: string) {
   return useQuery({
-    queryKey: queryKeys.projectSettings(projectId),
+    queryKey: launchKeys.projectSettings(projectId),
     queryFn: () => getProjectSettings(projectId),
     enabled: Boolean(projectId),
   })
@@ -135,8 +146,8 @@ export function useSaveProjectSetting(projectId: string) {
     mutationFn: ({ key, value }: { key: string; value: unknown | undefined }) =>
       value === undefined ? resetProjectSetting(projectId, key) : setProjectSetting(projectId, key, value),
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.projectSettings(projectId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.launches(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.projectSettings(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
     },
   })
 }
