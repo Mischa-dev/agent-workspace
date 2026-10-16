@@ -26,6 +26,7 @@ import {
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
+import { applyWorkItemChange, workItemChange } from './workItemPatches'
 
 const MAX_RECENT_EVENT_IDS = 512
 const INVALIDATION_DELAY_MS = 40
@@ -107,6 +108,27 @@ export function useRealtimeConnection(): RealtimeContextValue {
       const timer = window.setTimeout(() => {
         invalidationTimers.delete(key)
         invalidateConversation(queryClient, projectId, conversationId)
+      }, INVALIDATION_DELAY_MS)
+      invalidationTimers.set(key, timer)
+    }
+
+    // A changed task is patched into lists, boards and its detail in place.
+    // Everything else in the project that might show it converges by HTTP,
+    // leaving the patched work-item views alone.
+    const invalidateAroundWorkItem = (projectId: string, workItemId: string) => {
+      const key = `${projectId}:work-item:${workItemId}`
+      if (invalidationTimers.has(key)) return
+      const timer = window.setTimeout(() => {
+        invalidationTimers.delete(key)
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.workItemTimeline(projectId, workItemId),
+        })
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === 'project' &&
+            query.queryKey[1] === projectId &&
+            query.queryKey[2] !== 'work-items',
+        })
       }, INVALIDATION_DELAY_MS)
       invalidationTimers.set(key, timer)
     }
@@ -249,6 +271,12 @@ export function useRealtimeConnection(): RealtimeContextValue {
           if (reactions) {
             setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
             invalidateReactions(envelope.projectId, reactions.conversationId)
+            return
+          }
+          const workItem = workItemChange(envelope)
+          if (workItem) {
+            void applyWorkItemChange(queryClient, envelope.projectId, workItem)
+            invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
           const removedFrom = removedConversationId(envelope)
