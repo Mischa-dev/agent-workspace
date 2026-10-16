@@ -875,10 +875,14 @@ fn thread_start_params(cwd: &Path, config: &RunConfig) -> Value {
 }
 
 fn turn_start_params(thread_id: &str, cwd: &Path, prompt: &str, config: &RunConfig) -> Value {
+    // Isolation is set on every turn, not only when the thread starts: a
+    // resumed thread otherwise keeps the policy of the run that created it.
     let mut params = json!({
         "threadId": thread_id,
         "cwd": cwd,
-        "input": [{"type": "text", "text": prompt}]
+        "input": [{"type": "text", "text": prompt}],
+        "approvalPolicy": approval_policy(config),
+        "sandboxPolicy": sandbox_policy(cwd, config)
     });
     if let Some(model) = &config.model {
         params["model"] = json!(model);
@@ -910,6 +914,19 @@ fn sandbox_mode(config: &RunConfig) -> &'static str {
     match config.sandbox.as_deref() {
         Some("read_only") => "read-only",
         _ => "workspace-write",
+    }
+}
+
+/// The per-turn form of `sandbox_mode`: a read-only turn, or writes limited
+/// to the run's worktree with no network.
+fn sandbox_policy(cwd: &Path, config: &RunConfig) -> Value {
+    match sandbox_mode(config) {
+        "read-only" => json!({"type": "readOnly"}),
+        _ => json!({
+            "type": "workspaceWrite",
+            "writableRoots": [cwd],
+            "networkAccess": false
+        }),
     }
 }
 
@@ -1600,6 +1617,17 @@ mod tests {
         assert_eq!(params["effort"], "high");
         assert_eq!(params["serviceTier"], "priority");
         assert_eq!(params["summary"], "concise");
+        assert_eq!(params["approvalPolicy"], "on-request");
+        assert_eq!(params["sandboxPolicy"]["type"], "workspaceWrite");
+        assert_eq!(params["sandboxPolicy"]["writableRoots"], json!(["/work"]));
+        let read_only = RunConfig {
+            sandbox: Some("read_only".to_owned()),
+            approval_policy: Some("untrusted".to_owned()),
+            ..RunConfig::default()
+        };
+        let params = turn_start_params("thread-1", Path::new("/work"), "go", &read_only);
+        assert_eq!(params["sandboxPolicy"], json!({"type": "readOnly"}));
+        assert_eq!(params["approvalPolicy"], "untrusted");
         let standard = RunConfig {
             speed: Some("standard".to_owned()),
             ..RunConfig::default()

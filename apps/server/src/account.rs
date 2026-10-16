@@ -31,9 +31,9 @@ use crate::{
     },
     profile_runtime::prepare_private_profile_directory,
     provider::{
-        AccountHandle, AccountSummary, LoginCeremonyError, LoginCeremonySnapshot, LoginKind,
-        LoginReservation, LoginStart, ProfileHealth, RateLimitSummary, catalog::pickable_models,
-        manifest::AdapterManifest, run_config::RunConfig,
+        AccountHandle, AccountSummary, HarnessError, LoginCeremonyError, LoginCeremonySnapshot,
+        LoginKind, LoginReservation, LoginStart, ProfileHealth, RateLimitSummary,
+        catalog::pickable_models, manifest::AdapterManifest, run_config::RunConfig,
     },
 };
 
@@ -951,12 +951,23 @@ async fn account_status(
         .supervisors
         .acquire_control(&access.adapter_kind, access.handle())
         .await;
-    let Ok(mut provider) = provider else {
-        persist_account_state(state, account_id, "unknown", "unavailable").await?;
-        return Ok(Json(AccountStatusResponse {
-            ceremony,
-            ..status_response(&access, "unknown")
-        }));
+    let mut provider = match provider {
+        Ok(provider) => provider,
+        // Every control slot is busy with other account pages: that says
+        // nothing about this account, so its stored state stands.
+        Err(HarnessError::ControlCapacity) => {
+            return Ok(Json(AccountStatusResponse {
+                ceremony,
+                ..status_response(&access, &access.account_state)
+            }));
+        }
+        Err(_) => {
+            persist_account_state(state, account_id, "unknown", "unavailable").await?;
+            return Ok(Json(AccountStatusResponse {
+                ceremony,
+                ..status_response(&access, "unknown")
+            }));
+        }
     };
     let account = match provider.read_account().await {
         Ok(account) => account,

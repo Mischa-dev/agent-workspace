@@ -117,6 +117,9 @@ impl LoginCeremony {
     }
 }
 
+const CONTROL_SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const CONTROL_SLOT_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl SupervisorRegistry {
     pub fn new(config: &AppConfig) -> Result<Self, HarnessError> {
         let shutdown = Arc::new(ShutdownSignal::default());
@@ -193,7 +196,20 @@ impl SupervisorRegistry {
         kind: &str,
         account: AccountHandle,
     ) -> Result<Box<dyn HarnessSession>, HarnessError> {
-        self.adapter(kind)?.acquire_control(account).await
+        // Control sessions are short (a status read, a sign-in step), so a
+        // full pool frees up quickly: wait for a slot rather than report the
+        // account as failing.
+        let adapter = self.adapter(kind)?;
+        let mut waited = std::time::Duration::ZERO;
+        loop {
+            match adapter.acquire_control(account.clone()).await {
+                Err(HarnessError::ControlCapacity) if waited < CONTROL_SLOT_WAIT => {
+                    tokio::time::sleep(CONTROL_SLOT_RETRY).await;
+                    waited += CONTROL_SLOT_RETRY;
+                }
+                result => return result,
+            }
+        }
     }
 
     pub async fn health(&self, kind: &str, account_id: Uuid) -> Option<ProfileHealth> {
