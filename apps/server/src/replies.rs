@@ -1384,14 +1384,16 @@ async fn post_wakeup(
     secret: &str,
     delivery: &DueDelivery,
 ) -> Result<(), &'static str> {
-    let body = wakeup_body(delivery).to_string();
+    let body = wakeup_body(delivery);
+    let event = body["event"].as_str().unwrap_or_default().to_owned();
+    let body = body.to_string();
     let timestamp = unix_timestamp();
     let signature = sign(secret, &timestamp, &body).ok_or("could not sign the wakeup")?;
     let response = client
         .post(url)
         .header("content-type", "application/json")
         .header("x-workspace-delivery", delivery.id.to_string())
-        .header("x-workspace-event", &delivery.event)
+        .header("x-workspace-event", event)
         .header("x-workspace-timestamp", &timestamp)
         .header("x-workspace-signature", format!("sha256={signature}"))
         .body(body)
