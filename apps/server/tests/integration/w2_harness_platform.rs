@@ -326,6 +326,39 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     )
     .await;
     assert_eq!(member_edit.0, StatusCode::FORBIDDEN, "{}", member_edit.1);
+    let member_refresh = send(
+        &application,
+        member,
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
+            seed.project_id
+        ),
+        "member-refresh",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        member_refresh.0,
+        StatusCode::FORBIDDEN,
+        "{}",
+        member_refresh.1
+    );
+    let inconsistent = send(
+        &application,
+        owner,
+        "PUT",
+        &model,
+        "owner-inconsistent",
+        json!({"reasoningLevels": ["low"], "defaultReasoning": "high"}),
+    )
+    .await;
+    assert_eq!(
+        inconsistent.0,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        inconsistent.1
+    );
     let harnesses = send_get(
         &application,
         member,

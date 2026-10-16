@@ -485,14 +485,14 @@ async fn register_personal_execution_profile(
                  AND connection.enabled
                 WHERE profile.project_id = $1
                   AND profile.owner_actor_id = $2
-                  AND ($3::text IS NULL OR account.adapter_kind = $3)
+                  AND account.adapter_kind = $3
                 ORDER BY profile.preferred DESC, profile.created_at, profile.id
                 LIMIT 1
                 "#,
             )
             .bind(project_id)
             .bind(principal.actor_id)
-            .bind(request.adapter_kind.as_deref())
+            .bind(&adapter_kind)
             .fetch_optional(&mut *transaction)
             .await?;
             if let Some(profile_id) = existing_profile_id {
@@ -695,6 +695,11 @@ async fn refresh_catalog(
     )
     .await?;
     let workspace = workspace_access(&mut transaction, &principal, project_id).await?;
+    // A refresh replaces the workspace's provider-reported models for
+    // everyone, so it is a catalog edit.
+    if !may_edit_catalog(&principal, &workspace) {
+        return Err(AppError::Forbidden);
+    }
     let account = sqlx::query_as::<_, crate::provider::ProfileAccount>(
         r#"
         SELECT account.id AS account_id, account.adapter_kind, account.home_path,

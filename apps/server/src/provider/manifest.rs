@@ -260,6 +260,17 @@ impl ModelOverrides {
         {
             return Err("defaultSpeed");
         }
+        // A default must be one of the options listed beside it.
+        if let (Some(levels), Some(default)) = (&self.reasoning_levels, &self.default_reasoning)
+            && !levels.contains(default)
+        {
+            return Err("defaultReasoning");
+        }
+        if let (Some(speeds), Some(default)) = (&self.speeds, &self.default_speed)
+            && !speeds.iter().any(|speed| &speed.id == default)
+        {
+            return Err("defaultSpeed");
+        }
         if let Some(prices) = &self.prices {
             let price = |value: f64| value.is_finite() && (0.0..=1_000_000.0).contains(&value);
             if !(prices.currency.len() == 3
@@ -308,6 +319,21 @@ impl ModelOverrides {
         }
         if let Some(value) = self.is_default {
             model.is_default = value;
+        }
+        // A default left behind by a changed option list (on either side)
+        // is dropped rather than advertised, so runs never inherit one the
+        // model refuses.
+        if model.default_reasoning.as_ref().is_some_and(|level| {
+            !model.reasoning_levels.is_empty() && !model.reasoning_levels.contains(level)
+        }) {
+            model.default_reasoning = None;
+        }
+        if model
+            .default_speed
+            .as_ref()
+            .is_some_and(|speed| !model.speeds.iter().any(|option| &option.id == speed))
+        {
+            model.default_speed = None;
         }
         model
     }
