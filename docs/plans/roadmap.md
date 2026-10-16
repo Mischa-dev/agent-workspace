@@ -747,14 +747,19 @@ starts on the Red Hat runner without anyone touching it.
 Workstreams will mostly be built by agents in the cloud: Claude Code cloud
 sessions (Rust 1.97.1, Node 22 and PostgreSQL 16, but no setup) and Codex
 Cloud tasks. Add one setup script that starts PostgreSQL, creates a test
-database, exports `AGENT_WORKSPACE_DATABASE_URL`, installs web dependencies
-with the pinned pnpm and warms the cargo build. Run it from a SessionStart
-hook (`.claude/settings.json`), and use it as the Codex Cloud environment's
-setup script, checking what that image already has. Note in `AGENTS.md` that
-one web test (`SessionBoundary`) needs Node 24.
+database, installs web dependencies with the pinned pnpm and warms the cargo
+build. Run it from a SessionStart hook (`.claude/settings.json`), and use it
+as the Codex Cloud environment's setup script, checking what that image
+already has. An export dies with the hook's process, so it saves
+`AGENT_WORKSPACE_DATABASE_URL` where later commands see it: appended to
+`CLAUDE_ENV_FILE` in a Claude session, and to the shell profile in Codex
+Cloud. It installs the Node in `.node-version` (24.18.1) when the image has
+another and the download is allowed, and the web checks keep passing on Node
+22 for a session where it isn't.
 
 **Done when:** A fresh Claude cloud session and a fresh Codex Cloud task both
-run `cargo test --workspace` and `corepack pnpm check` with no manual steps.
+run `cargo test --workspace` and `corepack pnpm check` with no manual steps,
+and their integration tests reach PostgreSQL instead of skipping.
 
 #### F4. Changes that don't collide
 
@@ -1555,10 +1560,12 @@ private thread ever sees a suggestion drawn from it.
 
 Paste a plan or pick a page and get a proposed tree of tasks with criteria,
 labels, milestones and dependencies; edit the preview, then commit through
-`task_create_many`.
+`task_create_many`. A plan bigger than one call (100 tasks) commits in
+batches, each with its own idempotency key, and links between batches are
+added once every task exists, so a retry never duplicates a batch.
 
-**Done when:** This roadmap imports as tasks, milestones and dependencies in
-one go.
+**Done when:** This roadmap's 103 items import as tasks, milestones and
+dependencies in one go.
 
 #### AI4. Triage on create
 
