@@ -10,7 +10,7 @@ import {
   Button,
   ErrorState,
   Icon,
-  MessageSkeleton,
+  ListSkeleton,
   Row,
   RowList,
   Section,
@@ -107,7 +107,7 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
   })
 
   if (members.isPending || invitations.isPending) {
-    return <MessageSkeleton label="Loading members" rows={3} />
+    return <ListSkeleton label="Loading members" rows={3} avatars />
   }
   if (members.isError || invitations.isError) {
     return (

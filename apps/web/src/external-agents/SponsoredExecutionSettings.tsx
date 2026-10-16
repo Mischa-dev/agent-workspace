@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import { ActorTag, Avatar, Banner, Button, ErrorState, MessageSkeleton, Row, RowList, formatDateTime } from '../ui'
+import { ActorTag, Avatar, Banner, Button, ErrorState, ListSkeleton, Row, RowList, formatDateTime } from '../ui'
 import {
   listSponsoredExecutionRequests,
   respondToSponsoredExecution,
@@ -41,7 +41,7 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
     },
   })
 
-  if (requests.isPending) return <MessageSkeleton label="Loading run requests" rows={1} />
+  if (requests.isPending) return <ListSkeleton label="Loading run requests" rows={2} />
   if (requests.isError) {
     return (
       <ErrorState action={<Button onClick={() => void requests.refetch()}>Try again</Button>} title="Run requests didn’t load">

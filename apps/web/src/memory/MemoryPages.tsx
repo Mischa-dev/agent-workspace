@@ -15,7 +15,8 @@ import {
   EmptyState,
   Markdown,
   MarkdownEditor,
-  MessageSkeleton,
+  DocumentSkeleton,
+  ListSkeleton,
   PageHeader,
   Row,
   RowList,
@@ -93,7 +94,7 @@ function PagesList({ projectId }: { projectId: string }) {
         What’s true for this project now: how it works, conventions, plans. People and agents both read and edit these, and every
         version is kept.
       </PageHeader>
-      {pages.isPending ? <MessageSkeleton label="Loading pages" rows={2} /> : null}
+      {pages.isPending ? <ListSkeleton label="Loading pages" rows={3} /> : null}
       {pages.isError ? <Banner tone="danger">Pages didn’t load.</Banner> : null}
       {pages.data && pages.data.pages.length === 0 ? (
         <EmptyState icon="list" title="No pages yet">
@@ -161,7 +162,7 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
     queryClient.setQueryData(memoryKeys.page(pageId), saved)
     await queryClient.invalidateQueries({ queryKey: memoryKeys.pages(projectId) })
   }
-  if (page.isPending) return <MessageSkeleton label="Loading page" rows={3} />
+  if (page.isPending) return <DocumentSkeleton label="Loading page" />
   if (page.isError || !page.data) return <Banner tone="danger">This page didn’t load.</Banner>
   const current = page.data
   const restore = (version: number) => {
@@ -276,6 +277,7 @@ function PageEditor({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const save = (event: FormEvent) => {
     event.preventDefault()
     if (!title.trim() || busy) return
@@ -289,13 +291,15 @@ function PageEditor({
       note: note.trim() || undefined,
     })
       .then(onSaved)
-      .catch((reason: unknown) =>
-        setError(
-          isApiError(reason) && reason.status === 409
-            ? 'Someone changed this page while you were editing. Copy your text, reload, and try again.'
-            : errorText(reason, 'The page wasn’t saved.'),
-        ),
-      )
+      .catch((reason: unknown) => {
+        if (isApiError(reason) && reason.status === 409) {
+          // Fetch their version underneath; the draft stays in the editor.
+          void queryClient.invalidateQueries({ queryKey: memoryKeys.page(page.id) })
+          setError('Someone saved a newer version while you were editing. Your text is still here: save again to replace theirs, or cancel to read it.')
+          return
+        }
+        setError(errorText(reason, 'The page wasn’t saved.'))
+      })
       .finally(() => setBusy(false))
   }
   return (
@@ -362,7 +366,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
         visible to the people in it.
       </PageHeader>
       <Checkbox checked={showSuperseded} label="Show replaced decisions" onChange={setShowSuperseded} />
-      {decisions.isPending ? <MessageSkeleton label="Loading decisions" rows={2} /> : null}
+      {decisions.isPending ? <ListSkeleton label="Loading decisions" rows={3} /> : null}
       {decisions.isError ? <Banner tone="danger">Decisions didn’t load.</Banner> : null}
       {decisions.data && decisions.data.decisions.length === 0 ? (
         <EmptyState icon="check" title="No decisions yet">

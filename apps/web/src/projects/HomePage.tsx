@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
-import { Badge, Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
+import { Badge, Banner, Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
 import { useProjects, useSwitchProject } from './hooks'
 import { ProjectInitials } from './ProjectInitials'
 import type { Project } from './types'
@@ -88,7 +88,7 @@ export function HomePage() {
           </Banner>
         )}
         <Section id="recent-projects-heading" title="Your Projects">
-          {projects.isPending && <MessageSkeleton label="Loading your Projects" rows={3} />}
+          {projects.isPending && <ListSkeleton label="Loading your Projects" rows={3} />}
           {projects.isError && (
             <ErrorState action={<Button onClick={() => void projects.refetch()}>Try again</Button>} title="Your Projects didn’t load">
               Check your connection and try again.

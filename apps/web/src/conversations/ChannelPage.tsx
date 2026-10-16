@@ -13,11 +13,11 @@ import { AppShell } from '../shell/AppShell'
 import { Banner, Button, ConversationIntro, Dialog, ErrorState, Icon, IconButton, MessageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 import {
-  archiveConversation,
   getConversationTimeline,
   searchMentionableActors,
   sendConversationMessage,
 } from './api'
+import { useArchiveConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ConversationHeader } from './ConversationHeader'
 import type { ComposerSubmission } from './composerModel'
@@ -66,7 +66,6 @@ export function ChannelPage() {
   const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const [threadDialog, setThreadDialog] = useState<{ origin: ThreadOrigin | null } | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
-  const [archiveError, setArchiveError] = useState<string | null>(null)
   const [firstUnread, setFirstUnread] = useState<{ channelId: string; sequence: number | null }>({ channelId: '', sequence: null })
   const page = timeline.data
   const validBoundary =
@@ -194,16 +193,16 @@ export function ChannelPage() {
     }
   }
 
+  const archiveChannel = useArchiveConversation({
+    conversationId: channelId,
+    kind: 'channel',
+    label: `#${name}`,
+    leaveTo: `/projects/${encodeURIComponent(projectId)}`,
+    projectId,
+  })
   const archive = () => {
     if (!page) return
-    setArchiveError(null)
-    void archiveConversation({ conversationId: channelId, kind: 'channel', expectedVersion: page.conversation.version })
-      .then(() => {
-        setArchiveOpen(false)
-        void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
-        navigate(`/projects/${encodeURIComponent(projectId)}`, { replace: true })
-      })
-      .catch((reason: unknown) => setArchiveError(reason instanceof Error ? reason.message : 'The channel wasn’t archived.'))
+    archiveChannel.mutate(page.conversation.version, { onSettled: () => setArchiveOpen(false) })
   }
 
   if (isApiError(timeline.error) && timeline.error.status === 404) {
@@ -379,7 +378,7 @@ export function ChannelPage() {
         footer={
           <>
             <Button onClick={() => setArchiveOpen(false)}>Cancel</Button>
-            <Button onClick={archive} variant="danger">
+            <Button busy={archiveChannel.isPending} onClick={archive} variant="danger">
               Archive channel
             </Button>
           </>
@@ -387,9 +386,7 @@ export function ChannelPage() {
         onClose={() => setArchiveOpen(false)}
         open={archiveOpen}
         title={`Archive #${name}?`}
-      >
-        {archiveError ? <Banner tone="danger">{archiveError}</Banner> : null}
-      </Dialog>
+      />
     </AppShell>
   )
 }
