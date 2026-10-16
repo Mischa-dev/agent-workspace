@@ -1,6 +1,10 @@
 //! Project admin: a project's workflow and members, renaming, and archiving
 //! or restoring it. Changing a project is for people with an owner or admin
 //! role; agents never manage projects (docs/plans/mcp-tools.md, decision 5).
+//! workflow_update sends the whole workflow through `replace_workflow`, as
+//! the web settings page does.
+
+use std::collections::{BTreeMap, HashMap};
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -10,6 +14,7 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, parse_id, project_role, public_url, role_allows},
+    tasks::command_actor,
     workflow::Workflow,
 };
 use crate::{
@@ -17,6 +22,11 @@ use crate::{
     error::AppError,
     memory,
     policy::{Action, ActorKind},
+    work_item_commands::lock_membership,
+    work_item_workflow::{
+        self, AllTransitions, StatusDraft, TransitionDraft, TransitionsDraft, TypeDraft,
+        WorkflowDocument, WorkflowRefusal,
+    },
 };
 
 /// Owner or admin, and a person: what changing a project takes.
@@ -67,6 +77,64 @@ pub(super) struct WorkflowValue {
     pub statuses: Vec<WorkflowStatus>,
     /// The status changes allowed, by status name.
     pub transitions: Vec<WorkflowTransition>,
+    /// Pass as expectedVersion to workflow_update.
+    #[serde(default)]
+    pub version: i64,
+    /// What task estimates count: points or hours.
+    #[serde(default)]
+    pub estimate_unit: String,
+}
+
+/// The workflow as workflow_get shows it.
+async fn workflow_value(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+) -> Result<WorkflowValue, AppError> {
+    let workflow = Workflow::load(connection, project_id).await?;
+    let (version, estimate_unit) =
+        work_item_workflow::task_settings(connection, project_id).await?;
+    let types = workflow
+        .types
+        .iter()
+        .map(|kind| WorkflowType {
+            id: kind.id.to_string(),
+            name: kind.name.clone(),
+            is_default: kind.is_default,
+        })
+        .collect();
+    let statuses = workflow
+        .statuses
+        .iter()
+        .filter(|status| status.enabled)
+        .map(|status| WorkflowStatus {
+            id: status.id.to_string(),
+            name: status.name.clone(),
+            category: status.category.clone(),
+            is_default: status.is_default,
+        })
+        .collect();
+    let enabled = |id: Uuid| {
+        workflow
+            .statuses
+            .iter()
+            .any(|status| status.id == id && status.enabled)
+    };
+    let transitions = workflow
+        .transitions
+        .iter()
+        .filter(|(from, to)| enabled(*from) && enabled(*to))
+        .map(|(from, to)| WorkflowTransition {
+            from: workflow.status_name(*from).to_owned(),
+            to: workflow.status_name(*to).to_owned(),
+        })
+        .collect();
+    Ok(WorkflowValue {
+        types,
+        statuses,
+        transitions,
+        version,
+        estimate_unit,
+    })
 }
 
 pub(super) async fn workflow_get(
@@ -90,50 +158,289 @@ pub(super) async fn workflow_get(
         )
         .await?;
         let mut connection = state.pool.acquire().await?;
-        let workflow = Workflow::load(&mut connection, principal.project_id).await?;
-        let types = workflow
-            .types
-            .iter()
-            .map(|kind| WorkflowType {
-                id: kind.id.to_string(),
-                name: kind.name.clone(),
-                is_default: kind.is_default,
-            })
-            .collect();
-        let statuses = workflow
-            .statuses
-            .iter()
-            .filter(|status| status.enabled)
-            .map(|status| WorkflowStatus {
-                id: status.id.to_string(),
-                name: status.name.clone(),
-                category: status.category.clone(),
-                is_default: status.is_default,
-            })
-            .collect();
-        let enabled = |id: Uuid| {
-            workflow
-                .statuses
-                .iter()
-                .any(|status| status.id == id && status.enabled)
-        };
-        let transitions = workflow
-            .transitions
-            .iter()
-            .filter(|(from, to)| enabled(*from) && enabled(*to))
-            .map(|(from, to)| WorkflowTransition {
-                from: workflow.status_name(*from).to_owned(),
-                to: workflow.status_name(*to).to_owned(),
-            })
-            .collect();
-        Ok::<_, AppError>(ToolResult::ok(WorkflowValue {
-            types,
-            statuses,
-            transitions,
-        }))
+        Ok::<_, AppError>(ToolResult::ok(
+            workflow_value(&mut connection, principal.project_id).await?,
+        ))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "workflow_get"))
+}
+
+// ---------------------------------------------------------------------------
+// workflow_update
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct WorkflowUpdateArguments {
+    /// The project's ID, link or key (such as "AWD").
+    pub project_id: String,
+    /// The version from workflow_get. If someone changed the workflow since,
+    /// nothing changes.
+    pub expected_version: i64,
+    /// points or hours. Left out, it stays as it is.
+    pub estimate_unit: Option<String>,
+    /// Every status the workflow should have, in board order. Keep a status
+    /// by passing its id (you can rename it or change its category); leave
+    /// it out to retire it. A new one has no id.
+    pub statuses: Vec<WorkflowStatusDraft>,
+    /// Every task type the workflow should have, in order, the same way.
+    pub types: Vec<WorkflowTypeDraft>,
+    /// true allows any status change.
+    pub all_transitions: Option<bool>,
+    /// The status changes allowed, each from and to a status by name, id or
+    /// key. Left out (without allTransitions), the current ones between
+    /// statuses that stay are kept.
+    pub transitions: Option<Vec<WorkflowTransitionDraft>>,
+    /// Where the open tasks of a retired status or type go: its name or id
+    /// to a status or type that stays (name, id or key). Each moved task gets
+    /// an entry in its history.
+    pub replacements: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct WorkflowStatusDraft {
+    /// An existing status's id. Leave it out for a new status.
+    pub id: Option<String>,
+    /// A short name for a new status, for transitions and replacements to
+    /// use before it has an id.
+    pub key: Option<String>,
+    pub name: String,
+    /// backlog, unstarted, started, review, verification, completed, or
+    /// canceled.
+    #[serde(alias = "semanticCategory")]
+    pub category: String,
+    /// Where new tasks start. One status is the default.
+    pub is_default: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct WorkflowTypeDraft {
+    /// An existing type's id. Leave it out for a new type.
+    pub id: Option<String>,
+    pub key: Option<String>,
+    pub name: String,
+    pub is_default: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct WorkflowTransitionDraft {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WorkflowUpdateValue {
+    pub statuses_added: u32,
+    pub statuses_retired: u32,
+    pub types_added: u32,
+    pub types_retired: u32,
+    /// Open tasks moved off retired statuses and types.
+    pub tasks_moved: u32,
+    /// The workflow now, with its new version.
+    pub workflow: WorkflowValue,
+}
+
+fn count(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+pub(super) async fn workflow_update(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: WorkflowUpdateArguments,
+) -> ToolResult<WorkflowUpdateValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if principal.actor_kind != ActorKind::Human {
+        return ToolResult::denied(ADMIN_ONLY);
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    if arguments.all_transitions == Some(true) && arguments.transitions.is_some() {
+        return ToolResult::invalid(
+            "transitions",
+            "Pass allTransitions or transitions, not both.",
+        );
+    }
+    let project_id = principal.project_id;
+    let mut statuses = Vec::with_capacity(arguments.statuses.len());
+    for status in &arguments.statuses {
+        let id = match status.id.as_deref() {
+            Some(id) => match parse_id(id) {
+                Some(id) => Some(id),
+                None => {
+                    return ToolResult::invalid(
+                        "statuses",
+                        format!(
+                            "{} has an id that isn't one (see workflow_get).",
+                            status.name
+                        ),
+                    );
+                }
+            },
+            None => None,
+        };
+        statuses.push(StatusDraft {
+            id,
+            key: status.key.clone(),
+            name: status.name.clone(),
+            semantic_category: status.category.trim().to_lowercase(),
+            is_default: status.is_default == Some(true),
+        });
+    }
+    let mut types = Vec::with_capacity(arguments.types.len());
+    for kind in &arguments.types {
+        let id = match kind.id.as_deref() {
+            Some(id) => match parse_id(id) {
+                Some(id) => Some(id),
+                None => {
+                    return ToolResult::invalid(
+                        "types",
+                        format!("{} has an id that isn't one (see workflow_get).", kind.name),
+                    );
+                }
+            },
+            None => None,
+        };
+        types.push(TypeDraft {
+            id,
+            key: kind.key.clone(),
+            name: kind.name.clone(),
+            is_default: kind.is_default == Some(true),
+        });
+    }
+    let result = async {
+        // The caller must reach the project through this connection, and be
+        // an owner or admin there, checked again under the project lock.
+        if project_role(state, principal, project_id).await?.is_none() {
+            return Ok(ToolResult::not_found("That project"));
+        }
+        let mut transaction = state.pool.begin().await?;
+        super::common::mark_via(&mut transaction, principal).await?;
+        let Some(membership) =
+            lock_membership(&mut transaction, principal.actor_id, project_id).await?
+        else {
+            return Ok(ToolResult::not_found("That project"));
+        };
+        if !membership.enabled {
+            return Ok(ToolResult::not_found("That project"));
+        }
+        if !role_allows(principal, project_id, &membership.role, Action::ProjectManage) {
+            return Ok(ToolResult::denied(ADMIN_ONLY));
+        }
+        if membership.project_archived_at.is_some() {
+            return Ok(ToolResult::conflict(
+                "That project is archived. Restore it with project_archive (archived: false) first.",
+            ));
+        }
+        let transitions = if arguments.all_transitions == Some(true) {
+            TransitionsDraft::All(AllTransitions::All)
+        } else if let Some(list) = &arguments.transitions {
+            TransitionsDraft::List(
+                list.iter()
+                    .map(|transition| TransitionDraft {
+                        from: transition.from.clone(),
+                        to: transition.to.clone(),
+                    })
+                    .collect(),
+            )
+        } else {
+            // The current ones, by ID: replace_workflow keeps those between
+            // statuses that stay and refuses the rest, so drop those here.
+            let kept = statuses.iter().filter_map(|status| status.id).collect::<Vec<_>>();
+            TransitionsDraft::List(
+                sqlx::query_as::<_, (Uuid, Uuid)>(
+                    r#"
+                    SELECT from_status_id, to_status_id FROM work_item_status_transitions
+                    WHERE project_id = $1 AND from_status_id = ANY($2) AND to_status_id = ANY($2)
+                    ORDER BY from_status_id, to_status_id
+                    "#,
+                )
+                .bind(project_id)
+                .bind(&kept)
+                .fetch_all(&mut *transaction)
+                .await?
+                .into_iter()
+                .map(|(from, to)| TransitionDraft {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                })
+                .collect(),
+            )
+        };
+        // Replacements are keyed by the retired status's or type's ID; an
+        // agent may name it instead, so names are turned into IDs here.
+        let named = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT id, name FROM work_item_statuses WHERE project_id = $1 AND enabled
+            UNION ALL
+            SELECT id, name FROM work_item_types WHERE project_id = $1 AND enabled
+            "#,
+        )
+        .bind(project_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        let mut replacements = HashMap::new();
+        for (from, to) in arguments.replacements.iter().flatten() {
+            let from = from.trim();
+            match parse_id(from) {
+                Some(id) => {
+                    replacements.insert(id.to_string(), to.clone());
+                }
+                None => {
+                    for (id, _) in named
+                        .iter()
+                        .filter(|(_, name)| name.to_lowercase() == from.to_lowercase())
+                    {
+                        replacements.insert(id.to_string(), to.clone());
+                    }
+                }
+            }
+        }
+        let document = WorkflowDocument {
+            expected_version: arguments.expected_version,
+            estimate_unit: arguments
+                .estimate_unit
+                .as_deref()
+                .map(|unit| unit.trim().to_lowercase()),
+            statuses: statuses.clone(),
+            types: types.clone(),
+            transitions,
+            replacements,
+        };
+        let actor = command_actor(principal, project_id);
+        let change = match work_item_workflow::replace_workflow(&mut transaction, &actor, &document)
+            .await?
+        {
+            Ok(change) => change,
+            Err(WorkflowRefusal::VersionConflict { current_version }) => {
+                return Ok(ToolResult::conflict(format!(
+                    "Someone changed this workflow first (now version {current_version}). Read it again with workflow_get, then retry with expectedVersion {current_version}."
+                )));
+            }
+            Err(WorkflowRefusal::Invalid { field, message }) => {
+                return Ok(ToolResult::invalid(field, message));
+            }
+        };
+        let workflow = workflow_value(&mut transaction, project_id).await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(WorkflowUpdateValue {
+            statuses_added: count(change.statuses_added),
+            statuses_retired: count(change.statuses_retired),
+            types_added: count(change.types_added),
+            types_retired: count(change.types_retired),
+            tasks_moved: count(change.tasks_moved),
+            workflow,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "workflow_update"))
 }
 
 // ---------------------------------------------------------------------------

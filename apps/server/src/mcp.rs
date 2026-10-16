@@ -1214,7 +1214,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). Same project only; a dependency that would make a cycle is refused with the path. Returns the task's blockers and whether it's ready.",
+        description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). The other tasks may be in another project of the same workspace that you can reach; a dependency that would make a cycle is refused with the path. Returns the task's blockers with their status and whether it's ready.",
         annotations(
             title = "Set dependencies",
             read_only_hint = false,
@@ -1266,6 +1266,63 @@ impl McpServer {
     ) -> Json<common::ToolResult<planning::MilestoneValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(planning::milestone_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Say how a task relates to another: relates_to (the default) or duplicates (this task duplicates the other; close: true also closes it as canceled). remove: true takes the relation away. The other task may be in another project of the same workspace that you can reach.",
+        annotations(
+            title = "Relate tasks",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_relate(
+        &self,
+        Parameters(arguments): Parameters<planning::TaskRelateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::RelationsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::task_relate(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Watch a task to hear about its changes, or stop (watching: false). Returns who watches it.",
+        annotations(
+            title = "Watch task",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_watch(
+        &self,
+        Parameters(arguments): Parameters<planning::TaskWatchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::WatchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::task_watch(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change a project's workflow: its statuses (in board order, each with a category), task types, allowed status changes and estimate unit. Send the whole workflow as workflow_get shows it, with expectedVersion; a status or type left out is retired, and replacements say where its open tasks go. Owners and admins only, as themselves.",
+        annotations(
+            title = "Update workflow",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn workflow_update(
+        &self,
+        Parameters(arguments): Parameters<admin::WorkflowUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::WorkflowUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::workflow_update(&self.state, principal, arguments).await)
     }
 
     #[tool(

@@ -526,6 +526,66 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
         WorkItemEdit
     ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/bulk",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/labels",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/labels/{label_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/milestones",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/milestones/{milestone_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Put,
+        "/api/v1/projects/{project_id}/work-item-workflow",
+        ProjectManage
+    ),
 ];
 
 #[cfg(test)]

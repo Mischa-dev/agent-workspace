@@ -362,6 +362,18 @@ struct LockedEnd {
 }
 
 /// Locks tasks across projects in ID order.
+/// How `task`'s history names `other`: by key within one project. Across
+/// projects the entry is read by members of `task`'s project, who may not
+/// see the other one, so it isn't named; readers who can see it get the
+/// task itself from the payload and `task_links`.
+fn named(other: &LockedEnd, task: &LockedEnd) -> String {
+    if other.project_id == task.project_id {
+        other.key.clone()
+    } else {
+        "a task in another project".to_owned()
+    }
+}
+
 async fn lock_ends(
     transaction: &mut Transaction<'_, Postgres>,
     ids: &[Uuid],
@@ -561,12 +573,12 @@ pub async fn change_dependencies(
         });
         activities.entry(blocked.id).or_default().push((
             kind.to_owned(),
-            format!("{blocked_words} {}", blocking.key),
+            format!("{blocked_words} {}", named(blocking, blocked)),
             payload.clone(),
         ));
         activities.entry(blocking.id).or_default().push((
             kind.to_owned(),
-            format!("{blocking_words} {}", blocked.key),
+            format!("{blocking_words} {}", named(blocked, blocking)),
             payload,
         ));
     }
@@ -815,12 +827,12 @@ pub async fn change_relation(
         };
         activities.entry(task.id).or_default().push((
             kind_name.to_owned(),
-            format!("{task_words} {}", other.key),
+            format!("{task_words} {}", named(other, task)),
             payload.clone(),
         ));
         activities.entry(other.id).or_default().push((
             kind_name.to_owned(),
-            format!("{other_words} {}", task.key),
+            format!("{other_words} {}", named(task, other)),
             payload,
         ));
     }

@@ -653,10 +653,12 @@ impl Filters {
 
 /// "42", "#42" or "AW-42" as a task number.
 fn search_number(search: &str) -> Option<i64> {
-    let digits = search
-        .trim_start_matches('#')
-        .rsplit_once('-')
-        .map_or(search.trim_start_matches('#'), |(_, number)| number);
+    let search = search.trim_start_matches('#');
+    let digits = match search.rsplit_once('-') {
+        Some((key, number)) if !key.is_empty() => number,
+        Some(_) => return None,
+        None => search,
+    };
     digits
         .parse::<i64>()
         .ok()

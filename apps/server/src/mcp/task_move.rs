@@ -3,8 +3,10 @@
 //! A task can't change projects in place: its comments are immutable, and
 //! its links and authors belong to its project. So a move carries the task
 //! over into the target project (title, description, priority, status and
-//! type by name, the assignee if they're there, acceptance criteria,
-//! subtasks, labels, and every comment quoted with its author and date), then
+//! type by name, the assignee if they're there, start and due dates, the
+//! estimate, the milestone by name if the target has it, acceptance
+//! criteria, subtasks, labels, and every comment quoted with its author and
+//! date), then
 //! archives the original. The original keeps its history and links, and its
 //! key keeps opening the new task (migration 0043).
 
@@ -25,8 +27,8 @@ use crate::{
     policy::{Action, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ChangeFinalization, CommandActor, CreateWorkItemCommand,
-        CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, authorize_mutation, create_work_item,
-        finalize_change, finalize_comment, insert_criteria, lock_membership,
+        CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, NewTaskFields, authorize_mutation,
+        create_work_item, finalize_change, finalize_comment, insert_criteria, lock_membership,
     },
     work_item_labels::{self, LabelLimit, MAX_LABELS_PER_TASK, SkipReason},
 };
@@ -90,6 +92,10 @@ struct SourceTask {
     assignee_name: Option<String>,
     blocked_reason: Option<String>,
     version: i64,
+    start_date: Option<chrono::NaiveDate>,
+    due_date: Option<chrono::NaiveDate>,
+    estimate: Option<f64>,
+    milestone_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -224,9 +230,12 @@ pub(super) async fn task_move(
                    item_type.name AS type_name, status.name AS status_name,
                    status.semantic_category AS status_category,
                    item.assignee_actor_id, assignee.display_name AS assignee_name,
-                   item.blocked_reason, item.version
+                   item.blocked_reason, item.version, item.start_date, item.due_date,
+                   item.estimate, milestone.name AS milestone_name
             FROM tree
             JOIN work_items item ON item.id = tree.id
+            LEFT JOIN project_milestones milestone
+              ON milestone.project_id = item.project_id AND milestone.id = item.milestone_id
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_types item_type
               ON item_type.project_id = item.project_id AND item_type.id = item.type_id
@@ -320,6 +329,27 @@ pub(super) async fn task_move(
                 )
                 .await?;
             }
+            // A milestone goes by name: the target's active one with the same
+            // name, if it has one.
+            let milestone_id = match &task.milestone_name {
+                Some(name) => {
+                    let found = sqlx::query_scalar::<_, Uuid>(
+                        "SELECT id FROM project_milestones WHERE project_id = $1 AND archived_at IS NULL AND lower(name) = lower($2)",
+                    )
+                    .bind(target_project_id)
+                    .bind(name)
+                    .fetch_optional(&mut *transaction)
+                    .await?;
+                    if found.is_none() {
+                        notes.push(format!(
+                            "{target_key} has no milestone called \"{name}\", so the task moved from {} isn't in one.",
+                            task.key
+                        ));
+                    }
+                    found
+                }
+                None => None,
+            };
             let summary = format!("Work Item moved from {}", task.key);
             let outcome = create_work_item(
                 &mut transaction,
@@ -335,7 +365,12 @@ pub(super) async fn task_move(
                     label_ids: &labels.ids,
                     acceptance_criteria: &[],
                     board_placement: None,
-                    fields: Default::default(),
+                    fields: NewTaskFields {
+                        milestone_id,
+                        start_date: task.start_date,
+                        due_date: task.due_date,
+                        estimate: task.estimate,
+                    },
                     activity_summary: &summary,
                     activity_metadata: serde_json::json!({ "movedFrom": task.key }),
                     activity_number_metadata: AllocatedNumberMetadata::Include,
