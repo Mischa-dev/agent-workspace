@@ -625,7 +625,8 @@ page, a real Home, onboarding, and a polish pass over every area.
 
 **Owns:** The suggested batch, the usage page, `HomePage.tsx`, the onboarding
 path, and the polish checklist in `docs/frontend/`. The polish pass touches
-every area, so it comes last and merges main first.
+every area, so it comes last and merges main first; pages that land after it
+(W12, W14) pass the checklist in their own workstream.
 
 **Seams:**
 
@@ -1527,10 +1528,16 @@ then the model judges them in batches. A dismissed pair is never suggested
 again. Accepting writes through `task_depend`, shown as via AI. A per-project
 switch applies suggestions above a confidence threshold automatically (off by
 default). It also reads conversations for 'waiting on X' and suggests the
-block. Suggestions only ever cite tasks and messages the reader can see.
+block. Runs with no person behind them (on edit, nightly, auto-apply) read
+only tasks and conversations every project member can see, never DMs, private
+groups or private threads. A person's own Analyze may use what they can see,
+but its suggestions stay visible to that person only. Each suggestion keeps
+its sources, and `conversation_visible_to` is checked again whenever one is
+shown or accepted.
 
 **Done when:** On a 200-task project, suggestions arrive in a review queue,
-and accepting one updates the graph and the ready list.
+and accepting one updates the graph and the ready list; nobody outside a
+private thread ever sees a suggestion drawn from it.
 
 #### AI3. Plan to tasks
 
@@ -1590,18 +1597,22 @@ clearly falls short.
 *In [W6](#w6-notifications) Notifications · Needs nothing · Better with F9 ·
 Migration*
 
-A notifications table per recipient (kind, subject, actor, preview, group key,
-read, archived, snoozed), filled from outbox events: @mentions in messages and
-task comments (comment mentions are stored but never shown today),
-assignments, approvals waiting, runs finished, failed or waiting, failing PR
-checks and review requests, and later capacity alerts and AI suggestions.
-Repeats collapse into one. `attention_count` stops being hard-coded to 0
-(`projects.rs:479`). The MCP briefing includes them. Notifications are written
-in the outbox publisher's transaction, so they need no job queue; fan-out
-moves to a job if volume calls for it.
+A notifications table per recipient (kind, subject, actor, source conversation
+and message, group key, read, archived, snoozed), filled from outbox events:
+@mentions in messages and task comments (comment mentions are stored but never
+shown today), assignments, approvals waiting, runs finished, failed or
+waiting, failing PR checks and review requests, and later capacity alerts and
+AI suggestions. Repeats collapse into one. `attention_count` stops being
+hard-coded to 0 (`projects.rs:479`). The MCP briefing includes them. Rows hold
+ids, not message text: the inbox, push and the briefing build each preview
+from its source through `conversation_visible_to` when they read it, and hide
+a notification whose source the reader can no longer see. Notifications are
+written in the outbox publisher's transaction, so they need no job queue;
+fan-out moves to a job if volume calls for it.
 
 **Done when:** A comment @mention reaches the person and the project's
-attention count.
+attention count, and someone removed from a private group stops seeing its
+notifications' previews.
 
 #### N2. Inbox
 
@@ -1836,7 +1847,8 @@ land: skeletons shaped like the page, consistent dates, no raw markup outside
 the kit (`WorkOsAgentSettings.tsx`), the agent's name instead of a hard-coded
 'Codex', phone layouts, and big files split (`ThreadPage.tsx` is 1,128 lines).
 The error boundary reports errors instead of dropping them
-(`AppErrorBoundary.tsx:13`).
+(`AppErrorBoundary.tsx:13`). Workstreams that merge after this one run the
+same checklist on their own pages before they're marked ready.
 
 **Done when:** Each area passes a short checklist kept in docs/frontend.
 
@@ -2080,7 +2092,8 @@ Defaults for the rest. Say if any is wrong:
    whichever side merges second wires the two together before it's marked
    ready.
 6. Ship the web and MCP sides together, with loading, empty, error, keyboard
-   and phone states.
+   and phone states. Once P7's polish checklist is in `docs/frontend/`, pass
+   it for your pages.
 7. Test where AGENTS.md says bugs are silent and costly, plus: secrets never
    leak (S1), settings resolve in the right order (S2), every adapter passes
    the same contract tests (H2), AI suggestions never cite anything the
