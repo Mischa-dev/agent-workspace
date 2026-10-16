@@ -66,10 +66,13 @@ pub enum Action {
     GithubIntegrationManage,
     PullRequestCreate,
     PullRequestRefresh,
+    /// Change settings and keys for a workspace or project (owners and
+    /// admins; people only).
+    SettingsManage,
 }
 
 impl Action {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::OrganizationProjectCreate,
         Self::ProjectView,
         Self::ProjectManage,
@@ -104,6 +107,7 @@ impl Action {
         Self::GithubIntegrationManage,
         Self::PullRequestCreate,
         Self::PullRequestRefresh,
+        Self::SettingsManage,
     ];
 }
 
@@ -364,9 +368,10 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
     }
 
     let resource_scope = match (action, resource) {
-        (Action::OrganizationProjectCreate, Resource::Organization { organization_id }) => {
-            MembershipScope::Organization(organization_id)
-        }
+        (
+            Action::OrganizationProjectCreate | Action::SettingsManage,
+            Resource::Organization { organization_id },
+        ) => MembershipScope::Organization(organization_id),
         (
             Action::ProjectView
             | Action::ProjectManage
@@ -399,7 +404,8 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
             | Action::RepositoryPublish
             | Action::GithubIntegrationManage
             | Action::PullRequestCreate
-            | Action::PullRequestRefresh,
+            | Action::PullRequestRefresh
+            | Action::SettingsManage,
             Resource::Project(scope),
         ) => MembershipScope::Project(scope.project_id),
         (Action::ApprovalRespond, Resource::Approval { scope, .. }) => {
@@ -412,7 +418,9 @@ pub fn authorize(subject: &Subject, action: Action, resource: Resource) -> Decis
         return Decision::Deny(DenyReason::MembershipScopeMismatch);
     }
 
-    if action == Action::ExternalAgentManage && subject.actor_kind != ActorKind::Human {
+    if matches!(action, Action::ExternalAgentManage | Action::SettingsManage)
+        && subject.actor_kind != ActorKind::Human
+    {
         return Decision::Deny(DenyReason::HumanRequired);
     }
 
@@ -806,7 +814,7 @@ mod tests {
             MembershipRole::Viewer,
         ] {
             for action in Action::ALL {
-                if action == Action::ExternalAgentManage {
+                if matches!(action, Action::ExternalAgentManage | Action::SettingsManage) {
                     continue;
                 }
                 let resource = project_resource(action, role);

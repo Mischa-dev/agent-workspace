@@ -2,11 +2,11 @@ import { useQuery } from '@tanstack/react-query'
 
 import { listPins, memoryKeys } from './api'
 
-export function usePins(conversationId: string) {
+export function usePins(projectId: string, conversationId: string) {
   return useQuery({
-    queryKey: memoryKeys.pins(conversationId),
+    queryKey: memoryKeys.pins(projectId, conversationId),
     queryFn: () => listPins(conversationId),
-    enabled: Boolean(conversationId),
+    enabled: Boolean(projectId && conversationId),
     staleTime: 15_000,
   })
 }

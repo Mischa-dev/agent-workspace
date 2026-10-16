@@ -12,9 +12,9 @@ import {
   DetailList,
   ErrorState,
   Icon,
-  MessageSkeleton,
   Row,
   RowList,
+  SettingsSkeleton,
   StatusChip,
   Switch,
   TextField,
@@ -31,7 +31,7 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
     queryFn: () => getGitHubStatus(projectId),
   })
 
-  if (status.isPending) return <MessageSkeleton label="Loading GitHub" rows={2} />
+  if (status.isPending) return <SettingsSkeleton label="Loading GitHub" />
   if (status.isError) {
     return (
       <ErrorState action={<Button onClick={() => void status.refetch()}>Try again</Button>} title="GitHub didn’t load">
@@ -166,7 +166,7 @@ function GitHubAutomationSettings({ projectId }: { projectId: string }) {
     onSuccess: (current) => queryClient.setQueryData(queryKey, current),
     onError: () => void queryClient.invalidateQueries({ queryKey }),
   })
-  if (settings.isPending) return <MessageSkeleton label="Loading work item automation" rows={1} />
+  if (settings.isPending) return <SettingsSkeleton label="Loading work item automation" />
   if (settings.isError) return <Banner tone="danger">Work item automation didn’t load.</Banner>
   return (
     <div className="aw-subsection">
@@ -266,7 +266,7 @@ function GitHubInstallationSetup({ onVerified, projectId }: { onVerified: (statu
           Ready to connect
         </StatusChip>
       </header>
-      {repositories.isPending && <MessageSkeleton label="Loading registered repositories" rows={1} />}
+      {repositories.isPending && <SettingsSkeleton label="Loading registered repositories" />}
       {repositories.isError && <Banner tone="danger">Registered repositories didn’t load.</Banner>}
       {repositories.isSuccess && (
         <>
@@ -326,7 +326,7 @@ function GitHubReverify({
     <div className="aw-subsection">
       <h3 className="aw-subsection__title">Change repositories</h3>
       <div className="aw-card aw-formcard aw-form">
-        {repositories.isPending && <MessageSkeleton label="Loading registered repositories" rows={1} />}
+        {repositories.isPending && <SettingsSkeleton label="Loading registered repositories" />}
         {repositories.isError && <Banner tone="danger">Registered repositories didn’t load.</Banner>}
         {repositories.isSuccess && (
           <RepositoryChoices available={available} disabled={verify.isPending} onChange={setSelected} selected={selected} />

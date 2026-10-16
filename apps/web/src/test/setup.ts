@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { configure } from '@testing-library/react'
 
-// The default one-second wait for findBy* and waitFor is too short when CI
-// renders lazily loaded pages on a busy machine, which made tests flaky.
+// Routes load lazily, and vitest transforms a route's modules the first time a
+// test opens it. On a busy CI machine that can take longer than the default
+// one second, so findBy* and waitFor wait up to five.
 configure({ asyncUtilTimeout: 5000 })

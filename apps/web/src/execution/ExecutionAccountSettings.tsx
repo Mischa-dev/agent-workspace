@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
-import { Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, StatusChip, TextField } from '../ui'
+import { Banner, Button, EmptyState, ErrorState, Icon, SettingsSkeleton, StatusChip, TextField } from '../ui'
 import {
   cancelAccountLogin,
   createPersonalExecutionProfile,
@@ -33,7 +33,7 @@ export function ExecutionAccountSettings({ actorId, projectId }: { actorId: stri
     },
   })
 
-  if (profiles.isPending) return <MessageSkeleton label="Loading your Codex account" rows={1} />
+  if (profiles.isPending) return <SettingsSkeleton label="Loading your Codex account" />
   if (profiles.isError) {
     return (
       <ErrorState action={<Button onClick={() => void profiles.refetch()}>Try again</Button>} title="Your Codex account didn’t load">

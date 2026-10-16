@@ -70,11 +70,13 @@ export type Pin = {
 
 const project = (projectId: string) => `/api/v1/projects/${encodeURIComponent(projectId)}`
 
+// Project first, so a project's refresh and reset reach them.
 export const memoryKeys = {
-  pages: (projectId: string) => ['pages', projectId] as const,
-  page: (pageId: string) => ['page', pageId] as const,
-  decisions: (projectId: string) => ['decisions', projectId] as const,
-  pins: (conversationId: string) => ['pins', conversationId] as const,
+  pages: (projectId: string) => ['project', projectId, 'memory', 'pages'] as const,
+  page: (projectId: string, pageId: string) => ['project', projectId, 'memory', 'page', pageId] as const,
+  decisions: (projectId: string) => ['project', projectId, 'memory', 'decisions'] as const,
+  pins: (projectId: string, conversationId: string) =>
+    ['project', projectId, 'memory', 'pins', conversationId] as const,
 }
 
 export function listPages(projectId: string) {

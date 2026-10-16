@@ -447,6 +447,41 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     let listed = response_json(list).await;
     assert_eq!(listed["projects"].as_array().expect("Projects").len(), 1);
 
+    // A Project whose name sorts first and contains the key must not push the
+    // exact key out of a limited search.
+    let named_like_key = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/projects",
+            &[
+                ("origin", "http://127.0.0.1:3100"),
+                ("cookie", cookie_header.as_str()),
+                ("x-csrf-token", csrf.as_str()),
+                ("idempotency-key", "m1-create-named-like-key"),
+            ],
+            json!({
+                "organizationId": bootstrapped.organization_id,
+                "key": "alp",
+                "name": "Alpha one notes"
+            }),
+        ))
+        .await
+        .expect("create second Project");
+    assert_eq!(named_like_key.status(), StatusCode::CREATED);
+    let exact_first = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/projects?q=one&limit=1",
+            &[("cookie", cookie_header.as_str())],
+            Value::Null,
+        ))
+        .await
+        .expect("search response");
+    let exact_first = response_json(exact_first).await;
+    assert_eq!(exact_first["projects"][0]["key"], "ONE");
+
     let active_run_id = insert_active_run_fixture(
         &pool,
         first_project_id.parse().expect("Project UUID"),

@@ -155,6 +155,25 @@ pub struct AgentRunUpdatedPayload {
 pub struct WorkItemUpdatedPayload {
     pub work_item_id: Uuid,
     pub version: i64,
+    /// Where the task sits on the board after the change, so open boards
+    /// can move the card in place instead of refetching. IDs only, like the
+    /// rest of the outbox: no titles or other text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<WorkItemPlacement>,
+}
+
+/// A task's column and neighbours on the board: the cards just before and
+/// after it among tasks with the same status and archived state, in board
+/// order. Either neighbour is absent at the ends of the column.
+#[derive(Clone, Debug, Deserialize, Eq, FromRow, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkItemPlacement {
+    pub status_id: Uuid,
+    pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -594,6 +613,57 @@ pub async fn enqueue_typed(
     enqueue(transaction, &event).await
 }
 
+/// Enqueue `work_item.updated` with the task's board placement as of this
+/// transaction. Every task change goes through here.
+pub async fn enqueue_work_item_updated(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    version: i64,
+) -> Result<Uuid, AppError> {
+    let placement = sqlx::query_as::<_, WorkItemPlacement>(
+        r#"
+        SELECT
+            item.status_id,
+            item.archived_at IS NOT NULL AS archived,
+            (
+                SELECT previous.id FROM work_items previous
+                WHERE previous.project_id = item.project_id
+                  AND previous.status_id = item.status_id
+                  AND (previous.archived_at IS NULL) = (item.archived_at IS NULL)
+                  AND (previous.board_rank, previous.id) < (item.board_rank, item.id)
+                ORDER BY previous.board_rank DESC, previous.id DESC
+                LIMIT 1
+            ) AS after_id,
+            (
+                SELECT following.id FROM work_items following
+                WHERE following.project_id = item.project_id
+                  AND following.status_id = item.status_id
+                  AND (following.archived_at IS NULL) = (item.archived_at IS NULL)
+                  AND (following.board_rank, following.id) > (item.board_rank, item.id)
+                ORDER BY following.board_rank, following.id
+                LIMIT 1
+            ) AS before_id
+        FROM work_items item
+        WHERE item.project_id = $1 AND item.id = $2
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    enqueue_typed(
+        transaction,
+        project_id,
+        OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
+            work_item_id,
+            version,
+            placement,
+        }),
+    )
+    .await
+}
+
 pub async fn enqueue_message_created(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -843,7 +913,7 @@ mod tests {
         MessageCreatedPayload, MessageReactionsUpdatedPayload, MessageUpdatedPayload,
         OUTBOX_SCHEMA_VERSION, OutboxConversationKind, OutboxEventError, OutboxEventPayload,
         OutboxFailureKind, OutboxResourceKind, ProjectMembershipUpdatedPayload,
-        ReadStateUpdatedPayload, WorkItemUpdatedPayload, retry_delay,
+        ReadStateUpdatedPayload, WorkItemPlacement, WorkItemUpdatedPayload, retry_delay,
     };
     use std::time::Duration;
     use uuid::Uuid;
@@ -954,6 +1024,7 @@ mod tests {
         let work_item = OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
             work_item_id: id(6),
             version: 3,
+            placement: None,
         });
         assert_eq!(work_item.event_type(), "work_item.updated");
         assert_eq!(work_item.resource_kind(), OutboxResourceKind::WorkItem);
@@ -1050,6 +1121,38 @@ mod tests {
         assert_eq!(
             invalid_read.to_json(),
             Err(OutboxEventError::MalformedPayload)
+        );
+    }
+
+    #[test]
+    fn work_item_placement_is_optional_and_round_trips() {
+        // Events enqueued before placement existed still decode.
+        let old = OutboxEventPayload::from_json(
+            "work_item.updated",
+            serde_json::json!({"workItemId": id(6), "version": 2}),
+        )
+        .expect("decode an event without placement");
+        assert!(
+            matches!(old, OutboxEventPayload::WorkItemUpdated(ref payload) if payload.placement.is_none())
+        );
+
+        let placed = OutboxEventPayload::WorkItemUpdated(WorkItemUpdatedPayload {
+            work_item_id: id(6),
+            version: 3,
+            placement: Some(WorkItemPlacement {
+                status_id: id(7),
+                archived: false,
+                after_id: Some(id(8)),
+                before_id: None,
+            }),
+        });
+        let json = placed.to_json().expect("encode placement");
+        assert_eq!(json["placement"]["statusId"], id(7).to_string());
+        assert_eq!(json["placement"]["afterId"], id(8).to_string());
+        assert!(json["placement"].get("beforeId").is_none());
+        assert_eq!(
+            OutboxEventPayload::from_json("work_item.updated", json).expect("decode placement"),
+            placed
         );
     }
 

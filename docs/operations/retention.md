@@ -3,6 +3,15 @@
 Policy version 1 protects recoverable work before reclaiming space. Cleanup is
 an owner-operated maintenance action, not an emergency deletion mechanism.
 
+## On a schedule
+
+The server runs retention itself as background jobs (see `jobs.rs`), so
+nobody has to remember: `retention.database_windows` (the windows below) and
+`retention.worktrees` daily, `retention.external_events` every six hours, and
+`jobs.prune_finished` for the job queue's own finished rows. Each holds the
+same advisory lock as the host command, so the two never overlap. The host
+commands below still work for a dry run or a one-off cleanup.
+
 ## Fixed database windows
 
 | Category | Eligibility | Action |
