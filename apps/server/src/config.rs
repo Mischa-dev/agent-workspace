@@ -3,7 +3,7 @@ use std::{
     fmt,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -103,6 +103,15 @@ pub struct AppConfig {
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
     pub log_filter: String,
+    /// The secrets master keyring (S1): an owner-only file outside the data
+    /// and release roots. Unset in development, a keyring under
+    /// `.agent-workspace-secrets/` in the working directory is created on
+    /// first use; unset elsewhere, encrypted secrets are unavailable.
+    pub secrets_key_path: Option<PathBuf>,
+    /// The bearer token `/metrics` requires (O2), as an owner-only file.
+    pub metrics_token_path: Option<PathBuf>,
+    /// Background jobs run at once in this process (F9).
+    pub job_concurrency: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -267,6 +276,31 @@ impl AppConfig {
         }
 
         let workos = workos_config(values, &data_root, &web_root)?;
+        let secrets_key_path =
+            optional_secret_path(values, "SECRETS_KEY_PATH", &data_root, &web_root, 64 * 1024)?;
+        // The master key opens every stored credential; a checkout (or an
+        // etckeeper `/etc`) could commit it.
+        if let Some(work_tree) = secrets_key_path
+            .as_deref()
+            .and_then(git_work_tree_containing)
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}SECRETS_KEY_PATH"),
+                reason: format!(
+                    "{} is a Git work tree; keep the keyring outside it",
+                    work_tree.display()
+                ),
+            });
+        }
+        let metrics_token_path =
+            optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
+        let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
+        if !(1..=64).contains(&job_concurrency) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}JOB_CONCURRENCY"),
+                reason: "must be between 1 and 64".into(),
+            });
+        }
         Ok(Self {
             environment,
             server_addr,
@@ -292,6 +326,9 @@ impl AppConfig {
             github,
             workos,
             log_filter,
+            secrets_key_path,
+            metrics_token_path,
+            job_concurrency,
         })
     }
 }
@@ -392,6 +429,80 @@ fn github_config(
     }))
 }
 
+fn optional_secret_path(
+    values: &BTreeMap<String, String>,
+    key: &str,
+    data_root: &Path,
+    web_root: &Path,
+    maximum_bytes: u64,
+) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(value) = values
+        .get(&format!("{PREFIX}{key}"))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    validate_secret_file(key, &path, data_root, web_root, maximum_bytes)?;
+    Ok(Some(path))
+}
+
+/// Whether `path` is absolute, has no `.` or `..` parts, and neither its
+/// text nor its resolved directory falls under a served or runtime root.
+fn secret_path_outside_roots(path: &Path, data_root: &Path, web_root: &Path) -> bool {
+    let plain = path
+        .components()
+        .all(|component| matches!(component, Component::RootDir | Component::Normal(_)));
+    // Compare resolved paths too: a symlinked directory could otherwise point
+    // into a served root while the text looks outside it.
+    let resolved = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .zip(path.file_name())
+        .map(|(parent, name)| parent.join(name));
+    let Some(resolved) = resolved else {
+        return false;
+    };
+    path.is_absolute()
+        && plain
+        && [data_root, web_root].into_iter().all(|root| {
+            let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            !path.starts_with(root) && !resolved.starts_with(&canonical)
+        })
+}
+
+/// Where `secret-key-init` may create a keyring: everywhere a configured
+/// secret file may live, and not inside a Git work tree (a checkout, or an
+/// `/etc` kept by etckeeper), where the key could be committed.
+pub fn validate_new_secret_location(path: &Path, config: &AppConfig) -> Result<(), String> {
+    if !secret_path_outside_roots(path, &config.data_root, &config.web_root) {
+        return Err(
+            "the path must be absolute, in an existing directory, and outside the data and web roots"
+                .into(),
+        );
+    }
+    path.parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .ok_or("the directory must exist")?;
+    if let Some(work_tree) = git_work_tree_containing(path) {
+        return Err(format!(
+            "{} is a Git work tree; keep the keyring outside it",
+            work_tree.display()
+        ));
+    }
+    Ok(())
+}
+
+/// The nearest Git work tree holding `path`'s resolved directory, if any.
+fn git_work_tree_containing(path: &Path) -> Option<PathBuf> {
+    let directory = std::fs::canonicalize(path.parent()?).ok()?;
+    directory
+        .ancestors()
+        .find(|ancestor| std::fs::symlink_metadata(ancestor.join(".git")).is_ok())
+        .map(Path::to_path_buf)
+}
+
 fn validate_secret_file(
     key: &str,
     path: &Path,
@@ -399,7 +510,7 @@ fn validate_secret_file(
     web_root: &Path,
     maximum_bytes: u64,
 ) -> Result<(), ConfigError> {
-    if !path.is_absolute() || path.starts_with(data_root) || path.starts_with(web_root) {
+    if !secret_path_outside_roots(path, data_root, web_root) {
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}{key}"),
             reason: "must be an absolute path outside runtime data and release roots".into(),
@@ -685,6 +796,81 @@ mod tests {
             "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
             "postgres://example.invalid/database".to_owned(),
         )])
+    }
+
+    #[test]
+    fn a_secret_file_may_not_reach_a_served_root_through_dots_or_symlinks() {
+        use std::os::unix::fs::{OpenOptionsExt as _, symlink};
+        let base = std::env::temp_dir().join(format!("aw-secret-path-{}", uuid::Uuid::new_v4()));
+        let web_root = base.join("release/web");
+        let data_root = base.join("data");
+        let outside = base.join("etc");
+        for directory in [&web_root, &data_root, &outside] {
+            std::fs::create_dir_all(directory).expect("make directory");
+        }
+        for file in [web_root.join("keyring"), outside.join("keyring")] {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(0o600)
+                .open(&file)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, b"k"))
+                .expect("write keyring");
+        }
+        symlink(&web_root, base.join("etc/linked-web")).expect("link");
+        let check = |path: PathBuf| {
+            validate_secret_file("SECRETS_KEY_PATH", &path, &data_root, &web_root, 64)
+        };
+        check(outside.join("keyring")).expect("a plain outside path is fine");
+        check(base.join("release/../release/web/keyring")).expect_err("dots into the web root");
+        check(base.join("etc/../release/web/keyring")).expect_err("dots anywhere");
+        check(base.join("etc/linked-web/keyring")).expect_err("a symlinked directory into it");
+        check(web_root.join("keyring")).expect_err("the web root itself");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_new_keyring_stays_out_of_served_roots_and_git_work_trees() {
+        let base = std::env::temp_dir().join(format!("aw-new-secret-{}", uuid::Uuid::new_v4()));
+        let checkout = base.join("checkout");
+        for directory in [
+            base.join("etc"),
+            checkout.join(".git"),
+            checkout.join("deep"),
+        ] {
+            std::fs::create_dir_all(directory).expect("make directory");
+        }
+        let mut config = AppConfig::from_values(&base_values()).expect("valid config");
+        config.web_root = base.join("release/web");
+        config.data_root = base.join("data");
+        std::fs::create_dir_all(&config.web_root).expect("make web root");
+        validate_new_secret_location(&base.join("etc/keyring"), &config)
+            .expect("a plain outside path is fine");
+        validate_new_secret_location(&config.web_root.join("keyring"), &config)
+            .expect_err("the web root");
+        validate_new_secret_location(&base.join("etc/../release/web/keyring"), &config)
+            .expect_err("dots into the web root");
+        validate_new_secret_location(&checkout.join("deep/keyring"), &config)
+            .expect_err("inside a Git work tree");
+        validate_new_secret_location(&base.join("missing/keyring"), &config)
+            .expect_err("a directory that doesn't exist");
+        // An existing keyring inside a checkout is refused at startup too.
+        let committed = checkout.join("deep/keyring");
+        std::fs::write(&committed, "k").expect("write keyring");
+        std::fs::set_permissions(
+            &committed,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .expect("owner only");
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_SECRETS_KEY_PATH".to_owned(),
+            committed.to_string_lossy().into_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("keyring in a checkout");
+        assert!(error.to_string().contains("Git work tree"), "{error}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

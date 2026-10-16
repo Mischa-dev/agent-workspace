@@ -270,6 +270,8 @@ not delete either release until the incident is closed.
 
 ## Maintenance and incident diagnostics
 
+- The daily encrypted off-host backup, the separate secrets-key backup, and
+  the restore drill are in `docs/operations/backups.md`.
 - Backup, validation, clean-location restore, storage reporting, and database
   retention commands are in `tools/host-maintenance/README.md`.
 - Run retention without `--apply` first. The explicit apply path returns only
