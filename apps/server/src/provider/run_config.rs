@@ -136,6 +136,16 @@ impl RunConfig {
             }
         };
         let model_id = model.map(|model| model.id.clone());
+        // Reasoning and speed can only be checked against a known model;
+        // until the catalog has one, launches may not name them.
+        if model.is_none() {
+            if self.reasoning.is_some() {
+                return Err(InvalidRunConfig("reasoning"));
+            }
+            if self.speed.is_some() {
+                return Err(InvalidRunConfig("speed"));
+            }
+        }
         // Account defaults for reasoning and speed only apply when the model
         // they were chosen for is still the one in use, and only while that
         // model still offers them; otherwise the model's own default is used.
@@ -152,7 +162,7 @@ impl RunConfig {
             .clone()
             .or_else(|| {
                 account_default(&account_defaults.reasoning, &|level| {
-                    model.is_none_or(|model| {
+                    model.is_some_and(|model| {
                         model.reasoning_levels.is_empty()
                             || model
                                 .reasoning_levels
@@ -173,7 +183,7 @@ impl RunConfig {
             .clone()
             .or_else(|| {
                 account_default(&account_defaults.speed, &|speed| {
-                    model.is_none_or(|model| model.speeds.iter().any(|option| option.id == speed))
+                    model.is_some_and(|model| model.speeds.iter().any(|option| option.id == speed))
                 })
             })
             .or_else(|| model.and_then(|model| model.default_speed.clone()));
@@ -415,6 +425,35 @@ mod tests {
                 .is_ok_and(|config| config.model.is_none()),
             "an account default the catalog doesn't list falls back"
         );
+        // Reasoning and speed can't be checked without a model, so a launch
+        // may not name them and account choices wait for the catalog.
+        for (launch, field) in [
+            (
+                RunConfig {
+                    reasoning: Some("typo".to_owned()),
+                    ..RunConfig::default()
+                },
+                "reasoning",
+            ),
+            (
+                RunConfig {
+                    speed: Some("typo".to_owned()),
+                    ..RunConfig::default()
+                },
+                "speed",
+            ),
+        ] {
+            assert_eq!(
+                launch.resolve(&RunConfig::default(), &manifest, &[]),
+                Err(InvalidRunConfig(field))
+            );
+            assert!(
+                RunConfig::default()
+                    .resolve(&launch, &manifest, &[])
+                    .is_ok_and(|config| config.reasoning.is_none() && config.speed.is_none()),
+                "account {field} is not used before the catalog lists a model"
+            );
+        }
         assert!(
             RunConfig::default()
                 .resolve(&RunConfig::default(), &manifest, &[])

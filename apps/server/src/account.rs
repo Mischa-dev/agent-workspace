@@ -628,10 +628,32 @@ async fn use_account(
     ApiJson(_request): ApiJson<EmptyRequest>,
 ) -> Result<Json<ProviderAccountView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    IdempotencyKey::from_headers(&headers)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    // The project is part of the request, so reusing a key for another
+    // project is refused rather than replayed.
+    let request_hash = RequestHash::for_value(&serde_json::json!({ "projectId": project_id }))?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
     let project = require_project_manager(&state, &principal, project_id).await?;
+    let scope = idempotency::resource_bound_scope("provider_account", account_id, "use")?;
     let mut transaction = state.pool.begin().await?;
+    let reservation = match idempotency::reserve(
+        &mut transaction,
+        principal.actor_id,
+        &scope,
+        &idempotency_key,
+        request_hash,
+    )
+    .await?
+    {
+        IdempotencyOutcome::Replay(replay) => {
+            replay.decode::<AccountCommandReference>()?;
+            transaction.commit().await?;
+            return Ok(Json(
+                fetch_account_view(&state, project_id, account_id).await?,
+            ));
+        }
+        IdempotencyOutcome::Reserved(reservation) => reservation,
+    };
     use_account_in_project(
         &state,
         &mut transaction,
@@ -639,6 +661,13 @@ async fn use_account(
         principal.actor_id,
         &project.handle,
         &access,
+    )
+    .await?;
+    idempotency::complete(
+        &mut transaction,
+        &reservation,
+        StatusCode::OK,
+        &AccountCommandReference { account_id },
     )
     .await?;
     transaction.commit().await?;

@@ -459,6 +459,19 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     .await;
     assert!(second_used.0.is_success(), "use second: {}", second_used.1);
     assert_ne!(uuid_field(&second_used.2, "profileId"), profile_id);
+    // Retrying the first selection replays it instead of taking the
+    // preference back from the second account.
+    let retried = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{account}/use"),
+        "use-demo",
+        json!({}),
+    )
+    .await;
+    assert!(retried.0.is_success(), "retry use: {}", retried.1);
+    assert_eq!(retried.2["preferred"], false);
 
     // Managers see a teammate's profile but not the private account behind it.
     sqlx::query("UPDATE project_memberships SET role = 'admin' WHERE handle = 'w2-member'")
