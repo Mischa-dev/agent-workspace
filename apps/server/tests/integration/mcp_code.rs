@@ -18,7 +18,8 @@ use uuid::Uuid;
 
 use super::{
     agent_interface::{
-        PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send, test_app, tool,
+        Browser, PASSWORD, connect_app, create_agent, initialize, login, schema_pool, send,
+        test_app, tool,
     },
     mcp_admin::{Setup, create_project, setup},
     mcp_task_board::seed_pull_request,
@@ -98,7 +99,16 @@ async fn seeded_through(prefix: &str, version: i64) -> Option<(Setup, DevSeed, t
     .await
     .expect("authenticate profile");
     let app = test_app(pool.clone(), &database_url);
-    let browser = login(&app).await;
+    // Signing in needs the current schema (sessions, two-factor), so a
+    // database held at an older migration gets no browser session.
+    let browser = if version == i64::MAX {
+        login(&app).await
+    } else {
+        Browser {
+            cookie: String::new(),
+            csrf: String::new(),
+        }
+    };
     Some((
         Setup {
             app,
