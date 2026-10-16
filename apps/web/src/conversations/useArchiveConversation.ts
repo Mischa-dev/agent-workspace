@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { archiveConversation, conversationVersionFrom, restoreConversation } from './api'
+import type { ProjectConversationSidebar } from './types'
 
 /**
  * Archive a channel or thread, leave it, and offer Undo, which restores it
@@ -37,6 +38,14 @@ export function useArchiveConversation({
     mutationFn: (expectedVersion: number) => archiveConversation({ conversationId, kind, expectedVersion }),
     errorTitle: `Couldn’t archive ${label}`,
     onSuccess: () => {
+      if (kind === 'channel') {
+        // Drop the archived channel from every cached sidebar now, so the
+        // list stays put (minus this channel) while it refetches.
+        queryClient.setQueriesData<ProjectConversationSidebar>(
+          { queryKey: queryKeys.conversationSidebarRoot(projectId) },
+          (data) => data && { ...data, channels: data.channels.filter((channel) => channel.id !== conversationId) },
+        )
+      }
       refresh()
       navigate(leaveTo, { replace: true })
     },
