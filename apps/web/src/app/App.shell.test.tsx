@@ -38,14 +38,13 @@ describe('App shell and Project navigation', () => {
         name: 'Agent Workspace, 3 items need attention',
       }),
     ).toBeVisible()
-    const searchButton = screen.getByRole('button', { name: 'Search Projects' })
+    const searchButton = screen.getByRole('button', { name: 'Search and commands' })
     fireEvent.click(searchButton)
-    const search = screen.getByRole('searchbox', { name: 'Search Projects' })
+    const search = screen.getByRole('combobox', { name: 'Command menu' })
     expect(search).toHaveFocus()
-    expect(search.closest('label')).toHaveClass('aw-switcher__search')
     fireEvent.change(search, { target: { value: 'beta' } })
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByRole('link', { name: /Beta Project/ })).toBeVisible()
+    expect(within(dialog).getByRole('option', { name: /^Beta Project/ })).toBeVisible()
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(searchButton).toHaveFocus())
 

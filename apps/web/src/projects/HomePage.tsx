@@ -6,7 +6,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import { Badge, Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, PageHeader, Row, RowList, Section, relativeDay } from '../ui'
 import { useProjects, useSwitchProject } from './hooks'
-import { ProjectInitials } from './ProjectSwitcher'
+import { ProjectInitials } from './ProjectInitials'
 import type { Project } from './types'
 
 function openedLabel(iso: string | null) {
