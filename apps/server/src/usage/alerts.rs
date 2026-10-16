@@ -276,24 +276,24 @@ pub fn candidates(
                     window: Some(window.clone()),
                 });
             }
-        } else if let (Some(view), Some(used)) = (rule(Rule::HighUsage), window.used_percent) {
-            if i16::try_from(used).unwrap_or(100) >= view.percent.unwrap_or(90) {
-                let title = match resets {
-                    Some(at) => format!(
-                        "{phrase} is {used}% used · resets in {}",
-                        countdown(now, at)
-                    ),
-                    None => format!("{phrase} is {used}% used"),
-                };
-                found.push(Candidate {
-                    rule: Rule::HighUsage,
-                    kind: kind::HIGH_USAGE,
-                    subject_key: window.key.clone(),
-                    cycle_at: window.resets_at,
-                    title,
-                    window: Some(window.clone()),
-                });
-            }
+        } else if let (Some(view), Some(used)) = (rule(Rule::HighUsage), window.used_percent)
+            && i16::try_from(used).unwrap_or(100) >= view.percent.unwrap_or(90)
+        {
+            let title = match resets {
+                Some(at) => format!(
+                    "{phrase} is {used}% used · resets in {}",
+                    countdown(now, at)
+                ),
+                None => format!("{phrase} is {used}% used"),
+            };
+            found.push(Candidate {
+                rule: Rule::HighUsage,
+                kind: kind::HIGH_USAGE,
+                subject_key: window.key.clone(),
+                cycle_at: window.resets_at,
+                title,
+                window: Some(window.clone()),
+            });
         }
     }
     if let Some(view) = rule(Rule::ResetCredits) {
@@ -406,7 +406,7 @@ pub async fn evaluate(
         .await?;
         let preview = if candidate.rule == Rule::ResetSoon {
             let ready = ready::ready_tasks(
-                &mut *transaction,
+                &mut transaction,
                 account.owner_actor_id,
                 account.id,
                 Some(100),
