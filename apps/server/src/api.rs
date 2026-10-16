@@ -1,5 +1,3 @@
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
-
 use axum::{
     Json, Router,
     extract::State,
@@ -25,6 +23,7 @@ use crate::{
         Action, ActorKind, ApprovalEligibility, ApprovalRequirements, Decision, Membership,
         MembershipRole, ProjectScope, Resource, Subject, authorize,
     },
+    provider::run_config::RunConfig,
 };
 
 const ANY_AUTHORIZED_APPROVER: &str = "any_authorized";
@@ -150,6 +149,11 @@ struct ConversationRow {
 pub(crate) struct StartRunRequest {
     pub(crate) prompt: String,
     pub(crate) repository_id: Option<Uuid>,
+    /// Launch overrides for this run (harness, model, reasoning, speed, ...).
+    /// Whatever is left out comes from the account's defaults and the
+    /// harness's catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) config: Option<RunConfig>,
 }
 
 #[derive(Debug, FromRow)]
@@ -157,6 +161,9 @@ pub(crate) struct RunSetup {
     pub(crate) repository_id: Uuid,
     pub(crate) execution_worker_id: Uuid,
     pub(crate) execution_profile_id: Uuid,
+    pub(crate) organization_id: Uuid,
+    pub(crate) adapter_kind: String,
+    pub(crate) run_defaults: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -288,12 +295,22 @@ pub(crate) async fn start_run_in(
         ));
     }
 
-    let setup = select_run_setup(
+    let launch = request.config.clone().unwrap_or_default();
+    let setup = select_run_setup_for(
         &mut transaction,
         conversation.project_id,
         conversation_id,
         principal.actor_id(),
         request.repository_id,
+        launch.harness.as_deref(),
+    )
+    .await?;
+    let config = crate::provider::resolve_run_config(
+        state,
+        setup.organization_id,
+        &setup.adapter_kind,
+        &setup.run_defaults,
+        &launch,
     )
     .await?;
     let bound = sqlx::query(
@@ -352,9 +369,9 @@ pub(crate) async fn start_run_in(
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, state, prompt,
-            authorization_snapshot, prompt_message_id
+            authorization_snapshot, prompt_message_id, config
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10)
         "#,
     )
     .bind(run_id)
@@ -370,6 +387,7 @@ pub(crate) async fn start_run_in(
         "scope": ["repository.read", "repository.write", "provider.turn"]
     }))
     .bind(prompt_message_id)
+    .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
@@ -474,10 +492,10 @@ async fn retry_agent_run(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let (repository_id, prompt, predecessor_state, prompt_message_id) =
-        sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>)>(
+    let (repository_id, prompt, predecessor_state, prompt_message_id, predecessor_config) =
+        sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, serde_json::Value)>(
             r#"
-            SELECT repository_id, prompt, state, prompt_message_id
+            SELECT repository_id, prompt, state, prompt_message_id, config
               FROM agent_runs
              WHERE id = $1 AND conversation_id = $2 AND project_id = $3
              FOR UPDATE
@@ -529,23 +547,48 @@ async fn retry_agent_run(
             "Thread already has an active run",
         ));
     }
-    let setup = select_run_setup(
+    // A retry asks for the same settings again; whatever the account or the
+    // catalog no longer offers falls back to their current defaults.
+    let predecessor_config = RunConfig::from_value(&predecessor_config);
+    let setup = select_run_setup_for(
         &mut transaction,
         conversation.project_id,
         conversation_id,
         principal.actor_id,
         Some(repository_id),
+        predecessor_config.harness.as_deref(),
     )
     .await?;
+    let config = match crate::provider::resolve_run_config(
+        &state,
+        setup.organization_id,
+        &setup.adapter_kind,
+        &setup.run_defaults,
+        &predecessor_config,
+    )
+    .await
+    {
+        Ok(config) => config,
+        Err(_) => {
+            crate::provider::resolve_run_config(
+                &state,
+                setup.organization_id,
+                &setup.adapter_kind,
+                &setup.run_defaults,
+                &RunConfig::default(),
+            )
+            .await?
+        }
+    };
     let run_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO agent_runs (
             id, conversation_id, execution_worker_id, requesting_actor_id,
             execution_profile_id, repository_id, predecessor_run_id,
-            state, prompt, authorization_snapshot, prompt_message_id
+            state, prompt, authorization_snapshot, prompt_message_id, config
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'created', $8, $9, $10, $11)
         "#,
     )
     .bind(run_id)
@@ -563,6 +606,7 @@ async fn retry_agent_run(
         "retry_of": predecessor_run_id
     }))
     .bind(prompt_message_id)
+    .bind(serde_json::to_value(&config).map_err(|_| AppError::Internal("serialize run settings"))?)
     .execute(&mut *transaction)
     .await?;
     transition_run(&mut transaction, run_id, RunState::Queued, None).await?;
@@ -744,6 +788,27 @@ pub(crate) async fn select_run_setup(
     profile_owner_actor_id: Uuid,
     explicit_repository_id: Option<Uuid>,
 ) -> Result<RunSetup, AppError> {
+    select_run_setup_for(
+        transaction,
+        project_id,
+        conversation_id,
+        profile_owner_actor_id,
+        explicit_repository_id,
+        None,
+    )
+    .await
+}
+
+/// `select_run_setup` limited to profiles on one harness when `harness` is
+/// set. Among the owner's signed-in profiles the preferred one comes first.
+pub(crate) async fn select_run_setup_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    profile_owner_actor_id: Uuid,
+    explicit_repository_id: Option<Uuid>,
+    harness: Option<&str>,
+) -> Result<RunSetup, AppError> {
     let bound_repository_id = sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT repository_id FROM conversations WHERE id = $1 AND project_id = $2 FOR UPDATE",
     )
@@ -819,7 +884,10 @@ pub(crate) async fn select_run_setup(
         r#"
         SELECT r.id AS repository_id,
                ew.id AS execution_worker_id,
-               profile.id AS execution_profile_id
+               profile.id AS execution_profile_id,
+               account.organization_id,
+               account.adapter_kind,
+               account.run_defaults
         FROM repositories r
         JOIN execution_workers ew
           ON ew.project_id = r.project_id AND ew.enabled
@@ -838,10 +906,16 @@ pub(crate) async fn select_run_setup(
          AND connection.enabled
         JOIN execution_profiles profile
           ON profile.project_id = ew.project_id
-         AND profile.provider_connection_id = connection.id
          AND profile.owner_actor_id = $3
          AND profile.status = 'available'
          AND profile.account_state = 'authenticated'
+        JOIN provider_connections profile_connection
+          ON profile_connection.id = profile.provider_connection_id
+         AND profile_connection.project_id = profile.project_id
+         AND profile_connection.enabled
+        JOIN provider_accounts account
+          ON account.id = profile.provider_account_id
+         AND ($4::text IS NULL OR account.adapter_kind = $4)
         JOIN project_memberships owner_membership
           ON owner_membership.project_id = profile.project_id
          AND owner_membership.actor_id = profile.owner_actor_id
@@ -852,13 +926,15 @@ pub(crate) async fn select_run_setup(
         WHERE r.project_id = $1 AND r.id = $2
           AND r.enabled AND r.trusted AND r.archived_at IS NULL
           AND r.preparation_state = 'ready'
-        ORDER BY ew.created_at, ew.id, profile.created_at, profile.id
+        ORDER BY ew.created_at, ew.id, profile.preferred DESC,
+                 profile.created_at, profile.id
         LIMIT 1
         "#,
     )
     .bind(project_id)
     .bind(selected_repository_id)
     .bind(profile_owner_actor_id)
+    .bind(harness)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::ExecutionProfileRequired)
@@ -1677,183 +1753,9 @@ async fn respond_to_approval(
     )
     .await?;
     transaction.commit().await?;
-    if approved && state.config.demo_executor {
-        let background_state = state.clone();
-        tokio::spawn(async move {
-            if let Err(error) =
-                complete_demo_run(background_state, context.run_id, context.conversation_id).await
-            {
-                tracing::error!(
-                    error_category = error.log_category(),
-                    run_id = %context.run_id,
-                    "development run completion failed"
-                );
-            }
-        });
-    }
     fetch_approval(&state, approval_id, context.project_id)
         .await
         .map(Json)
-}
-
-async fn complete_demo_run(
-    state: AppState,
-    run_id: Uuid,
-    conversation_id: Uuid,
-) -> Result<(), AppError> {
-    #[derive(FromRow)]
-    struct DemoRunContext {
-        project_id: Uuid,
-        worktree_path: String,
-    }
-
-    let context = sqlx::query_as::<_, DemoRunContext>(
-        r#"
-        SELECT c.project_id, gw.path AS worktree_path
-        FROM agent_runs ar
-        JOIN conversations c
-          ON c.id = ar.conversation_id
-         AND c.id = $2
-        JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
-        JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
-        WHERE ar.id = $1 AND gw.state = 'ready'
-        "#,
-    )
-    .bind(run_id)
-    .bind(conversation_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::Conflict(
-        "git_worktree",
-        "ready worktree not found",
-    ))?;
-    let worktree_path = context.worktree_path;
-
-    let proof_worktree_path = worktree_path.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        let known_file = PathBuf::from(proof_worktree_path).join("KNOWN_FILE.txt");
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(known_file)
-            .map_err(|_| AppError::Internal("open known proof file"))?;
-        writeln!(file, "M0 walking skeleton browser proof.")
-            .map_err(|_| AppError::Internal("write known proof file"))
-    })
-    .await
-    .map_err(|_| AppError::Internal("join proof write task"))??;
-
-    let dirty = tokio::task::spawn_blocking(move || {
-        crate::git_runtime::worktree_is_dirty(PathBuf::from(worktree_path).as_path())
-    })
-    .await
-    .map_err(|_| AppError::Internal("join worktree inspection task"))??;
-
-    let worker_actor_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT ew.actor_id FROM agent_runs ar JOIN execution_workers ew ON ew.id = ar.execution_worker_id WHERE ar.id = $1",
-    )
-    .bind(run_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let mut transaction = state.pool.begin().await?;
-    let file_event = insert_significant_event(
-        &mut transaction,
-        run_id,
-        "file_change",
-        "Updated KNOWN_FILE.txt in the isolated worktree.",
-        serde_json::json!({"path": "KNOWN_FILE.txt", "operation": "modified"}),
-    )
-    .await?;
-    insert_event_entry(&mut transaction, conversation_id, file_event).await?;
-    sqlx::query(
-        r#"
-        UPDATE git_worktrees gw
-        SET state = CASE WHEN $2 THEN 'dirty' ELSE 'ready' END,
-            dirty = $2,
-            last_inspected_at = now(),
-            updated_at = now()
-        FROM repository_workspaces rw, agent_runs ar
-        WHERE ar.id = $1
-          AND rw.id = ar.repository_workspace_id
-          AND gw.repository_workspace_id = rw.id
-        "#,
-    )
-    .bind(run_id)
-    .bind(dirty)
-    .execute(&mut *transaction)
-    .await?;
-
-    let message_id = Uuid::now_v7();
-    let (message_content, message_text, message_mentions) = MessageContent::from_plain_text(
-        "The development walking skeleton completed its isolated file change and preserved the worktree.",
-    )
-    .map_err(|_| AppError::Internal("validate development Worker Message"))?
-    .into_parts();
-    debug_assert!(message_mentions.is_empty());
-    let message_content = serde_json::to_value(message_content)
-        .map_err(|_| AppError::Internal("serialize development Worker Message"))?;
-    sqlx::query(
-        r#"
-        INSERT INTO messages (
-            id, project_id, conversation_id, author_actor_id,
-            content_version, content, plain_text, agent_run_id
-        )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
-        "#,
-    )
-    .bind(message_id)
-    .bind(context.project_id)
-    .bind(conversation_id)
-    .bind(worker_actor_id)
-    .bind(message_content)
-    .bind(&message_text)
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await?;
-    let message_sequence =
-        allocate_conversation_sequence(&mut transaction, conversation_id).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO conversation_entries (
-            id, conversation_id, sequence, kind, message_id
-        )
-        VALUES ($1, $2, $3, 'message', $4)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(conversation_id)
-    .bind(message_sequence)
-    .bind(message_id)
-    .execute(&mut *transaction)
-    .await?;
-    transition_run(&mut transaction, run_id, RunState::Completed, None).await?;
-    retain_run_workspace(&mut transaction, run_id).await?;
-    let completed_event = insert_significant_event(
-        &mut transaction,
-        run_id,
-        "run_completed",
-        "The run completed successfully.",
-        serde_json::json!({}),
-    )
-    .await?;
-    insert_event_entry(&mut transaction, conversation_id, completed_event).await?;
-    outbox::enqueue_message_created(
-        &mut transaction,
-        context.project_id,
-        conversation_id,
-        message_id,
-        message_sequence,
-        worker_actor_id,
-    )
-    .await?;
-    outbox::enqueue_agent_run_updated(
-        &mut transaction,
-        context.project_id,
-        conversation_id,
-        run_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(())
 }
 
 async fn interrupt_agent_run(
@@ -2094,6 +1996,7 @@ async fn fetch_run(state: &AppState, run_id: Uuid, project_id: Uuid) -> Result<R
             ar.provider_session_id,
             ar.provider_turn_id,
             workspace.branch_name AS branch,
+            ar.config,
             workspace.base_commit,
             workspace.published_commit,
             workspace.published_at::text AS published_at,

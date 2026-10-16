@@ -1,6 +1,6 @@
 //! What the run, approval and GitHub job cores share between the browser and
 //! MCP (docs/plans/mcp-tools.md, Phase 4): who is calling, the run states
-//! that count as active, and the per-person cap on Codex runs started
+//! that count as active, and the per-person cap on agent runs started
 //! through MCP.
 //!
 //! Whoever calls, the cores bind the execution profile to the caller (or the
@@ -18,7 +18,7 @@ use crate::{
     work_item_commands::{AuditAttribution, CommandActor},
 };
 
-/// Run states that hold (or wait for) Codex time. One list for starting a
+/// Run states that hold (or wait for) harness time. One list for starting a
 /// run, the cap, archiving a project, repository counts and run_list's
 /// "active" filter. It matches `RunState::is_terminal` being false.
 pub const ACTIVE_RUN_STATES: [&str; 6] = [
@@ -110,7 +110,7 @@ fn actor_kind(value: &str) -> Result<ActorKind, AppError> {
 
 /// The person's active runs, counted under a lock that lasts until the
 /// transaction ends, so two calls at the cap can't both start one. A run
-/// counts against whoever's Codex account it uses: the sponsor of an
+/// counts against whoever's provider account it uses: the sponsor of an
 /// approved run request, otherwise the person who started it.
 #[derive(Clone, Debug)]
 pub struct RunCapStatus {

@@ -482,6 +482,9 @@ pub(crate) struct RunRow {
     pub(crate) pull_request_automation_reason: Option<String>,
     pub(crate) queue_position: Option<i64>,
     pub(crate) failure_reason: Option<String>,
+    /// The run's frozen settings: harness, model, reasoning, speed and so on.
+    #[sqlx(default)]
+    pub(crate) config: serde_json::Value,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -3824,6 +3827,7 @@ async fn fetch_run_projection(
             run.id, run.state, run.repository_id, run.repository_workspace_id,
             run.provider_session_id, run.provider_turn_id,
             workspace.branch_name AS branch,
+            run.config,
             workspace.base_commit,
             workspace.published_commit,
             workspace.published_at::text AS published_at,
@@ -3873,6 +3877,7 @@ async fn fetch_run_projection(
             run.id, run.state, run.repository_id, run.repository_workspace_id,
             run.provider_session_id, run.provider_turn_id,
             workspace.branch_name AS branch,
+            run.config,
             workspace.base_commit,
             workspace.published_commit,
             workspace.published_at::text AS published_at,

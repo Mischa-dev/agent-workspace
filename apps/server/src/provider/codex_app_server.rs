@@ -1,48 +1,150 @@
+//! The Codex App Server adapter. Everything Codex-specific (its JSON-RPC
+//! methods and payloads, its process and CODEX_HOME) stays in this module.
+//!
+//! Each account gets a small pool of `codex app-server` processes sharing its
+//! private home. A run holds one process for its whole turn, so an account
+//! can run as many turns at once as its limit allows (H8). Account pages and
+//! model listing borrow an idle process, or start one that never counts
+//! against run capacity, and idle processes are shut down after a while, so
+//! looking at accounts can never block a run (F8).
+
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use codex_bridge_spike::{BridgeConfig, BridgeError, CodexBridge};
-use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 use tokio::{
-    sync::{Mutex, Notify, OwnedMutexGuard},
+    sync::{Mutex, OwnedMutexGuard},
     time::{sleep, timeout},
 };
 use uuid::Uuid;
 
+use super::{
+    adapter::{
+        AccountHandle, AccountSummary, HarnessAdapter, HarnessAnswer, HarnessError, HarnessEvent,
+        HarnessFuture, HarnessItem, HarnessRequest, HarnessSession, ItemKind, LoginKind,
+        LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, RecoveredTurn, RequestKind,
+        RequestOption,
+    },
+    manifest::{
+        AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
+        RunOptionSupport, SpeedOption, VersionRange,
+    },
+    registry::ShutdownSignal,
+    run_config::RunConfig,
+};
 use crate::{config::AppConfig, git_runtime::absolute_runtime_path};
 
+pub const CODEX_KIND: &str = "codex_app_server";
+/// The speed that sends no service tier.
+const STANDARD_SPEED: &str = "standard";
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 const CIRCUIT_OPEN_DURATION: Duration = Duration::from_secs(30);
 const MAX_RESTART_BACKOFF: Duration = Duration::from_secs(5);
+/// An unused process is shut down after this long.
+const IDLE_PROCESS_TTL: Duration = Duration::from_secs(120);
+/// Processes not running a turn (idle, or serving an account page) on top
+/// of the host run limit.
+const MAX_IDLE_PROCESSES: usize = 4;
+/// A process that started a browser or device sign-in stays up this long so
+/// the sign-in can finish.
+const LOGIN_PIN: Duration = Duration::from_secs(10 * 60);
+const MAX_MODEL_PAGES: usize = 5;
 
-#[derive(Clone)]
-pub struct SupervisorRegistry {
-    inner: Arc<RegistryInner>,
+pub fn codex_manifest() -> AdapterManifest {
+    AdapterManifest {
+        kind: CODEX_KIND.to_owned(),
+        display_name: "Codex".to_owned(),
+        description:
+            "OpenAI Codex through its App Server, running in an isolated worktree on this host."
+                .to_owned(),
+        versions: VersionRange {
+            minimum: "0.146.0".to_owned(),
+            below: Some("1.0.0".to_owned()),
+        },
+        branch_prefix: "codex/run-".to_owned(),
+        runs_on: RunLocation::LocalHost,
+        features: AdapterFeatures {
+            streaming: true,
+            commands: true,
+            file_changes: true,
+            approvals: true,
+            questions: true,
+            resume: true,
+            interrupt: true,
+            cloud: false,
+            multiple_attempts: false,
+            concurrent_runs: true,
+            model_listing: true,
+            pull_request_creation: false,
+        },
+        concurrency: ConcurrencyLimits {
+            default_per_account: 2,
+            max_per_account: 4,
+        },
+        login_methods: vec![
+            LoginMethod {
+                kind: LoginKind::Browser,
+                label: "Sign in with ChatGPT".to_owned(),
+            },
+            LoginMethod {
+                kind: LoginKind::DeviceCode,
+                label: "Use a device code".to_owned(),
+            },
+            LoginMethod {
+                kind: LoginKind::ApiKey,
+                label: "OpenAI API key".to_owned(),
+            },
+        ],
+        run_options: RunOptionSupport {
+            sandbox_modes: vec!["workspace_write".to_owned(), "read_only".to_owned()],
+            approval_policies: vec!["on_request".to_owned(), "untrusted".to_owned()],
+            max_attempts: 1,
+        },
+        options_schema: json!({
+            "type": "object",
+            "properties": {
+                "reasoningSummary": {
+                    "type": "string",
+                    "title": "Reasoning summary",
+                    "enum": ["auto", "concise", "detailed", "none"]
+                }
+            },
+            "additionalProperties": false
+        }),
+        default_models: Vec::new(),
+    }
 }
 
-struct RegistryInner {
+pub struct CodexAdapter {
+    pool: Arc<Pool>,
+    manifest: AdapterManifest,
+}
+
+struct Pool {
     config: SupervisorConfig,
-    profiles: Mutex<HashMap<Uuid, Arc<ProfileSupervisor>>>,
-    shutting_down: AtomicBool,
-    shutdown: Notify,
-    ceremonies: Mutex<HashMap<Uuid, LoginCeremony>>,
+    shutdown: Arc<ShutdownSignal>,
+    accounts: StdMutex<HashMap<Uuid, Arc<AccountProcesses>>>,
+    running: AtomicUsize,
 }
 
 #[derive(Clone)]
 struct SupervisorConfig {
     codex_binary: PathBuf,
     neutral_cwd: PathBuf,
-    max_profiles: usize,
+    host_run_limit: usize,
+    max_idle_processes: usize,
+    idle_ttl: Duration,
     max_line_bytes: usize,
     max_stderr_bytes: usize,
     max_buffered_events: usize,
@@ -50,12 +152,17 @@ struct SupervisorConfig {
     shutdown_timeout: Duration,
 }
 
-struct ProfileSupervisor {
-    profile_id: Uuid,
-    codex_home: PathBuf,
-    config: SupervisorConfig,
+struct AccountProcesses {
+    home: PathBuf,
+    stopping: Arc<AtomicBool>,
+    slots: StdMutex<Vec<Arc<Slot>>>,
+}
+
+struct Slot {
     state: Arc<Mutex<SupervisorState>>,
-    stopping: AtomicBool,
+    run_leased: AtomicBool,
+    last_released: StdMutex<Instant>,
+    pinned_until: StdMutex<Option<Instant>>,
 }
 
 struct SupervisorState {
@@ -66,733 +173,379 @@ struct SupervisorState {
     process_starts: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProfileHealth {
-    pub process_running: bool,
-    pub consecutive_failures: u32,
-    pub circuit_open: bool,
-    pub process_starts: u64,
-}
-
-#[derive(Debug, Error)]
-pub enum SupervisorError {
-    #[error("the Codex host concurrency limit is reached")]
-    HostCapacity,
-    #[error("the Codex supervisor is shutting down")]
-    ShuttingDown,
-    #[error("the Codex profile circuit is temporarily open")]
-    CircuitOpen,
-    #[error("the Codex profile configuration changed while its supervisor was active")]
-    ProfileConfigurationChanged,
-    #[error("the Codex App Server transport failed")]
-    Transport(#[source] BridgeError),
-    #[error("the Codex App Server response omitted {0}")]
-    MissingResult(&'static str),
-    #[error("the Codex App Server returned an invalid account response")]
-    InvalidAccountResponse,
-    #[error("the Codex supervisor configuration is invalid")]
-    InvalidConfiguration,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ItemKind {
-    CommandExecution,
-    FileChange,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ApprovalKind {
-    Approval,
-    Question,
-    Unsupported,
-}
-
-#[derive(Debug)]
-pub struct ProviderRequest {
-    id: Value,
-    pub kind: ApprovalKind,
-    question_ids: Vec<String>,
-    summary: String,
-    options: Vec<ProviderQuestionOption>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ProviderQuestionOption {
-    id: String,
-    label: String,
-}
-
-#[derive(Debug)]
-pub struct ProviderItemEvent {
-    pub key: String,
-    pub kind: ItemKind,
-}
-
-#[derive(Debug)]
-pub enum ProviderAnswer {
-    Approve,
-    Deny,
-    Text(String),
-}
-
-impl ProviderRequest {
-    pub fn durable_id(&self) -> String {
-        bounded_provider_identity("request", &self.id)
-    }
-
-    pub fn summary(&self) -> &str {
-        &self.summary
-    }
-
-    pub fn public_options(&self) -> Value {
-        serde_json::to_value(&self.options).unwrap_or_else(|_| json!([]))
+impl SupervisorState {
+    fn new() -> Self {
+        Self {
+            bridge: None,
+            consecutive_failures: 0,
+            last_failure_at: None,
+            circuit_open_until: None,
+            process_starts: 0,
+        }
     }
 }
 
-#[derive(Debug)]
-pub enum ProviderEvent {
-    AgentMessageDelta(String),
-    ItemStarted(ProviderItemEvent),
-    ItemCompleted(ProviderItemEvent),
-    TurnCompleted { completed: bool },
-    Request(ProviderRequest),
-    Error,
-    Ignored,
+impl Slot {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Arc::new(Mutex::new(SupervisorState::new())),
+            run_leased: AtomicBool::new(false),
+            last_released: StdMutex::new(Instant::now()),
+            pinned_until: StdMutex::new(None),
+        })
+    }
+
+    fn pinned(&self, now: Instant) -> bool {
+        lock(&self.pinned_until).is_some_and(|until| until > now)
+    }
+
+    fn idle_expired(&self, now: Instant, ttl: Duration) -> bool {
+        !self.pinned(now) && now.saturating_duration_since(*lock(&self.last_released)) >= ttl
+    }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveredTurn {
-    pub id: Option<String>,
-    pub status: String,
-    pub final_message: Option<String>,
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Purpose {
+    Run,
+    Control,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccountSummary {
-    pub authenticated: bool,
-    pub account_type: Option<String>,
-    pub email: Option<String>,
-}
-
-#[derive(Clone, Eq, PartialEq)]
-pub enum LoginStart {
-    Browser {
-        login_id: String,
-        auth_url: String,
-    },
-    DeviceCode {
-        login_id: String,
-        verification_url: String,
-        user_code: String,
-    },
-    ApiKey,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RateLimitWindow {
-    pub used_percent: u16,
-    pub resets_at: Option<i64>,
-    pub window_duration_minutes: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RateLimitSummary {
-    pub primary: Option<RateLimitWindow>,
-    pub secondary: Option<RateLimitWindow>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LoginKind {
-    Browser,
-    DeviceCode,
-    ApiKey,
-}
-
-#[derive(Clone)]
-pub struct LoginCeremonySnapshot {
-    pub ceremony_id: Uuid,
-    pub kind: LoginKind,
-    pub response: Option<LoginStart>,
-    pub expires_at_unix_seconds: u64,
-}
-
-pub enum LoginReservation {
-    Reserved(Uuid),
-    Replay(LoginCeremonySnapshot),
-}
-
-#[derive(Debug, Error)]
-pub enum LoginCeremonyError {
-    #[error("another login ceremony is active for this Execution Profile")]
-    Active,
-    #[error("the host login ceremony limit is reached")]
-    Capacity,
-    #[error("the login ceremony is not available to this session")]
-    NotFound,
-}
-
-struct LoginCeremony {
-    ceremony_id: Uuid,
-    actor_id: Uuid,
-    session_id: Uuid,
-    idempotency_key: String,
-    kind: LoginKind,
-    response: Option<LoginStart>,
-    expires_at: Instant,
-    expires_at_unix_seconds: u64,
-}
-
-pub struct ProfileLease {
-    supervisor: Arc<ProfileSupervisor>,
-    guard: OwnedMutexGuard<SupervisorState>,
-}
-
-impl SupervisorRegistry {
-    pub fn new(config: &AppConfig) -> Result<Self, SupervisorError> {
+impl CodexAdapter {
+    pub fn new(config: &AppConfig, shutdown: Arc<ShutdownSignal>) -> Result<Self, HarnessError> {
         let codex_binary = absolute_runtime_path(&config.codex_binary)
-            .map_err(|_| SupervisorError::InvalidConfiguration)?;
+            .map_err(|_| HarnessError::InvalidConfiguration)?;
         let neutral_cwd = absolute_runtime_path(&config.data_root)
-            .map_err(|_| SupervisorError::InvalidConfiguration)?;
+            .map_err(|_| HarnessError::InvalidConfiguration)?;
         Ok(Self {
-            inner: Arc::new(RegistryInner {
+            pool: Arc::new(Pool {
                 config: SupervisorConfig {
                     codex_binary,
                     neutral_cwd,
-                    max_profiles: config.codex_host_concurrency_limit,
+                    host_run_limit: config.codex_host_concurrency_limit,
+                    max_idle_processes: MAX_IDLE_PROCESSES,
+                    idle_ttl: IDLE_PROCESS_TTL,
                     max_line_bytes: config.codex_max_line_bytes,
                     max_stderr_bytes: config.codex_max_stderr_bytes,
                     max_buffered_events: config.codex_max_buffered_events,
                     request_timeout: config.codex_request_timeout,
                     shutdown_timeout: config.codex_shutdown_timeout,
                 },
-                profiles: Mutex::new(HashMap::new()),
-                shutting_down: AtomicBool::new(false),
-                shutdown: Notify::new(),
-                ceremonies: Mutex::new(HashMap::new()),
+                shutdown,
+                accounts: StdMutex::new(HashMap::new()),
+                running: AtomicUsize::new(0),
             }),
+            manifest: codex_manifest(),
         })
     }
 
-    pub async fn acquire(
+    #[cfg(test)]
+    fn with_idle_ttl(mut self, idle_ttl: Duration) -> Self {
+        if let Some(pool) = Arc::get_mut(&mut self.pool) {
+            pool.config.idle_ttl = idle_ttl;
+        }
+        self
+    }
+
+    async fn acquire(
         &self,
-        profile_id: Uuid,
-        codex_home: PathBuf,
-    ) -> Result<ProfileLease, SupervisorError> {
-        if self.is_shutting_down() {
-            return Err(SupervisorError::ShuttingDown);
+        account: AccountHandle,
+        purpose: Purpose,
+    ) -> Result<Box<dyn HarnessSession>, HarnessError> {
+        if self.pool.shutdown.is_shutting_down() {
+            return Err(HarnessError::ShuttingDown);
         }
-        let supervisor = {
-            let mut profiles = self.inner.profiles.lock().await;
-            if let Some(existing) = profiles.get(&profile_id) {
-                if existing.stopping.load(Ordering::Acquire) {
-                    return Err(SupervisorError::ShuttingDown);
-                }
-                if existing.codex_home != codex_home {
-                    return Err(SupervisorError::ProfileConfigurationChanged);
-                }
-                Arc::clone(existing)
-            } else {
-                if profiles.len() >= self.inner.config.max_profiles {
-                    return Err(SupervisorError::HostCapacity);
-                }
-                let supervisor = Arc::new(ProfileSupervisor {
-                    profile_id,
-                    codex_home,
-                    config: self.inner.config.clone(),
-                    state: Arc::new(Mutex::new(SupervisorState {
-                        bridge: None,
-                        consecutive_failures: 0,
-                        last_failure_at: None,
-                        circuit_open_until: None,
-                        process_starts: 0,
-                    })),
-                    stopping: AtomicBool::new(false),
-                });
-                profiles.insert(profile_id, Arc::clone(&supervisor));
-                supervisor
-            }
+        let (processes, slot, guard, evicted) = self.pool.select(&account, purpose)?;
+        let mut session = CodexSession {
+            pool: Arc::clone(&self.pool),
+            account_id: account.id,
+            processes,
+            slot,
+            guard,
+            run: purpose == Purpose::Run,
         };
-        let mut guard = Arc::clone(&supervisor.state).lock_owned().await;
-        ensure_started(&supervisor, &mut guard).await?;
-        Ok(ProfileLease { supervisor, guard })
-    }
-
-    pub async fn health(&self, profile_id: Uuid) -> Option<ProfileHealth> {
-        let supervisor = {
-            let profiles = self.inner.profiles.lock().await;
-            profiles.get(&profile_id).cloned()
-        }?;
-        let state = supervisor.state.lock().await;
-        Some(health_snapshot(&state))
-    }
-
-    pub fn is_shutting_down(&self) -> bool {
-        self.inner.shutting_down.load(Ordering::Acquire)
-    }
-
-    pub fn request_shutdown(&self) {
-        self.inner.shutting_down.store(true, Ordering::Release);
-        self.inner.shutdown.notify_waiters();
-    }
-
-    pub async fn shutdown_requested(&self) {
-        if self.is_shutting_down() {
-            return;
+        for mut evicted in evicted {
+            shutdown_bridge(&mut evicted).await;
         }
-        self.inner.shutdown.notified().await;
-    }
-
-    pub async fn shutdown_profile(&self, profile_id: Uuid) {
-        let supervisor = {
-            let profiles = self.inner.profiles.lock().await;
-            profiles.get(&profile_id).cloned()
-        };
-        if let Some(supervisor) = supervisor {
-            supervisor.stopping.store(true, Ordering::Release);
-            let mut state = supervisor.state.lock().await;
-            shutdown_bridge(&mut state).await;
-            drop(state);
-            let mut profiles = self.inner.profiles.lock().await;
-            if profiles
-                .get(&profile_id)
-                .is_some_and(|current| Arc::ptr_eq(current, &supervisor))
-            {
-                profiles.remove(&profile_id);
-            }
-        }
-    }
-
-    pub async fn profile_is_stopping(&self, profile_id: Uuid) -> bool {
-        let supervisor = {
-            let profiles = self.inner.profiles.lock().await;
-            profiles.get(&profile_id).cloned()
-        };
-        let Some(supervisor) = supervisor else {
-            return true;
-        };
-        supervisor.stopping.load(Ordering::Acquire)
-    }
-
-    pub async fn shutdown_all(&self) {
-        self.request_shutdown();
-        let supervisors = {
-            let profiles = self.inner.profiles.lock().await;
-            profiles.values().cloned().collect::<Vec<_>>()
-        };
-        for supervisor in &supervisors {
-            supervisor.stopping.store(true, Ordering::Release);
-        }
-        for supervisor in supervisors {
-            if let Ok(mut state) = timeout(
-                supervisor.config.shutdown_timeout + Duration::from_secs(1),
-                supervisor.state.lock(),
-            )
-            .await
-            {
-                shutdown_bridge(&mut state).await;
-            } else {
-                tracing::error!(
-                    profile_id = %supervisor.profile_id,
-                    "timed out waiting for the Codex profile lease during shutdown"
-                );
-            }
-        }
-        self.inner.profiles.lock().await.clear();
-    }
-
-    pub async fn reserve_login(
-        &self,
-        profile_id: Uuid,
-        actor_id: Uuid,
-        session_id: Uuid,
-        idempotency_key: &str,
-        kind: LoginKind,
-    ) -> Result<LoginReservation, LoginCeremonyError> {
-        let mut ceremonies = self.inner.ceremonies.lock().await;
-        let now = Instant::now();
-        ceremonies.retain(|_, ceremony| ceremony.expires_at > now);
-        if let Some(ceremony) = ceremonies.get(&profile_id) {
-            if ceremony.actor_id == actor_id
-                && ceremony.session_id == session_id
-                && ceremony.idempotency_key == idempotency_key
-                && ceremony.kind == kind
-                && ceremony.response.is_some()
-            {
-                return Ok(LoginReservation::Replay(ceremony.snapshot()));
-            }
-            return Err(LoginCeremonyError::Active);
-        }
-        if ceremonies.len() >= self.inner.config.max_profiles {
-            return Err(LoginCeremonyError::Capacity);
-        }
-        let ceremony_id = Uuid::now_v7();
-        let lifetime = Duration::from_secs(10 * 60);
-        let expires_at_unix_seconds = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .saturating_add(lifetime.as_secs());
-        ceremonies.insert(
-            profile_id,
-            LoginCeremony {
-                ceremony_id,
-                actor_id,
-                session_id,
-                idempotency_key: idempotency_key.to_owned(),
-                kind,
-                response: None,
-                expires_at: Instant::now() + lifetime,
-                expires_at_unix_seconds,
-            },
-        );
-        Ok(LoginReservation::Reserved(ceremony_id))
-    }
-
-    pub async fn complete_login(
-        &self,
-        profile_id: Uuid,
-        ceremony_id: Uuid,
-        response: LoginStart,
-    ) -> Result<LoginCeremonySnapshot, LoginCeremonyError> {
-        let mut ceremonies = self.inner.ceremonies.lock().await;
-        let ceremony = ceremonies
-            .get_mut(&profile_id)
-            .filter(|ceremony| ceremony.ceremony_id == ceremony_id)
-            .ok_or(LoginCeremonyError::NotFound)?;
-        ceremony.response = Some(response);
-        Ok(ceremony.snapshot())
-    }
-
-    pub async fn login_ceremony(
-        &self,
-        profile_id: Uuid,
-        actor_id: Uuid,
-        session_id: Uuid,
-    ) -> Option<LoginCeremonySnapshot> {
-        let mut ceremonies = self.inner.ceremonies.lock().await;
-        if ceremonies
-            .get(&profile_id)
-            .is_some_and(|ceremony| ceremony.expires_at <= Instant::now())
-        {
-            ceremonies.remove(&profile_id);
-        }
-        ceremonies
-            .get(&profile_id)
-            .filter(|ceremony| ceremony.actor_id == actor_id && ceremony.session_id == session_id)
-            .map(LoginCeremony::snapshot)
-    }
-
-    pub async fn clear_login(&self, profile_id: Uuid, ceremony_id: Option<Uuid>) {
-        let mut ceremonies = self.inner.ceremonies.lock().await;
-        let should_remove = ceremonies.get(&profile_id).is_some_and(|ceremony| {
-            ceremony_id.is_none_or(|ceremony_id| ceremony.ceremony_id == ceremony_id)
-        });
-        if should_remove {
-            ceremonies.remove(&profile_id);
-        }
-    }
-}
-
-impl LoginCeremony {
-    fn snapshot(&self) -> LoginCeremonySnapshot {
-        LoginCeremonySnapshot {
-            ceremony_id: self.ceremony_id,
-            kind: self.kind,
-            response: self.response.clone(),
-            expires_at_unix_seconds: self.expires_at_unix_seconds,
-        }
-    }
-}
-
-impl ProfileLease {
-    pub fn profile_id(&self) -> Uuid {
-        self.supervisor.profile_id
-    }
-
-    pub async fn start_thread(&mut self, cwd: &Path) -> Result<String, SupervisorError> {
-        let result = self
-            .request(
-                "thread/start",
-                json!({
-                    "cwd": cwd,
-                    "approvalPolicy": "on-request",
-                    "sandbox": "workspace-write",
-                    "ephemeral": false
-                }),
-            )
-            .await?;
-        result
-            .pointer("/thread/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or(SupervisorError::MissingResult("thread id"))
-    }
-
-    pub async fn resume_thread(
-        &mut self,
-        thread_id: &str,
-        cwd: &Path,
-    ) -> Result<(), SupervisorError> {
-        self.request("thread/resume", json!({"threadId": thread_id, "cwd": cwd}))
-            .await?;
-        Ok(())
-    }
-
-    pub async fn start_turn(
-        &mut self,
-        thread_id: &str,
-        cwd: &Path,
-        prompt: &str,
-    ) -> Result<String, SupervisorError> {
-        let result = self
-            .request(
-                "turn/start",
-                json!({
-                    "threadId": thread_id,
-                    "cwd": cwd,
-                    "input": [{"type": "text", "text": prompt}]
-                }),
-            )
-            .await?;
-        result
-            .pointer("/turn/id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or(SupervisorError::MissingResult("turn id"))
-    }
-
-    pub async fn interrupt_turn(
-        &mut self,
-        thread_id: &str,
-        turn_id: &str,
-    ) -> Result<(), SupervisorError> {
-        self.request(
-            "turn/interrupt",
-            json!({"threadId": thread_id, "turnId": turn_id}),
+        ensure_started(
+            &self.pool.config,
+            &session.processes.home,
+            &mut session.guard,
         )
         .await?;
-        Ok(())
+        Ok(Box::new(session))
     }
+}
 
-    pub async fn read_latest_turn(
-        &mut self,
-        thread_id: &str,
-    ) -> Result<RecoveredTurn, SupervisorError> {
-        let history = self
-            .request(
-                "thread/read",
-                json!({"threadId": thread_id, "includeTurns": true}),
-            )
-            .await?;
-        let Some(latest_turn) = history
-            .pointer("/thread/turns")
-            .and_then(Value::as_array)
-            .and_then(|turns| turns.last())
-        else {
-            return Ok(RecoveredTurn {
-                id: None,
-                status: "missing".to_owned(),
-                final_message: None,
-            });
-        };
-        let id = latest_turn
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let status = latest_turn
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_owned();
-        let final_message = latest_turn
-            .get("items")
-            .and_then(Value::as_array)
-            .and_then(|items| {
-                items.iter().rev().find_map(|item| {
-                    (item.get("type").and_then(Value::as_str) == Some("agentMessage"))
-                        .then(|| item.get("text").and_then(Value::as_str))
-                        .flatten()
-                })
+type Selection = (
+    Arc<AccountProcesses>,
+    Arc<Slot>,
+    OwnedMutexGuard<SupervisorState>,
+    Vec<OwnedMutexGuard<SupervisorState>>,
+);
+
+impl Pool {
+    /// Picks (or makes) a process for the account without waiting: an idle
+    /// one when there is one, else a new one if the limits allow it.
+    fn select(&self, account: &AccountHandle, purpose: Purpose) -> Result<Selection, HarnessError> {
+        let now = Instant::now();
+        let mut accounts = lock(&self.accounts);
+        let mut evicted = self.reap_idle(&mut accounts, now);
+        let processes = Arc::clone(accounts.entry(account.id).or_insert_with(|| {
+            Arc::new(AccountProcesses {
+                home: account.home.clone(),
+                stopping: Arc::new(AtomicBool::new(false)),
+                slots: StdMutex::new(Vec::new()),
             })
-            .map(str::to_owned);
-        Ok(RecoveredTurn {
-            id,
-            status,
-            final_message,
-        })
-    }
-
-    pub async fn read_account(&mut self) -> Result<AccountSummary, SupervisorError> {
-        let account = self
-            .request("account/read", json!({"refreshToken": false}))
-            .await?;
-        let account_value = account.get("account");
-        let authenticated = account_value.is_some_and(|value| !value.is_null());
-        let account_type = account_value
-            .and_then(|value| value.get("type"))
-            .and_then(Value::as_str)
-            .map(|value| bounded_provider_text(value, 32))
-            .transpose()?;
-        let email = account_value
-            .and_then(|value| value.get("email"))
-            .and_then(Value::as_str)
-            .map(|value| bounded_provider_text(value, 320))
-            .transpose()?;
-        if authenticated && account_type.is_none() {
-            return Err(SupervisorError::InvalidAccountResponse);
+        }));
+        if processes.home != account.home {
+            return Err(HarnessError::ConfigurationChanged);
         }
-        Ok(AccountSummary {
-            authenticated,
-            account_type,
-            email,
-        })
-    }
-
-    pub async fn start_browser_login(&mut self) -> Result<LoginStart, SupervisorError> {
-        let response = self
-            .request(
-                "account/login/start",
-                json!({
-                    "type": "chatgpt",
-                    "appBrand": "codex",
-                    "codexStreamlinedLogin": false,
-                    "useHostedLoginSuccessPage": true
-                }),
-            )
-            .await?;
-        parse_login_start(response, "chatgpt")
-    }
-
-    pub async fn start_device_code_login(&mut self) -> Result<LoginStart, SupervisorError> {
-        let response = self
-            .request("account/login/start", json!({"type": "chatgptDeviceCode"}))
-            .await?;
-        parse_login_start(response, "chatgptDeviceCode")
-    }
-
-    pub async fn login_with_api_key(
-        &mut self,
-        api_key: &str,
-    ) -> Result<LoginStart, SupervisorError> {
-        if !(20..=4096).contains(&api_key.len()) || api_key.chars().any(char::is_control) {
-            return Err(SupervisorError::InvalidAccountResponse);
+        if processes.stopping.load(Ordering::Acquire) {
+            return Err(HarnessError::ShuttingDown);
         }
-        let response = self
-            .request(
-                "account/login/start",
-                json!({"type": "apiKey", "apiKey": api_key}),
-            )
-            .await?;
-        if response.get("type").and_then(Value::as_str) != Some("apiKey") {
-            return Err(SupervisorError::InvalidAccountResponse);
-        }
-        Ok(LoginStart::ApiKey)
-    }
-
-    pub async fn cancel_login(&mut self, login_id: &str) -> Result<(), SupervisorError> {
-        let login_id = bounded_provider_text(login_id, 256)?;
-        self.request("account/login/cancel", json!({"loginId": login_id}))
-            .await?;
-        Ok(())
-    }
-
-    pub async fn logout_account(&mut self) -> Result<(), SupervisorError> {
-        self.request("account/logout", Value::Null).await?;
-        Ok(())
-    }
-
-    pub async fn read_rate_limits(&mut self) -> Result<RateLimitSummary, SupervisorError> {
-        let response = self.request("account/rateLimits/read", Value::Null).await?;
-        let rate_limits = response
-            .get("rateLimits")
-            .ok_or(SupervisorError::InvalidAccountResponse)?;
-        Ok(RateLimitSummary {
-            primary: parse_rate_limit_window(rate_limits.get("primary"))?,
-            secondary: parse_rate_limit_window(rate_limits.get("secondary"))?,
-        })
-    }
-
-    pub async fn next_event(&mut self) -> Result<ProviderEvent, SupervisorError> {
-        let raw = self.next_raw_event().await?;
-        if raw.get("id").is_some() {
-            return if raw.get("method").is_some() {
-                Ok(ProviderEvent::Request(parse_provider_request(raw)?))
-            } else {
-                Ok(ProviderEvent::Error)
-            };
-        }
-        let method = raw
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        Ok(match method {
-            "item/agentMessage/delta" => raw
-                .pointer("/params/delta")
-                .and_then(Value::as_str)
-                .map(|delta| ProviderEvent::AgentMessageDelta(delta.to_owned()))
-                .unwrap_or(ProviderEvent::Ignored),
-            "item/started" => ProviderEvent::ItemStarted(ProviderItemEvent {
-                key: provider_event_key(method, &raw),
-                kind: item_kind(&raw),
-            }),
-            "item/completed" => ProviderEvent::ItemCompleted(ProviderItemEvent {
-                key: provider_event_key(method, &raw),
-                kind: item_kind(&raw),
-            }),
-            "turn/completed" => ProviderEvent::TurnCompleted {
-                completed: raw.pointer("/params/turn/status").and_then(Value::as_str)
-                    == Some("completed"),
-            },
-            "error" => ProviderEvent::Error,
-            _ => ProviderEvent::Ignored,
-        })
-    }
-
-    pub async fn answer_request(
-        &mut self,
-        request: ProviderRequest,
-        answer: ProviderAnswer,
-    ) -> Result<(), SupervisorError> {
-        let result = match request.kind {
-            ApprovalKind::Approval => {
-                let decision = match answer {
-                    ProviderAnswer::Approve => "accept",
-                    ProviderAnswer::Deny => "decline",
-                    ProviderAnswer::Text(_) => return Err(SupervisorError::InvalidAccountResponse),
-                };
-                json!({"decision": decision})
+        let mut slots = lock(&processes.slots);
+        if purpose == Purpose::Run {
+            if self.running.load(Ordering::Acquire) >= self.config.host_run_limit {
+                return Err(HarnessError::HostCapacity);
             }
-            ApprovalKind::Question => {
-                let answer = match answer {
-                    ProviderAnswer::Approve => "approved".to_owned(),
-                    ProviderAnswer::Deny => "denied".to_owned(),
-                    ProviderAnswer::Text(answer) => bounded_provider_text(&answer, 4_000)?,
-                };
-                let answers = request
-                    .question_ids
-                    .into_iter()
-                    .map(|id| (id, json!({"answers": [answer]})))
-                    .collect::<serde_json::Map<_, _>>();
-                json!({"answers": answers})
+            let leased = slots
+                .iter()
+                .filter(|slot| slot.run_leased.load(Ordering::Acquire))
+                .count();
+            if leased >= usize::from(account.max_concurrent_runs.max(1)) {
+                return Err(HarnessError::AccountCapacity);
             }
-            ApprovalKind::Unsupported => {
-                let response = self
-                    .bridge_mut()?
-                    .respond_error(request.id, -32601, "unsupported provider request")
-                    .await;
-                return self.finish_transport_result(response).await;
+        }
+        // A control session goes to the process holding a sign-in first, so
+        // the sign-in can be checked or cancelled where it started; runs
+        // leave that process free.
+        let mut order = slots.iter().collect::<Vec<_>>();
+        order.sort_by_key(|slot| slot.pinned(now) == (purpose == Purpose::Run));
+        let reused = order.into_iter().find_map(|slot| {
+            Arc::clone(&slot.state)
+                .try_lock_owned()
+                .ok()
+                .map(|guard| (Arc::clone(slot), guard))
+        });
+        let (slot, guard) = match reused {
+            Some(found) => found,
+            None => {
+                drop(slots);
+                if purpose == Purpose::Control {
+                    let idle = accounts
+                        .values()
+                        .flat_map(|account| lock(&account.slots).clone())
+                        .filter(|slot| !slot.run_leased.load(Ordering::Acquire))
+                        .count();
+                    if idle >= self.config.max_idle_processes {
+                        match evict_one_idle(&mut accounts, now) {
+                            Some(guard) => evicted.push(guard),
+                            None => return Err(HarnessError::ControlCapacity),
+                        }
+                    }
+                }
+                let slot = Slot::new();
+                let guard = Arc::clone(&slot.state)
+                    .try_lock_owned()
+                    .map_err(|_| HarnessError::InvalidConfiguration)?;
+                slots = lock(&processes.slots);
+                slots.push(Arc::clone(&slot));
+                (slot, guard)
             }
         };
-        let response = self.bridge_mut()?.respond(request.id, result).await;
-        self.finish_transport_result(response).await
+        drop(slots);
+        if purpose == Purpose::Run {
+            slot.run_leased.store(true, Ordering::Release);
+            self.running.fetch_add(1, Ordering::AcqRel);
+        }
+        Ok((processes, slot, guard, evicted))
     }
 
-    pub async fn shutdown_process(&mut self) {
-        shutdown_bridge(&mut self.guard).await;
+    /// Removes processes nobody has used for `idle_ttl` (and that aren't
+    /// holding a sign-in), returning their locks so the caller can stop them
+    /// outside the map lock.
+    fn reap_idle(
+        &self,
+        accounts: &mut HashMap<Uuid, Arc<AccountProcesses>>,
+        now: Instant,
+    ) -> Vec<OwnedMutexGuard<SupervisorState>> {
+        let mut evicted = Vec::new();
+        for processes in accounts.values() {
+            lock(&processes.slots).retain(|slot| {
+                if !slot.idle_expired(now, self.config.idle_ttl) {
+                    return true;
+                }
+                match Arc::clone(&slot.state).try_lock_owned() {
+                    Ok(guard) => {
+                        evicted.push(guard);
+                        false
+                    }
+                    Err(_) => true,
+                }
+            });
+        }
+        accounts.retain(|_, processes| !lock(&processes.slots).is_empty());
+        evicted
+    }
+}
+
+/// Frees one process that isn't running a turn or holding a sign-in, the
+/// least recently used first.
+fn evict_one_idle(
+    accounts: &mut HashMap<Uuid, Arc<AccountProcesses>>,
+    now: Instant,
+) -> Option<OwnedMutexGuard<SupervisorState>> {
+    let mut candidates = accounts
+        .values()
+        .flat_map(|processes| {
+            lock(&processes.slots)
+                .iter()
+                .map(|slot| (Arc::clone(processes), Arc::clone(slot)))
+                .collect::<Vec<_>>()
+        })
+        .filter(|(_, slot)| !slot.run_leased.load(Ordering::Acquire) && !slot.pinned(now))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, slot)| *lock(&slot.last_released));
+    for (processes, slot) in candidates {
+        if let Ok(guard) = Arc::clone(&slot.state).try_lock_owned() {
+            lock(&processes.slots).retain(|candidate| !Arc::ptr_eq(candidate, &slot));
+            return Some(guard);
+        }
+    }
+    None
+}
+
+impl HarnessAdapter for CodexAdapter {
+    fn manifest(&self) -> &AdapterManifest {
+        &self.manifest
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> Result<Value, SupervisorError> {
+    fn acquire_run(&self, account: AccountHandle) -> HarnessFuture<'_, Box<dyn HarnessSession>> {
+        Box::pin(self.acquire(account, Purpose::Run))
+    }
+
+    fn acquire_control(
+        &self,
+        account: AccountHandle,
+    ) -> HarnessFuture<'_, Box<dyn HarnessSession>> {
+        Box::pin(self.acquire(account, Purpose::Control))
+    }
+
+    fn health(
+        &self,
+        account_id: Uuid,
+    ) -> Pin<Box<dyn Future<Output = Option<ProfileHealth>> + Send + '_>> {
+        Box::pin(async move {
+            let slots = {
+                let accounts = lock(&self.pool.accounts);
+                lock(&accounts.get(&account_id)?.slots).clone()
+            };
+            let mut health = ProfileHealth::default();
+            for slot in slots {
+                match slot.state.try_lock() {
+                    Ok(state) => {
+                        let snapshot = health_snapshot(&state);
+                        health.process_running |= snapshot.process_running;
+                        health.circuit_open |= snapshot.circuit_open;
+                        health.consecutive_failures = health
+                            .consecutive_failures
+                            .max(snapshot.consecutive_failures);
+                        health.process_starts = health
+                            .process_starts
+                            .saturating_add(snapshot.process_starts);
+                    }
+                    // In use right now, so its process is up.
+                    Err(_) => health.process_running = true,
+                }
+            }
+            Some(health)
+        })
+    }
+
+    fn shutdown_account(&self, account_id: Uuid) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let processes = lock(&self.pool.accounts).get(&account_id).cloned();
+            let Some(processes) = processes else {
+                return;
+            };
+            processes.stopping.store(true, Ordering::Release);
+            let slots = lock(&processes.slots).clone();
+            for slot in slots {
+                let mut state = slot.state.lock().await;
+                shutdown_bridge(&mut state).await;
+            }
+            let mut accounts = lock(&self.pool.accounts);
+            if accounts
+                .get(&account_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &processes))
+            {
+                accounts.remove(&account_id);
+            }
+        })
+    }
+
+    fn shutdown_all(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let all = lock(&self.pool.accounts)
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for processes in &all {
+                processes.stopping.store(true, Ordering::Release);
+            }
+            for processes in all {
+                let slots = lock(&processes.slots).clone();
+                for slot in slots {
+                    if let Ok(mut state) = timeout(
+                        self.pool.config.shutdown_timeout + Duration::from_secs(1),
+                        slot.state.lock(),
+                    )
+                    .await
+                    {
+                        shutdown_bridge(&mut state).await;
+                    } else {
+                        tracing::error!(
+                            "timed out waiting for a Codex process lease during shutdown"
+                        );
+                    }
+                }
+            }
+            lock(&self.pool.accounts).clear();
+        })
+    }
+}
+
+pub struct CodexSession {
+    pool: Arc<Pool>,
+    account_id: Uuid,
+    processes: Arc<AccountProcesses>,
+    slot: Arc<Slot>,
+    guard: OwnedMutexGuard<SupervisorState>,
+    run: bool,
+}
+
+impl Drop for CodexSession {
+    fn drop(&mut self) {
+        if self.run {
+            self.slot.run_leased.store(false, Ordering::Release);
+            self.pool.running.fetch_sub(1, Ordering::AcqRel);
+        }
+        *lock(&self.slot.last_released) = Instant::now();
+    }
+}
+
+impl CodexSession {
+    fn pin_for_login(&self) {
+        *lock(&self.slot.pinned_until) = Some(Instant::now() + LOGIN_PIN);
+    }
+
+    fn unpin_account(&self) {
+        for slot in lock(&self.processes.slots).iter() {
+            *lock(&slot.pinned_until) = None;
+        }
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, HarnessError> {
         let result = self.bridge_mut()?.request(method, params).await;
         match result {
             Ok(value) => {
@@ -801,38 +554,24 @@ impl ProfileLease {
             }
             Err(error) => {
                 self.fail_transport().await;
-                Err(SupervisorError::Transport(error))
+                Err(transport(error))
             }
         }
     }
 
-    async fn next_raw_event(&mut self) -> Result<Value, SupervisorError> {
-        let result = self.bridge_mut()?.next_raw_event().await;
-        match result {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                self.fail_transport().await;
-                Err(SupervisorError::Transport(error))
-            }
-        }
-    }
-
-    fn bridge_mut(&mut self) -> Result<&mut CodexBridge, SupervisorError> {
-        self.guard
-            .bridge
-            .as_mut()
-            .ok_or(SupervisorError::ShuttingDown)
+    fn bridge_mut(&mut self) -> Result<&mut CodexBridge, HarnessError> {
+        self.guard.bridge.as_mut().ok_or(HarnessError::ShuttingDown)
     }
 
     async fn finish_transport_result(
         &mut self,
         result: Result<(), BridgeError>,
-    ) -> Result<(), SupervisorError> {
+    ) -> Result<(), HarnessError> {
         match result {
             Ok(()) => Ok(()),
             Err(error) => {
                 self.fail_transport().await;
-                Err(SupervisorError::Transport(error))
+                Err(transport(error))
             }
         }
     }
@@ -841,12 +580,352 @@ impl ProfileLease {
         shutdown_bridge(&mut self.guard).await;
         record_failure(&mut self.guard);
     }
+
+    async fn next_codex_event(&mut self) -> Result<HarnessEvent, HarnessError> {
+        let raw = match self.bridge_mut()?.next_raw_event().await {
+            Ok(value) => value,
+            Err(error) => {
+                self.fail_transport().await;
+                return Err(transport(error));
+            }
+        };
+        Ok(parse_event(raw)?)
+    }
+
+    async fn read_models(&mut self) -> Result<Vec<ModelEntry>, HarnessError> {
+        let mut models = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_MODEL_PAGES {
+            let response = self
+                .request(
+                    "model/list",
+                    json!({"cursor": cursor, "includeHidden": false, "limit": 100}),
+                )
+                .await?;
+            let page = response
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or(HarnessError::InvalidResponse)?;
+            models.extend(page.iter().filter_map(parse_model));
+            cursor = response
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(models)
+    }
+}
+
+impl HarnessSession for CodexSession {
+    fn account_id(&self) -> Uuid {
+        self.account_id
+    }
+
+    fn is_stopping(&self) -> bool {
+        self.processes.stopping.load(Ordering::Acquire)
+    }
+
+    fn start_thread<'a>(
+        &'a mut self,
+        cwd: &'a Path,
+        config: &'a RunConfig,
+    ) -> HarnessFuture<'a, String> {
+        Box::pin(async move {
+            let result = self
+                .request("thread/start", thread_start_params(cwd, config))
+                .await?;
+            result
+                .pointer("/thread/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or(HarnessError::MissingResult("thread id"))
+        })
+    }
+
+    fn resume_thread<'a>(
+        &'a mut self,
+        thread_id: &'a str,
+        cwd: &'a Path,
+        _config: &'a RunConfig,
+    ) -> HarnessFuture<'a, ()> {
+        Box::pin(async move {
+            self.request("thread/resume", json!({"threadId": thread_id, "cwd": cwd}))
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn start_turn<'a>(
+        &'a mut self,
+        thread_id: &'a str,
+        cwd: &'a Path,
+        prompt: &'a str,
+        config: &'a RunConfig,
+    ) -> HarnessFuture<'a, String> {
+        Box::pin(async move {
+            let result = self
+                .request(
+                    "turn/start",
+                    turn_start_params(thread_id, cwd, prompt, config),
+                )
+                .await?;
+            result
+                .pointer("/turn/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or(HarnessError::MissingResult("turn id"))
+        })
+    }
+
+    fn interrupt_turn<'a>(
+        &'a mut self,
+        thread_id: &'a str,
+        turn_id: &'a str,
+    ) -> HarnessFuture<'a, ()> {
+        Box::pin(async move {
+            self.request(
+                "turn/interrupt",
+                json!({"threadId": thread_id, "turnId": turn_id}),
+            )
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn next_event(&mut self) -> HarnessFuture<'_, HarnessEvent> {
+        Box::pin(self.next_codex_event())
+    }
+
+    fn answer(&mut self, request: HarnessRequest, answer: HarnessAnswer) -> HarnessFuture<'_, ()> {
+        Box::pin(async move {
+            let id = request
+                .token
+                .get("id")
+                .cloned()
+                .ok_or(HarnessError::MissingResult("request id"))?;
+            let result = match request.kind {
+                RequestKind::Approval => {
+                    let decision = match answer {
+                        HarnessAnswer::Approve => "accept",
+                        HarnessAnswer::Deny => "decline",
+                        HarnessAnswer::Text(_) => return Err(HarnessError::InvalidResponse),
+                    };
+                    json!({"decision": decision})
+                }
+                RequestKind::Question => {
+                    let answer = match answer {
+                        HarnessAnswer::Approve => "approved".to_owned(),
+                        HarnessAnswer::Deny => "denied".to_owned(),
+                        HarnessAnswer::Text(answer) => bounded_provider_text(&answer, 4_000)?,
+                    };
+                    let answers = request
+                        .token
+                        .get("questionIds")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(|id| (id.to_owned(), json!({"answers": [answer]})))
+                        .collect::<serde_json::Map<_, _>>();
+                    json!({"answers": answers})
+                }
+                RequestKind::Unsupported => {
+                    let response = self
+                        .bridge_mut()?
+                        .respond_error(id, -32601, "unsupported provider request")
+                        .await;
+                    return self.finish_transport_result(response).await;
+                }
+            };
+            let response = self.bridge_mut()?.respond(id, result).await;
+            self.finish_transport_result(response).await
+        })
+    }
+
+    fn read_latest_turn<'a>(&'a mut self, thread_id: &'a str) -> HarnessFuture<'a, RecoveredTurn> {
+        Box::pin(async move {
+            let history = self
+                .request(
+                    "thread/read",
+                    json!({"threadId": thread_id, "includeTurns": true}),
+                )
+                .await?;
+            Ok(parse_latest_turn(&history))
+        })
+    }
+
+    fn read_account(&mut self) -> HarnessFuture<'_, AccountSummary> {
+        Box::pin(async move {
+            let account = self
+                .request("account/read", json!({"refreshToken": false}))
+                .await?;
+            let summary = parse_account(&account)?;
+            if summary.authenticated {
+                self.unpin_account();
+            }
+            Ok(summary)
+        })
+    }
+
+    fn start_login(&mut self, kind: LoginKind) -> HarnessFuture<'_, LoginStart> {
+        Box::pin(async move {
+            let started = match kind {
+                LoginKind::Browser => {
+                    let response = self
+                        .request(
+                            "account/login/start",
+                            json!({
+                                "type": "chatgpt",
+                                "appBrand": "codex",
+                                "codexStreamlinedLogin": false,
+                                "useHostedLoginSuccessPage": true
+                            }),
+                        )
+                        .await?;
+                    parse_login_start(response, "chatgpt")?
+                }
+                LoginKind::DeviceCode => {
+                    let response = self
+                        .request("account/login/start", json!({"type": "chatgptDeviceCode"}))
+                        .await?;
+                    parse_login_start(response, "chatgptDeviceCode")?
+                }
+                LoginKind::ApiKey => return Err(HarnessError::Unsupported("key sign-in here")),
+            };
+            self.pin_for_login();
+            Ok(started)
+        })
+    }
+
+    fn login_with_api_key<'a>(&'a mut self, api_key: &'a str) -> HarnessFuture<'a, LoginStart> {
+        Box::pin(async move {
+            if !(20..=4096).contains(&api_key.len()) || api_key.chars().any(char::is_control) {
+                return Err(HarnessError::InvalidResponse);
+            }
+            let response = self
+                .request(
+                    "account/login/start",
+                    json!({"type": "apiKey", "apiKey": api_key}),
+                )
+                .await?;
+            if response.get("type").and_then(Value::as_str) != Some("apiKey") {
+                return Err(HarnessError::InvalidResponse);
+            }
+            Ok(LoginStart::ApiKey)
+        })
+    }
+
+    fn cancel_login<'a>(&'a mut self, login_id: &'a str) -> HarnessFuture<'a, ()> {
+        Box::pin(async move {
+            let login_id = bounded_provider_text(login_id, 256)?;
+            self.request("account/login/cancel", json!({"loginId": login_id}))
+                .await?;
+            self.unpin_account();
+            Ok(())
+        })
+    }
+
+    fn logout(&mut self) -> HarnessFuture<'_, ()> {
+        Box::pin(async move {
+            self.request("account/logout", Value::Null).await?;
+            self.unpin_account();
+            Ok(())
+        })
+    }
+
+    fn read_rate_limits(&mut self) -> HarnessFuture<'_, RateLimitSummary> {
+        Box::pin(async move {
+            let response = self.request("account/rateLimits/read", Value::Null).await?;
+            let rate_limits = response
+                .get("rateLimits")
+                .ok_or(HarnessError::InvalidResponse)?;
+            Ok(RateLimitSummary {
+                primary: parse_rate_limit_window(rate_limits.get("primary"))?,
+                secondary: parse_rate_limit_window(rate_limits.get("secondary"))?,
+            })
+        })
+    }
+
+    fn list_models(&mut self) -> HarnessFuture<'_, Vec<ModelEntry>> {
+        Box::pin(self.read_models())
+    }
+
+    fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(shutdown_bridge(&mut self.guard))
+    }
+}
+
+fn thread_start_params(cwd: &Path, config: &RunConfig) -> Value {
+    let mut params = json!({
+        "cwd": cwd,
+        "approvalPolicy": approval_policy(config),
+        "sandbox": sandbox_mode(config),
+        "ephemeral": false
+    });
+    if let Some(model) = &config.model {
+        params["model"] = json!(model);
+    }
+    if let Some(tier) = service_tier(config) {
+        params["serviceTier"] = json!(tier);
+    }
+    params
+}
+
+fn turn_start_params(thread_id: &str, cwd: &Path, prompt: &str, config: &RunConfig) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": cwd,
+        "input": [{"type": "text", "text": prompt}]
+    });
+    if let Some(model) = &config.model {
+        params["model"] = json!(model);
+    }
+    if let Some(effort) = &config.reasoning {
+        params["effort"] = json!(effort);
+    }
+    if let Some(tier) = service_tier(config) {
+        params["serviceTier"] = json!(tier);
+    }
+    if let Some(summary) = config
+        .options
+        .get("reasoningSummary")
+        .and_then(Value::as_str)
+    {
+        params["summary"] = json!(summary);
+    }
+    params
+}
+
+fn approval_policy(config: &RunConfig) -> &'static str {
+    match config.approval_policy.as_deref() {
+        Some("untrusted") => "untrusted",
+        _ => "on-request",
+    }
+}
+
+fn sandbox_mode(config: &RunConfig) -> &'static str {
+    match config.sandbox.as_deref() {
+        Some("read_only") => "read-only",
+        _ => "workspace-write",
+    }
+}
+
+/// Codex calls speed its service tier; the standard speed sends none.
+fn service_tier(config: &RunConfig) -> Option<&str> {
+    config
+        .speed
+        .as_deref()
+        .filter(|speed| *speed != STANDARD_SPEED)
 }
 
 async fn ensure_started(
-    supervisor: &ProfileSupervisor,
+    config: &SupervisorConfig,
+    codex_home: &Path,
     state: &mut SupervisorState,
-) -> Result<(), SupervisorError> {
+) -> Result<(), HarnessError> {
     if state.bridge.is_some() {
         return Ok(());
     }
@@ -855,7 +934,7 @@ async fn ensure_started(
         .circuit_open_until
         .is_some_and(|circuit_open_until| circuit_open_until > now)
     {
-        return Err(SupervisorError::CircuitOpen);
+        return Err(HarnessError::CircuitOpen);
     }
     state.circuit_open_until = None;
     if let Some(last_failure_at) = state.last_failure_at {
@@ -867,11 +946,10 @@ async fn ensure_started(
     }
 
     let mut environment = BTreeMap::new();
-    let binary_parent = supervisor
-        .config
+    let binary_parent = config
         .codex_binary
         .parent()
-        .ok_or(SupervisorError::InvalidConfiguration)?;
+        .ok_or(HarnessError::InvalidConfiguration)?;
     environment.insert(
         "PATH".to_owned(),
         format!("{}:/usr/local/bin:/usr/bin:/bin", binary_parent.display()),
@@ -879,28 +957,28 @@ async fn ensure_started(
     environment.insert("LANG".to_owned(), "C.UTF-8".to_owned());
     environment.insert("LC_ALL".to_owned(), "C.UTF-8".to_owned());
     let bridge_config = BridgeConfig {
-        codex_binary: supervisor.config.codex_binary.clone(),
-        codex_home: supervisor.codex_home.clone(),
-        cwd: supervisor.config.neutral_cwd.clone(),
+        codex_binary: config.codex_binary.clone(),
+        codex_home: codex_home.to_path_buf(),
+        cwd: config.neutral_cwd.clone(),
         safe_environment: environment,
-        max_line_bytes: supervisor.config.max_line_bytes,
-        max_stderr_bytes: supervisor.config.max_stderr_bytes,
-        max_buffered_events: supervisor.config.max_buffered_events,
+        max_line_bytes: config.max_line_bytes,
+        max_stderr_bytes: config.max_stderr_bytes,
+        max_buffered_events: config.max_buffered_events,
         automatic_server_request_responses: false,
-        request_timeout: supervisor.config.request_timeout,
-        shutdown_timeout: supervisor.config.shutdown_timeout,
+        request_timeout: config.request_timeout,
+        shutdown_timeout: config.shutdown_timeout,
     };
     let mut bridge = match CodexBridge::spawn(bridge_config).await {
         Ok(bridge) => bridge,
         Err(error) => {
             record_failure(state);
-            return Err(SupervisorError::Transport(error));
+            return Err(transport(error));
         }
     };
     if let Err(error) = bridge.initialize().await {
         bridge.shutdown().await;
         record_failure(state);
-        return Err(SupervisorError::Transport(error));
+        return Err(transport(error));
     }
     state.bridge = Some(bridge);
     state.process_starts = state.process_starts.saturating_add(1);
@@ -908,24 +986,203 @@ async fn ensure_started(
     Ok(())
 }
 
-fn parse_provider_request(raw: Value) -> Result<ProviderRequest, SupervisorError> {
+fn transport(error: BridgeError) -> HarnessError {
+    HarnessError::Transport(Box::new(error))
+}
+
+fn parse_event(raw: Value) -> Result<HarnessEvent, HarnessError> {
+    if raw.get("id").is_some() {
+        return if raw.get("method").is_some() {
+            Ok(HarnessEvent::Request(parse_provider_request(raw)?))
+        } else {
+            Ok(HarnessEvent::Error)
+        };
+    }
+    let method = raw
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(match method {
+        "item/agentMessage/delta" => raw
+            .pointer("/params/delta")
+            .and_then(Value::as_str)
+            .map(|delta| HarnessEvent::MessageDelta(delta.to_owned()))
+            .unwrap_or(HarnessEvent::Ignored),
+        "item/started" => HarnessEvent::ItemStarted(HarnessItem {
+            key: provider_event_key(method, &raw),
+            kind: item_kind(&raw),
+        }),
+        "item/completed" => HarnessEvent::ItemCompleted(HarnessItem {
+            key: provider_event_key(method, &raw),
+            kind: item_kind(&raw),
+        }),
+        "turn/completed" => HarnessEvent::TurnCompleted {
+            completed: raw.pointer("/params/turn/status").and_then(Value::as_str)
+                == Some("completed"),
+        },
+        "error" => HarnessEvent::Error,
+        _ => HarnessEvent::Ignored,
+    })
+}
+
+fn parse_latest_turn(history: &Value) -> RecoveredTurn {
+    let Some(latest_turn) = history
+        .pointer("/thread/turns")
+        .and_then(Value::as_array)
+        .and_then(|turns| turns.last())
+    else {
+        return RecoveredTurn {
+            id: None,
+            status: "missing".to_owned(),
+            final_message: None,
+        };
+    };
+    let id = latest_turn
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let status = latest_turn
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let final_message = latest_turn
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().rev().find_map(|item| {
+                (item.get("type").and_then(Value::as_str) == Some("agentMessage"))
+                    .then(|| item.get("text").and_then(Value::as_str))
+                    .flatten()
+            })
+        })
+        .map(str::to_owned);
+    RecoveredTurn {
+        id,
+        status,
+        final_message,
+    }
+}
+
+fn parse_account(account: &Value) -> Result<AccountSummary, HarnessError> {
+    let account_value = account.get("account");
+    let authenticated = account_value.is_some_and(|value| !value.is_null());
+    let account_type = account_value
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str)
+        .map(|value| bounded_provider_text(value, 32))
+        .transpose()?;
+    let email = account_value
+        .and_then(|value| value.get("email"))
+        .and_then(Value::as_str)
+        .map(|value| bounded_provider_text(value, 320))
+        .transpose()?;
+    if authenticated && account_type.is_none() {
+        return Err(HarnessError::InvalidResponse);
+    }
+    Ok(AccountSummary {
+        authenticated,
+        account_type,
+        email,
+    })
+}
+
+/// One `model/list` entry as a catalog model. Entries with unusable
+/// identifiers are dropped rather than failing the whole list.
+fn parse_model(value: &Value) -> Option<ModelEntry> {
+    let text = |name: &str, max: usize| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .and_then(|text| bounded_provider_text(text, max).ok())
+    };
+    let identifier = |text: &str| {
+        (1..=200).contains(&text.len())
+            && text.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/' | b':')
+            })
+    };
+    let id = text("model", 200).or_else(|| text("id", 200))?;
+    if !identifier(&id) {
+        return None;
+    }
+    let reasoning_levels = value
+        .get("supportedReasoningEfforts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|option| option.get("reasoningEffort").and_then(Value::as_str))
+        .filter(|level| identifier(level) && level.len() <= 64)
+        .map(str::to_owned)
+        .take(16)
+        .collect::<Vec<_>>();
+    let mut speeds = vec![SpeedOption {
+        id: STANDARD_SPEED.to_owned(),
+        name: "Standard".to_owned(),
+    }];
+    speeds.extend(
+        value
+            .get("serviceTiers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|tier| {
+                let id = tier.get("id").and_then(Value::as_str)?;
+                let name = tier.get("name").and_then(Value::as_str)?;
+                (identifier(id) && id != STANDARD_SPEED && id.len() <= 64)
+                    .then(|| bounded_provider_text(name, 120).ok())
+                    .flatten()
+                    .map(|name| SpeedOption {
+                        id: id.to_owned(),
+                        name,
+                    })
+            })
+            .take(15),
+    );
+    let default_reasoning =
+        text("defaultReasoningEffort", 64).filter(|level| reasoning_levels.contains(level));
+    let default_speed = text("defaultServiceTier", 64)
+        .filter(|tier| speeds.iter().any(|speed| &speed.id == tier))
+        .or_else(|| Some(STANDARD_SPEED.to_owned()));
+    Some(ModelEntry {
+        display_name: text("displayName", 120).unwrap_or_else(|| id.clone()),
+        description: text("description", 2000),
+        id,
+        context_window: None,
+        reasoning_levels,
+        default_reasoning,
+        speeds,
+        default_speed,
+        prices: None,
+        hidden: value
+            .get("hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        is_default: value
+            .get("isDefault")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn parse_provider_request(raw: Value) -> Result<HarnessRequest, HarnessError> {
     let id = raw
         .get("id")
         .cloned()
-        .ok_or(SupervisorError::MissingResult("provider request id"))?;
+        .ok_or(HarnessError::MissingResult("provider request id"))?;
     let method = raw
         .get("method")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let kind = match method {
-        "item/tool/requestUserInput" => ApprovalKind::Question,
+        "item/tool/requestUserInput" => RequestKind::Question,
         "item/commandExecution/requestApproval"
         | "item/fileChange/requestApproval"
-        | "item/permissions/requestApproval" => ApprovalKind::Approval,
-        _ => ApprovalKind::Unsupported,
+        | "item/permissions/requestApproval" => RequestKind::Approval,
+        _ => RequestKind::Unsupported,
     };
     let questions = raw.pointer("/params/questions").and_then(Value::as_array);
-    let question_ids = if kind == ApprovalKind::Question {
+    let question_ids = if kind == RequestKind::Question {
         questions
             .into_iter()
             .flatten()
@@ -936,20 +1193,20 @@ fn parse_provider_request(raw: Value) -> Result<ProviderRequest, SupervisorError
     } else {
         Vec::new()
     };
-    if kind == ApprovalKind::Question && question_ids.is_empty() {
-        return Err(SupervisorError::InvalidAccountResponse);
+    if kind == RequestKind::Question && question_ids.is_empty() {
+        return Err(HarnessError::InvalidResponse);
     }
-    let summary = if kind == ApprovalKind::Question {
+    let summary = if kind == RequestKind::Question {
         questions
             .and_then(|questions| questions.first())
             .and_then(|question| question.get("question"))
             .and_then(Value::as_str)
             .and_then(|summary| bounded_provider_text(summary, 2_000).ok())
-            .unwrap_or_else(|| "Codex needs an answer before it can continue.".to_owned())
+            .unwrap_or_else(|| "The agent needs an answer before it can continue.".to_owned())
     } else {
-        "Codex needs permission before it can continue.".to_owned()
+        "The agent needs permission before it can continue.".to_owned()
     };
-    let options = if kind == ApprovalKind::Question {
+    let options = if kind == RequestKind::Question {
         questions
             .into_iter()
             .flatten()
@@ -965,7 +1222,7 @@ fn parse_provider_request(raw: Value) -> Result<ProviderRequest, SupervisorError
                     .get("label")
                     .and_then(Value::as_str)
                     .and_then(|label| bounded_provider_text(label, 200).ok())?;
-                Some(ProviderQuestionOption {
+                Some(RequestOption {
                     id: label.clone(),
                     label,
                 })
@@ -974,22 +1231,22 @@ fn parse_provider_request(raw: Value) -> Result<ProviderRequest, SupervisorError
             .collect()
     } else {
         vec![
-            ProviderQuestionOption {
+            RequestOption {
                 id: "approve".to_owned(),
                 label: "Allow once".to_owned(),
             },
-            ProviderQuestionOption {
+            RequestOption {
                 id: "deny".to_owned(),
                 label: "Deny".to_owned(),
             },
         ]
     };
-    Ok(ProviderRequest {
-        id,
+    Ok(HarnessRequest {
         kind,
-        question_ids,
+        durable_id: bounded_provider_identity("request", &id),
         summary,
         options,
+        token: json!({"id": id, "questionIds": question_ids}),
     })
 }
 
@@ -1022,15 +1279,15 @@ fn bounded_provider_identity(namespace: &str, value: &Value) -> String {
     format!("{namespace}:sha256:{digest:x}")
 }
 
-fn parse_login_start(response: Value, expected_type: &str) -> Result<LoginStart, SupervisorError> {
+fn parse_login_start(response: Value, expected_type: &str) -> Result<LoginStart, HarnessError> {
     if response.get("type").and_then(Value::as_str) != Some(expected_type) {
-        return Err(SupervisorError::InvalidAccountResponse);
+        return Err(HarnessError::InvalidResponse);
     }
     let login_id = bounded_provider_text(
         response
             .get("loginId")
             .and_then(Value::as_str)
-            .ok_or(SupervisorError::InvalidAccountResponse)?,
+            .ok_or(HarnessError::InvalidResponse)?,
         256,
     )?;
     match expected_type {
@@ -1040,7 +1297,7 @@ fn parse_login_start(response: Value, expected_type: &str) -> Result<LoginStart,
                 response
                     .get("authUrl")
                     .and_then(Value::as_str)
-                    .ok_or(SupervisorError::InvalidAccountResponse)?,
+                    .ok_or(HarnessError::InvalidResponse)?,
             )?,
         }),
         "chatgptDeviceCode" => Ok(LoginStart::DeviceCode {
@@ -1049,23 +1306,21 @@ fn parse_login_start(response: Value, expected_type: &str) -> Result<LoginStart,
                 response
                     .get("verificationUrl")
                     .and_then(Value::as_str)
-                    .ok_or(SupervisorError::InvalidAccountResponse)?,
+                    .ok_or(HarnessError::InvalidResponse)?,
             )?,
             user_code: bounded_provider_text(
                 response
                     .get("userCode")
                     .and_then(Value::as_str)
-                    .ok_or(SupervisorError::InvalidAccountResponse)?,
+                    .ok_or(HarnessError::InvalidResponse)?,
                 128,
             )?,
         }),
-        _ => Err(SupervisorError::InvalidAccountResponse),
+        _ => Err(HarnessError::InvalidResponse),
     }
 }
 
-fn parse_rate_limit_window(
-    value: Option<&Value>,
-) -> Result<Option<RateLimitWindow>, SupervisorError> {
+fn parse_rate_limit_window(value: Option<&Value>) -> Result<Option<RateLimitWindow>, HarnessError> {
     let Some(value) = value.filter(|value| !value.is_null()) else {
         return Ok(None);
     };
@@ -1074,7 +1329,7 @@ fn parse_rate_limit_window(
         .and_then(Value::as_u64)
         .and_then(|value| u16::try_from(value).ok())
         .filter(|value| *value <= 100)
-        .ok_or(SupervisorError::InvalidAccountResponse)?;
+        .ok_or(HarnessError::InvalidResponse)?;
     let bounded_optional_i64 = |name: &str, maximum: i64| {
         value
             .get(name)
@@ -1083,7 +1338,7 @@ fn parse_rate_limit_window(
                 value
                     .as_i64()
                     .filter(|value| (0..=maximum).contains(value))
-                    .ok_or(SupervisorError::InvalidAccountResponse)
+                    .ok_or(HarnessError::InvalidResponse)
             })
             .transpose()
     };
@@ -1094,32 +1349,29 @@ fn parse_rate_limit_window(
     }))
 }
 
-fn bounded_provider_text(
-    value: &str,
-    maximum_characters: usize,
-) -> Result<String, SupervisorError> {
+fn bounded_provider_text(value: &str, maximum_characters: usize) -> Result<String, HarnessError> {
     let character_count = value.chars().count();
     if character_count == 0
         || character_count > maximum_characters
         || value.chars().any(char::is_control)
     {
-        return Err(SupervisorError::InvalidAccountResponse);
+        return Err(HarnessError::InvalidResponse);
     }
     Ok(value.to_owned())
 }
 
-fn validated_provider_url(value: &str) -> Result<String, SupervisorError> {
+fn validated_provider_url(value: &str) -> Result<String, HarnessError> {
     let value = bounded_provider_text(value, 2048)?;
     let uri = value
         .parse::<http::Uri>()
-        .map_err(|_| SupervisorError::InvalidAccountResponse)?;
+        .map_err(|_| HarnessError::InvalidResponse)?;
     if !matches!(uri.scheme_str(), Some("http" | "https"))
         || uri.authority().is_none()
         || uri
             .authority()
             .is_some_and(|authority| authority.as_str().contains('@'))
     {
-        return Err(SupervisorError::InvalidAccountResponse);
+        return Err(HarnessError::InvalidResponse);
     }
     Ok(value)
 }
@@ -1168,373 +1420,8 @@ fn health_snapshot(state: &SupervisorState) -> ProfileHealth {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        ApprovalKind, ItemKind, ProviderEvent, ProviderItemEvent, RecoveredTurn, SupervisorError,
-        SupervisorRegistry, SupervisorState, health_snapshot, item_kind, parse_login_start,
-        parse_provider_request, parse_rate_limit_window, provider_event_key, record_failure,
-        restart_backoff,
-    };
-    use crate::config::AppConfig;
-    use serde_json::json;
-    use std::{collections::BTreeMap, time::Duration};
-
-    #[test]
-    fn restart_backoff_is_bounded() {
-        assert_eq!(restart_backoff(1), Duration::from_millis(100));
-        assert_eq!(restart_backoff(3), Duration::from_millis(400));
-        assert_eq!(restart_backoff(100), Duration::from_secs(5));
-    }
-
-    #[test]
-    fn repeated_failures_open_the_profile_circuit() {
-        let mut state = SupervisorState {
-            bridge: None,
-            consecutive_failures: 0,
-            last_failure_at: None,
-            circuit_open_until: None,
-            process_starts: 0,
-        };
-        for _ in 0..5 {
-            record_failure(&mut state);
-        }
-        let health = health_snapshot(&state);
-        assert!(health.circuit_open);
-        assert_eq!(health.consecutive_failures, 5);
-    }
-
-    #[test]
-    fn provider_requests_are_reduced_to_bounded_adapter_types() {
-        let request = parse_provider_request(json!({
-            "id": 17,
-            "method": "item/tool/requestUserInput",
-            "params": {"questions": [{
-                "id": "choice",
-                "question": "Which release track?",
-                "options": [{"label": "Stable"}, {"label": "Preview"}]
-            }]}
-        }))
-        .expect("provider request");
-        assert_eq!(request.kind, ApprovalKind::Question);
-        assert_eq!(request.question_ids, vec!["choice"]);
-        assert_eq!(request.summary(), "Which release track?");
-        assert_eq!(request.public_options()[0]["label"], "Stable");
-
-        let unsupported = parse_provider_request(json!({
-            "id": 18,
-            "method": "account/chatgptAuthTokens/refresh",
-            "params": {}
-        }))
-        .expect("unsupported provider request");
-        assert_eq!(unsupported.kind, ApprovalKind::Unsupported);
-
-        let item = json!({"params": {"item": {"type": "commandExecution"}}});
-        assert_eq!(item_kind(&item), ItemKind::CommandExecution);
-    }
-
-    #[test]
-    fn provider_event_type_does_not_expose_raw_json() {
-        let event = ProviderEvent::TurnCompleted { completed: true };
-        assert!(matches!(
-            event,
-            ProviderEvent::TurnCompleted { completed: true }
-        ));
-    }
-
-    #[test]
-    fn provider_event_identities_are_stable_and_bounded() {
-        let first = json!({
-            "method": "item/completed",
-            "params": {"item": {"id": "item-7", "type": "commandExecution"}}
-        });
-        assert_eq!(
-            provider_event_key("item/completed", &first),
-            "provider:item/completed:\"item-7\""
-        );
-        assert_eq!(
-            provider_event_key("item/completed", &first),
-            provider_event_key("item/completed", &first)
-        );
-
-        let oversized = json!({"params": {"opaque": "x".repeat(4096)}});
-        let key = provider_event_key("item/started", &oversized);
-        assert!(key.starts_with("provider:item/started:event:sha256:"));
-        assert!(key.len() < 160);
-    }
-
-    #[test]
-    fn account_adapter_bounds_login_and_rate_limit_shapes() {
-        let login = parse_login_start(
-            json!({
-                "type": "chatgptDeviceCode",
-                "loginId": "login-1",
-                "verificationUrl": "https://example.com/device",
-                "userCode": "ABCD-EFGH"
-            }),
-            "chatgptDeviceCode",
-        )
-        .expect("device login response");
-        assert!(matches!(login, super::LoginStart::DeviceCode { .. }));
-        assert!(
-            parse_login_start(
-                json!({
-                    "type": "chatgpt",
-                    "loginId": "login-2",
-                    "authUrl": "javascript:alert(1)"
-                }),
-                "chatgpt"
-            )
-            .is_err()
-        );
-
-        let window = parse_rate_limit_window(Some(&json!({
-            "usedPercent": 42,
-            "resetsAt": 2_000_000_000_i64,
-            "windowDurationMins": 300
-        })))
-        .expect("rate limit window")
-        .expect("present rate limit window");
-        assert_eq!(window.used_percent, 42);
-        assert!(parse_rate_limit_window(Some(&json!({"usedPercent": 101}))).is_err());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn one_profile_reuses_one_initialized_process_and_enforces_host_capacity() {
-        use std::{fs, os::unix::fs::PermissionsExt};
-        use uuid::Uuid;
-
-        let temporary = tempfile::tempdir().expect("temporary supervisor root");
-        let data_root = temporary.path().join("data");
-        let profile_home = data_root.join("profiles/one");
-        let first_worktree = data_root.join("worktrees/one");
-        let second_worktree = data_root.join("worktrees/two");
-        for directory in [&data_root, &profile_home, &first_worktree, &second_worktree] {
-            fs::create_dir_all(directory).expect("create test runtime directory");
-        }
-        let evidence = temporary.path().join("process-evidence");
-        let binary = temporary.path().join("fake-codex");
-        let script = format!(
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-printf '%s|%s|%s\n' "$$" "$PWD" "$CODEX_HOME" > '{}'
-while IFS= read -r line; do
-  if [[ "$line" != *'"id"'* ]]; then
-    continue
-  fi
-  request_id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
-  if [[ "$line" == *'"method":"initialize"'* ]]; then
-    printf '{{"id":%s,"result":{{"server":"fake"}}}}\n' "$request_id"
-  elif [[ "$line" == *'"method":"thread/start"'* ]]; then
-    printf '{{"method":"item/started","params":{{"item":{{"type":"commandExecution"}}}}}}\n'
-    printf '{{"id":%s,"result":{{"thread":{{"id":"thread-%s"}}}}}}\n' "$request_id" "$request_id"
-  elif [[ "$line" == *'"method":"turn/start"'* ]]; then
-    printf '{{"id":%s,"result":{{"turn":{{"id":"turn-%s"}}}}}}\n' "$request_id" "$request_id"
-  elif [[ "$line" == *'"method":"thread/read"'* ]]; then
-    printf '{{"id":%s,"result":{{"thread":{{"turns":[{{"id":"turn-5","status":"completed","items":[{{"type":"agentMessage","text":"recovered proof"}}]}}]}}}}}}\n' "$request_id"
-  else
-    printf '{{"id":%s,"result":{{}}}}\n' "$request_id"
-  fi
-done
-"#,
-            evidence.display()
-        );
-        fs::write(&binary, script).expect("write fake Codex binary");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("make fake Codex executable");
-
-        let config = AppConfig::from_values(&BTreeMap::from([
-            (
-                "AGENT_WORKSPACE_DATABASE_URL".to_owned(),
-                "postgres://example.invalid/database".to_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_DATA_ROOT".to_owned(),
-                data_root.to_string_lossy().into_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_BINARY".to_owned(),
-                binary.to_string_lossy().into_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_REQUEST_TIMEOUT_SECONDS".to_owned(),
-                "2".to_owned(),
-            ),
-            (
-                "AGENT_WORKSPACE_CODEX_SHUTDOWN_TIMEOUT_SECONDS".to_owned(),
-                "1".to_owned(),
-            ),
-        ]))
-        .expect("supervisor test config");
-        let registry = SupervisorRegistry::new(&config).expect("supervisor registry");
-        let profile_id = Uuid::now_v7();
-
-        {
-            let mut first = registry
-                .acquire(profile_id, profile_home.clone())
-                .await
-                .expect("first profile lease");
-            assert_eq!(
-                first
-                    .start_thread(&first_worktree)
-                    .await
-                    .expect("start first thread"),
-                "thread-2"
-            );
-            assert!(matches!(
-                first.next_event().await.expect("first buffered event"),
-                ProviderEvent::ItemStarted(ProviderItemEvent {
-                    kind: ItemKind::CommandExecution,
-                    ..
-                })
-            ));
-            assert_eq!(
-                first
-                    .start_turn("thread-2", &first_worktree, "first")
-                    .await
-                    .expect("start first turn"),
-                "turn-3"
-            );
-        }
-        {
-            let mut second = registry
-                .acquire(profile_id, profile_home.clone())
-                .await
-                .expect("second profile lease");
-            assert_eq!(
-                second
-                    .start_thread(&second_worktree)
-                    .await
-                    .expect("start second thread"),
-                "thread-4"
-            );
-            assert!(matches!(
-                second.next_event().await.expect("second buffered event"),
-                ProviderEvent::ItemStarted(ProviderItemEvent {
-                    kind: ItemKind::CommandExecution,
-                    ..
-                })
-            ));
-            assert_eq!(
-                second
-                    .start_turn("thread-4", &second_worktree, "second")
-                    .await
-                    .expect("start second turn"),
-                "turn-5"
-            );
-            second
-                .resume_thread("thread-4", &second_worktree)
-                .await
-                .expect("resume second thread");
-            assert_eq!(
-                second
-                    .read_latest_turn("thread-4")
-                    .await
-                    .expect("read exact recovered turn"),
-                RecoveredTurn {
-                    id: Some("turn-5".to_owned()),
-                    status: "completed".to_owned(),
-                    final_message: Some("recovered proof".to_owned()),
-                }
-            );
-        }
-
-        let health = registry.health(profile_id).await.expect("profile health");
-        assert!(health.process_running);
-        assert_eq!(health.process_starts, 1);
-        assert!(matches!(
-            registry
-                .acquire(Uuid::now_v7(), data_root.join("profiles/two"))
-                .await,
-            Err(SupervisorError::HostCapacity)
-        ));
-        let evidence = fs::read_to_string(evidence).expect("process evidence");
-        let mut fields = evidence.trim().split('|');
-        assert!(fields.next().is_some_and(|pid| !pid.is_empty()));
-        let expected_data_root = data_root.to_string_lossy();
-        let expected_profile_home = profile_home.to_string_lossy();
-        assert_eq!(fields.next(), Some(expected_data_root.as_ref()));
-        assert_eq!(fields.next(), Some(expected_profile_home.as_ref()));
-
-        let actor_id = Uuid::now_v7();
-        let session_id = Uuid::now_v7();
-        let ceremony_id = match registry
-            .reserve_login(
-                profile_id,
-                actor_id,
-                session_id,
-                "login-key",
-                super::LoginKind::DeviceCode,
-            )
-            .await
-            .expect("reserve login ceremony")
-        {
-            super::LoginReservation::Reserved(ceremony_id) => ceremony_id,
-            super::LoginReservation::Replay(_) => panic!("first login must reserve"),
-        };
-        registry
-            .complete_login(
-                profile_id,
-                ceremony_id,
-                super::LoginStart::DeviceCode {
-                    login_id: "login-1".to_owned(),
-                    verification_url: "https://example.com/device".to_owned(),
-                    user_code: "ABCD-EFGH".to_owned(),
-                },
-            )
-            .await
-            .expect("complete login ceremony");
-        assert!(matches!(
-            registry
-                .reserve_login(
-                    profile_id,
-                    actor_id,
-                    session_id,
-                    "login-key",
-                    super::LoginKind::DeviceCode,
-                )
-                .await
-                .expect("replay login ceremony"),
-            super::LoginReservation::Replay(_)
-        ));
-        assert!(matches!(
-            registry
-                .reserve_login(
-                    profile_id,
-                    actor_id,
-                    Uuid::now_v7(),
-                    "other-key",
-                    super::LoginKind::DeviceCode,
-                )
-                .await,
-            Err(super::LoginCeremonyError::Active)
-        ));
-        assert!(
-            registry
-                .login_ceremony(profile_id, actor_id, Uuid::now_v7())
-                .await
-                .is_none()
-        );
-        assert!(matches!(
-            registry
-                .reserve_login(
-                    Uuid::now_v7(),
-                    actor_id,
-                    session_id,
-                    "capacity-key",
-                    super::LoginKind::Browser,
-                )
-                .await,
-            Err(super::LoginCeremonyError::Capacity)
-        ));
-
-        registry.request_shutdown();
-        assert!(registry.is_shutting_down());
-        tokio::time::timeout(Duration::from_millis(50), registry.shutdown_requested())
-            .await
-            .expect("requested shutdown is immediately observable");
-        registry.shutdown_all().await;
-        assert!(registry.is_shutting_down());
-    }
+fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

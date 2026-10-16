@@ -1791,6 +1791,7 @@ async fn work_with_worker(
         ApiJson(crate::api::StartRunRequest {
             prompt: provider_prompt,
             repository_id: Some(repository_id),
+            config: None,
         }),
     )
     .await?;
