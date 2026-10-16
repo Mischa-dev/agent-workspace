@@ -387,6 +387,7 @@ export async function getWorkItemBoard(
         total: typeof column.total === 'number' ? column.total : items.length,
         nextCursor: nullableString(column.nextCursor),
         filter,
+        droppable: column.droppable !== false,
       }
     }),
   }

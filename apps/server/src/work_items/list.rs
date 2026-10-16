@@ -7,7 +7,7 @@
 //! OFFSET and without ranking the whole project. A cursor remembers a
 //! fingerprint of the filters it was made for and is refused under others.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::{Json, extract::State};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -1448,6 +1448,10 @@ pub(super) struct BoardColumn {
     total: i64,
     next_cursor: Option<String>,
     filter: BTreeMap<String, String>,
+    /// Whether a card can be moved here. Columns for an archived milestone
+    /// or label, a disabled type or a removed member stay for the tasks that
+    /// still carry them, but nothing new can be given that value.
+    droppable: bool,
 }
 
 pub(super) async fn get_work_item_board(
@@ -1550,6 +1554,18 @@ pub(super) async fn get_work_item_board(
         columns
     };
 
+    // The values a card can still be given, whatever the filters.
+    let assignable = if grouping == Grouping::Status {
+        None
+    } else {
+        Some(
+            column_values(&state.pool, project_id, grouping, &Filters::default())
+                .await?
+                .into_iter()
+                .map(|value| value.key)
+                .collect::<HashSet<_>>(),
+        )
+    };
     let mut first = first_pages(&state.pool, project_id, &filters, grouping, limit).await?;
     let mut pages = Vec::with_capacity(columns.len());
     let mut all_rows = Vec::new();
@@ -1590,9 +1606,13 @@ pub(super) async fn get_work_item_board(
             has_more: page.next_cursor.is_some(),
             next_cursor: page.next_cursor,
             total: group.count,
-            key: group.key,
             label: group.label,
             color: group.color,
+            droppable: group.key == "none"
+                || assignable
+                    .as_ref()
+                    .is_none_or(|values| values.contains(&group.key)),
+            key: group.key,
             status,
             filter,
         })

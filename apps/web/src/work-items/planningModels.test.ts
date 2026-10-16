@@ -39,7 +39,7 @@ function card(id: string): WorkItemCard {
 }
 
 function column(key: string, ids: string[]) {
-  return { key, label: key, status: { id: key, name: key, semanticCategory: 'unstarted' }, items: ids.map(card), hasMore: false, total: ids.length, nextCursor: null, filter: { statusId: key } }
+  return { key, label: key, status: { id: key, name: key, semanticCategory: 'unstarted' }, items: ids.map(card), hasMore: false, total: ids.length, nextCursor: null, filter: { statusId: key }, droppable: true }
 }
 
 const board: WorkItemBoardResponse = { columnsBy: 'status', columns: [column('todo', ['1', '2', '3']), column('doing', ['4'])] }

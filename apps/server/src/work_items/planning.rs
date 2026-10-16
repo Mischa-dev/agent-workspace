@@ -302,7 +302,9 @@ fn link_refusal(refused: &LinkRefusal, reference: &str) -> Response {
             message,
             json!({ "path": path }),
         ),
-        LinkRefusal::AlreadyDuplicate { .. } | LinkRefusal::CantClose { .. } => {
+        LinkRefusal::AlreadyDuplicate { .. }
+        | LinkRefusal::CantClose { .. }
+        | LinkRefusal::TooMany { .. } => {
             refusal(StatusCode::CONFLICT, "conflict", message, Value::Null)
         }
         LinkRefusal::NotFound | LinkRefusal::SelfLink | LinkRefusal::OtherWorkspace => {

@@ -311,7 +311,8 @@ fn link_refusal<T>(field: &str, reference: &str, refusal: &LinkRefusal) -> ToolR
         LinkRefusal::SelfLink | LinkRefusal::OtherWorkspace => ToolResult::invalid(field, message),
         LinkRefusal::Cycle { .. }
         | LinkRefusal::AlreadyDuplicate { .. }
-        | LinkRefusal::CantClose { .. } => ToolResult::conflict(message),
+        | LinkRefusal::CantClose { .. }
+        | LinkRefusal::TooMany { .. } => ToolResult::conflict(message),
     }
 }
 

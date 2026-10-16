@@ -261,6 +261,8 @@ export type BoardColumn = {
   total: number
   nextCursor: string | null
   filter: Record<string, string>
+  /** False for a column kept only for the tasks that still carry an archived or removed value. */
+  droppable: boolean
 }
 
 export type WorkItemBoardResponse = {

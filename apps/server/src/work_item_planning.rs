@@ -30,6 +30,9 @@ use crate::{
 
 /// Most dependencies or relations one call changes.
 pub const MAX_LINKS_PER_CALL: usize = 50;
+/// The most blockers, blocked tasks or relations one task has; task details
+/// show them all.
+pub const MAX_LINKS_PER_TASK: i64 = 200;
 
 /// Who is reading: a person (no connection) or an agent through its
 /// connection, as `actor_can_access_project` takes them.
@@ -126,7 +129,7 @@ pub async fn task_links(
         WHERE dependency.project_id = $1 AND dependency.blocked_work_item_id = $2
           AND item.archived_at IS NULL AND {visible}
         ORDER BY finished, project.project_key, item.number
-        LIMIT 200"#
+        LIMIT {MAX_LINKS_PER_TASK}"#
     ))
     .bind(project_id)
     .bind(task_id)
@@ -145,7 +148,7 @@ pub async fn task_links(
         WHERE dependency.blocking_project_id = $1 AND dependency.blocking_work_item_id = $2
           AND item.archived_at IS NULL AND {visible}
         ORDER BY finished, project.project_key, item.number
-        LIMIT 200"#
+        LIMIT {MAX_LINKS_PER_TASK}"#
     ))
     .bind(project_id)
     .bind(task_id)
@@ -169,7 +172,7 @@ pub async fn task_links(
           AND {visible}
           AND $1::uuid IS NOT NULL
         ORDER BY relation.created_at, item.id
-        LIMIT 200"#
+        LIMIT {MAX_LINKS_PER_TASK}"#
     ))
     .bind(project_id)
     .bind(task_id)
@@ -340,6 +343,11 @@ pub enum LinkRefusal {
     CantClose {
         status: String,
     },
+    /// One of the two tasks already has as many links of this kind as a
+    /// task can have.
+    TooMany {
+        key: String,
+    },
 }
 
 impl LinkRefusal {
@@ -359,6 +367,9 @@ impl LinkRefusal {
             }
             Self::CantClose { status } => format!(
                 "It can't be closed from {status} in this project's workflow. Move it first, or link it without closing."
+            ),
+            Self::TooMany { key } => format!(
+                "{key} already has {MAX_LINKS_PER_TASK} links of this kind, the most a task can have. Remove some first."
             ),
         }
     }
@@ -540,6 +551,32 @@ pub async fn change_dependencies(
             if let Some(path) = blocking_path(transaction, blocked.id, blocking.id).await? {
                 let keys = keys_for(transaction, actor, &path).await?;
                 return Ok(Err((index, LinkRefusal::Cycle { path: keys })));
+            }
+            let (blockers, blocking_count) = sqlx::query_as::<_, (i64, i64)>(
+                r#"
+                SELECT
+                    (SELECT count(*) FROM work_item_dependencies
+                      WHERE blocked_work_item_id = $1 AND blocking_work_item_id <> $2),
+                    (SELECT count(*) FROM work_item_dependencies
+                      WHERE blocking_work_item_id = $2 AND blocked_work_item_id <> $1)
+                "#,
+            )
+            .bind(blocked.id)
+            .bind(blocking.id)
+            .fetch_one(&mut **transaction)
+            .await?;
+            if blockers >= MAX_LINKS_PER_TASK || blocking_count >= MAX_LINKS_PER_TASK {
+                let full = if blockers >= MAX_LINKS_PER_TASK {
+                    blocked
+                } else {
+                    blocking
+                };
+                return Ok(Err((
+                    index,
+                    LinkRefusal::TooMany {
+                        key: named(full, task),
+                    },
+                )));
             }
             let inserted = sqlx::query(
                 r#"
@@ -807,6 +844,25 @@ pub async fn change_relation(
             .await?
         {
             return Ok(Err(LinkRefusal::AlreadyDuplicate { original }));
+        }
+        for end in [task, other] {
+            let count = sqlx::query_scalar::<_, i64>(
+                r#"
+                SELECT count(*) FROM work_item_relations
+                WHERE (work_item_id = $1 OR other_work_item_id = $1)
+                  AND NOT ((work_item_id = $1 AND other_work_item_id = $2)
+                           OR (work_item_id = $2 AND other_work_item_id = $1))
+                "#,
+            )
+            .bind(end.id)
+            .bind(if end.id == task.id { other.id } else { task.id })
+            .fetch_one(&mut **transaction)
+            .await?;
+            if count >= MAX_LINKS_PER_TASK {
+                return Ok(Err(LinkRefusal::TooMany {
+                    key: named(end, task),
+                }));
+            }
         }
         let inserted = sqlx::query(
             r#"

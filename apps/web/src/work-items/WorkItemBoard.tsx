@@ -93,6 +93,11 @@ export function WorkItemBoard({
   }, [assignees.data, milestones.data, state.lanes, workflow.types])
   const lanes = useMemo(() => lanesFor(columns, state.lanes, knownLanes), [columns, knownLanes, state.lanes])
   const canMove = !disabled
+  // A lane for an archived milestone or a removed member holds its tasks, but nothing new can join it.
+  const laneDroppable = useCallback(
+    (laneKey: string) => knownLanes.length === 0 || laneKey === 'none' || knownLanes.some((lane) => lane.key === laneKey),
+    [knownLanes],
+  )
 
   const cellCards = useCallback(
     (column: BoardColumn, laneKey: string) =>
@@ -117,6 +122,10 @@ export function WorkItemBoard({
       if (sameColumn && !laneChanged && (columnsBy !== 'status' || currentIndex === target.index)) return
       if (columnsBy === 'status' && !sameColumn && !allowedStatuses(workflow, card.status.id).some((status) => status.id === to.key)) {
         notify({ tone: 'warning', message: `This workflow doesn’t allow moving from ${card.status.name} to ${to.label}.` })
+        return
+      }
+      if ((!sameColumn && !to.droppable) || (laneChanged && !laneDroppable(target.laneKey))) {
+        notify({ tone: 'warning', message: 'That column is archived or no longer available, so tasks can’t be moved into it.' })
         return
       }
       // Anchor on the cards of the target cell; an empty cell goes after the column's last card.
@@ -186,7 +195,7 @@ export function WorkItemBoard({
         })
         .finally(() => void invalidate(projectId))
     },
-    [boardKey, columnsBy, invalidate, lanes, notify, projectId, queryClient, state.lanes, workflow],
+    [boardKey, columnsBy, invalidate, laneDroppable, lanes, notify, projectId, queryClient, state.lanes, workflow],
   )
 
   const drag = useBoardDrag({ enabled: canMove, ghostRef, onDrop: performMove, scrollerRef })
@@ -206,7 +215,10 @@ export function WorkItemBoard({
     if (!activeDrag) return cards
     const without = cards.filter((entry) => !('card' in entry) || entry.dragId !== activeDrag.dragId)
     const target = activeDrag.target
-    if (!target || target.columnKey !== column.key || target.laneKey !== laneKey) {
+    const { columnKey: fromKey } = splitDragId(activeDrag.dragId)
+    const fromLane = draggedCard && state.lanes !== 'none' ? laneOf(draggedCard, state.lanes).key : laneKey
+    const blocked = (column.key !== fromKey && !column.droppable) || (laneKey !== fromLane && !laneDroppable(laneKey))
+    if (!target || target.columnKey !== column.key || target.laneKey !== laneKey || blocked) {
       // Keep the held card visible in place while the pointer is outside every cell.
       return activeDrag.keyboard || target ? without : cards
     }

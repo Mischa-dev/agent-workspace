@@ -502,6 +502,31 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
         ["urgent", "high", "medium", "low", "no_priority"],
         "{board}"
     );
+
+    // An archived milestone keeps its column for the tasks still in it, but
+    // nothing can be dropped there.
+    let milestone_id = milestone["id"].as_str().expect("milestone id");
+    let (status, archived) = owner
+        .patch(
+            &format!("{base}/milestones/{milestone_id}"),
+            json!({ "expectedVersion": milestone["version"], "archived": true }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    let (status, board) = owner
+        .get(&format!("{base}/work-items/board?columnsBy=milestone"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let droppable = |key: &str| {
+        board["columns"]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .find(|column| column["key"] == key)
+            .map(|column| column["droppable"].clone())
+    };
+    assert_eq!(droppable(milestone_id), Some(json!(false)), "{board}");
+    assert_eq!(droppable("none"), Some(json!(true)), "{board}");
 }
 
 #[tokio::test]
