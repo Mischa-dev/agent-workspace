@@ -510,6 +510,39 @@ pub async fn replace_workflow(
         };
         status_moves.push((row.id, target));
     }
+    // A status's category decides whether its tasks count as done, ready or
+    // canceled. Changing it in place would change every task in it without a
+    // version, history entry or event, so it waits until the status is empty.
+    let categories: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, semantic_category FROM work_item_statuses WHERE project_id = $1 AND enabled",
+    )
+    .bind(project_id)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect();
+    for status in statuses.iter().filter(|status| status.existing) {
+        let category = status.category.as_deref().unwrap_or("backlog");
+        let Some(row) = existing_statuses.get(&status.id) else {
+            continue;
+        };
+        if row.all_tasks > 0
+            && categories
+                .get(&status.id)
+                .is_some_and(|current| current != category)
+        {
+            return Ok(Err(invalid(
+                "statuses",
+                format!(
+                    "{} still has {} {}, so its category can't change. Move them to another status first, or add a new status with the category you want and retire {} into it.",
+                    row.name,
+                    row.all_tasks,
+                    if row.all_tasks == 1 { "task" } else { "tasks" },
+                    row.name
+                ),
+            )));
+        }
+    }
     let mut type_moves = Vec::new();
     for row in existing_types.values().filter(|row| row.enabled) {
         if kept_types.contains(&row.id) || row.all_tasks == 0 {

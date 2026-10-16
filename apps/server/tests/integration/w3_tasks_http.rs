@@ -792,6 +792,33 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+    // QA holds tasks, so its category can't change in place.
+    let recategorized = statuses(&updated)
+        .iter()
+        .map(|status| {
+            let category = if status["name"] == "QA" {
+                json!("completed")
+            } else {
+                status["semanticCategory"].clone()
+            };
+            json!({
+                "id": status["id"], "name": status["name"],
+                "semanticCategory": category, "isDefault": status["isDefault"]
+            })
+        })
+        .collect::<Vec<_>>();
+    let (status, refused) = owner
+        .put(
+            &uri,
+            json!({
+                "expectedVersion": updated["version"],
+                "statuses": recategorized,
+                "types": types,
+                "transitions": "all"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     let without_qa = statuses(&updated)
         .iter()
         .filter(|status| status["name"] != "QA")

@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     McpPrincipal,
-    common::{ToolResult, accessible_project_ids_in, parse_id, public_url},
+    common::{ToolResult, accessible_project_ids_in, archived_task_message, parse_id, public_url},
     tasks::{command_actor, resolve_tasks},
     writes::{WriteAccess, check_access_for, check_write_access},
 };
@@ -290,18 +290,27 @@ async fn resolve_linked(
     Ok(Ok(found))
 }
 
-async fn task_in_project(
+/// Why a task can't take link changes, if it can't: missing from the
+/// project, or archived (an archived task refuses every change but a restore).
+async fn link_target_refusal<T>(
     connection: &mut PgConnection,
     project_id: Uuid,
     task_id: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM work_items WHERE id = $1 AND project_id = $2)",
+) -> Result<Option<ToolResult<T>>, AppError> {
+    let row = sqlx::query_as::<_, (String, bool)>(
+        "SELECT project.project_key || '-' || item.number::text, item.archived_at IS NOT NULL \
+         FROM work_items item JOIN projects project ON project.id = item.project_id \
+         WHERE item.id = $1 AND item.project_id = $2",
     )
     .bind(task_id)
     .bind(project_id)
-    .fetch_one(&mut *connection)
-    .await?)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(match row {
+        None => Some(ToolResult::not_found("That task")),
+        Some((key, true)) => Some(ToolResult::conflict(archived_task_message(&key))),
+        Some((_, false)) => None,
+    })
 }
 
 fn link_refusal<T>(field: &str, reference: &str, refusal: &LinkRefusal) -> ToolResult<T> {
@@ -383,8 +392,8 @@ pub(super) async fn task_depend(
         {
             return Ok(refusal);
         }
-        if !task_in_project(&mut transaction, project_id, task_id).await? {
-            return Ok(ToolResult::not_found("That task"));
+        if let Some(refusal) = link_target_refusal(&mut transaction, project_id, task_id).await? {
+            return Ok(refusal);
         }
         let references = blocked_by
             .iter()
@@ -518,8 +527,8 @@ pub(super) async fn task_relate(
         {
             return Ok(refusal);
         }
-        if !task_in_project(&mut transaction, project_id, task_id).await? {
-            return Ok(ToolResult::not_found("That task"));
+        if let Some(refusal) = link_target_refusal(&mut transaction, project_id, task_id).await? {
+            return Ok(refusal);
         }
         let reference = arguments.other_task_id.clone();
         let other = match resolve_linked(

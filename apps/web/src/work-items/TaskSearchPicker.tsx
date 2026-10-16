@@ -13,6 +13,7 @@ const KEY = /^[A-Za-z][A-Za-z0-9]*-\d+$/
  * since blockers may live in another project.
  */
 export function TaskSearchPicker({
+  allowTypedKey = true,
   anchor,
   exclude,
   extra,
@@ -22,6 +23,8 @@ export function TaskSearchPicker({
   onPick,
   projectId,
 }: {
+  /** Offers "Use AW-12" for a typed key the search didn't find. Parents live in the same project, so they turn it off. */
+  allowTypedKey?: boolean
   anchor: HTMLElement | null
   exclude: readonly string[]
   /** Something to show above the results, such as a "close as duplicate" choice. */
@@ -49,7 +52,7 @@ export function TaskSearchPicker({
         loading={results.isFetching}
         onClose={onClose}
         onCreate={
-          KEY.test(typed) && !found.some((task) => task.key.toLowerCase() === typed.toLowerCase())
+          allowTypedKey && KEY.test(typed) && !found.some((task) => task.key.toLowerCase() === typed.toLowerCase())
             ? (text) => {
                 onPick({ id: null, key: text.toUpperCase() })
                 onClose()

@@ -304,6 +304,35 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     let after = as_mara("task_open", json!({"taskId": "WORK-3"})).await;
     assert_eq!(after["value"]["watchers"][0]["handle"], "mara", "{after}");
     assert_eq!(after["value"]["ready"], false, "SECRET-1 still blocks it");
+
+    // An archived task takes no link changes until it's restored.
+    sqlx::query(
+        "UPDATE work_items item SET archived_at = now(), archived_by_actor_id = item.created_by_actor_id \
+         FROM projects project \
+         WHERE project.id = item.project_id AND project.project_key = 'WORK' AND item.number = 3",
+    )
+    .execute(&setup.pool)
+    .await
+    .expect("archive WORK-3");
+    for (tool, arguments) in [
+        (
+            "task_depend",
+            json!({"taskId": "WORK-3", "blocks": ["WORK-1"]}),
+        ),
+        (
+            "task_relate",
+            json!({"taskId": "WORK-3", "otherTaskId": "WORK-1", "kind": "relates_to"}),
+        ),
+    ] {
+        let refused = call(tool, arguments).await;
+        assert_eq!(refused["outcome"], "conflict", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("WORK-3 is archived")),
+            "{refused}"
+        );
+    }
 }
 
 #[tokio::test]

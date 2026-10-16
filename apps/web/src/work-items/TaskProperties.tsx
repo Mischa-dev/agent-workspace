@@ -177,6 +177,7 @@ export function TaskProperties({
         />
       ) : null}
       <TaskSearchPicker
+        allowTypedKey={false}
         anchor={parentAnchor}
         exclude={[item.id, ...item.subtasks.map((task) => task.id)]}
         label="Set parent"
@@ -184,7 +185,7 @@ export function TaskProperties({
         onClose={() => setParentAnchor(null)}
         onPick={(target) => {
           setParentAnchor(null)
-          save.save('Parent', { parentWorkItemId: target.id ?? (target.key || null) })
+          save.save('Parent', { parentWorkItemId: target.id })
         }}
         projectId={item.projectId}
       />
