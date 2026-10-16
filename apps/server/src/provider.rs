@@ -137,7 +137,7 @@ pub(crate) async fn resolve_run_config(
             "agent_run",
             "this harness is not installed",
         ))?;
-    let catalog = catalog::pickable_models(&state.pool, organization_id, manifest).await?;
+    let catalog = catalog::run_catalog(&state.pool, organization_id, manifest).await?;
     launch
         .resolve(&RunConfig::from_value(account_defaults), manifest, &catalog)
         .map_err(|error| AppError::Validation(error.0))

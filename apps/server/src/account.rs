@@ -33,7 +33,7 @@ use crate::{
     provider::{
         AccountHandle, AccountSummary, HarnessError, LoginCeremonyError, LoginCeremonySnapshot,
         LoginKind, LoginReservation, LoginStart, ProfileHealth, RateLimitSummary,
-        catalog::pickable_models, manifest::AdapterManifest, run_config::RunConfig,
+        catalog::run_catalog, manifest::AdapterManifest, run_config::RunConfig,
     },
 };
 
@@ -539,9 +539,11 @@ async fn update_account(
     };
     let run_defaults = match request.run_defaults {
         Some(defaults) => {
-            let catalog = pickable_models(&state.pool, access.organization_id, &manifest).await?;
-            RunConfig::default()
-                .resolve(&defaults, &manifest, &catalog)
+            // Checked as if named at launch, so a saved default must be
+            // pickable now even though stale ones fall back at run time.
+            let catalog = run_catalog(&state.pool, access.organization_id, &manifest).await?;
+            defaults
+                .resolve(&RunConfig::default(), &manifest, &catalog)
                 .map_err(|error| AppError::Validation(error.0))?;
             Some(
                 serde_json::to_value(&defaults)

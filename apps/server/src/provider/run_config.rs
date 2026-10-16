@@ -90,9 +90,12 @@ impl RunConfig {
 
     /// Resolves the launch overrides (`self`) over the account defaults for
     /// one adapter, checking every value against its manifest and catalog.
-    /// `catalog` holds the models people can pick (hidden ones excluded); an
-    /// empty catalog means the adapter's own default model is used, and a
-    /// named model is refused until the catalog lists it.
+    /// `catalog` is the workspace's whole catalog; hidden models can't be
+    /// picked. An empty catalog means the adapter's own default model is
+    /// used and a model named at launch is refused until the catalog lists
+    /// it; a catalog with every model hidden refuses to run at all. An
+    /// account default model that is no longer pickable falls back to the
+    /// catalog default rather than blocking the account's runs.
     pub fn resolve(
         &self,
         account_defaults: &RunConfig,
@@ -107,27 +110,32 @@ impl RunConfig {
             return Err(InvalidRunConfig("harness"));
         }
         let launch_model = self.model.clone();
-        let model_id = launch_model
-            .clone()
-            .or_else(|| account_defaults.model.clone())
-            .or_else(|| {
-                catalog
-                    .iter()
+        let pickable = |id: &str| catalog.iter().find(|model| model.id == id && !model.hidden);
+        if let Some(id) = &launch_model
+            && pickable(id).is_none()
+        {
+            return Err(InvalidRunConfig("model"));
+        }
+        let model = match launch_model
+            .as_deref()
+            .or(account_defaults.model.as_deref())
+            .and_then(pickable)
+        {
+            Some(model) => Some(model),
+            None => {
+                let visible = || catalog.iter().filter(|model| !model.hidden);
+                let fallback = visible()
                     .find(|model| model.is_default)
-                    .or_else(|| catalog.first())
-                    .map(|model| model.id.clone())
-            });
-        // A named model must be in the catalog; with an empty catalog only
-        // the adapter's own default (no model named) can run.
-        let model = match &model_id {
-            Some(id) => Some(
-                catalog
-                    .iter()
-                    .find(|model| &model.id == id)
-                    .ok_or(InvalidRunConfig("model"))?,
-            ),
-            None => None,
+                    .or_else(|| visible().next());
+                if fallback.is_none() && !catalog.is_empty() {
+                    // Every model is hidden: running the adapter's own
+                    // default would bypass what the admins hid.
+                    return Err(InvalidRunConfig("model"));
+                }
+                fallback
+            }
         };
+        let model_id = model.map(|model| model.id.clone());
         // Account defaults for reasoning and speed only apply when the model
         // they were chosen for is still the one in use, and only while that
         // model still offers them; otherwise the model's own default is used.
@@ -358,8 +366,8 @@ mod tests {
         assert!(
             RunConfig::default()
                 .resolve(&named, &manifest, &[])
-                .is_err(),
-            "an account default is checked too"
+                .is_ok_and(|config| config.model.is_none()),
+            "an account default the catalog doesn't list falls back"
         );
         assert!(
             RunConfig::default()
@@ -395,6 +403,34 @@ mod tests {
         assert_eq!(
             launch.resolve(&account, &manifest, &catalog()).err(),
             Some(InvalidRunConfig("reasoning"))
+        );
+    }
+
+    #[test]
+    fn hidden_models_are_never_run_and_stale_account_models_fall_back() {
+        let manifest = demo_manifest();
+        let mut hidden = catalog();
+        hidden[1].hidden = true;
+        let account = RunConfig {
+            model: Some("deep-model".to_owned()),
+            ..RunConfig::default()
+        };
+        let resolved = RunConfig::default()
+            .resolve(&account, &manifest, &hidden)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(resolved.model.as_deref(), Some("fast-model"));
+        assert_eq!(
+            account.resolve(&RunConfig::default(), &manifest, &hidden),
+            Err(InvalidRunConfig("model")),
+            "named at launch, a hidden model is refused"
+        );
+        for model in &mut hidden {
+            model.hidden = true;
+        }
+        assert_eq!(
+            RunConfig::default().resolve(&RunConfig::default(), &manifest, &hidden),
+            Err(InvalidRunConfig("model")),
+            "with every model hidden nothing runs"
         );
     }
 }

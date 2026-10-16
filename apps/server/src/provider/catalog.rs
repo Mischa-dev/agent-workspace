@@ -135,8 +135,9 @@ pub async fn catalog(
     })
 }
 
-/// The models a run may use: the catalog without hidden ones.
-pub async fn pickable_models(
+/// The catalog as runs see it, hidden models included (and marked) so
+/// `RunConfig::resolve` can tell a hidden-only catalog from an empty one.
+pub async fn run_catalog(
     pool: &PgPool,
     organization_id: Uuid,
     manifest: &AdapterManifest,
@@ -146,7 +147,6 @@ pub async fn pickable_models(
         .models
         .into_iter()
         .map(|model| model.model)
-        .filter(|model| !model.hidden)
         .collect())
 }
 
