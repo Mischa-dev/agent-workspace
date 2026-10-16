@@ -49,7 +49,12 @@ export function ThreadPanel({
   const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
   const scroller = useRef<HTMLDivElement>(null)
   const page = timeline.data
-  const valid = page?.conversation.id === threadId && page.conversation.kind === 'thread'
+  // The id comes from the URL: show only a thread that belongs to this parent.
+  const valid =
+    page?.conversation.id === threadId &&
+    page.conversation.kind === 'thread' &&
+    page.conversation.projectId === projectId &&
+    page.conversation.parentChannelId === parentId
   // The panel shows the newest page only; this keeps it current between refetches.
   const live = useLiveOlderEntries({
     conversationId: threadId,
@@ -147,6 +152,7 @@ export function ThreadPanel({
         {timeline.isError ? (
           <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="This thread didn’t load" />
         ) : null}
+        {page && !valid ? <ErrorState title="This thread isn’t in this conversation" /> : null}
         <TimelineEntries
           entries={live.entries}
           onOpenHistory={messageActions.openHistory}

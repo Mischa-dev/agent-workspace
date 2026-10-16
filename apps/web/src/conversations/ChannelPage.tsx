@@ -56,8 +56,11 @@ export function ChannelPage() {
   const openThreadId = searchParams.get('thread')
   const setBoardOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams)
-    if (open) next.set('threads', 'all')
-    else next.delete('threads')
+    // The board and an open thread share the side panel: showing one closes the other.
+    if (open) {
+      next.set('threads', 'all')
+      next.delete('thread')
+    } else next.delete('threads')
     setSearchParams(next, { replace: true })
   }
   // Threads open beside the channel, so you keep your place in it.
