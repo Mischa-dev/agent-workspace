@@ -2556,7 +2556,6 @@ pub async fn notify_watching_agents(
         WHERE watcher.work_item_id = $1 AND watcher.actor_id <> $2
           AND item.assignee_actor_id IS DISTINCT FROM watcher.actor_id
         ORDER BY watcher.actor_id
-        LIMIT 20
         "#,
     )
     .bind(work_item_id)
@@ -2813,6 +2812,7 @@ pub async fn finalize_comment(
         "An assigned Work Item changed",
     )
     .await?;
+    notify_watching_agents(transaction, actor, work_item_id).await?;
     let audit_id = record_audit(
         transaction,
         actor,

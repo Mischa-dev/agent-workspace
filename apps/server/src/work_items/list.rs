@@ -515,10 +515,19 @@ impl Filters {
             Grouping::Milestone => filters.milestone = Some(one_or_none()?),
             Grouping::Parent => filters.parent = Some(one_or_none()?),
             Grouping::Label => {
-                filters.labels = Some(if key == "none" {
-                    LabelFilter::None
-                } else {
-                    LabelFilter::All(vec![id()?])
+                // A label column keeps the labels the filter already
+                // requires. Under such a filter the "No label" column counts
+                // zero, so its page is never read.
+                filters.labels = Some(match (key, filters.labels.take()) {
+                    ("none", _) => LabelFilter::None,
+                    (_, Some(LabelFilter::All(mut ids))) => {
+                        let column = id()?;
+                        if !ids.contains(&column) {
+                            ids.push(column);
+                        }
+                        LabelFilter::All(ids)
+                    }
+                    _ => LabelFilter::All(vec![id()?]),
                 });
             }
         }

@@ -457,6 +457,35 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
         );
     }
 
+    // Filtered to Backend, the Frontend column holds only tasks with both.
+    let frontend_only = create_task(
+        owner,
+        project,
+        json!({ "title": "Styles", "labelIds": [frontend["id"]] }),
+    )
+    .await;
+    let backend_id = label["id"].as_str().expect("label id");
+    let (status, board) = owner
+        .get(&format!(
+            "{base}/work-items/board?columnsBy=label&labelIds={backend_id}"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let frontend_column = board["columns"]
+        .as_array()
+        .expect("columns")
+        .iter()
+        .find(|column| column["label"] == "Frontend")
+        .expect("frontend column");
+    let ids = frontend_column["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["id"].clone())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&both["id"]), "{board}");
+    assert!(!ids.contains(&frontend_only["id"]), "{board}");
+
     // Every priority is a column to drop on, even one no task has yet.
     let (status, board) = owner
         .get(&format!("{base}/work-items/board?columnsBy=priority"))
