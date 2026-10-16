@@ -1,0 +1,87 @@
+#!/usr/bin/bash
+# Back up the secrets master key (keyring) on its own: a different age
+# recipient and a different off-host place from the database backups, because
+# a dump together with its key defeats the encryption. Runs after the daily
+# backup and uploads only when the key file changed. Key sets are never
+# pruned: an old dump may need the key that was current when it was made.
+#
+# usage: agent-workspace-backup-key [--config FILE] [--force]
+set -euo pipefail
+
+script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# shellcheck source=agent-workspace-backup-lib.sh
+source "${script_dir}/agent-workspace-backup-lib.sh"
+
+config="${BACKUP_DEFAULT_CONFIG}"
+force=false
+while (($# > 0)); do
+  case "$1" in
+    --config)
+      config="${2:?--config needs a path}"
+      shift 2
+      ;;
+    --force)
+      force=true
+      shift
+      ;;
+    *)
+      echo "usage: agent-workspace-backup-key [--config FILE] [--force]" >&2
+      exit 64
+      ;;
+  esac
+done
+
+load_config "${config}"
+apply_common_defaults
+
+if [[ -z "${BACKUP_SECRETS_KEY_FILE:-}" ]]; then
+  log "BACKUP_SECRETS_KEY_FILE is not set; no secrets key to back up"
+  exit 0
+fi
+require_setting BACKUP_KEY_AGE_RECIPIENTS_FILE
+require_setting BACKUP_KEY_REMOTE
+require_file BACKUP_SECRETS_KEY_FILE "${BACKUP_SECRETS_KEY_FILE}"
+require_file BACKUP_KEY_AGE_RECIPIENTS_FILE "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"
+if [[ -n "${BACKUP_AGE_RECIPIENTS_FILE:-}" ]]; then
+  if [[ "$(readlink -f -- "${BACKUP_AGE_RECIPIENTS_FILE}")" == "$(readlink -f -- "${BACKUP_KEY_AGE_RECIPIENTS_FILE}")" ]] \
+    || cmp -s -- "${BACKUP_AGE_RECIPIENTS_FILE}" "${BACKUP_KEY_AGE_RECIPIENTS_FILE}"; then
+    die "BACKUP_KEY_AGE_RECIPIENTS_FILE must hold a different recipient from BACKUP_AGE_RECIPIENTS_FILE"
+  fi
+fi
+if [[ -n "${BACKUP_REMOTE:-}" ]]; then
+  require_separate_remotes "${BACKUP_REMOTE}" "${BACKUP_KEY_REMOTE}"
+else
+  parse_remote "${BACKUP_KEY_REMOTE}"
+fi
+key_mode="$(stat -c '%a' -- "${BACKUP_SECRETS_KEY_FILE}")"
+(((8#${key_mode} & 8#077) == 0)) || die "the secrets key file must be owner-only"
+require_tools age sha256sum flock
+require_transport_tools "${BACKUP_KEY_REMOTE}"
+
+take_lock backup-key
+umask 0077
+state_file="${BACKUP_STATE_DIR}/secrets-key.sha256"
+current="$(sha256sum -- "${BACKUP_SECRETS_KEY_FILE}" | cut -d' ' -f1)"
+previous=""
+[[ -f "${state_file}" ]] && previous="$(<"${state_file}")"
+if [[ "${current}" == "${previous}" && "${force}" == false ]]; then
+  log "secrets key unchanged since the last upload; nothing to do"
+  exit 0
+fi
+
+work="$(mktemp -d -p "${BACKUP_WORK_DIR}" agent-workspace-key.XXXXXX)"
+cleanup() {
+  rm -rf -- "${work:?}"
+}
+trap cleanup EXIT
+name="$(new_set_name)"
+install -d -m 0700 "${work}/${name}"
+encrypt_stream "${BACKUP_KEY_AGE_RECIPIENTS_FILE}" "${work}/${name}/secrets-key.age" \
+  <"${BACKUP_SECRETS_KEY_FILE}"
+test -s "${work}/${name}/secrets-key.age" || die "encrypted key is empty"
+(cd -- "${work}/${name}" && sha256sum -- secrets-key.age >SHA256SUMS)
+
+remote_put_set "${BACKUP_KEY_REMOTE}" "${work}/${name}"
+printf '%s\n' "${current}" >"${state_file}.next"
+mv -T -- "${state_file}.next" "${state_file}"
+log "secrets key ${name} copied off-host"

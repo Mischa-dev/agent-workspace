@@ -110,6 +110,36 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&rotated)?);
             return Ok(());
         }
+        Some("secret-key-init") => {
+            // Creates a new keyring file; refuses to replace one.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["path"])?;
+            let path = std::path::PathBuf::from(required_option(&options, "path")?);
+            if !path.is_absolute() {
+                bail!("--path must be absolute");
+            }
+            let keyring = agent_workspace_server::secrets::FileKeyring::generate();
+            agent_workspace_server::secrets::write_new_keyring(&path, &keyring)
+                .with_context(|| format!("create {}", path.display()))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "path": path,
+                    "activeKeyId": keyring.key_ids().first(),
+                    "next": "Set AGENT_WORKSPACE_SECRETS_KEY_PATH to this path, and back the file up apart from database dumps.",
+                }))?
+            );
+            return Ok(());
+        }
+        Some("secret-key-rotate") => {
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &[])?;
+            let result = agent_workspace_server::secrets::rotate_master_key(&pool, &config)
+                .await
+                .context("rotate the secrets master key")?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            return Ok(());
+        }
         Some("retention-worktrees") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["apply"])?;
@@ -189,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(url) = options.get("webhook-url") {
                 let secret = agent_workspace_server::external_agents::set_webhook_for_host(
                     &pool,
+                    &config,
                     agent.connection_id,
                     url,
                 )
@@ -281,6 +312,17 @@ async fn main() -> anyhow::Result<()> {
         "startup reconciliation completed"
     );
 
+    let moved_secrets =
+        agent_workspace_server::secrets::migrate_plaintext_webhook_secrets(&pool, &config)
+            .await
+            .context("encrypt plaintext agent webhook secrets")?;
+    if moved_secrets > 0 {
+        tracing::info!(
+            moved_secrets,
+            "moved agent webhook secrets into the secrets store"
+        );
+    }
+
     let listener = TcpListener::bind(config.server_addr)
         .await
         .with_context(|| format!("bind application server to {}", config.server_addr))?;
@@ -317,6 +359,17 @@ async fn main() -> anyhow::Result<()> {
     // and lease expiry but never loses data, so it must not stop the server.
     tokio::spawn(agent_workspace_server::replies::run(
         state.clone(),
+        shutdown_receiver.clone(),
+    ));
+    // Background jobs (F9). A job lost to a crash is retried once its lease
+    // runs out, so like the reply worker this doesn't stop the server.
+    let job_workers = tokio::spawn(agent_workspace_server::jobs::run_workers(
+        state.clone(),
+        Arc::new(agent_workspace_server::jobs::default_registry()),
+        agent_workspace_server::jobs::WorkerOptions {
+            concurrency: config.job_concurrency,
+            ..agent_workspace_server::jobs::WorkerOptions::default()
+        },
         shutdown_receiver.clone(),
     ));
     let signal_shutdown_sender = shutdown_sender.clone();
@@ -422,6 +475,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     signal_task.abort();
+    if let Err(error) = job_workers.await {
+        tracing::warn!(%error, "background job workers stopped abnormally");
+    }
     supervisors.shutdown_all().await;
     result
 }

@@ -99,6 +99,15 @@ pub struct AppConfig {
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
     pub log_filter: String,
+    /// The secrets master keyring (S1): an owner-only file outside the data
+    /// and release roots. Unset in development, a keyring under
+    /// `.agent-workspace-secrets/` in the working directory is created on
+    /// first use; unset elsewhere, encrypted secrets are unavailable.
+    pub secrets_key_path: Option<PathBuf>,
+    /// The bearer token `/metrics` requires (O2), as an owner-only file.
+    pub metrics_token_path: Option<PathBuf>,
+    /// Background jobs run at once in this process (F9).
+    pub job_concurrency: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -262,6 +271,17 @@ impl AppConfig {
         }
 
         let workos = workos_config(values, &data_root, &web_root)?;
+        let secrets_key_path =
+            optional_secret_path(values, "SECRETS_KEY_PATH", &data_root, &web_root, 64 * 1024)?;
+        let metrics_token_path =
+            optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
+        let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
+        if !(1..=64).contains(&job_concurrency) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}JOB_CONCURRENCY"),
+                reason: "must be between 1 and 64".into(),
+            });
+        }
         Ok(Self {
             environment,
             server_addr,
@@ -286,6 +306,9 @@ impl AppConfig {
             github,
             workos,
             log_filter,
+            secrets_key_path,
+            metrics_token_path,
+            job_concurrency,
         })
     }
 }
@@ -384,6 +407,25 @@ fn github_config(
         api_base_url,
         api_version,
     }))
+}
+
+fn optional_secret_path(
+    values: &BTreeMap<String, String>,
+    key: &str,
+    data_root: &Path,
+    web_root: &Path,
+    maximum_bytes: u64,
+) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(value) = values
+        .get(&format!("{PREFIX}{key}"))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    validate_secret_file(key, &path, data_root, web_root, maximum_bytes)?;
+    Ok(Some(path))
 }
 
 fn validate_secret_file(

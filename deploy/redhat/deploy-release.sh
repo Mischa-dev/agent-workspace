@@ -44,6 +44,10 @@ sudo install -m 0755 \
   "${release_root}/bin/agent-workspace-service-command"
 sudo install -m 0755 \
   deploy/redhat/agent-workspace-pg-dump \
+  deploy/redhat/agent-workspace-backup \
+  deploy/redhat/agent-workspace-backup-key \
+  deploy/redhat/agent-workspace-backup-lib.sh \
+  deploy/redhat/agent-workspace-restore-drill \
   deploy/redhat/agent-workspace-pg-restore \
   deploy/redhat/agent-workspace-psql \
   deploy/redhat/install-file-secret.sh \

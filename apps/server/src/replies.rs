@@ -826,7 +826,7 @@ pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
         if let Err(error) = expire_leases(&state.pool).await {
             tracing::warn!(category = error.log_category(), "reply lease sweep failed");
         }
-        if let Err(error) = deliver_webhooks(&state.pool, &client).await {
+        if let Err(error) = deliver_webhooks(&state, &client).await {
             tracing::warn!(category = error.log_category(), "webhook delivery failed");
         }
         tokio::select! {
@@ -871,17 +871,20 @@ struct DueDelivery {
     agent_actor_id: Uuid,
     request_pending: bool,
     webhook_url: Option<String>,
+    /// Plaintext from before the secrets store; moved into it at startup.
     webhook_secret: Option<String>,
+    webhook_secret_id: Option<Uuid>,
 }
 
-async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(), AppError> {
+async fn deliver_webhooks(state: &AppState, client: &reqwest::Client) -> Result<(), AppError> {
+    let pool = &state.pool;
     let mut transaction = pool.begin().await?;
     let due = sqlx::query_as::<_, DueDelivery>(
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
                delivery.attempts, request.agent_actor_id,
                (request.status = 'pending' AND agent_connection_can_access(connection.id, request.project_id) AND conversation_visible_to(request.conversation_id, request.agent_actor_id)) AS request_pending,
-               connection.webhook_url, connection.webhook_secret
+               connection.webhook_url, connection.webhook_secret, connection.webhook_secret_id
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id
         JOIN external_agent_connections connection ON connection.id = delivery.connection_id
@@ -897,9 +900,32 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
     .fetch_all(&mut *transaction)
     .await?;
     for delivery in due {
+        // A stored secret that can't be opened is a failed attempt, retried
+        // with backoff, not a wakeup quietly dropped.
+        let mut secret_unreadable = false;
+        let secret = match (&delivery.webhook_secret_id, &delivery.webhook_secret) {
+            (Some(id), _) => {
+                let revealed = match crate::secrets::keyring(&state.config) {
+                    Ok(keys) => {
+                        crate::secrets::reveal(pool, keys.as_ref(), *id, "agent_webhook.sign")
+                            .await
+                            .ok()
+                    }
+                    Err(_) => None,
+                };
+                secret_unreadable = revealed.is_none();
+                revealed
+            }
+            (None, Some(plaintext)) => Some(crate::secrets::SecretValue::new(plaintext.clone())),
+            (None, None) => None,
+        };
+        let placeholder = crate::secrets::SecretValue::new(String::new());
         let (Some(url), Some(secret), true) = (
             delivery.webhook_url.as_deref(),
-            delivery.webhook_secret.as_deref(),
+            secret
+                .as_ref()
+                .or(secret_unreadable.then_some(&placeholder))
+                .map(crate::secrets::SecretValue::expose),
             delivery.request_pending,
         ) else {
             // Answered, superseded, or the webhook was removed: nothing to wake.
@@ -909,7 +935,11 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
                 .await?;
             continue;
         };
-        let error = post_wakeup(client, url, secret, &delivery).await.err();
+        let error = if secret_unreadable {
+            Some("the webhook's signing secret couldn't be read")
+        } else {
+            post_wakeup(client, url, secret, &delivery).await.err()
+        };
         let attempts = delivery.attempts + 1;
         let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
         sqlx::query(

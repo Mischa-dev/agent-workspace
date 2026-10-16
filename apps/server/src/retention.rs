@@ -252,3 +252,39 @@ fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> boo
     Path::new(&candidate.mirror_path) == expected_mirror
         && Path::new(&candidate.worktree_path) == expected_worktree
 }
+
+/// O3: the retention commands, run on a schedule as background jobs
+/// instead of by hand. The host commands still work for a dry run.
+pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
+    registry.register(EXTERNAL_EVENTS_JOB, |context| async move {
+        let result = clean_external_events(&context.state.pool, true).await?;
+        tracing::info!(
+            removed = result.removed_events,
+            remaining = result.remaining_expired_events,
+            "trimmed expired agent events"
+        );
+        Ok(())
+    });
+    registry.every(
+        EXTERNAL_EVENTS_JOB,
+        std::time::Duration::from_secs(6 * 60 * 60),
+    );
+    registry.register_with_timeout(
+        WORKTREES_JOB,
+        std::time::Duration::from_secs(30 * 60),
+        |context| async move {
+            let result =
+                clean_worktrees(&context.state.pool, &context.state.config.data_root, true).await?;
+            tracing::info!(
+                removed = result.removed_worktrees,
+                preserved = result.preserved_worktrees,
+                "removed retained worktrees past their retention"
+            );
+            Ok(())
+        },
+    );
+    registry.every(WORKTREES_JOB, std::time::Duration::from_secs(24 * 60 * 60));
+}
+
+pub const EXTERNAL_EVENTS_JOB: &str = "retention.external_events";
+pub const WORKTREES_JOB: &str = "retention.worktrees";

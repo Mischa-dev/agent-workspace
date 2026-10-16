@@ -1,0 +1,156 @@
+#!/usr/bin/bash
+# Restore drill: fetch the newest off-host backup set, verify its checksums,
+# decrypt it, restore the dump into a spare database, run sanity queries,
+# report, and drop the spare database (unless --keep).
+#
+# usage: agent-workspace-restore-drill [--config FILE] [--identity FILE]
+#          [--from remote|local] [--set NAME] [--database NAME]
+#          [--replace] [--keep]
+set -euo pipefail
+
+script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# shellcheck source=agent-workspace-backup-lib.sh
+source "${script_dir}/agent-workspace-backup-lib.sh"
+
+usage() {
+  sed -n '6,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 64
+}
+
+config="${BACKUP_DEFAULT_CONFIG}"
+identity=""
+from=remote
+set_name=""
+database=""
+keep=false
+replace=false
+while (($# > 0)); do
+  case "$1" in
+    --config) config="${2:?}"; shift 2 ;;
+    --identity) identity="${2:?}"; shift 2 ;;
+    --from) from="${2:?}"; shift 2 ;;
+    --set) set_name="${2:?}"; shift 2 ;;
+    --database) database="${2:?}"; shift 2 ;;
+    --keep) keep=true; shift ;;
+    --replace) replace=true; shift ;;
+    *) usage ;;
+  esac
+done
+
+load_config "${config}"
+apply_common_defaults
+: "${BACKUP_DRILL_DATABASE:=agent_workspace_restore_drill}"
+[[ -n "${database}" ]] || database="${BACKUP_DRILL_DATABASE}"
+[[ -n "${identity}" ]] || identity="${BACKUP_AGE_IDENTITY_FILE:-}"
+[[ -n "${identity}" ]] || die "pass --identity or set BACKUP_AGE_IDENTITY_FILE (the private age key)"
+require_file "age identity" "${identity}"
+validate_identifier "drill database" "${database}"
+case "${database}" in
+  "${BACKUP_DATABASE}" | "${BACKUP_MAINTENANCE_DATABASE}" | postgres | template0 | template1)
+    die "refusing to restore into ${database}: it is the live or a system database"
+    ;;
+esac
+[[ -z "${set_name}" || "${set_name}" =~ ${SET_NAME_PATTERN} ]] || die "--set must be a set name like 20260101T033000Z"
+[[ -x "${BACKUP_PG_RESTORE}" ]] || die "BACKUP_PG_RESTORE (${BACKUP_PG_RESTORE}) is not executable"
+[[ -x "${BACKUP_PSQL}" ]] || die "BACKUP_PSQL (${BACKUP_PSQL}) is not executable"
+require_tools age tar gzip sha256sum flock
+
+case "${from}" in
+  remote)
+    require_setting BACKUP_REMOTE
+    require_transport_tools "${BACKUP_REMOTE}"
+    available="$(remote_list "${BACKUP_REMOTE}")"
+    ;;
+  local)
+    available="$(local_list "${BACKUP_LOCAL_DIR}")"
+    ;;
+  *) die "--from must be remote or local" ;;
+esac
+if [[ -z "${set_name}" ]]; then
+  set_name="$(tail -n 1 <<<"${available}")"
+  [[ -n "${set_name}" ]] || die "no backup sets found (${from})"
+elif ! grep -qxF -- "${set_name}" <<<"${available}"; then
+  die "set ${set_name} not found (${from})"
+fi
+
+take_lock restore-drill
+umask 0077
+
+maintenance_sql() {
+  PGDATABASE="${BACKUP_MAINTENANCE_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1 -c "$1"
+}
+drill_sql() {
+  PGDATABASE="${database}" "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1 -c "$1"
+}
+
+work="$(mktemp -d -p "${BACKUP_WORK_DIR}" agent-workspace-drill.XXXXXX)"
+created_database=false
+cleanup() {
+  local status=$?
+  rm -rf -- "${work:?}"
+  if [[ "${created_database}" == true && "${keep}" == false ]]; then
+    maintenance_sql "DROP DATABASE IF EXISTS \"${database}\" WITH (FORCE)" || true
+    log "dropped spare database ${database}"
+  fi
+  exit "${status}"
+}
+trap cleanup EXIT
+
+log "drill: fetching set ${set_name} (${from})"
+if [[ "${from}" == remote ]]; then
+  remote_get_set "${BACKUP_REMOTE}" "${set_name}" "${work}"
+else
+  cp -a -- "${BACKUP_LOCAL_DIR}/${set_name}/." "${work}/"
+fi
+
+# Only names we expect may appear in the checksum list.
+[[ -f "${work}/SHA256SUMS" ]] || die "SHA256SUMS is missing from the set"
+listed="$(sed -E 's/^[0-9a-f]{64}  //' "${work}/SHA256SUMS" | sort | tr '\n' ' ')"
+[[ "${listed}" == "backup-info data.tar.gz.age database.dump.age " ]] \
+  || die "SHA256SUMS lists unexpected files: ${listed}"
+(cd -- "${work}" && sha256sum --check --strict --quiet SHA256SUMS) || die "checksum mismatch"
+log "drill: checksums verified"
+
+expected_version="$(sed -n 's/^migration_version=//p' "${work}/backup-info")"
+[[ "${expected_version}" =~ ^[0-9]+$ ]] || die "backup-info has no migration version"
+
+exists="$(maintenance_sql "SELECT count(*) FROM pg_database WHERE datname = '${database}'")"
+if [[ "${exists}" != 0 ]]; then
+  [[ "${replace}" == true ]] || die "database ${database} already exists; drop it or pass --replace"
+  maintenance_sql "DROP DATABASE \"${database}\" WITH (FORCE)"
+fi
+maintenance_sql "CREATE DATABASE \"${database}\""
+created_database=true
+log "drill: created spare database ${database}"
+
+decrypt_stream "${identity}" "${work}/database.dump.age" \
+  | PGDATABASE="${database}" "${BACKUP_PG_RESTORE}" \
+    --dbname="${database}" --no-owner --no-privileges --exit-on-error
+log "drill: database restored"
+
+# The data archive is decrypted and read end to end, not unpacked.
+data_entries="$(decrypt_stream "${identity}" "${work}/data.tar.gz.age" | tar --list --gzip --file=- | wc -l)"
+log "drill: data archive readable"
+
+organizations="$(drill_sql 'SELECT count(*) FROM organizations')"
+projects="$(drill_sql 'SELECT count(*) FROM projects')"
+messages="$(drill_sql 'SELECT count(*) FROM messages')"
+restored_version="$(drill_sql 'SELECT coalesce(max(version), 0) FROM _sqlx_migrations')"
+failed_migrations="$(drill_sql 'SELECT count(*) FROM _sqlx_migrations WHERE NOT success')"
+
+cat <<REPORT
+restore drill report
+  set:                ${set_name} (${from})
+  spare database:     ${database}
+  organizations:      ${organizations}
+  projects:           ${projects}
+  messages:           ${messages}
+  latest migration:   ${restored_version} (backup recorded ${expected_version})
+  failed migrations:  ${failed_migrations}
+  data archive files: ${data_entries}
+  after the drill:    $([[ "${keep}" == true ]] && echo "kept" || echo "dropped")
+REPORT
+
+[[ "${restored_version}" == "${expected_version}" ]] || die "restored migration version differs from the backup"
+[[ "${failed_migrations}" == 0 ]] || die "restored database lists failed migrations"
+log "drill: passed"
