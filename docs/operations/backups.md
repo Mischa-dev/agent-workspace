@@ -144,7 +144,9 @@ Do these once on the Red Hat host.
    ```
 
    Set `BACKUP_REMOTE`, `BACKUP_KEY_REMOTE`, and `BACKUP_SECRETS_KEY_FILE` (the
-   same path as `AGENT_WORKSPACE_SECRETS_KEY_PATH`).
+   same path as `AGENT_WORKSPACE_SECRETS_KEY_PATH`). Leaving
+   `BACKUP_SECRETS_KEY_FILE` out is only accepted while the database stores no
+   secrets; after that the key backup fails until it is set.
 
 6. **Install the scripts and units.** `deploy-release.sh` copies the four
    backup scripts into the release `bin` directory with the other wrappers,

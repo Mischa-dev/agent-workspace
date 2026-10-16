@@ -233,7 +233,8 @@ filter_set_names() {
 }
 
 # Copy a finished local set directory to the remote. It lands under a
-# .partial name and is renamed only after every file arrived.
+# .partial name, is renamed only after every file arrived, and the
+# destination's filesystem is synced after the rename.
 remote_put_set() {
   local spec="$1" local_set="$2" name
   name="$(basename -- "${local_set}")"
@@ -244,8 +245,9 @@ remote_put_set() {
       install -d -m 0700 "${remote_path}"
       rm -rf -- "${remote_path:?}/${name}.partial"
       cp -a -- "${local_set}" "${remote_path}/${name}.partial"
-      sync -f "${remote_path}/${name}.partial"
       mv -T -- "${remote_path}/${name}.partial" "${remote_path}/${name}"
+      # Flush the files and the rename before calling the set stored.
+      sync -f -- "${remote_path}/${name}"
       ;;
     ssh)
       build_ssh_command
@@ -255,6 +257,7 @@ remote_put_set() {
         -- "${local_set}/" "${remote_host}:${remote_path}/${name}.partial/"
       # -T: never move the set inside an existing one of the same name.
       remote_shell mv -T -- "${remote_path}/${name}.partial" "${remote_path}/${name}"
+      remote_shell sync -f -- "${remote_path}/${name}"
       ;;
   esac
 }

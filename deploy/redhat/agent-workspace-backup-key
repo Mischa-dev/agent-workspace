@@ -37,7 +37,18 @@ load_config "${config}"
 apply_common_defaults
 
 if [[ -z "${BACKUP_SECRETS_KEY_FILE:-}" ]]; then
-  log "BACKUP_SECRETS_KEY_FILE is not set; no secrets key to back up"
+  # Fine only while nothing is encrypted: once the database holds secrets,
+  # the dump is useless without the key, so a missing setting is an error.
+  [[ -x "${BACKUP_PSQL}" ]] || die "BACKUP_PSQL (${BACKUP_PSQL}) is not executable"
+  stored="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public' AND tablename = 'secrets'")"
+  if [[ "${stored}" == 1 ]]; then
+    stored="$(PGDATABASE="${BACKUP_DATABASE}" "${BACKUP_PSQL}" -X -A -t -q -v ON_ERROR_STOP=1 \
+      -c 'SELECT count(*) FROM secrets')"
+  fi
+  [[ "${stored}" =~ ^[0-9]+$ ]] || die "could not count stored secrets"
+  ((stored == 0)) || die "the database holds ${stored} encrypted secrets but BACKUP_SECRETS_KEY_FILE is not set; without the key they can't be restored"
+  log "BACKUP_SECRETS_KEY_FILE is not set and no secrets are stored; nothing to back up"
   exit 0
 fi
 require_setting BACKUP_KEY_AGE_RECIPIENTS_FILE
