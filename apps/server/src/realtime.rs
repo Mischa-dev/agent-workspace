@@ -173,7 +173,9 @@ impl OutboxPublisher for RealtimeHub {
         // Actor-targeted events reach only the actor named in their payload.
         let actor_targeted_event = matches!(
             envelope.event_type.as_str(),
-            "conversation.read_state.updated" | "conversation.member.removed"
+            "conversation.read_state.updated"
+                | "conversation.member.removed"
+                | "notifications.updated"
         );
         let invalid_actor_scope = if actor_targeted_event {
             payload_actor_id.is_none() || payload_actor_id != envelope.recipient_actor_id
@@ -194,10 +196,11 @@ impl OutboxPublisher for RealtimeHub {
                 | "conversation.agent_run.updated"
                 | "work_item.updated"
                 | "project.membership.updated"
+                | "notifications.updated"
         );
         let project_scoped_event = matches!(
             envelope.event_type.as_str(),
-            "work_item.updated" | "project.membership.updated"
+            "work_item.updated" | "project.membership.updated" | "notifications.updated"
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
@@ -603,7 +606,9 @@ fn valid_worker_id(worker_id: &str) -> bool {
         })
 }
 
-async fn publish_ready_outbox_batch(
+/// Publishes one batch of ready outbox events and writes the notifications
+/// they cause. Public so tests can drain the outbox without the poll loop.
+pub async fn publish_ready_outbox_batch(
     pool: &PgPool,
     realtime: &RealtimeHub,
     worker_id: &str,
@@ -652,6 +657,7 @@ async fn publish_ready_outbox_batch(
                 continue;
             }
         };
+        notify_people(&mut transaction, &claim).await;
         match outbox::mark_published(&mut transaction, claim.event_id(), worker_id).await {
             Ok(()) => {
                 if let Err(error) = transaction.commit().await {
@@ -690,6 +696,52 @@ async fn publish_ready_outbox_batch(
     }
 
     Ok(claim_count)
+}
+
+/// Writes the notifications an event causes, in the transaction that marks
+/// it published. A savepoint keeps a failure here from undoing the
+/// acknowledgement: the event was already broadcast, and notifications are
+/// best effort next to it.
+async fn notify_people(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    claim: &outbox::ClaimedOutboxEvent,
+) {
+    let Ok(payload) = claim.decode() else {
+        return;
+    };
+    let mut savepoint = match sqlx::Connection::begin(&mut **transaction).await {
+        Ok(savepoint) => savepoint,
+        Err(error) => {
+            tracing::error!(
+                event_id = %claim.event_id(),
+                error_category = AppError::from(error).log_category(),
+                "notification fan-out could not start"
+            );
+            return;
+        }
+    };
+    let outcome = crate::notifications::fan_out(
+        &mut savepoint,
+        claim.event_id(),
+        claim.project_id(),
+        &payload,
+    )
+    .await;
+    let finished = match outcome {
+        Ok(_) => savepoint.commit().await.map_err(AppError::from),
+        Err(error) => {
+            let _ = savepoint.rollback().await;
+            Err(error)
+        }
+    };
+    if let Err(error) = finished {
+        tracing::error!(
+            event_id = %claim.event_id(),
+            event_cursor = claim.event_cursor(),
+            error_category = error.log_category(),
+            "notification fan-out failed"
+        );
+    }
 }
 
 async fn record_outbox_failure(
