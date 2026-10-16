@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
-import { Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, SelectField, StatusChip, TextField } from '../ui'
+import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField } from '../ui'
 import {
   cancelAccountLogin,
   createProviderAccount,
@@ -47,7 +47,7 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
     onSuccess: refresh,
   })
 
-  if (harnesses.isPending || accounts.isPending) return <MessageSkeleton label="Loading your accounts" rows={1} />
+  if (harnesses.isPending || accounts.isPending) return <SettingsSkeleton label="Loading your accounts" />
   if (harnesses.isError || accounts.isError) {
     return (
       <ErrorState

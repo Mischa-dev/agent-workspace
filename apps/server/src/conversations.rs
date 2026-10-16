@@ -76,6 +76,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/threads/{id}", axum::routing::patch(patch_thread))
         .route("/api/v1/channels/{id}/archive", post(archive_channel))
         .route("/api/v1/threads/{id}/archive", post(archive_thread))
+        .route("/api/v1/channels/{id}/restore", post(restore_channel))
+        .route("/api/v1/threads/{id}/restore", post(restore_thread))
         .route(
             "/api/v1/conversations/{id}/timeline",
             get(conversation_timeline),
@@ -715,6 +717,12 @@ struct ThreadAttention {
 struct ArchiveConversationResponse {
     conversation: ConversationView,
     fallback: ArchiveFallback,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreConversationResponse {
+    conversation: ConversationView,
 }
 
 #[derive(Debug, Serialize)]
@@ -2665,6 +2673,87 @@ async fn archive_conversation(
     Ok(Json(ArchiveConversationResponse {
         conversation: ConversationView::from(&archived),
         fallback,
+    }))
+}
+
+async fn restore_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ArchiveConversationRequest>,
+) -> Result<Json<RestoreConversationResponse>, AppError> {
+    restore_conversation(
+        &state,
+        &headers,
+        &principal,
+        conversation_id,
+        "channel",
+        request,
+    )
+    .await
+}
+
+async fn restore_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ArchiveConversationRequest>,
+) -> Result<Json<RestoreConversationResponse>, AppError> {
+    restore_conversation(
+        &state,
+        &headers,
+        &principal,
+        conversation_id,
+        "thread",
+        request,
+    )
+    .await
+}
+
+/// Undo for archive: brings a channel or thread back. The expected version is
+/// the one the archive returned, so a restore never undoes a later change.
+async fn restore_conversation(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    conversation_id: Uuid,
+    expected_kind: &'static str,
+    request: ArchiveConversationRequest,
+) -> Result<Json<RestoreConversationResponse>, AppError> {
+    require_authenticated_write(state, headers, principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let (conversation, restored) = set_conversation_archived(
+        &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        conversation_id,
+        &[expected_kind],
+        false,
+        Some(request.expected_version),
+    )
+    .await?;
+    let Some(restored) = restored else {
+        // Already active: nothing to undo.
+        transaction.commit().await?;
+        return Ok(Json(RestoreConversationResponse {
+            conversation: ConversationView::from(&conversation),
+        }));
+    };
+    insert_audit_event(
+        &mut transaction,
+        headers,
+        principal,
+        conversation.project_id,
+        "conversation.restored",
+        conversation.id,
+        serde_json::json!({"previous_version": conversation.version}),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RestoreConversationResponse {
+        conversation: ConversationView::from(&restored),
     }))
 }
 

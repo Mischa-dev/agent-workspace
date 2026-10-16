@@ -37,9 +37,11 @@ import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
+import { useArchiveConversation } from '../conversations/useArchiveConversation'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
+import { useInstantMutation } from '../app/mutations'
+import { usePageTitle } from '../shell/documentTitleModel'
 import {
-  archiveConversation,
   normalizeTimelinePage,
   searchMentionableActors,
   sendConversationMessage,
@@ -154,6 +156,38 @@ type Timeline = {
 }
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
+
+// What a run action failed to do, for its error toast.
+const ACTION_ERRORS: Record<string, string> = {
+  start: 'Couldn’t start the run',
+  interrupt: 'Couldn’t stop the run',
+  retry: 'Couldn’t run it again',
+  publish: 'Couldn’t publish the branch',
+  'pull-request': 'Couldn’t open the pull request',
+  'pull-request-refresh': 'Couldn’t check GitHub',
+  'acknowledge-failure': 'Couldn’t dismiss the failure',
+}
+
+const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
+  requestJson(path, { method: 'POST', idempotencyKey, json })
+
+/** The thread's run commands, one request each. */
+const threadApi = {
+  startRun: (threadId: string, prompt: string, key: string) =>
+    post(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, key, { prompt }),
+  respond: (approvalId: string, action: string, response: { decision: 'approve' | 'deny' } | { answer: string }) =>
+    post(`/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`, `approval-${approvalId}-${action}`, response),
+  interrupt: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`, `interrupt-${runId}`),
+  retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
+  publish: (projectId: string, runId: string, key: string) =>
+    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`, key),
+  createPullRequest: (projectId: string, runId: string, key: string, json: { title: string; body: string; workItemIds: string[] }) =>
+    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`, key, json),
+  refreshPullRequest: (projectId: string, pullRequestId: string) =>
+    post(`/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`, crypto.randomUUID()),
+  acknowledgeFailure: (runId: string, eventId: string) =>
+    post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/acknowledge-failure`, `acknowledge-failure-${runId}-${eventId}`, { eventId }),
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object'
@@ -422,6 +456,7 @@ export function ThreadPage() {
   const realtime = useConversationRealtime(threadId)
   const timeline = thread.timeline.data
   const verifiedTimeline = thread.routeMatches ? timeline : undefined
+  usePageTitle(verifiedTimeline?.conversation.name ?? null)
   const activeRun = verifiedTimeline?.activeRun ?? null
   const latestTerminalRun = verifiedTimeline?.latestTerminalRun ?? null
   const [prompt, setPrompt] = useState('')
@@ -434,8 +469,6 @@ export function ThreadPage() {
   const [pullRequestIdempotencyKey, setPullRequestIdempotencyKey] = useState<
     string | null
   >(null)
-  const [busyAction, setBusyAction] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
   const [acknowledgedRunId, setAcknowledgedRunId] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [pendingSends, setPendingSends] = useState<{ key: string; text?: string }[]>([])
@@ -520,21 +553,29 @@ export function ThreadPage() {
     onSeen,
   )
 
-  const perform = async (key: string, action: () => Promise<unknown>) => {
-    setBusyAction(key)
-    setActionError(null)
-    try {
-      await action()
-      setPrompt((current) => (key === 'start' ? '' : current))
-      await thread.timeline.refetch()
-      return true
-    } catch (reason) {
-      setActionError(reason instanceof Error ? reason.message : 'Action failed.')
-      return false
-    } finally {
-      setBusyAction(null)
-    }
-  }
+  const action = useInstantMutation({
+    mutationFn: ({ request }: { key: string; request: () => Promise<unknown> }) => request(),
+    errorTitle: ({ key }) => ACTION_ERRORS[key] ?? (key.includes(':') ? 'Couldn’t send your answer' : 'That didn’t work'),
+    invalidate: () => [queryKeys.timeline(projectId, threadId, includeArchived)],
+    onSuccess: (_result, { key }) => {
+      if (key === 'start') setPrompt('')
+    },
+  })
+  const busyAction = action.isPending ? action.variables.key : null
+  const perform = (key: string, request: () => Promise<unknown>) =>
+    action.mutateAsync({ key, request }).then(
+      () => true,
+      () => false,
+    )
+  const archiveThread = useArchiveConversation({
+    conversationId: threadId,
+    kind: 'thread',
+    label: `“${verifiedTimeline?.conversation.name ?? 'thread'}”`,
+    leaveTo: verifiedTimeline?.conversation.parentChannelId
+      ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(verifiedTimeline.conversation.parentChannelId)}`
+      : `/projects/${encodeURIComponent(projectId)}`,
+    projectId,
+  })
 
   const startRun = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -545,16 +586,7 @@ export function ThreadPage() {
     if (!value || !isSafeMessageText(value)) return
     const commandKey = startIdempotencyKey ?? crypto.randomUUID()
     if (!startIdempotencyKey) setStartIdempotencyKey(commandKey)
-    void perform('start', () =>
-      requestJson(
-        `/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`,
-        {
-          method: 'POST',
-          idempotencyKey: commandKey,
-          json: { prompt: value },
-        },
-      ),
-    ).then((succeeded) => {
+    void perform('start', () => threadApi.startRun(threadId, value, commandKey)).then((succeeded) => {
       if (succeeded) setStartIdempotencyKey(null)
     })
   }
@@ -573,40 +605,20 @@ export function ThreadPage() {
     ) {
       return
     }
-    const action = 'decision' in response ? response.decision : 'answer'
-    void perform(`${approvalId}:${action}`, () =>
-      requestJson(
-        `/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`,
-        {
-          method: 'POST',
-          idempotencyKey: `approval-${approvalId}-${action}`,
-          json: response,
-        },
-      ),
-    )
+    const kind = 'decision' in response ? response.decision : 'answer'
+    void perform(`${approvalId}:${kind}`, () => threadApi.respond(approvalId, kind, response))
   }
 
   const interrupt = () => {
     const runId = activeRun?.id
     if (!runId || activeRun.capabilities.interrupt !== true) return
-    void perform('interrupt', () =>
-      requestJson(
-        `/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`,
-        { method: 'POST', idempotencyKey: `interrupt-${runId}`, json: {} },
-      ),
-    )
+    void perform('interrupt', () => threadApi.interrupt(runId))
   }
 
   const retryLastRun = () => {
     const runId = latestTerminalRun?.id
     if (!runId || latestTerminalRun.capabilities.retry !== true || activeRun) return
-    void perform('retry', () =>
-      requestJson(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, {
-        method: 'POST',
-        idempotencyKey: `retry-${runId}`,
-        json: {},
-      }),
-    )
+    void perform('retry', () => threadApi.retry(runId))
   }
 
   const publishLastRun = () => {
@@ -621,16 +633,7 @@ export function ThreadPage() {
     }
     const commandKey = publishIdempotencyKey ?? crypto.randomUUID()
     if (!publishIdempotencyKey) setPublishIdempotencyKey(commandKey)
-    void perform('publish', () =>
-      requestJson(
-        `/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`,
-        {
-          method: 'POST',
-          idempotencyKey: commandKey,
-          json: {},
-        },
-      ),
-    ).then((succeeded) => {
+    void perform('publish', () => threadApi.publish(projectId, runId, commandKey)).then((succeeded) => {
       if (succeeded) setPublishIdempotencyKey(null)
     })
   }
@@ -652,19 +655,11 @@ export function ThreadPage() {
     const commandKey = pullRequestIdempotencyKey ?? crypto.randomUUID()
     if (!pullRequestIdempotencyKey) setPullRequestIdempotencyKey(commandKey)
     void perform('pull-request', () =>
-      requestJson(
-        `/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`,
-        {
-          method: 'POST',
-          idempotencyKey: commandKey,
-          json: {
-            title,
-            body: 'Created from an explicitly published Agent Workspace run.',
-            workItemIds:
-              verifiedTimeline?.linkedWorkItems.map((item) => item.id) ?? [],
-          },
-        },
-      ),
+      threadApi.createPullRequest(projectId, runId, commandKey, {
+        title,
+        body: 'Created from an explicitly published Agent Workspace run.',
+        workItemIds: verifiedTimeline?.linkedWorkItems.map((item) => item.id) ?? [],
+      }),
     ).then((succeeded) => {
       if (succeeded) setPullRequestIdempotencyKey(null)
     })
@@ -678,16 +673,7 @@ export function ThreadPage() {
     ) {
       return
     }
-    void perform('pull-request-refresh', () =>
-      requestJson(
-        `/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`,
-        {
-          method: 'POST',
-          idempotencyKey: crypto.randomUUID(),
-          json: {},
-        },
-      ),
-    )
+    void perform('pull-request-refresh', () => threadApi.refreshPullRequest(projectId, pullRequestId))
   }
 
   const acknowledgeFailure = () => {
@@ -700,16 +686,8 @@ export function ThreadPage() {
       return
     }
     const runId = latestTerminalRun.id
-    void perform('acknowledge-failure', () =>
-      requestJson(
-        `/api/v1/agent-runs/${encodeURIComponent(runId)}/acknowledge-failure`,
-        {
-          method: 'POST',
-          idempotencyKey: `acknowledge-failure-${runId}-${latestFailureEvent.id}`,
-          json: { eventId: latestFailureEvent.id },
-        },
-      ),
-    ).then((succeeded) => {
+    const eventId = latestFailureEvent.id
+    void perform('acknowledge-failure', () => threadApi.acknowledgeFailure(runId, eventId)).then((succeeded) => {
       if (succeeded) setAcknowledgedRunId(runId)
     })
   }
@@ -1032,11 +1010,6 @@ export function ThreadPage() {
             />
           </div>
         ) : null}
-        {actionError ? (
-          <div className="aw-timeline__card">
-            <Banner tone="danger">{actionError}</Banner>
-          </div>
-        ) : null}
       </ConversationTimeline>
 
       {mode === 'message' && canMessage ? (
@@ -1104,16 +1077,10 @@ export function ThreadPage() {
           <>
             <Button onClick={() => setArchiveOpen(false)}>Cancel</Button>
             <Button
+              busy={archiveThread.isPending}
               onClick={() => {
                 if (!verifiedTimeline) return
-                void archiveConversation({
-                  conversationId: threadId,
-                  kind: 'thread',
-                  expectedVersion: verifiedTimeline.conversation.version ?? 1,
-                }).then(() => {
-                  setArchiveOpen(false)
-                  navigate(channelRoute, { replace: true })
-                })
+                archiveThread.mutate(verifiedTimeline.conversation.version ?? 1, { onSettled: () => setArchiveOpen(false) })
               }}
               variant="danger"
             >

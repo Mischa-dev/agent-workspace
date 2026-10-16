@@ -20,7 +20,7 @@ export function PinnedBar({
   direct?: boolean
   projectId: string
 }) {
-  const pins = usePins(conversationId)
+  const pins = usePins(projectId, conversationId)
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const items = pins.data?.pins ?? []
@@ -60,7 +60,7 @@ export function PinnedBar({
                   label={`Unpin ${item.title}`}
                   onClick={() =>
                     void unpin(conversationId, item.kind, item.id).then(() =>
-                      queryClient.invalidateQueries({ queryKey: memoryKeys.pins(conversationId) }),
+                      queryClient.invalidateQueries({ queryKey: memoryKeys.pins(projectId, conversationId) }),
                     )
                   }
                   size="sm"
@@ -93,7 +93,7 @@ export function MessageMemoryActions({
         label="Pin to this conversation"
         onClick={() =>
           void pin(conversationId, 'message', message.id).then(() =>
-            queryClient.invalidateQueries({ queryKey: memoryKeys.pins(conversationId) }),
+            queryClient.invalidateQueries({ queryKey: memoryKeys.pins(projectId, conversationId) }),
           )
         }
         size="sm"
@@ -143,7 +143,7 @@ function DecisionDialog({
         if (pinIt) await pin(conversationId, 'decision', decision.id)
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: memoryKeys.decisions(projectId) }),
-          queryClient.invalidateQueries({ queryKey: memoryKeys.pins(conversationId) }),
+          queryClient.invalidateQueries({ queryKey: memoryKeys.pins(projectId, conversationId) }),
         ])
         onClose()
       })

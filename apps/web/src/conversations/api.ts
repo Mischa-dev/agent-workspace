@@ -596,6 +596,27 @@ export async function archiveConversation(input: {
   )
 }
 
+/** Undo an archive. `expectedVersion` is the version the archive returned. */
+export async function restoreConversation(input: {
+  conversationId: string
+  kind: 'channel' | 'thread'
+  expectedVersion: number
+}) {
+  return requestJson<unknown>(
+    `/api/v1/${input.kind === 'channel' ? 'channels' : 'threads'}/${encodeURIComponent(input.conversationId)}/restore`,
+    {
+      method: 'POST',
+      json: { expectedVersion: input.expectedVersion },
+    },
+  )
+}
+
+/** The version a conversation has after an archive or restore, from its response. */
+export function conversationVersionFrom(response: unknown, fallback: number) {
+  const conversation = response && typeof response === 'object' ? (response as { conversation?: { version?: unknown } }).conversation : undefined
+  return typeof conversation?.version === 'number' ? conversation.version : fallback
+}
+
 export async function markConversationSeen(input: {
   conversationId: string
   highestSeenSequence: number

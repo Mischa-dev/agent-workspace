@@ -255,6 +255,8 @@ async fn list_projects(
               OR p.project_key ILIKE $2
           )
         ORDER BY
+            -- An exact key comes first, so `/KEY-12` finds its Project before the limit.
+            (upper(p.project_key) = upper($4)) IS TRUE DESC,
             (pns.pinned_at IS NOT NULL) DESC,
             pns.pinned_at ASC NULLS LAST,
             pns.last_opened_at DESC NULLS LAST,
@@ -266,6 +268,7 @@ async fn list_projects(
     .bind(principal.actor_id)
     .bind(search_pattern)
     .bind(limit)
+    .bind(search)
     .fetch_all(&state.pool)
     .await?;
     let projects = rows

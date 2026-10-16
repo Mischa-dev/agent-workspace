@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
-import { Banner, Button, Checkbox, ErrorState, Icon, MessageSkeleton, Row, RowList, StatusChip, TextField } from '../ui'
+import { Banner, Button, Checkbox, ErrorState, Icon, ListSkeleton, Row, RowList, StatusChip, TextField } from '../ui'
 import { archiveRepository, listRepositories, prepareRepository, registerRepository, type Repository } from './api'
 
 function RepositoryState({ repository }: { repository: Repository }) {
@@ -58,7 +58,7 @@ export function RepositorySettings({ projectId }: { projectId: string }) {
   })
   const [error, setError] = useState<string | null>(null)
 
-  if (repositories.isPending) return <MessageSkeleton label="Loading repositories" rows={2} />
+  if (repositories.isPending) return <ListSkeleton label="Loading repositories" rows={2} />
   if (repositories.isError) {
     return (
       <ErrorState action={<Button onClick={() => void repositories.refetch()}>Try again</Button>} title="Repositories didn’t load">

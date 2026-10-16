@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 
 import type { ConversationWorkItemReference } from '../conversations/types'
 import { runSettingsFrom } from '../execution/api'
-import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, type ChipTone, type IconName } from '../ui'
+import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatDateTime, type ChipTone, type IconName } from '../ui'
 import type { Approval, Run, RunState } from './ThreadPage'
 
 const RUN_STATES: Record<RunState, { label: string; tone: ChipTone; icon?: IconName; dots?: boolean; spin?: boolean }> = {
@@ -70,7 +70,7 @@ export function RunCard({ actions, notes, run }: { actions?: ReactNode; notes?: 
         <Avatar kind="worker" name="Codex" seed="codex" size={24} />
         <div className="aw-card__titles">
           <span className="aw-card__title">{harness ? `${harness} run` : 'Agent run'}</span>
-          <span className="aw-card__sub">Updated {new Date(run.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span className="aw-card__sub">Updated {formatDateTime(run.updatedAt)}</span>
         </div>
         <StatusChip dots={state.dots} icon={state.icon} spin={state.spin} tone={state.tone}>
           {state.label}

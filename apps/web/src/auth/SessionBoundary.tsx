@@ -11,6 +11,8 @@ import {
   useSession,
 } from './session'
 import { RealtimeProvider } from '../realtime/RealtimeProvider'
+import { CommandCenter } from '../shell/CommandCenter'
+import { DocumentTitle } from '../shell/DocumentTitle'
 
 export function SessionBoundary() {
   const session = useSession()
@@ -81,6 +83,8 @@ export function SessionBoundary() {
     <AuthenticatedSessionProvider session={session.data}>
       <RealtimeProvider>
         <Outlet />
+        <CommandCenter />
+        <DocumentTitle />
       </RealtimeProvider>
     </AuthenticatedSessionProvider>
   )

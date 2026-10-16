@@ -32,6 +32,15 @@ fi
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${CI_TARGET_DIR:-${PWD}/target}"
 export CARGO_TERM_COLOR=always
+# Incremental caches only help repeat local edits; on CI hosts they grew to
+# 12 GB and filled the Red Hat disk.
+export CARGO_INCREMENTAL=0
+# Keep the build cache from filling a shared disk: start fresh past 16 GB.
+if [ -d "${CARGO_TARGET_DIR}" ] &&
+  [ "$(du -s --block-size=1G "${CARGO_TARGET_DIR}" | cut -f1)" -gt 16 ]; then
+  echo "Build cache is over 16 GB; clearing it."
+  rm -rf "${CARGO_TARGET_DIR}"
+fi
 export AGENT_WORKSPACE_ENV=test
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 started=$(date +%s)
@@ -110,7 +119,37 @@ run_web_checks() {
   step "web tests" pnpm test &&
     step "web build" pnpm build &&
     step "web asset budgets" pnpm check:assets &&
-    step "performance tools" pnpm check:performance-tools
+    step "performance tools" pnpm check:performance-tools &&
+    step "web browser smoke" run_browser_smoke
+}
+# Playwright smoke tests (apps/web/e2e): sign in and the task board in a real
+# browser, against the server built from this tree and a throwaway database.
+# Skipped, with a note, where PostgreSQL or a Chromium for Playwright is missing.
+run_browser_smoke() {
+  local binary="${CARGO_TARGET_DIR}/debug/agent-workspace-server"
+  if [ -z "${CI_DATABASE_BASE:-}" ] ||
+    ! psql -d "${CI_DATABASE_BASE}/postgres" -Atqc 'SELECT 1' >/dev/null 2>&1; then
+    echo "Skipping browser smoke tests: PostgreSQL isn't reachable at CI_DATABASE_BASE."
+    return 0
+  fi
+  if [ -z "${PLAYWRIGHT_CHROMIUM_EXECUTABLE:-}" ] && ! (cd apps/web && node -e \
+    "process.exit(require('fs').existsSync(require('@playwright/test').chromium.executablePath()) ? 0 : 1)"); then
+    echo "Skipping browser smoke tests: no Chromium for Playwright. Run" \
+      "'pnpm --filter @agent-workspace/web exec playwright install chromium'" \
+      "or set PLAYWRIGHT_CHROMIUM_EXECUTABLE."
+    return 0
+  fi
+  # Build the server from this tree (incremental; waits for any cargo run in progress).
+  if type -P cargo >/dev/null; then
+    cargo build --quiet -p agent-workspace-server --bin agent-workspace-server || return
+  fi
+  if [ ! -x "${binary}" ]; then
+    echo "Skipping browser smoke tests: no server binary at ${binary}."
+    return 0
+  fi
+  E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
+    E2E_DATABASE_NAME="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')" \
+    pnpm test:e2e
 }
 if has web && [ "$(nproc)" -lt 8 ] && has rust; then
   web_later=1
