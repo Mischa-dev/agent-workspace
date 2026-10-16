@@ -22,6 +22,7 @@ const PROVIDER_START_FAILURE_REASON: &str =
     "The agent harness could not start. The worktree was preserved.";
 const UNKNOWN_HARNESS_REASON: &str =
     "This run's harness is not installed on the server. Nothing was started.";
+const CLEANED_RETRY_REASON: &str = "The previous worktree was removed by retention cleanup before the retry could use it. Start a new Thread to continue.";
 /// Run states that hold a harness turn (and count against limits).
 const ACTIVE_TURN_STATES: &str = "('starting', 'working', 'blocked', 'recovering')";
 const UNSAFE_RETRY_REASON: &str = "The previous worktree is dirty, missing, or no longer has its owned branch. It was preserved; start a new Thread or inspect it before retrying.";
@@ -299,18 +300,35 @@ async fn admit(state: &AppState, run: ClaimedRun) -> Result<(), AppError> {
                 if !owned {
                     return Err(AppError::Conflict("agent_run", "scheduler claim was lost"));
                 }
-                sqlx::query(
-                    "UPDATE repository_workspaces SET state = 'active', updated_at = now() WHERE id = $1",
+                // Retention cleanup removes retained worktrees under this
+                // lock. Take it, then claim only if the workspace is still
+                // retained: one cleaned up since the inspection is gone.
+                crate::retention::lock_repository_retention(&mut transaction, run.repository_id)
+                    .await?;
+                let claimed = sqlx::query(
+                    "UPDATE repository_workspaces SET state = 'active', updated_at = now() WHERE id = $1 AND state = 'retained'",
                 )
                 .bind(workspace_id)
                 .execute(&mut *transaction)
-                .await?;
-                sqlx::query(
-                    "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1",
-                )
-                .bind(worktree_id)
-                .execute(&mut *transaction)
-                .await?;
+                .await?
+                .rows_affected()
+                    == 1
+                    && sqlx::query(
+                        "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE id = $1 AND state IN ('ready', 'dirty', 'missing', 'failed')",
+                    )
+                    .bind(worktree_id)
+                    .execute(&mut *transaction)
+                    .await?
+                    .rows_affected()
+                        == 1;
+                if !claimed {
+                    transaction.rollback().await?;
+                    fail_admission(state, &run, CLEANED_RETRY_REASON, None).await?;
+                    return Err(AppError::Conflict(
+                        "git_worktree",
+                        "previous worktree was cleaned up before the retry claimed it",
+                    ));
+                }
                 sqlx::query(
                     "UPDATE agent_runs SET repository_workspace_id = $2, updated_at = now() WHERE id = $1",
                 )

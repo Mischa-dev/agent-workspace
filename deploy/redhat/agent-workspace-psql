@@ -8,6 +8,9 @@ fi
 
 readonly podman_command=(
   /usr/bin/podman exec
+  # Keep stdin attached: the backup feeds a long-lived session (its key
+  # rotation lock) through it.
+  --interactive
   --user postgres
   --env PGDATABASE
   --env PGUSER=agent_workspace

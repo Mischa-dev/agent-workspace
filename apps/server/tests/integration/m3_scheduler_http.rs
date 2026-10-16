@@ -529,6 +529,92 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         StatusCode::OK
     );
 
+    // Retention cleanup and a retry racing for the same retained worktree:
+    // the cleanup holds the repository's retention lock and has removed the
+    // workspace (uncommitted) when the retry inspects it. The retry waits for
+    // the lock, sees the workspace is gone, and fails instead of reviving it.
+    let repository_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id FROM repository_workspaces WHERE id = $1",
+    )
+    .bind(workspace_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read retained workspace repository");
+    let mut cleanup = pool.begin().await.expect("begin cleanup");
+    agent_workspace_server::retention::lock_repository_retention(&mut cleanup, repository_id)
+        .await
+        .expect("cleanup takes the retention lock");
+    sqlx::query("UPDATE repository_workspaces SET state = 'cleaned' WHERE id = $1")
+        .bind(workspace_id)
+        .execute(&mut *cleanup)
+        .await
+        .expect("cleanup marks the workspace cleaned");
+    sqlx::query("UPDATE git_worktrees SET state = 'removed' WHERE repository_workspace_id = $1")
+        .bind(workspace_id)
+        .execute(&mut *cleanup)
+        .await
+        .expect("cleanup marks the worktree removed");
+    let raced = retry_run(
+        &application,
+        &cookie,
+        &csrf,
+        retry_run_id,
+        "retry-during-cleanup",
+    )
+    .await;
+    assert_eq!(raced.0, StatusCode::ACCEPTED);
+    let raced_id = uuid_field(&raced.2, "runId");
+    let mut waited = 0;
+    while sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read lock waits")
+    {
+        waited += 1;
+        assert!(
+            waited < 200,
+            "the retry never waited for the retention lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    cleanup.commit().await.expect("cleanup commits");
+    wait_for_state(&pool, raced_id, "failed").await;
+    let (raced_workspace, workspace_state, worktree_state) =
+        sqlx::query_as::<_, (Option<Uuid>, String, String)>(
+            r#"
+            SELECT run.repository_workspace_id, workspace.state, worktree.state
+              FROM agent_runs run, repository_workspaces workspace
+              JOIN git_worktrees worktree ON worktree.repository_workspace_id = workspace.id
+             WHERE run.id = $1 AND workspace.id = $2
+            "#,
+        )
+        .bind(raced_id)
+        .bind(workspace_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read raced retry");
+    assert!(
+        raced_workspace.is_none(),
+        "the retry did not claim a cleaned workspace"
+    );
+    assert_eq!(
+        (workspace_state.as_str(), worktree_state.as_str()),
+        ("cleaned", "removed")
+    );
+    // Put the fixture back (the files were never removed) for the next case.
+    sqlx::query("UPDATE repository_workspaces SET state = 'retained' WHERE id = $1")
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .expect("restore the workspace");
+    sqlx::query("UPDATE git_worktrees SET state = 'ready' WHERE repository_workspace_id = $1")
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .expect("restore the worktree");
+
     fs::write(second_worktree.join("UNCOMMITTED.txt"), "preserve me\n")
         .expect("dirty the retained retry worktree");
     let unsafe_retry = retry_run(

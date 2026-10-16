@@ -2,6 +2,7 @@
 //! compiled and linked for tests once rather than once per file.
 
 mod agent_interface;
+mod backbone;
 mod direct_conversations;
 mod harness_support;
 mod m0_database;
@@ -48,3 +49,4 @@ mod phase3_takedown;
 mod phase4_groundwork;
 mod reply_requests;
 mod w2_harness_platform;
+mod workspace_isolation;

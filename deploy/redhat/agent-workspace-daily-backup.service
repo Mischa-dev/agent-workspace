@@ -1,11 +1,24 @@
 [Unit]
-Description=Daily Agent Workspace database backup
-After=agent-workspace.service
+Description=Daily Agent Workspace encrypted off-host backup
+After=agent-workspace.service network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 UMask=0077
 WorkingDirectory=/tmp
-# Custom-format dump, written to a temporary name and renamed once complete.
-# Old backups are kept; delete them by hand when you want the space.
-ExecStart=/usr/bin/bash -c 'set -euo pipefail; out=/var/backups/agent-workspace/daily-$(date +%%F).dump; PGDATABASE=agent_workspace /opt/agent-workspace/current/bin/agent-workspace-pg-dump --format=custom > "$out.partial"; test -s "$out.partial"; mv "$out.partial" "$out"'
+# Settings (remote, recipients, retention) live in /etc/agent-workspace/backup.env.
+# See docs/operations/backups.md.
+# One command runs the secrets key backup (its own recipient and remote) and
+# then the database backup, attempting both even when one fails.
+ExecStart=/opt/agent-workspace/current/bin/agent-workspace-daily-backup --config /etc/agent-workspace/backup.env
+# Stay out of the way of the live app and anything else on the host. pg_dump
+# itself runs inside the PostgreSQL container, so these limits cover the
+# compression, encryption, archive and upload work done here.
+Nice=19
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryHigh=512M
+MemoryMax=1G
+TimeoutStartSec=4h
