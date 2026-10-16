@@ -189,8 +189,9 @@ export function patchBoard(
   }
   if (at < 0 && placement.beforeId === null && !column.hasMore) at = items.length
   if (at < 0) {
-    // Neither neighbour is loaded: it belongs further down a long column.
-    if (column.hasMore) return removed()
+    // Neither neighbour is loaded. Unfiltered, that puts it further down a long
+    // column; filtered, the neighbours may just be filtered out, so ask.
+    if (column.hasMore && !filtered(filters)) return removed()
     return 'refetch'
   }
   if (source && source.status.id !== column.status.id && source.hasMore) return 'refetch'
@@ -198,6 +199,11 @@ export function patchBoard(
   if (column.hasMore && source?.status.id !== column.status.id) return 'refetch'
   column.items = [...items.slice(0, at), card, ...items.slice(at)]
   return { data: { columns } }
+}
+
+/** Filters that narrow the board, so event neighbours may be off it. */
+function filtered(filters: WorkItemFilters) {
+  return Object.entries(filters).some(([name, value]) => name !== 'cursor' && name !== 'limit' && Boolean(value))
 }
 
 function isListKey(key: readonly unknown[]) {

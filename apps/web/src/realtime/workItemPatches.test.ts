@@ -179,6 +179,13 @@ describe('work item live patches', () => {
     }, {})).toBe('refetch')
   })
 
+  it('refetches a filtered long column that cannot place a new card', () => {
+    const long = board()
+    long.columns[1].hasMore = true
+    const placement = { statusId: doing.id, archived: false, afterId: id(90), beforeId: id(91) }
+    expect(patchBoard(long, card(2, doing, 2), id(2), placement, { priority: 'no_priority' })).toBe('refetch')
+  })
+
   it('refetches a wildcard search, which only the server can match', () => {
     const list: WorkItemListResponse = { items: [card(2)], nextCursor: null }
     expect(patchList(list, card(2, todo, 2), id(2), { q: '100%' })).toBe('refetch')
