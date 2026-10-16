@@ -46,7 +46,8 @@ function useTaskResults(query: string, current: Project | null) {
   const settled = useSettled(query.trim())
   const key = parseTaskKey(settled)
   const { project: keyProject } = useProjectByKey(key?.projectKey ?? null, current?.id)
-  const target = keyProject ?? current
+  // A typed key searches only its own Project; words search the current one.
+  const target = key ? keyProject : current
   const enabled = Boolean(target && settled.length >= 2)
   const results = useQuery({
     queryKey: ['project', target?.id ?? '', 'command-menu', 'tasks', settled],
