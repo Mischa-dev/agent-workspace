@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(completion.text, "{\"ok\":true}");
         assert_eq!((completion.input_tokens, completion.output_tokens), (12, 3));
         assert_eq!(
-            parse(&json!({"stop_reason": "refusal", "content": []})).unwrap_err(),
+            parse(&json!({"stop_reason": "refusal", "content": []})).expect_err("refused"),
             ProviderError::Refused
         );
     }

@@ -805,7 +805,7 @@ pub async fn graph(
             href: href(row),
         })
         .collect::<Vec<_>>();
-    nodes.sort_by(|a, b| natural_key(&a.key).cmp(&natural_key(&b.key)));
+    nodes.sort_by_key(|node| natural_key(&node.key));
     let unblocks = unblock_counts(&by_id, &loaded.edges);
     let today = Utc::now().date_naive();
     let mut frontier = nodes
@@ -819,7 +819,7 @@ pub async fn graph(
             )
         })
         .collect::<Vec<_>>();
-    frontier.sort_by(|a, b| b.0.cmp(&a.0));
+    frontier.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     let mut graph_edges = edges
         .iter()
         .map(|(from, to)| GraphEdge {
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn the_critical_path_follows_the_heaviest_open_chain() {
         let ids = (1..=5).map(Uuid::from_u128).collect::<Vec<_>>();
-        let rows = vec![
+        let rows = [
             row(ids[0], None, false),
             row(ids[1], Some(5.0), false),
             row(ids[2], None, false),

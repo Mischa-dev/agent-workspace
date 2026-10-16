@@ -345,12 +345,7 @@ fn read_roadmap(value: &Value) -> Draft {
             milestone_of.insert(id.clone(), reference.clone());
             DraftMilestone {
                 reference,
-                name: truncate(
-                    &format!("{id} {}", text(workstream, "name"))
-                        .trim()
-                        .to_owned(),
-                    120,
-                ),
+                name: truncate(format!("{id} {}", text(workstream, "name")).trim(), 120),
                 description: truncate(&text(workstream, "goal"), 2000),
                 target_date: None,
             }
@@ -374,10 +369,7 @@ fn read_roadmap(value: &Value) -> Draft {
             }
             DraftTask {
                 reference: task_of[&id].clone(),
-                title: truncate(
-                    &format!("{id} {}", text(item, "title")).trim().to_owned(),
-                    240,
-                ),
+                title: truncate(format!("{id} {}", text(item, "title")).trim(), 240),
                 description,
                 criteria: if done.is_empty() {
                     Vec::new()
@@ -549,7 +541,11 @@ const IMPORT_COLUMNS: &str = r#"
 
 /// Where a plan comes from.
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum Source {
     Text { text: String },
     Page { page_id: Uuid },

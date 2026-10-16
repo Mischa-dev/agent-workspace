@@ -117,6 +117,9 @@ mod tests {
         assert_eq!(completion.text, "{\"ok\":true}");
         assert_eq!((completion.input_tokens, completion.output_tokens), (9, 2));
         let blocked = json!({"candidates": [{"finishReason": "SAFETY"}]});
-        assert_eq!(parse(&blocked).unwrap_err(), ProviderError::Refused);
+        assert_eq!(
+            parse(&blocked).expect_err("blocked"),
+            ProviderError::Refused
+        );
     }
 }

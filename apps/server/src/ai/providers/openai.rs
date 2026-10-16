@@ -145,6 +145,9 @@ mod tests {
         assert_eq!(completion.text, "{\"ok\":true}");
         assert_eq!((completion.input_tokens, completion.output_tokens), (20, 4));
         let refused = json!({"choices": [{"message": {"content": null, "refusal": "no"}}]});
-        assert_eq!(parse(&refused).unwrap_err(), ProviderError::Refused);
+        assert_eq!(
+            parse(&refused).expect_err("refused"),
+            ProviderError::Refused
+        );
     }
 }

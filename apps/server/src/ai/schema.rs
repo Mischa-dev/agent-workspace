@@ -112,12 +112,12 @@ fn check(schema: &Value, value: &Value, path: &str) -> Option<String> {
         Value::Number(number) => {
             let number = number.as_f64().unwrap_or(f64::NAN);
             if let Some(min) = schema.get("minimum").and_then(Value::as_f64)
-                && !(number >= min)
+                && (number.is_nan() || number < min)
             {
                 return Some(format!("{path}: below {min}"));
             }
             if let Some(max) = schema.get("maximum").and_then(Value::as_f64)
-                && !(number <= max)
+                && (number.is_nan() || number > max)
             {
                 return Some(format!("{path}: above {max}"));
             }

@@ -677,6 +677,7 @@ impl RunContext<'_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn suggestion(
         &self,
         task: &TaskRow,
@@ -870,7 +871,7 @@ impl RunContext<'_> {
             for (_, other) in alike.into_iter().take(3) {
                 add(index, other, "similar");
             }
-            related.sort_by(|a, b| b.0.cmp(&a.0));
+            related.sort_by_key(|entry| std::cmp::Reverse(entry.0));
             for (_, other) in related.into_iter().take(3) {
                 add(index, other, "milestone");
             }
