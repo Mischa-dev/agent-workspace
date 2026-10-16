@@ -1,5 +1,10 @@
 # Current frontend feature inventory
 
+> **Historical.** This describes the frontend as it was in August 2026 and is
+> no longer kept up to date. For what is planned, see
+> [`docs/plans/roadmap.md`](../plans/roadmap.md); for what exists, read the
+> code under `apps/web/src/`.
+
 **Baseline:** `61bb577034d77dbcdb1d06f141036f51ede4bb7f` (PR #86)
 
 **Captured:** August 19, 2026
