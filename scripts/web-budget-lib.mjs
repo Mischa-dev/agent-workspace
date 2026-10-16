@@ -18,11 +18,17 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // Editing and removing messages, their history, reactions, live updates of
   // older pages and mark-unread (MCP Phase 3) measure 642,380 / 206,161, all
   // in the lazily loaded conversation routes.
-  javascriptRawBytes: 632 * 1024,
-  javascriptGzipBytes: 203 * 1024,
+  // The app shell (command menu, shortcuts, toasts with Undo, skeletons, tab
+  // titles and badges, the thread side panel, live task patches) and the
+  // Markdown renderer and editor measure 694,135 / 223,840; code highlighting
+  // loads only with a code block.
+  javascriptRawBytes: 680 * 1024,
+  javascriptGzipBytes: 220 * 1024,
   // Raised from 72 KiB for the design system's five theme presets, components and page layouts.
   // Lowered from 104 KiB once pass two removed the legacy stylesheet.
-  cssRawBytes: 100 * 1024,
+  // The kit (toasts, command menu, shortcut sheet, skeletons) and Markdown
+  // styles bring it to 112,083.
+  cssRawBytes: 110 * 1024,
 })
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {

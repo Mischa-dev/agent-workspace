@@ -39,7 +39,10 @@ const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
-const DevUiPage = lazy(() => import('./DevUiPage').then((module) => ({ default: module.DevUiPage })))
+// Only development builds include the kit page; production drops the import.
+const DevUiPage = import.meta.env.DEV
+  ? lazy(() => import('./DevUiPage').then((module) => ({ default: module.DevUiPage })))
+  : null
 const SearchPage = lazy(() => import('../memory/SearchPage').then((module) => ({ default: module.SearchPage })))
 
 function createQueryClient() {
@@ -220,7 +223,7 @@ export function App() {
                     }
                     path="/search"
                   />
-                  {import.meta.env.DEV ? (
+                  {DevUiPage ? (
                     <Route element={<AuthenticatedRouteBoundary><DevUiPage /></AuthenticatedRouteBoundary>} path="/dev/ui" />
                   ) : null}
                   <Route element={<AuthenticatedRouteBoundary><TaskKeyRedirect /></AuthenticatedRouteBoundary>} path="/:taskKey" />
