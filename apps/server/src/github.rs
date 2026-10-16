@@ -3891,15 +3891,8 @@ async fn apply_pull_request_work_item_automation(
         .bind(&payload)
         .execute(&mut **transaction)
         .await?;
-        outbox::enqueue_typed(
-            transaction,
-            job.project_id,
-            outbox::OutboxEventPayload::WorkItemUpdated(outbox::WorkItemUpdatedPayload {
-                work_item_id: item.id,
-                version: new_version,
-            }),
-        )
-        .await?;
+        outbox::enqueue_work_item_updated(transaction, job.project_id, item.id, new_version)
+            .await?;
         applied += 1;
     }
     if applied > 0 {
@@ -4005,15 +3998,8 @@ async fn enqueue_pull_request_invalidations(
     .fetch_all(&mut **transaction)
     .await?;
     for (work_item_id, version) in work_items {
-        outbox::enqueue_typed(
-            transaction,
-            job.project_id,
-            outbox::OutboxEventPayload::WorkItemUpdated(outbox::WorkItemUpdatedPayload {
-                work_item_id,
-                version,
-            }),
-        )
-        .await?;
+        outbox::enqueue_work_item_updated(transaction, job.project_id, work_item_id, version)
+            .await?;
     }
     Ok(())
 }
