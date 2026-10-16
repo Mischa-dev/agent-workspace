@@ -1748,8 +1748,8 @@
       "id": "X5",
       "area": "X",
       "title": "Automations",
-      "what": "Rules with a trigger (an event, a schedule, a capacity window), conditions (a saved view's filters) and actions (launch an agent profile, set a field, notify, post a message). For example: launch when a task labelled agent becomes Ready; launch a fixer when a PR's checks fail; post a standup every weekday at 9. A builder in project settings plus MCP tools.",
-      "done": "'When a PR's checks fail, launch Fixer on it' works without anyone watching.",
+      "what": "Rules with a trigger (an event, a schedule, a capacity window), conditions (a saved view's filters) and actions (launch an agent profile, set a field, notify, post a message). For example: launch when a task labelled agent becomes Ready; launch a fixer when a PR's checks fail; post a standup every weekday at 9. A builder in project settings plus MCP tools. Each rule acts as the person or app that made it, and before every action it checks that actor's current access to the project and to any account, environment or conversation the action uses (principle 9). A rule that fails the check is turned off, and its owner, or a project admin if the owner has left, is told why.",
+      "done": "'When a PR's checks fail, launch Fixer on it' works without anyone watching, and a rule whose maker left the project stops instead of acting for them.",
       "deps": [
         "C5",
         "N1",

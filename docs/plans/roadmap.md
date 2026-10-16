@@ -144,6 +144,14 @@ records or child environments.
      billing can come later without new tracking.
    - Other people's code never runs loose on a host you share: hosted runs go
      to provider clouds or containers (C7) before the SaaS opens.
+9. **Access is checked when the work happens.** Anything that acts later on
+   someone's behalf (a queued launch, an automation, a webhook delivery) is
+   tied to the person, app or agent it acts as. At the moment it acts, it
+   checks that actor's current access to the project, conversation, provider
+   account and environment involved, not only the access they had when they
+   set it up. If the check fails, it stops, and its owner, or a project admin
+   if the owner is gone, is told why. Notifications and AI suggestions apply
+   the same idea when they're read (N1, AI2).
 
 ## Where it stands today
 
@@ -1968,10 +1976,15 @@ Rules with a trigger (an event, a schedule, a capacity window), conditions (a
 saved view's filters) and actions (launch an agent profile, set a field,
 notify, post a message). For example: launch when a task labelled agent
 becomes Ready; launch a fixer when a PR's checks fail; post a standup every
-weekday at 9. A builder in project settings plus MCP tools.
+weekday at 9. A builder in project settings plus MCP tools. Each rule acts as
+the person or app that made it, and before every action it checks that actor's
+current access to the project and to any account, environment or conversation
+the action uses (principle 9). A rule that fails the check is turned off, and
+its owner, or a project admin if the owner has left, is told why.
 
 **Done when:** 'When a PR's checks fail, launch Fixer on it' works without
-anyone watching.
+anyone watching, and a rule whose maker left the project stops instead of
+acting for them.
 
 
 ### O. Operations, open source and SaaS
@@ -2140,7 +2153,8 @@ Defaults for the rest. Say if any is wrong:
 7. Test where AGENTS.md says bugs are silent and costly, plus: secrets never
    leak (S1), settings resolve in the right order (S2), every adapter passes
    the same contract tests (H2), AI suggestions never cite anything the
-   reader can't see (AI2), and the workstream's lists and tools are in the
+   reader can't see (AI2), anything that acts later stops for someone who
+   lost access (principle 9), and the workstream's lists and tools are in the
    two-workspace isolation tests (O7).
 8. Follow principle 8: new tables belong to a workspace, background work
    uses the job queue, and nothing in the code names a machine.
