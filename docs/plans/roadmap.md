@@ -536,7 +536,7 @@ page.
 including a plan with only a weekly window, and your phone shows 'Codex weekly
 limit resets in 2 h · 38% unused' with a Launch button.
 
-#### W10. AI planning
+#### W10. AI planning (#145)
 
 *7 items · Starts when W1 and W3 have merged · 3 add a migration*
 
@@ -544,13 +544,13 @@ Moment 3's brain: the model gateway on your key from settings, suggested
 dependencies and blockers in a review queue and on a graph, ready-and-next
 ranking, plan to tasks, and triage on create.
 
-- [ ] [AI1](#ai1-model-gateway) Model gateway
-- [ ] [AI2](#ai2-dependency-and-blocker-detection) Dependency and blocker detection
-- [ ] [AI3](#ai3-plan-to-tasks) Plan to tasks
-- [ ] [AI4](#ai4-triage-on-create) Triage on create
-- [ ] [AI5](#ai5-ready-and-next) Ready and next
-- [ ] [AI6](#ai6-summaries) Summaries
-- [ ] [V7](#v7-dependency-graph) Dependency graph
+- [x] [AI1](#ai1-model-gateway) Model gateway
+- [x] [AI2](#ai2-dependency-and-blocker-detection) Dependency and blocker detection
+- [x] [AI3](#ai3-plan-to-tasks) Plan to tasks
+- [x] [AI4](#ai4-triage-on-create) Triage on create
+- [x] [AI5](#ai5-ready-and-next) Ready and next
+- [x] [AI6](#ai6-summaries) Summaries
+- [x] [V7](#v7-dependency-graph) Dependency graph
 
 **Owns:** A new AI module with its prompts and fixtures, the `ai_suggestions`
 table, readiness and ranking, the AI and models settings page, and the
