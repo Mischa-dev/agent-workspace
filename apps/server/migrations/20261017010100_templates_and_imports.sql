@@ -126,7 +126,8 @@ CREATE TABLE recurring_task_occurrences (
 );
 
 -- An import: what was read (rows ready to become tasks), how its columns map
--- to task fields, and how far creating them got. The source text is kept
+-- to task fields, and how far creating them got. A GitHub import starts
+-- `fetching` while a job reads the issues. The source text is kept
 -- while it's a draft so a changed mapping can be applied again, and dropped
 -- once it's committed.
 CREATE TABLE task_imports (
@@ -142,9 +143,11 @@ CREATE TABLE task_imports (
     options JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(options) = 'object'),
     rows JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(rows) = 'array'),
     status TEXT NOT NULL DEFAULT 'draft' CHECK (
-        status IN ('draft', 'queued', 'running', 'completed', 'failed', 'canceled')
+        status IN ('fetching', 'draft', 'queued', 'running', 'completed', 'failed', 'canceled')
     ),
     row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count BETWEEN 0 AND 5000),
+    -- Rows the commit job has worked through, created or skipped.
+    processed_count INTEGER NOT NULL DEFAULT 0,
     created_count INTEGER NOT NULL DEFAULT 0,
     skipped_count INTEGER NOT NULL DEFAULT 0,
     error TEXT CHECK (error IS NULL OR char_length(error) <= 500),

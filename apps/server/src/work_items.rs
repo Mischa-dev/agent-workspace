@@ -84,6 +84,8 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
     ("Canceled", "Backlog"),
 ];
 
+pub(crate) mod import_parse;
+pub(crate) mod imports;
 mod list;
 mod planning;
 pub(crate) mod project_templates;
@@ -199,6 +201,24 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             axum::routing::post(templates::apply_template_route),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/imports",
+            get(imports::list_imports).post(imports::create_import).layer(
+                axum::extract::DefaultBodyLimit::max(imports::MAX_IMPORT_BODY_BYTES),
+            ),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/imports/{import_id}",
+            get(imports::get_import).patch(imports::update_import),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/imports/{import_id}/commit",
+            axum::routing::post(imports::commit_import),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/export",
+            get(imports::export_project),
         )
         .route(
             "/api/v1/projects/{project_id}/save-as-template",

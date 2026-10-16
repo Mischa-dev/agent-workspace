@@ -760,6 +760,24 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "work_items",
         Post,
+        "/api/v1/projects/{project_id}/imports",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/imports/{import_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/imports/{import_id}/commit",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Post,
         "/api/v1/projects/{project_id}/save-as-template",
         SettingsManage
     ),
