@@ -32,6 +32,9 @@ fi
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${CI_TARGET_DIR:-${PWD}/target}"
 export CARGO_TERM_COLOR=always
+# Incremental caches only help repeat local edits; on CI hosts they grew to
+# 12 GB and filled the Red Hat disk.
+export CARGO_INCREMENTAL=0
 export AGENT_WORKSPACE_ENV=test
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 started=$(date +%s)
