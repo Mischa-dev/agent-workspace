@@ -20,7 +20,9 @@ export function useProjectByKey(
     if (!matches.some((match) => match.id === project.id)) matches.push(project)
   }
   const pending = Boolean(wanted) && (projects.isPending || (projects.isSuccess && search.isPending))
-  const project = pending
+  const error = wanted ? (projects.error ?? search.error) : null
+  // Without the server's answer another organization's Project may share the key.
+  const project = pending || error
     ? null
     : matches.length === 1
       ? matches[0]
@@ -29,7 +31,7 @@ export function useProjectByKey(
     project,
     matches: pending ? [] : matches,
     pending,
-    error: wanted ? (projects.error ?? search.error) : null,
+    error,
     retry: () => {
       void projects.refetch()
       if (wanted) void search.refetch()

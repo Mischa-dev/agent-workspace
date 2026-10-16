@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../api/queryKeys'
 import type { Project, ProjectListResponse } from '../projects/types'
@@ -29,6 +29,8 @@ function project(id: string, organizationId: string): Project {
 }
 
 describe('useProjectByKey', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
   it('picks no Project when two organizations share the key', async () => {
     const first = project('first', 'organization-a')
     const second = project('second', 'organization-b')
@@ -47,5 +49,18 @@ describe('useProjectByKey', () => {
 
     const preferred = renderHook(() => useProjectByKey('AWD', 'second'), { wrapper })
     await waitFor(() => expect(preferred.result.current.project?.id).toBe('second'))
+  })
+
+  it('picks nothing when the server search fails, even with one listed match', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+    queryClient.setQueryData<ProjectListResponse>(queryKeys.projects, { projects: [project('first', 'organization-a')] })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline') }))
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+
+    const { result } = renderHook(() => useProjectByKey('AWD'), { wrapper })
+    await waitFor(() => expect(result.current.error).toBeTruthy())
+    expect(result.current.project).toBeNull()
   })
 })

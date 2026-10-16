@@ -83,6 +83,17 @@ export function TaskKeyRedirect() {
                 ? 'That task may have been removed, or you may not have access to it.'
                 : 'No Project you can see uses that key.'
               : 'That address isn’t part of this workspace. It may have moved, or the link may be old.'}
+            {project && byKey.matches.length > 1 ? (
+              <div className="aw-stack">
+                {byKey.matches
+                  .filter((match) => match.id !== project.id)
+                  .map((match) => (
+                    <Button key={match.id} onClick={() => setChosenId(match.id)}>
+                      {`Try ${match.name}`}
+                    </Button>
+                  ))}
+              </div>
+            ) : null}
           </EmptyState>
         )}
       </div>
