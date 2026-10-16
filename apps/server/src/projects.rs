@@ -119,6 +119,9 @@ struct CreateProjectRequest {
     organization_id: Uuid,
     key: String,
     name: String,
+    /// A project template in the same workspace to start from.
+    #[serde(default)]
+    template_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,6 +296,7 @@ async fn create_project(
             "organizationId": request.organization_id,
             "key": key,
             "name": name,
+            "templateId": request.template_id,
         }))
         .map_err(|_| AppError::Internal("serialize Project command"))?,
     )
@@ -430,6 +434,19 @@ async fn create_project(
         .execute(&mut *transaction)
         .await?;
     crate::work_items::ensure_default_workflow(&mut transaction, project_id).await?;
+    let applied_template = match request.template_id {
+        Some(template_id) => Some(
+            crate::work_items::project_templates::apply_to_new_project(
+                &mut transaction,
+                &principal,
+                crate::work_items::project_templates::creator_actor(&principal, project_id)?,
+                request.organization_id,
+                template_id,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     sqlx::query(
         r#"
         INSERT INTO project_instructions (project_id, content)
@@ -492,6 +509,7 @@ async fn create_project(
         serde_json::json!({
             "organization_id": request.organization_id,
             "project_key": project.key,
+            "template": applied_template,
         }),
     )
     .await?;
