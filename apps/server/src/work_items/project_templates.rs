@@ -184,7 +184,7 @@ const PROJECT_TEMPLATE_SELECT: &str = r#"
            template.archived_at IS NOT NULL AS archived, template.version
     FROM project_templates template
     LEFT JOIN projects source ON source.id = template.source_project_id
-    LEFT JOIN actors creator ON creator.id = template.created_by_actor_id
+    LEFT JOIN users creator ON creator.actor_id = template.created_by_actor_id
 "#;
 
 #[derive(Clone, Debug, Serialize)]

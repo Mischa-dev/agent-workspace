@@ -50,6 +50,7 @@ mod oauth_agent;
 mod phase3_takedown;
 mod phase4_groundwork;
 mod reply_requests;
+mod w11_views_and_data;
 mod w2_harness_platform;
 mod w3_tasks_http;
 mod workspace_isolation;

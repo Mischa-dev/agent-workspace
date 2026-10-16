@@ -154,7 +154,7 @@ pub(crate) async fn ensure_builtin_views(
 const VIEW_SELECT: &str = r#"
     SELECT saved.id, saved.project_id, saved.owner_actor_id, saved.builtin, saved.name,
            saved.query, saved.layout, saved.fields, saved.position, saved.version,
-           COALESCE(pin.pinned, saved.builtin IN ('my_tasks', 'ready_for_agents')) AS pinned,
+           COALESCE(pin.pinned, saved.builtin IN ('my_tasks', 'ready_for_agents'), false) AS pinned,
            pin.position AS pin_position
     FROM saved_views saved
     LEFT JOIN saved_view_pins pin ON pin.view_id = saved.id AND pin.actor_id = $2

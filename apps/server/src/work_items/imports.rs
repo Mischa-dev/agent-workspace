@@ -118,7 +118,8 @@ const IMPORT_SELECT: &str = r#"
            import.processed_count, import.created_count, import.skipped_count, import.error,
            import.version, import.created_at, import.finished_at
     FROM task_imports import
-    LEFT JOIN actors creator ON creator.id = import.created_by_actor_id
+    LEFT JOIN project_memberships creator
+      ON creator.project_id = import.project_id AND creator.actor_id = import.created_by_actor_id
     LEFT JOIN repositories repository
       ON repository.project_id = import.project_id AND repository.id = import.repository_id
 "#;
