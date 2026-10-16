@@ -13,7 +13,7 @@ import {
   EmptyState,
   ErrorState,
   Icon,
-  MessageSkeleton,
+  ListSkeleton,
   PageHeader,
   TextField,
   actorKind,
@@ -74,7 +74,7 @@ export function MessagesPage() {
         <PageHeader icon="compose" title="New message">
           Pick one person or agent for a direct message, or several for a group.
         </PageHeader>
-        {overview.isPending ? <MessageSkeleton label="Loading people" rows={2} /> : null}
+        {overview.isPending ? <ListSkeleton label="Loading people" rows={2} avatars /> : null}
         {overview.isError ? (
           <ErrorState action={<Button onClick={() => void overview.refetch()}>Try again</Button>} title="Messages didn’t load">
             Check your connection and try again.
@@ -182,7 +182,7 @@ export function AgentsPage() {
         ) : overview.data ? (
           <Banner tone="info">Only the workspace owner can connect and manage agents.</Banner>
         ) : overview.isPending ? (
-          <MessageSkeleton label="Loading agents" rows={2} />
+          <ListSkeleton label="Loading agents" rows={2} avatars />
         ) : null}
       </div>
     </AppShell>

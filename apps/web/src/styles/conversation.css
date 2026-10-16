@@ -1102,7 +1102,7 @@ h2.aw-card__title {
 }
 
 /* A conversation's thread board */
-.aw-board__list {
+.aw-threadboard__list {
   display: grid;
   gap: var(--space-1);
   margin: 0;
@@ -1110,7 +1110,7 @@ h2.aw-card__title {
   list-style: none;
 }
 
-.aw-board__item {
+.aw-threadboard__item {
   display: grid;
   gap: var(--space-1);
   width: 100%;
@@ -1123,24 +1123,24 @@ h2.aw-card__title {
   cursor: pointer;
 }
 
-.aw-board__item:hover {
+.aw-threadboard__item:hover {
   border-color: var(--content-border);
   background: var(--content-hover);
 }
 
-.aw-board__item:focus-visible {
+.aw-threadboard__item:focus-visible {
   box-shadow: var(--focus-ring);
   outline: none;
 }
 
-.aw-board__top,
-.aw-board__meta {
+.aw-threadboard__top,
+.aw-threadboard__meta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.aw-board__name {
+.aw-threadboard__name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1149,8 +1149,8 @@ h2.aw-card__title {
   white-space: nowrap;
 }
 
-.aw-board__meta,
-.aw-board__outcome {
+.aw-threadboard__meta,
+.aw-threadboard__outcome {
   font: var(--t-small);
   color: var(--content-fg-muted);
 }

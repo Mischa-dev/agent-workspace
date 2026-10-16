@@ -1,13 +1,8 @@
-import type { IconName } from '../ui'
+import { formatRelative, type IconName } from '../ui'
 import type { ReplyRequest } from './types'
 
 function timeAgo(iso: string) {
-  const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
-  if (!Number.isFinite(seconds)) return 'a while ago'
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)} hr ago`
-  return `${Math.round(seconds / 86_400)} days ago`
+  return formatRelative(iso) || 'a while ago'
 }
 
 export const REPLY_ICONS: Partial<Record<ReplyRequest['status'], IconName>> = {

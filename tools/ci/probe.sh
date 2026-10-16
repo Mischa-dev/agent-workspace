@@ -32,7 +32,9 @@ fi
 
 cores="$(nproc)"
 load="$(cut -d' ' -f1 /proc/loadavg)"
-if awk -v l="${load}" -v c="${cores}" 'BEGIN { exit !(l > c * 0.4) }'; then
+# The load average still counts a CI run that just finished here (run.sh sets
+# CI_RECENT_RUN), so it only says the owner is busy when no run was recent.
+if [ -z "${CI_RECENT_RUN:-}" ] && awk -v l="${load}" -v c="${cores}" 'BEGIN { exit !(l > c * 0.4) }'; then
   reasons+=("CPU busy (load ${load} on ${cores} threads)")
 fi
 

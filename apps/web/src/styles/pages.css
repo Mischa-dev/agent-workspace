@@ -1577,7 +1577,6 @@
   color: var(--content-fg);
   font: var(--t-body);
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }
 
 .aw-page-editor {

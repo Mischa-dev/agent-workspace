@@ -1950,7 +1950,6 @@ async fn task_reorder_inner(
             &payload.activity(),
         )
         .await?;
-        enqueue_update(&mut transaction, project_id, *id, version).await?;
         let mut metadata = payload.audit(version);
         if let (Some(object), ReorderPlace::Before(anchor) | ReorderPlace::After(anchor)) =
             (metadata.as_object_mut(), place)
@@ -1971,6 +1970,11 @@ async fn task_reorder_inner(
             version,
             board_position: position,
         });
+    }
+    // Every rank is written before any event records its neighbours, so each
+    // card's placement reflects the finished order.
+    for (id, task) in ids.iter().zip(&tasks) {
+        enqueue_update(&mut transaction, project_id, *id, task.version).await?;
     }
     transaction.commit().await?;
     Ok(ToolResult::ok(ReorderValue {
