@@ -453,6 +453,9 @@ pub(super) struct MembersArguments {
     pub project_id: String,
     /// Include people and agents who were removed.
     pub include_removed: Option<bool>,
+    /// Skip this many members: pass the last call's nextOffset to read the
+    /// next page.
+    pub offset: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -476,7 +479,13 @@ pub(super) struct MemberLine {
 #[serde(rename_all = "camelCase")]
 pub(super) struct MembersValue {
     pub members: Vec<MemberLine>,
+    /// Set when there are more members: pass it as offset to read them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<u32>,
 }
+
+/// Members per page of project_members.
+const MEMBERS_PAGE: u32 = 500;
 
 pub(super) async fn project_members(
     state: &AppState,
@@ -489,6 +498,7 @@ pub(super) async fn project_members(
     if parse_id(&arguments.project_id) != Some(principal.project_id) {
         return ToolResult::not_found("That project");
     }
+    let offset = arguments.offset.unwrap_or(0);
     let result = async {
         let Some(role) = project_role(state, principal, principal.project_id).await? else {
             return Ok(ToolResult::not_found("That project"));
@@ -512,15 +522,25 @@ pub(super) async fn project_members(
             ORDER BY membership.enabled DESC,
                      CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1
                                           WHEN 'member' THEN 2 ELSE 3 END,
-                     lower(membership.display_name)
-            LIMIT 500
+                     lower(membership.display_name), membership.actor_id
+            LIMIT $3 OFFSET $4
             "#,
         )
         .bind(principal.project_id)
         .bind(arguments.include_removed.unwrap_or(false))
+        .bind(i64::from(MEMBERS_PAGE) + 1)
+        .bind(i64::from(offset))
         .fetch_all(&state.pool)
         .await?;
-        Ok::<_, AppError>(ToolResult::ok(MembersValue { members }))
+        let mut members = members;
+        let next_offset = (members.len() > MEMBERS_PAGE as usize).then(|| {
+            members.truncate(MEMBERS_PAGE as usize);
+            offset.saturating_add(MEMBERS_PAGE)
+        });
+        Ok::<_, AppError>(ToolResult::ok(MembersValue {
+            members,
+            next_offset,
+        }))
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "project_members"))

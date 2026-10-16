@@ -45,7 +45,8 @@ function taskCells({
   const editable = !disabled && card.capabilities.edit && !card.archivedAt
   const pick = (field: PickerField, anchor: HTMLElement) => onPick(card, field, anchor)
   return {
-    select: (
+    // A read-only list (archived project, viewer or worker role) has nothing to select for.
+    select: disabled ? null : (
       <input
         aria-label={`Select ${card.key}`}
         checked={selected}
@@ -288,12 +289,13 @@ export function WorkItemList({
   }
 
   const onRowSelect = (card: WorkItemCard, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
+    if (disabled) return
     setSelection(pick(selection, card.id, order, { shift: event.shiftKey, toggle: event.metaKey || event.ctrlKey }))
   }
 
   useTaskShortcuts(!picker, (event) => {
     const key = event.key.toLowerCase()
-    if ((event.metaKey || event.ctrlKey) && key === 'a' && bodyRef.current?.contains(document.activeElement)) {
+    if (!disabled && (event.metaKey || event.ctrlKey) && key === 'a' && bodyRef.current?.contains(document.activeElement)) {
       setSelection(selectAll(order))
       if (order.length > MAX_BULK) notify({ tone: 'info', message: `Selected the first ${MAX_BULK}; bulk changes take up to ${MAX_BULK} at a time.` })
       return true
@@ -313,7 +315,7 @@ export function WorkItemList({
       return true
     }
     const row = currentKey ? rowByKey(currentKey) : undefined
-    if (key === 'x' && row?.kind === 'task') {
+    if (key === 'x' && row?.kind === 'task' && !disabled) {
       setSelection(toggleOne(selection, row.item.id))
       return true
     }
@@ -461,16 +463,18 @@ export function WorkItemList({
         spaceAfter={windowed.after}
         spaceBefore={windowed.before}
       />
-      <BulkBar
-        archived={selection.ids.size > 0 && selectedCards().every((card) => Boolean(card.archivedAt))}
-        busy={bulkBusy || applyPick.isPending}
-        count={selection.ids.size}
-        onArchive={() => void archiveSelected()}
-        onClear={() => setSelection(emptySelection)}
-        onDueDate={(value) => void setDueDate(value)}
-        onPick={(field, anchor) => openPicker(field, anchor)}
-        onRestore={() => void restoreSelected()}
-      />
+      {disabled ? null : (
+        <BulkBar
+          archived={selection.ids.size > 0 && selectedCards().every((card) => Boolean(card.archivedAt))}
+          busy={bulkBusy || applyPick.isPending}
+          count={selection.ids.size}
+          onArchive={() => void archiveSelected()}
+          onClear={() => setSelection(emptySelection)}
+          onDueDate={(value) => void setDueDate(value)}
+          onPick={(field, anchor) => openPicker(field, anchor)}
+          onRestore={() => void restoreSelected()}
+        />
+      )}
       {picker ? (
         <FieldPicker
           anchor={picker.anchor}

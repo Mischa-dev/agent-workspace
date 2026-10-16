@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
@@ -45,24 +45,40 @@ export function useTaskSave(item: WorkItem) {
     [queryClient],
   )
 
+  // Saves go one at a time, each sent with the version in the cache when it
+  // starts (the last save or conflict updates it), so two quick edits never
+  // conflict with each other. With nothing in flight a save starts at once.
+  const queue = useRef<{ tail: Promise<void>; pending: number }>({ tail: Promise.resolve(), pending: 0 })
+
   const save = useCallback(
     (field: string, patch: Omit<WorkItemPatch, 'expectedVersion'>, onDone?: (saved: boolean) => void) => {
       setProblem(null)
       setSaving(field)
-      update.mutate(
-        { projectId: item.projectId, workItemId: item.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion: item.version, ...patch } },
-        {
-          onSuccess: () => onDone?.(true),
-          onError: (error) => {
-            takeConflict(error)
-            setProblem(problemFor(error, field))
-            onDone?.(false)
-          },
-          onSettled: () => setSaving(null),
-        },
-      )
+      const send = () =>
+        new Promise<void>((resolve) => {
+          const expectedVersion = queryClient.getQueryData<WorkItem>(queryKeys.workItem(item.projectId, item.id))?.version ?? item.version
+          update.mutate(
+            { projectId: item.projectId, workItemId: item.id, idempotencyKey: crypto.randomUUID(), patch: { expectedVersion, ...patch } },
+            {
+              onSuccess: () => onDone?.(true),
+              onError: (error) => {
+                takeConflict(error)
+                setProblem(problemFor(error, field))
+                onDone?.(false)
+              },
+              onSettled: () => {
+                queue.current.pending -= 1
+                setSaving((now) => (now === field ? null : now))
+                resolve()
+              },
+            },
+          )
+        })
+      const state = queue.current
+      state.pending += 1
+      state.tail = state.pending === 1 ? send() : state.tail.then(send)
     },
-    [item.id, item.projectId, item.version, takeConflict, update],
+    [item.id, item.projectId, item.version, queryClient, takeConflict, update],
   )
 
   /** For other task writes (dependencies, relations): the same conflict handling. */
