@@ -5,12 +5,14 @@ import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, MessageSkeleton, actorKind, Avatar } from '../ui'
 import { listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
-import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, runOptimisticMove } from './boardModel'
+import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { allowedStatuses } from './pickerModel'
 import { boardQuery, type ListState } from './listModel'
 import type { Notice } from './notice'
-import { useBoard, useInvalidateWorkItems } from './planningHooks'
+import { priorityLabel } from './constants'
+import { useAssignableActors } from './hooks'
+import { useBoard, useInvalidateWorkItems, useMilestones } from './planningHooks'
 import { useTaskShortcuts } from './shortcutKeys'
 import { TaskGlyph } from './TaskGlyph'
 import { editErrorMessage, useApplyPick } from './taskEdits'
@@ -73,7 +75,23 @@ export function WorkItemBoard({
 
   const columns = useMemo(() => board.data?.columns ?? [], [board.data])
   const columnsBy = board.data?.columnsBy ?? state.columnsBy
-  const lanes = useMemo(() => lanesFor(columns, state.lanes), [columns, state.lanes])
+  const milestones = useMilestones(projectId)
+  const assignees = useAssignableActors(projectId, '')
+  const knownLanes = useMemo(() => {
+    switch (state.lanes) {
+      case 'priority':
+        return PRIORITY_ORDER.map((priority) => ({ key: priority, label: priorityLabel(priority) }))
+      case 'type':
+        return workflow.types.map((type) => ({ key: type.id, label: type.name }))
+      case 'milestone':
+        return [...(milestones.data ?? []).filter((milestone) => !milestone.archived).map((milestone) => ({ key: milestone.id, label: milestone.name })), { key: 'none', label: 'No milestone' }]
+      case 'assignee':
+        return [...(assignees.data ?? []).map((actor) => ({ key: actor.id, label: actor.displayName })), { key: 'none', label: 'Unassigned' }]
+      default:
+        return []
+    }
+  }, [assignees.data, milestones.data, state.lanes, workflow.types])
+  const lanes = useMemo(() => lanesFor(columns, state.lanes, knownLanes), [columns, knownLanes, state.lanes])
   const canMove = !disabled
 
   const cellCards = useCallback(
@@ -421,7 +439,7 @@ export function WorkItemBoard({
                           <BoardCard
                             card={entry.card}
                             dragId={entry.dragId}
-                            draggable={canMove}
+                            draggable={canMove && entry.card.capabilities.edit && !entry.card.archivedAt}
                             focused={entry.dragId === tabStop}
                             held={held?.dragId === entry.dragId}
                             key={entry.dragId}

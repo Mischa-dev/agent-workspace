@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
-import { applyMove, dropAnchor, fieldMove, runOptimisticMove } from './boardModel'
+import { applyMove, dropAnchor, fieldMove, lanesFor, runOptimisticMove } from './boardModel'
 import { changeSentence, formatChanges } from './historyFormat'
 import type { WorkItemBoardResponse, WorkItemCard, WorkItemWorkflow } from './types'
 import { addStatus, draftFromWorkflow, draftProblem, removeStatus, setAllowAny, togglePair, workflowUpdate } from './workflowModel'
@@ -99,6 +99,15 @@ describe('board moves', () => {
     expect(fieldMove('assignee', 'a1', 'none', 'Unassigned').patch).toEqual({ assigneeActorId: null })
     const cleared = fieldMove('label', 'bug', 'none', 'No label', undefined, ['bug', 'ui'])
     expect(cleared.patch).toEqual({ removeLabelIds: ['bug', 'ui'] })
+  })
+
+  it('offers a lane for every known value, used or not, with none last', () => {
+    const lanes = lanesFor([], 'milestone', [
+      { key: 'none', label: 'No milestone' },
+      { key: 'm2', label: 'v2' },
+      { key: 'm1', label: 'v1' },
+    ])
+    expect(lanes.map((lane) => lane.key)).toEqual(['m1', 'm2', 'none'])
   })
 
   it('shows the move at once and puts the board back when the server refuses', async () => {

@@ -440,10 +440,10 @@ pub(super) async fn watch(
     )
     .await?;
     let watchers = planning::watchers(&mut write.transaction, project_id, task_id).await?;
+    // The watcher list is capped for display, so it can't say whether the
+    // caller is on it; the change just made does.
     let body = WatchResponse {
-        watching: watchers
-            .iter()
-            .any(|watcher| watcher.id == principal.actor_id),
+        watching: request.watching,
         watchers,
     };
     write.finish(StatusCode::OK, &body).await

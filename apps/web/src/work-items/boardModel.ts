@@ -106,12 +106,16 @@ export function laneOf(card: WorkItemCard, lanes: LaneBy): { key: string; label:
   }
 }
 
-const PRIORITY_ORDER: WorkItemPriority[] = ['urgent', 'high', 'medium', 'low', 'no_priority']
+export const PRIORITY_ORDER: WorkItemPriority[] = ['urgent', 'high', 'medium', 'low', 'no_priority']
 
-/** Lanes present among the loaded cards, in a stable order, "none" last. */
-export function lanesFor(columns: readonly BoardColumn[], lanes: LaneBy) {
+/**
+ * The swimlanes: every `known` value a card can be dropped on (the field's
+ * definitions), plus any other value a loaded card carries, in a stable
+ * order with "none" last.
+ */
+export function lanesFor(columns: readonly BoardColumn[], lanes: LaneBy, known: ReadonlyArray<{ key: string; label: string }> = []) {
   if (lanes === 'none') return [{ key: 'all', label: '' }]
-  const found = new Map<string, string>()
+  const found = new Map<string, string>(known.map((lane) => [lane.key, lane.label]))
   for (const column of columns) for (const card of column.items) {
     const lane = laneOf(card, lanes)
     found.set(lane.key, lane.label)
