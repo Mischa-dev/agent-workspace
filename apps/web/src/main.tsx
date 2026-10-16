@@ -14,6 +14,8 @@ import './styles/shell.css'
 import './styles/conversation.css'
 import './styles/pages.css'
 import './styles/work.css'
+import './styles/kit.css'
+import './styles/markdown.css'
 
 installErrorReporting()
 

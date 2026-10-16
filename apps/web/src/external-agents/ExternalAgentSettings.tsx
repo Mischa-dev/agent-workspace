@@ -11,11 +11,12 @@ import {
   Button,
   ErrorState,
   Icon,
-  MessageSkeleton,
+  ListSkeleton,
   Section,
   SelectField,
   StatusChip,
   TextField,
+  formatDateTime,
 } from '../ui'
 import {
   createExternalAgent,
@@ -44,8 +45,7 @@ const SCOPE_LABELS: Record<ExternalAgentScope, string> = {
 
 function formatWhen(iso: string | null | undefined) {
   if (!iso) return null
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return formatDateTime(iso) || iso
 }
 
 export function ExternalAgentSettings({ projectId }: { projectId: string }) {
@@ -96,7 +96,7 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
   })
   const pending = createMutation.isPending || updateMutation.isPending || rotateMutation.isPending || removeMutation.isPending
 
-  if (connections.isPending) return <MessageSkeleton label="Loading agents" rows={2} />
+  if (connections.isPending) return <ListSkeleton label="Loading agents" rows={2} avatars />
   if (connections.isError) {
     return (
       <ErrorState action={<Button onClick={() => void connections.refetch()}>Try again</Button>} title="Agents didn’t load">

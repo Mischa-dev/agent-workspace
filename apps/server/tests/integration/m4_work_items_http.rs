@@ -1085,6 +1085,14 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .await
     .expect("count M4 outbox events");
     assert_eq!(outbox_count, 19);
+    let unplaced = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM outbox_events WHERE project_id = $1 AND event_type = 'work_item.updated' AND NOT (payload -> 'placement' ? 'statusId')",
+    )
+    .bind(seed.project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count M4 events without a board placement");
+    assert_eq!(unplaced, 0, "every task event says where the card sits");
     let counter = sqlx::query_scalar::<_, i64>(
         "SELECT next_work_item_number FROM project_counters WHERE project_id = $1",
     )
