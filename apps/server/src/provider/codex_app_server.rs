@@ -589,7 +589,7 @@ impl CodexSession {
                 return Err(transport(error));
             }
         };
-        Ok(parse_event(raw)?)
+        parse_event(raw)
     }
 
     async fn read_models(&mut self) -> Result<Vec<ModelEntry>, HarnessError> {

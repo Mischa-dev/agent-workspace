@@ -302,7 +302,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         .bind(organization_id)
         .bind(human_actor_id)
         .bind(&codex_manifest.kind)
-        .bind(&profile_path)
+        .bind(profile_path)
         .fetch_one(&mut *transaction)
         .await?;
         let profile_id = sqlx::query_scalar::<_, Uuid>(
@@ -353,7 +353,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
         .bind(project_id)
         .bind(provider_connection_id)
         .bind(human_actor_id)
-        .bind(&profile_path)
+        .bind(profile_path)
         .fetch_one(&mut *transaction)
         .await?;
         let stored = sqlx::query_scalar::<_, String>(

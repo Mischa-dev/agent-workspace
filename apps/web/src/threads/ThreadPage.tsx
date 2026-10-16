@@ -83,6 +83,8 @@ export type RunState =
 
 export type Run = {
   id: string
+  /** The settings frozen on the run when it started (harness, model, reasoning, speed). */
+  config?: unknown
   state: RunState
   repositoryId: string
   repositoryWorkspaceId: string | null

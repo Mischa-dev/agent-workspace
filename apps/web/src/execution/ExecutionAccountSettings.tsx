@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
-import { Badge, Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, SelectField, StatusChip, TextField } from '../ui'
+import { Banner, Button, EmptyState, ErrorState, Icon, MessageSkeleton, SelectField, StatusChip, TextField } from '../ui'
 import {
   cancelAccountLogin,
   createProviderAccount,
@@ -14,6 +14,8 @@ import {
   loginWithApiKey,
   logoutAccount,
   pickableModels,
+  refreshCatalog,
+  saveModel,
   startAccountLogin,
   updateProviderAccount,
   useProviderAccount as setAccountInUse,
@@ -99,6 +101,11 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
       )}
       {accounts.data.length > 0 ? addForm : null}
       {add.isError && <Banner tone="danger">{errorMessage(add.error)}</Banner>}
+      {harnesses.data
+        .filter((harness) => harness.canEditCatalog && harness.catalog.models.length > 0)
+        .map((harness) => (
+          <ModelCatalog harness={harness} key={harness.kind} projectId={projectId} />
+        ))}
     </div>
   )
 }
@@ -200,7 +207,7 @@ function ProviderAccountCard({
             {account.activeRuns ? ` · ${account.activeRuns} running` : ''}
           </p>
         </div>
-        {account.preferred ? <Badge>Used here</Badge> : null}
+        {account.preferred ? <StatusChip icon="check" tone="success">Used here</StatusChip> : null}
         <AccountState state={current?.accountState ?? account.accountState} />
       </header>
       {!harness && <Banner tone="warning">This server no longer has this harness installed, so it can’t run.</Banner>}
@@ -415,6 +422,73 @@ export function RunSettingsFields({
         </SelectField>
       ) : null}
     </div>
+  )
+}
+
+/** The workspace's model list for one harness. Admins hide models nobody
+ * should pick, choose the default, and pull the provider's latest list. */
+function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: string }) {
+  const queryClient = useQueryClient()
+  const saved = (updated: Harness) =>
+    queryClient.setQueryData<Harness[]>(queryKeys.harnesses(projectId), (current) =>
+      current?.map((entry) => (entry.kind === updated.kind ? updated : entry)),
+    )
+  const edit = useMutation({
+    mutationFn: ({ modelId, change }: { modelId: string; change: { hidden?: boolean; isDefault?: boolean } }) =>
+      saveModel(projectId, harness.kind, modelId, change, crypto.randomUUID()),
+    onSuccess: saved,
+  })
+  const refresh = useMutation({
+    mutationFn: () => refreshCatalog(projectId, harness.kind, crypto.randomUUID()),
+    onSuccess: saved,
+  })
+  const failure = edit.error ?? refresh.error
+
+  return (
+    <section aria-labelledby={`catalog-${harness.kind}`} className="aw-card aw-profile">
+      <header className="aw-profile__head">
+        <div className="aw-profile__titles">
+          <h3 className="aw-profile__name" id={`catalog-${harness.kind}`}>
+            {harness.displayName} models
+          </h3>
+          <p className="aw-profile__sub">
+            Everyone in this workspace picks from this list.
+            {harness.catalog.refreshedAt ? ` Updated ${new Date(harness.catalog.refreshedAt).toLocaleDateString()}.` : ''}
+          </p>
+        </div>
+        {harness.features.modelListing ? (
+          <Button busy={refresh.isPending} icon="retry" onClick={() => refresh.mutate()} size="sm" variant="secondary">
+            Refresh list
+          </Button>
+        ) : null}
+      </header>
+      {failure ? <Banner tone="danger">{errorMessage(failure)}</Banner> : null}
+      <ul className="aw-rows">
+        {harness.catalog.models.map((model) => (
+          <li className="aw-row" key={model.id}>
+            <span className="aw-row__main">
+              <span className="aw-row__title">{model.displayName}</span>
+              <span className="aw-quiet">
+                {[model.isDefault && 'Default', model.hidden && 'Hidden', model.source === 'manual' && 'Added by hand'].filter(Boolean).join(' · ') || model.id}
+              </span>
+            </span>
+            {!model.isDefault && !model.hidden ? (
+              <Button disabled={edit.isPending} onClick={() => edit.mutate({ modelId: model.id, change: { isDefault: true } })} size="sm" variant="ghost">
+                Make default
+              </Button>
+            ) : null}
+            <Button
+              disabled={edit.isPending || (model.isDefault && !model.hidden)}
+              onClick={() => edit.mutate({ modelId: model.id, change: { hidden: !model.hidden } })}
+              size="sm"
+              variant="ghost"
+            >
+              {model.hidden ? `Show ${model.displayName}` : `Hide ${model.displayName}`}
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
