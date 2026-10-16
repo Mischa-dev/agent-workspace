@@ -12,6 +12,7 @@ import {
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
+import { closeCommandMenu } from '../shell/commandStore'
 import { clearToasts } from '../ui/toastStore'
 
 export type OrganizationRole = 'owner' | 'admin' | 'member'
@@ -212,6 +213,8 @@ function clearActorScopedQueries(queryClient: QueryClient) {
   queryClient.getMutationCache().clear()
   // Toasts can name private conversations and hold Undo callbacks.
   clearToasts()
+  // A menu left open must not reopen over the next session.
+  closeCommandMenu()
 }
 
 export function isAuthenticatedSession(
