@@ -74,6 +74,7 @@ mod reactions;
 mod reads;
 mod replies;
 mod runs;
+mod settings_tools;
 mod talk;
 mod task_batch;
 mod task_drafts;
@@ -234,6 +235,19 @@ impl McpServer {
     ) -> Json<common::ToolResult<admin::WorkflowValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(admin::workflow_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's settings as they apply to you: the default harness, model, reasoning and speed for runs, its environment, and AI options, each with where its value came from (project, user, workspace or default). Read only; people change settings in the app.",
+        annotations(title = "Get settings", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn settings_get(
+        &self,
+        Parameters(arguments): Parameters<settings_tools::SettingsGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(settings_tools::settings_get(&self.state, principal, arguments).await)
     }
 
     #[tool(
