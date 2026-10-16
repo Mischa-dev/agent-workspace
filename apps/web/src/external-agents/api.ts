@@ -30,6 +30,8 @@ export type ExternalAgentConnection = {
   webhookUrl?: string | null
   lastWakeupAt?: string | null
   lastWakeupError?: string | null
+  /** `inbox`: the old inbox.available wakeups, until the webhook is saved again. */
+  wakeupFormat?: 'typed' | 'inbox'
 }
 
 export type OneTimeCredential = {
@@ -42,6 +44,8 @@ export type OneTimeCredential = {
 export type ExternalAgentMutation = {
   connection: ExternalAgentConnection
   oneTimeCredential: OneTimeCredential | null
+  /** Shown once, when the agent was created with a webhook. */
+  webhookSecret?: string | null
 }
 
 export function listExternalAgents(projectId: string) {
@@ -58,6 +62,8 @@ export function createExternalAgent(
     handle: string
     role: ExternalAgentRole
     scopes: ExternalAgentScope[]
+    /** Where to send wakeups; sets the runner up in one step. */
+    webhookUrl?: string
   },
 ) {
   return requestJson<ExternalAgentMutation>(

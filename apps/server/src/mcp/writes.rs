@@ -12,6 +12,7 @@ use super::{
         ARCHIVED_PROJECT_MESSAGE, READ_ONLY_MESSAGE, accessible_project_ids_in,
         archived_task_message, parse_id, public_url, version_conflict_message,
     },
+    planning,
     workflow::Workflow,
 };
 use crate::{
@@ -27,11 +28,11 @@ use crate::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
         AuditVersionMetadata, BoardPlacement, ChangeFinalization, ChangePayload, CommandActor,
         ConflictKind, CreateWorkItemCommand, CreateWorkItemOutcome, LockedWorkItem,
-        MAX_SUBTASK_LEVELS, ParentProblem, PlacementProblem, UpdateWorkItemCommand,
-        UpdateWorkItemOutcome, advance_version, authorize_mutation, conflict_kind,
-        create_work_item as execute_create_work_item, enqueue_update, finalize_change,
-        finalize_comment, insert_activity as insert_work_item_activity, lock_membership,
-        lock_work_item, normalize_criterion_text, place_in_column, record_audit,
+        MAX_SUBTASK_LEVELS, NewTaskFields, ParentProblem, PlacementProblem, TaskFieldChanges,
+        UpdateWorkItemCommand, UpdateWorkItemOutcome, advance_version, authorize_mutation,
+        conflict_kind, create_work_item as execute_create_work_item, enqueue_update,
+        finalize_change, finalize_comment, insert_activity as insert_work_item_activity,
+        lock_membership, lock_work_item, normalize_criterion_text, place_in_column, record_audit,
         set_archived as execute_set_archived, update_work_item_by_id,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
@@ -57,9 +58,12 @@ const ASSIGNEE_MESSAGE: &str =
 pub(super) const STATUS_MESSAGE: &str =
     "Pass a status name, such as \"In Progress\" (see workflow_get).";
 pub(super) const TYPE_MESSAGE: &str = "Pass a type name, such as \"Bug\" (see workflow_get).";
+pub(super) const MILESTONE_MESSAGE: &str =
+    "Pass an active milestone of this project by name or ID (see milestone_list), or \"none\".";
+pub(super) const DATES_MESSAGE: &str = "The start date must be on or before the due date.";
 const POSITION_MESSAGE: &str = "Use top, bottom, or a position number (1 is the top of the column). To put it next to a task, use beforeTaskId or afterTaskId instead.";
 pub(super) const LABEL_COUNT_MESSAGE: &str = "Pass at most 20 labels at a time.";
-const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, or archived.";
+const NOTHING_TO_CHANGE_MESSAGE: &str = "Pass at least one change: title, description, priority, assignee, type, status, position, parentId, clearParent, addLabels, removeLabels, milestone, startDate, dueDate, estimate, clearEstimate, or archived.";
 /// The most acceptance criteria one task_create call takes.
 const MAX_CRITERIA_ON_CREATE: usize = 50;
 const TASK_NOT_FOUND_MESSAGE: &str = "That task wasn't found, or you can't see it.";
@@ -118,6 +122,19 @@ pub struct UpdateWorkItemArguments {
     pub before_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_task_id: Option<String>,
+    /// An active milestone by name or ID, or "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    /// YYYY-MM-DD, or "" to clear it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    /// YYYY-MM-DD, or "" to clear it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_estimate: Option<bool>,
 }
 
 // The create arguments flatten NewTaskDetails, which serde can't combine
@@ -169,6 +186,14 @@ pub struct NewTaskDetails {
     pub before_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -499,6 +524,23 @@ async fn create_task(
         Ok(placement) => placement,
         Err((field, message)) => return Ok(WriteResult::invalid(field, message)),
     };
+    let mut dates = [None, None];
+    for (slot, (field, value)) in dates.iter_mut().zip([
+        ("startDate", details.start_date.as_deref()),
+        ("dueDate", details.due_date.as_deref()),
+    ]) {
+        if let Some(value) = value {
+            match planning::date_change(value) {
+                Some(date) => *slot = date,
+                None => return Ok(WriteResult::invalid(field, planning::DATE_MESSAGE)),
+            }
+        }
+    }
+    let [start_date, due_date] = dates;
+    let estimate = match planning::estimate_change(details.estimate, None) {
+        Ok(estimate) => estimate.flatten(),
+        Err(message) => return Ok(WriteResult::invalid("estimate", message)),
+    };
     let Some(key) = parse_request_id(task.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
@@ -566,6 +608,15 @@ async fn create_task(
             Ok(ids) => ids,
             Err(result) => return Ok(result),
         };
+    let milestone_id = match details.milestone.as_deref() {
+        Some(value) => {
+            match planning::milestone_change(&mut transaction, principal.project_id, value).await? {
+                Some(milestone) => milestone,
+                None => return Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE)),
+            }
+        }
+        None => None,
+    };
     let (summary, audit_action, changed_field, metadata, number_metadata) = match parent_id {
         Some(parent_id) => (
             "Subtask created through MCP",
@@ -596,6 +647,12 @@ async fn create_task(
             label_ids: &label_ids,
             acceptance_criteria: &criteria,
             board_placement: placement,
+            fields: NewTaskFields {
+                milestone_id,
+                start_date,
+                due_date,
+                estimate,
+            },
             activity_summary: summary,
             activity_metadata: metadata.clone(),
             activity_number_metadata: number_metadata,
@@ -612,6 +669,12 @@ async fn create_task(
         } => (work_item_id, finalized),
         CreateWorkItemOutcome::InvalidAssignee => {
             return Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE));
+        }
+        CreateWorkItemOutcome::InvalidMilestone => {
+            return Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE));
+        }
+        CreateWorkItemOutcome::InvalidDates => {
+            return Ok(WriteResult::invalid("dueDate", DATES_MESSAGE));
         }
         CreateWorkItemOutcome::ParentNotFound => {
             return Ok(WriteResult::not_found(
@@ -740,6 +803,7 @@ async fn set_status_inner(
             parent_work_item_id: None,
             board_placement: None,
             labels: None,
+            fields: Default::default(),
             summary: "Work Item status updated through MCP",
             audit_action: "work_item.mcp_status_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
@@ -800,6 +864,23 @@ async fn update_work_item_inner(
     let add_labels = arguments.add_labels.clone().unwrap_or_default();
     let remove_labels = arguments.remove_labels.clone().unwrap_or_default();
     let clear_parent = arguments.clear_parent == Some(true);
+    let mut dates = [None, None];
+    for (slot, (field, value)) in dates.iter_mut().zip([
+        ("startDate", arguments.start_date.as_deref()),
+        ("dueDate", arguments.due_date.as_deref()),
+    ]) {
+        if let Some(value) = value {
+            match planning::date_change(value) {
+                Some(date) => *slot = Some(date),
+                None => return Ok(WriteResult::invalid(field, planning::DATE_MESSAGE)),
+            }
+        }
+    }
+    let [start_date, due_date] = dates;
+    let estimate = match planning::estimate_change(arguments.estimate, arguments.clear_estimate) {
+        Ok(estimate) => estimate,
+        Err(message) => return Ok(WriteResult::invalid("estimate", message)),
+    };
     if status.is_none()
         && arguments.title.is_none()
         && arguments.description.is_none()
@@ -814,6 +895,10 @@ async fn update_work_item_inner(
         && arguments.position.is_none()
         && arguments.before_task_id.is_none()
         && arguments.after_task_id.is_none()
+        && arguments.milestone.is_none()
+        && start_date.is_none()
+        && due_date.is_none()
+        && estimate.is_none()
     {
         return Ok(WriteResult::invalid("update", NOTHING_TO_CHANGE_MESSAGE));
     }
@@ -993,6 +1078,15 @@ async fn update_work_item_inner(
             format!("\"{name}\" is in both addLabels and removeLabels. Pick one."),
         ));
     }
+    let milestone_id = match arguments.milestone.as_deref() {
+        Some(value) => {
+            match planning::milestone_change(&mut transaction, principal.project_id, value).await? {
+                Some(milestone) => Some(milestone),
+                None => return Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE)),
+            }
+        }
+        None => None,
+    };
     let labels_touched = !add.is_empty() || !remove.is_empty();
     let outcome = update_work_item_by_id(
         &mut transaction,
@@ -1016,6 +1110,13 @@ async fn update_work_item_inner(
                 add: &add,
                 remove: &remove,
             }),
+            fields: TaskFieldChanges {
+                milestone_id,
+                start_date,
+                due_date,
+                estimate,
+                blocked_reason: None,
+            },
             summary: "Work Item updated through MCP",
             audit_action: "work_item.mcp_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
@@ -1886,6 +1987,17 @@ pub(super) async fn check_write_access(
     transaction: &mut Transaction<'_, Postgres>,
     principal: &McpPrincipal,
 ) -> Result<WriteAccess, AppError> {
+    check_access_for(transaction, principal, Action::McpWrite).await
+}
+
+/// `check_write_access` with the role checked for `action` instead, for the
+/// few writes a role below member may make (watching a task it can see).
+/// The credential still needs write scope.
+pub(super) async fn check_access_for(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &McpPrincipal,
+    action: Action,
+) -> Result<WriteAccess, AppError> {
     if !principal.can_write() {
         return Ok(WriteAccess::ReadOnly);
     }
@@ -1910,7 +2022,7 @@ pub(super) async fn check_write_access(
     let decision = authorize_mutation(
         &mcp_actor(principal, String::new()),
         &membership,
-        Action::McpWrite,
+        action,
         None,
     )?;
     Ok(if matches!(decision, Decision::Allow) {
@@ -2083,6 +2195,10 @@ async fn finish_update_outcome(
         UpdateWorkItemOutcome::InvalidAssignee => {
             Ok(WriteResult::invalid("assigneeActorId", ASSIGNEE_MESSAGE))
         }
+        UpdateWorkItemOutcome::InvalidMilestone => {
+            Ok(WriteResult::invalid("milestone", MILESTONE_MESSAGE))
+        }
+        UpdateWorkItemOutcome::InvalidDates => Ok(WriteResult::invalid("dueDate", DATES_MESSAGE)),
         UpdateWorkItemOutcome::InvalidTransition {
             current_status_id,
             requested_status_id,
@@ -2810,6 +2926,11 @@ mod tests {
             position: None,
             before_task_id: None,
             after_task_id: None,
+            milestone: None,
+            start_date: None,
+            due_date: None,
+            estimate: None,
+            clear_estimate: None,
         };
         assert_eq!(
             serde_json::to_string(&update).expect("update"),

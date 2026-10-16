@@ -4,13 +4,13 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarChannel, SidebarThread } from '../conversations/types'
 import { AppShell } from '../shell/AppShell'
-import { Avatar, Banner, Button, Dots, EmptyState, Icon, MessageSkeleton, PageHeader, Row, RowList, Section, actorKind } from '../ui'
+import { Avatar, Banner, Button, Dots, EmptyState, Icon, ListSkeleton, PageHeader, Row, RowList, Section, actorKind } from '../ui'
 import { useWorkItems } from '../work-items/hooks'
 import { StatusIcon } from '../work-items/WorkItemIcons'
 import { roleLabel } from './format'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import { ProjectPageError, ProjectPageLoading } from './ProjectPageStates'
-import { ProjectInitials } from './ProjectSwitcher'
+import { ProjectInitials } from './ProjectInitials'
 import { useProject } from './hooks'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
@@ -93,7 +93,7 @@ function Conversations({ base, project }: { base: string; project: Project }) {
   if (sidebar.isPending) {
     return (
       <Section title="Needs you">
-        <MessageSkeleton label="Loading conversations" rows={2} />
+        <ListSkeleton label="Loading conversations" rows={2} />
       </Section>
     )
   }
@@ -195,7 +195,7 @@ function RecentWork({ base, projectId }: { base: string; projectId: string }) {
   return (
     <div className="aw-overview__column">
       <Section actions={viewAll} title="Recent work items">
-        {work.isPending && <MessageSkeleton label="Loading work items" rows={3} />}
+        {work.isPending && <ListSkeleton label="Loading work items" rows={3} />}
         {work.isError && (
           <Banner action={<Button onClick={() => void work.refetch()} size="sm" variant="ghost">Try again</Button>} tone="danger">
             Work items didn’t load.

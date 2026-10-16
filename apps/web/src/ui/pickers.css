@@ -1,0 +1,356 @@
+/* UI kit additions: Popover, Combobox, DatePicker and Table. */
+
+.aw-popover {
+  position: fixed;
+  z-index: var(--layer-dropdown);
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: min(440px, calc(100dvh - 16px));
+  overflow: auto;
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--content-fg);
+  box-shadow: var(--shadow-popover);
+  outline: none;
+  animation: aw-pop var(--duration-standard) var(--ease-out);
+  --r-focus: var(--focus-ring);
+}
+
+@media (max-width: 640px) {
+  /* On phones a picker is a sheet along the bottom, clear of the keyboard. */
+  .aw-popover {
+    top: auto !important;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    left: 8px !important;
+    width: auto !important;
+    max-width: none;
+    max-height: 70dvh;
+    box-shadow: var(--shadow-dialog);
+  }
+}
+
+.aw-combobox {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.aw-combobox__search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--content-border);
+  color: var(--content-fg-muted);
+}
+
+.aw-combobox__input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  font: var(--t-ui);
+  color: var(--content-fg);
+  outline: none;
+}
+
+.aw-combobox__list {
+  max-height: 280px;
+  margin: 0;
+  padding: var(--space-1) 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.aw-combobox__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font: var(--t-ui);
+  cursor: pointer;
+}
+
+.aw-combobox__option.is-active {
+  background: var(--content-hover);
+}
+
+.aw-combobox__option[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.aw-combobox__box {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-xs);
+}
+
+.aw-combobox__option.is-selected .aw-combobox__box {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.aw-combobox__leading {
+  display: inline-flex;
+  flex: none;
+}
+
+.aw-combobox__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-combobox__desc {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-combobox__check {
+  color: var(--accent);
+}
+
+.aw-combobox__empty {
+  padding: var(--space-2);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-combobox__footer {
+  display: flex;
+  gap: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-combobox-trigger,
+.aw-datepicker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--size-control);
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: var(--t-ui);
+  color: var(--content-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-combobox-trigger:hover:not(:disabled),
+.aw-datepicker:hover:not(:disabled) {
+  background: var(--content-hover);
+}
+
+.aw-combobox-trigger:disabled,
+.aw-datepicker:disabled {
+  cursor: default;
+}
+
+.aw-datepicker.is-empty {
+  color: var(--content-fg-muted);
+}
+
+.aw-datepicker__typed {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1);
+}
+
+.aw-datepicker__input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font: var(--t-ui);
+  color: var(--content-fg);
+}
+
+.aw-datepicker__foot {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-1);
+}
+
+.aw-calendar {
+  padding: var(--space-1);
+}
+
+.aw-calendar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-1);
+}
+
+.aw-calendar__next .aw-icon {
+  transform: rotate(180deg);
+}
+
+.aw-calendar__month {
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-calendar__row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.aw-calendar__weekday {
+  padding: 4px 0;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+  text-align: center;
+}
+
+.aw-calendar__day {
+  width: 100%;
+  min-width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: var(--t-small);
+  color: var(--content-fg);
+  cursor: pointer;
+}
+
+.aw-calendar__day:hover {
+  background: var(--content-hover);
+}
+
+.aw-calendar__day.is-outside {
+  color: var(--content-fg-muted);
+}
+
+.aw-calendar__day.is-today {
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--control-border);
+}
+
+.aw-calendar__day.is-selected {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Table */
+.aw-table {
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-table__head {
+  position: sticky;
+  top: 0;
+  z-index: var(--layer-sticky);
+  border-bottom: 1px solid var(--content-border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--surface-raised);
+}
+
+.aw-table__row {
+  display: grid;
+  grid-template-columns: var(--aw-table-columns);
+  align-items: center;
+  min-height: 36px;
+  outline: none;
+}
+
+.aw-table__row--full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-table__body > .aw-table__row + .aw-table__row {
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-table__row--head {
+  min-height: 32px;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-table__body .aw-table__row:hover {
+  background: var(--content-hover);
+}
+
+.aw-table__body .aw-table__row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+.aw-table__row.is-selected {
+  background: var(--accent-soft);
+}
+
+.aw-table__cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 var(--space-2);
+}
+
+.aw-table__cell.is-end {
+  justify-content: flex-end;
+}
+
+.aw-table__empty {
+  padding: var(--space-6);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .aw-table__row {
+    grid-template-columns: var(--aw-table-columns-phone);
+  }
+
+  .aw-table__row--full {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-table__cell.is-wide-only {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .aw-table__row {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-popover {
+    animation: none;
+  }
+}

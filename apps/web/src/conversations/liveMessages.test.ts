@@ -155,7 +155,7 @@ describe('removed and edited messages', () => {
       removed: false,
       revisions: [{ revision: 1, content: { version: 1, nodes: [] }, plainText: 'ghp_secret', redacted: false }],
     })
-    queryClient.setQueryData(['pins', conversationId], {
+    queryClient.setQueryData(['project', projectId, 'memory', 'pins', conversationId], {
       pins: [
         { kind: 'message', id: messageId(1), title: 'Bob', text: 'ghp_secret' },
         { kind: 'page', id: messageId(9), title: 'Guide', text: 'Read me' },
@@ -170,7 +170,7 @@ describe('removed and edited messages', () => {
     const cached = JSON.stringify([
       queryClient.getQueryData(timelineKey),
       queryClient.getQueryData(historyKey),
-      queryClient.getQueryData(['pins', conversationId]),
+      queryClient.getQueryData(['project', projectId, 'memory', 'pins', conversationId]),
       queryClient.getQueryData(['search', 'ghp', '']),
     ])
     expect(cached).not.toContain('ghp_secret')
@@ -192,8 +192,8 @@ describe('removed and edited messages', () => {
       lastActivityAt: '2026-10-01T10:00:00Z',
       statusChangedAt: null,
     })
-    const boardKey = threadsQueryKey(conversationId)
-    const otherBoardKey = threadsQueryKey(projectId)
+    const boardKey = threadsQueryKey(projectId, conversationId)
+    const otherBoardKey = threadsQueryKey(projectId, projectId)
     const sidebarKey = queryKeys.conversationSidebar(projectId, conversationId, `expanded:${conversationId}`)
     queryClient.setQueryData(boardKey, [thread(1, 'ghp_secret', messageId(1)), thread(2, 'Deploy plan', messageId(2))])
     const otherBoard = [thread(3, 'Elsewhere', messageId(3))]

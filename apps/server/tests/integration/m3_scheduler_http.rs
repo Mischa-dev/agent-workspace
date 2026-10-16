@@ -529,6 +529,92 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
         StatusCode::OK
     );
 
+    // Retention cleanup and a retry racing for the same retained worktree:
+    // the cleanup holds the repository's retention lock and has removed the
+    // workspace (uncommitted) when the retry inspects it. The retry waits for
+    // the lock, sees the workspace is gone, and fails instead of reviving it.
+    let repository_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT repository_id FROM repository_workspaces WHERE id = $1",
+    )
+    .bind(workspace_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read retained workspace repository");
+    let mut cleanup = pool.begin().await.expect("begin cleanup");
+    agent_workspace_server::retention::lock_repository_retention(&mut cleanup, repository_id)
+        .await
+        .expect("cleanup takes the retention lock");
+    sqlx::query("UPDATE repository_workspaces SET state = 'cleaned' WHERE id = $1")
+        .bind(workspace_id)
+        .execute(&mut *cleanup)
+        .await
+        .expect("cleanup marks the workspace cleaned");
+    sqlx::query("UPDATE git_worktrees SET state = 'removed' WHERE repository_workspace_id = $1")
+        .bind(workspace_id)
+        .execute(&mut *cleanup)
+        .await
+        .expect("cleanup marks the worktree removed");
+    let raced = retry_run(
+        &application,
+        &cookie,
+        &csrf,
+        retry_run_id,
+        "retry-during-cleanup",
+    )
+    .await;
+    assert_eq!(raced.0, StatusCode::ACCEPTED);
+    let raced_id = uuid_field(&raced.2, "runId");
+    let mut waited = 0;
+    while sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read lock waits")
+    {
+        waited += 1;
+        assert!(
+            waited < 200,
+            "the retry never waited for the retention lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    cleanup.commit().await.expect("cleanup commits");
+    wait_for_state(&pool, raced_id, "failed").await;
+    let (raced_workspace, workspace_state, worktree_state) =
+        sqlx::query_as::<_, (Option<Uuid>, String, String)>(
+            r#"
+            SELECT run.repository_workspace_id, workspace.state, worktree.state
+              FROM agent_runs run, repository_workspaces workspace
+              JOIN git_worktrees worktree ON worktree.repository_workspace_id = workspace.id
+             WHERE run.id = $1 AND workspace.id = $2
+            "#,
+        )
+        .bind(raced_id)
+        .bind(workspace_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read raced retry");
+    assert!(
+        raced_workspace.is_none(),
+        "the retry did not claim a cleaned workspace"
+    );
+    assert_eq!(
+        (workspace_state.as_str(), worktree_state.as_str()),
+        ("cleaned", "removed")
+    );
+    // Put the fixture back (the files were never removed) for the next case.
+    sqlx::query("UPDATE repository_workspaces SET state = 'retained' WHERE id = $1")
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .expect("restore the workspace");
+    sqlx::query("UPDATE git_worktrees SET state = 'ready' WHERE repository_workspace_id = $1")
+        .bind(workspace_id)
+        .execute(&pool)
+        .await
+        .expect("restore the worktree");
+
     fs::write(second_worktree.join("UNCOMMITTED.txt"), "preserve me\n")
         .expect("dirty the retained retry worktree");
     let unsafe_retry = retry_run(
@@ -700,7 +786,7 @@ async fn start_run_with_repository(
     .await
 }
 
-async fn start_run_body(
+pub(super) async fn start_run_body(
     application: &axum::Router,
     cookie: &str,
     csrf: &str,
@@ -731,7 +817,7 @@ async fn start_run_body(
     .await
 }
 
-async fn interrupt(
+pub(super) async fn interrupt(
     application: &axum::Router,
     cookie: &str,
     csrf: &str,
@@ -850,7 +936,7 @@ async fn acknowledge_failure(
     .await
 }
 
-async fn wait_for_state(pool: &PgPool, run_id: Uuid, expected: &str) {
+pub(super) async fn wait_for_state(pool: &PgPool, run_id: Uuid, expected: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let state = sqlx::query_scalar::<_, String>("SELECT state FROM agent_runs WHERE id = $1")
@@ -890,7 +976,7 @@ async fn wait_for_claim_release(pool: &PgPool, run_id: Uuid) {
     }
 }
 
-fn uuid_field(value: &Value, field: &str) -> Uuid {
+pub(super) fn uuid_field(value: &Value, field: &str) -> Uuid {
     value[field]
         .as_str()
         .expect("UUID response field")
@@ -898,7 +984,7 @@ fn uuid_field(value: &Value, field: &str) -> Uuid {
         .expect("valid UUID response field")
 }
 
-fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
+pub(super) fn create_test_mirror(runtime_root: &Path, mirror_path: &Path) {
     let source = runtime_root.join("source");
     fs::create_dir(&source).expect("create scheduler source");
     git(&source, ["init", "-b", "main"]);
@@ -999,7 +1085,9 @@ async fn login(application: &axum::Router) -> (String, String) {
     (cookie, csrf)
 }
 
-async fn response_json(response: axum::response::Response) -> (StatusCode, String, Value) {
+pub(super) async fn response_json(
+    response: axum::response::Response,
+) -> (StatusCode, String, Value) {
     let status = response.status();
     let text = String::from_utf8(
         to_bytes(response.into_body(), 1024 * 1024)
@@ -1012,7 +1100,7 @@ async fn response_json(response: axum::response::Response) -> (StatusCode, Strin
     (status, text, value)
 }
 
-async fn integration_pool() -> Option<(String, PgPool)> {
+pub(super) async fn integration_pool() -> Option<(String, PgPool)> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return None;
@@ -1025,7 +1113,7 @@ async fn integration_pool() -> Option<(String, PgPool)> {
     Some((database_url, pool))
 }
 
-async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
+pub(super) async fn schema_pool(database_url: &str, schema: &str) -> PgPool {
     let schema = schema.to_owned();
     PgPoolOptions::new()
         .max_connections(12)

@@ -70,6 +70,7 @@ limited by their role in the project.
 | `project_members` | + | Members with roles, kind (person or agent), and last active. | Anyone who can see members |
 | `project_member_set` | + | Add an org member, change a role, or remove someone. Destructive when removing. | Owner or admin, people only |
 | `workflow_get` | + | Task types, statuses (with category and order), and allowed transitions. | Everyone |
+| `settings_get` | + | A project's settings as they apply to the caller (run defaults, environment, AI options), each with where its value came from. Read only. | Everyone |
 | `workflow_update` | + | Add, rename, reorder or retire statuses and types. Phase 5. | Owner or admin |
 
 ### Tasks
@@ -92,6 +93,8 @@ limited by their role in the project.
 | `label_list`, `label_write` | + | Project labels: create, rename, recolor, archive. Needs a labels table. |
 | `task_depend` | + | "Blocks" and "blocked by", rejecting cycles with the path shown. Stage 1b. |
 | `milestone_list`, `milestone_write` | + | Milestones with target dates and progress. Stage 1b. |
+| `task_relate` | + | Relates-to and duplicates (optionally closing the duplicate), across projects of one workspace. W3. |
+| `task_watch` | + | Watch or stop watching a task. W3. |
 
 ### Conversations
 
@@ -116,7 +119,9 @@ limited by their role in the project.
 
 | Tool | | What it does |
 |---|---|---|
-| `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | |
+| `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` | ✓ | `reply_send` takes `final: false` for an interim message that keeps the claim. |
+| `reply_progress` | + | A one-line status on a claimed request, shown next to the agent's name; renews the claim. See [agent-tag.md](agent-tag.md). |
+| `reply_stop` | + | People: stop an agent's work on a request, as the Stop button does. Its queued follow-ups stop too. See [agent-runner.md](../agent-runner.md). |
 | `conversation_continue` | ✓ | Let the agents in a group take more turns, as the web app's Continue button does. People only. |
 
 ### Memory and search
@@ -568,4 +573,6 @@ Differences from the plan:
 - `workflow_update` isn't built. Projects still check their statuses against the default workflow, so editing statuses needs that check redesigned first.
 - Pages as MCP resources aren't built.
 
-The tool count is 71.
+There were 71 tools at the end of Phase 5. Tests no longer pin the count
+(so branches that each add a tool merge in either order); they check that
+every tool has a description and well-formed schemas instead.

@@ -433,6 +433,8 @@ fn assert_redacted(response: &str, runtime_root: &std::path::Path) {
         API_KEY,
         "codexHomePath",
         "codex_home_path",
+        "homePath",
+        "home_path",
         "provider_thread_id",
         "stderr",
     ] {

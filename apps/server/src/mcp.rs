@@ -74,6 +74,7 @@ mod reactions;
 mod reads;
 mod replies;
 mod runs;
+mod settings_tools;
 mod talk;
 mod task_batch;
 mod task_drafts;
@@ -234,6 +235,19 @@ impl McpServer {
     ) -> Json<common::ToolResult<admin::WorkflowValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(admin::workflow_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's settings as they apply to you: the default harness, model, reasoning and speed for runs, its environment, and AI options, each with where its value came from (project, user, workspace or default). Read only; people change settings in the app.",
+        annotations(title = "Get settings", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn settings_get(
+        &self,
+        Parameters(arguments): Parameters<settings_tools::SettingsGetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(settings_tools::settings_get(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -696,7 +710,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: answer a claimed reply request. Posts your text in the conversation as you; @handles become mentions.",
+        description = "Agents: answer a claimed reply request. Posts your text in the conversation as you; @handles become mentions. Closes the request unless you pass final: false, which posts an interim message and keeps your claim.",
         annotations(
             title = "Send reply",
             read_only_hint = false,
@@ -714,6 +728,27 @@ impl McpServer {
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let principal = principal_or!(parts, replies::ReplyToolResult::denied());
         Json(replies::reply_send(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Agents: say what you're doing on a claimed reply request, in one short line (\"Running the server tests\"). People see it next to your name until you reply. Also renews the claim, so report progress at least every 15 minutes during long work.",
+        annotations(
+            title = "Report progress",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_progress(
+        &self,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyProgressArguments>>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::ProgressProjection>> {
+        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
+        Json(replies::reply_progress(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -756,6 +791,27 @@ impl McpServer {
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let principal = principal_or!(parts, replies::ReplyToolResult::denied());
         Json(replies::reply_release(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
+        annotations(
+            title = "Stop agent",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_stop(
+        &self,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyStopArguments>>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::StopProjection>> {
+        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
+        Json(replies::reply_stop(&self.state, principal, arguments).await)
     }
 
     // -- Tasks ---------------------------------------------------------------
@@ -1214,7 +1270,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). Same project only; a dependency that would make a cycle is refused with the path. Returns the task's blockers and whether it's ready.",
+        description = "Say which tasks block a task (blockedBy) or which it blocks (blocks), or remove them (remove: true). The other tasks may be in another project of the same workspace that you can reach; a dependency that would make a cycle is refused with the path. Returns the task's blockers with their status and whether it's ready.",
         annotations(
             title = "Set dependencies",
             read_only_hint = false,
@@ -1266,6 +1322,63 @@ impl McpServer {
     ) -> Json<common::ToolResult<planning::MilestoneValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(planning::milestone_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Say how a task relates to another: relates_to (the default) or duplicates (this task duplicates the other; close: true also closes it as canceled). remove: true takes the relation away. The other task may be in another project of the same workspace that you can reach.",
+        annotations(
+            title = "Relate tasks",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_relate(
+        &self,
+        Parameters(arguments): Parameters<planning::TaskRelateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::RelationsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::task_relate(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Watch a task to hear about its changes, or stop (watching: false). Returns who watches it.",
+        annotations(
+            title = "Watch task",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_watch(
+        &self,
+        Parameters(arguments): Parameters<planning::TaskWatchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<planning::WatchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(planning::task_watch(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change a project's workflow: its statuses (in board order, each with a category), task types, allowed status changes and estimate unit. Send the whole workflow as workflow_get shows it, with expectedVersion; a status or type left out is retired, and replacements say where its open tasks go. Owners and admins only, as themselves.",
+        annotations(
+            title = "Update workflow",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn workflow_update(
+        &self,
+        Parameters(arguments): Parameters<admin::WorkflowUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::WorkflowUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::workflow_update(&self.state, principal, arguments).await)
     }
 
     #[tool(

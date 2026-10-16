@@ -11,13 +11,18 @@ export function isSettled(status: string) {
   return SETTLED.has(status.toLowerCase())
 }
 
-export const threadsQueryKey = (conversationId: string) => ['threads', conversationId] as const
+export const threadsQueryKey = (projectId: string, conversationId: string) =>
+  ['project', projectId, 'threads', conversationId] as const
 
-export function useThreads(conversationId: string) {
+/** Every cached thread board of one conversation, whichever project holds it. */
+export const isThreadsKey = (key: readonly unknown[], conversationId: string) =>
+  key[0] === 'project' && key[2] === 'threads' && key[3] === conversationId
+
+export function useThreads(projectId: string, conversationId: string) {
   return useQuery({
-    queryKey: threadsQueryKey(conversationId),
+    queryKey: threadsQueryKey(projectId, conversationId),
     queryFn: () => listThreads(conversationId),
-    enabled: Boolean(conversationId),
+    enabled: Boolean(projectId && conversationId),
     staleTime: 10_000,
   })
 }
@@ -25,5 +30,5 @@ export function useThreads(conversationId: string) {
 /** Refresh every view of a conversation's threads after one changes. */
 export function useRefreshThreads() {
   const queryClient = useQueryClient()
-  return (conversationId: string) => queryClient.invalidateQueries({ queryKey: threadsQueryKey(conversationId) })
+  return (conversationId: string) => queryClient.invalidateQueries({ predicate: (query) => isThreadsKey(query.queryKey, conversationId) })
 }

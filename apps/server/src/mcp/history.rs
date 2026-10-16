@@ -9,6 +9,9 @@
 //! see it: conversations, messages and decisions through
 //! `conversation_visible_to`, other tasks through the reader's reachable
 //! projects. Archived labels are left out, as they are everywhere else.
+//! A change's before and after (`changes`, roadmap T8) reads in plain words,
+//! such as "Priority: High → Urgent", with names from
+//! `work_item_history::label_changes`, as the web timeline shows them.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -24,6 +27,7 @@ use super::{
 use crate::{
     AppState,
     error::AppError,
+    work_item_history::label_changes,
     work_items::{WorkItemTimelineRow, encode_work_item_timeline_cursor, fetch_timeline_rows},
 };
 
@@ -33,6 +37,8 @@ pub(super) const MAX_HISTORY_LIMIT: u16 = 100;
 const COMMENT_CHARACTERS: usize = 1_000;
 /// The most criterion text an entry quotes.
 const CRITERION_CHARACTERS: i32 = 160;
+/// The most description diff an entry shows.
+const DIFF_CHARACTERS: usize = 1_500;
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -58,8 +64,9 @@ pub(super) struct HistoryEntry {
     /// work_item_restored, criterion_created, criterion_updated,
     /// criterion_completed, criterion_reopened, criterion_removed,
     /// thread_linked, thread_unlinked, repository_linked,
-    /// repository_unlinked, repository_primary_changed, worker_invoked, or
-    /// github_automation_transition.
+    /// repository_unlinked, repository_primary_changed, worker_invoked,
+    /// github_automation_transition, dependency_added, dependency_removed,
+    /// relation_added, or relation_removed.
     pub kind: String,
     /// Who, by their name in the project.
     pub by: String,
@@ -113,6 +120,11 @@ struct Lookups {
     moved_from: Option<Uuid>,
     /// Where this task went, when it was moved away and that's reachable.
     moved_to: Option<String>,
+    /// The task whose history this is.
+    this_task: Option<Uuid>,
+    /// Keys of tasks linked by a dependency or relation, in this project or
+    /// one the reader can reach.
+    linked_tasks: HashMap<Uuid, String>,
 }
 
 /// The IDs a page of history mentions, gathered before the lookups.
@@ -130,6 +142,7 @@ struct Mentioned {
     tasks: BTreeSet<Uuid>,
     moved_from: Option<String>,
     moved_to: bool,
+    linked_tasks: BTreeSet<Uuid>,
 }
 
 fn uuid_at(value: &Value, key: &str) -> Option<Uuid> {
@@ -193,6 +206,19 @@ fn mentioned(rows: &[WorkItemTimelineRow]) -> Mentioned {
                 _ => false,
             };
         }
+        if matches!(
+            kind,
+            "dependency_added" | "dependency_removed" | "relation_added" | "relation_removed"
+        ) {
+            for key in [
+                "blockingWorkItemId",
+                "blockedWorkItemId",
+                "workItemId",
+                "otherWorkItemId",
+            ] {
+                found.linked_tasks.extend(uuid_at(payload, key));
+            }
+        }
         match kind {
             "work_item_created" => {
                 if let Some(key) = payload.get("movedFrom").and_then(Value::as_str) {
@@ -221,7 +247,10 @@ async fn look_up(
 ) -> Result<Lookups, AppError> {
     let pool = &state.pool;
     let viewer = principal.actor_id;
-    let mut lookups = Lookups::default();
+    let mut lookups = Lookups {
+        this_task: Some(task_id),
+        ..Lookups::default()
+    };
     if !found.statuses.is_empty() {
         lookups.statuses = sqlx::query_as::<_, (Uuid, String)>(
             "SELECT id, name FROM work_item_statuses WHERE project_id = $1 AND id = ANY($2)",
@@ -372,6 +401,25 @@ async fn look_up(
         .into_iter()
         .collect();
     }
+    // A dependency or relation may name another project's task: it's named
+    // only when the reader can reach that project through this connection.
+    if !found.linked_tasks.is_empty() {
+        let reachable = accessible_project_ids(state, principal).await?;
+        lookups.linked_tasks = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT item.id, project.project_key || '-' || item.number::text
+            FROM work_items item JOIN projects project ON project.id = item.project_id
+            WHERE item.id = ANY($1) AND (item.project_id = $2 OR item.project_id = ANY($3))
+            "#,
+        )
+        .bind(ids(&found.linked_tasks))
+        .bind(project_id)
+        .bind(&reachable)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .collect();
+    }
     // A move names another project's task, so it's named only when the
     // reader can reach that project through this connection.
     if found.moved_from.is_some() || found.moved_to {
@@ -430,7 +478,7 @@ pub(super) async fn task_history(
     limit: u16,
     before: Option<i64>,
 ) -> Result<TaskHistory, AppError> {
-    let page = fetch_timeline_rows(
+    let mut page = fetch_timeline_rows(
         &state.pool,
         project_id,
         task_id,
@@ -453,6 +501,15 @@ pub(super) async fn task_history(
         )?),
         _ => None,
     };
+    // IDs in each change's before and after become names, as the web
+    // timeline shows them.
+    let mut payloads = page
+        .rows
+        .iter_mut()
+        .filter_map(|row| row.activity_payload.as_mut())
+        .filter(|payload| payload.get("changes").is_some() || payload.get("statusId").is_some())
+        .collect::<Vec<_>>();
+    label_changes(&state.pool, project_id, &mut payloads).await?;
     let lookups = look_up(state, principal, project_id, task_id, mentioned(&page.rows)).await?;
     let entries = page
         .rows
@@ -590,6 +647,14 @@ fn describe(row: &WorkItemTimelineRow, lookups: &Lookups) -> HistoryEntry {
                 _ => format!("Made {name} the primary repository"),
             })
         }
+        "dependency_added" | "dependency_removed" => Some(dependency_text(
+            kind == "dependency_added",
+            &payload,
+            lookups,
+        )),
+        "relation_added" | "relation_removed" => {
+            Some(relation_text(kind == "relation_added", &payload, lookups))
+        }
         "worker_invoked" => Some(
             match uuid_at(&payload, "conversationId").and_then(|id| lookups.conversations.get(&id))
             {
@@ -713,10 +778,17 @@ fn updated_text(payload: &Value, lookups: &Lookups, entry: &mut HistoryEntry) ->
         entry.from_status = Some(from.clone());
         entry.to_status = Some(to.clone());
     }
+    let changes = payload.get("changes").and_then(Value::as_object);
+    let detailed = |field: &str| {
+        changes.is_some_and(|changes| {
+            changes.contains_key(field) && (change_label(field).is_some() || field == "description")
+        })
+    };
     // Fields with a clause of their own below.
     let others = fields
         .iter()
         .filter(|field| !matches!(field.as_str(), "status" | "labels" | "parent" | "position"))
+        .filter(|field| !detailed(field))
         .map(|field| field_words(field).to_owned())
         .collect::<Vec<_>>();
     let position = payload
@@ -750,6 +822,15 @@ fn updated_text(payload: &Value, lookups: &Lookups, entry: &mut HistoryEntry) ->
             }
         }
     }
+    if let Some(changes) = changes {
+        for field in CHANGE_ORDER {
+            if let (Some(label), Some(change)) = (change_label(field), changes.get(field)) {
+                let side =
+                    |side: &str| change_value(field, change.get(side).unwrap_or(&Value::Null));
+                clauses.push(format!("{label}: {} → {}", side("from"), side("to")));
+            }
+        }
+    }
     let added = label_names(payload, "labelsAdded", lookups);
     let removed = label_names(payload, "labelsRemoved", lookups);
     if !added.is_empty() {
@@ -775,10 +856,131 @@ fn updated_text(payload: &Value, lookups: &Lookups, entry: &mut HistoryEntry) ->
     {
         clauses.push(format!("put it at position {position} in its column"));
     }
-    if clauses.is_empty() {
-        return None;
+    let description = changes
+        .and_then(|changes| changes.get("description"))
+        .map(description_text);
+    match (clauses.is_empty(), description) {
+        (true, None) => None,
+        (true, Some(description)) => Some(description),
+        (false, None) => Some(capitalized(&clauses.join("; "))),
+        (false, Some(description)) => Some(format!(
+            "{}\n{description}",
+            capitalized(&clauses.join("; "))
+        )),
     }
-    Some(capitalized(&clauses.join("; ")))
+}
+
+/// The fields a change line names, in the order they're read out.
+const CHANGE_ORDER: [&str; 9] = [
+    "title",
+    "type",
+    "priority",
+    "assignee",
+    "milestone",
+    "startDate",
+    "dueDate",
+    "estimate",
+    "blockedReason",
+];
+
+/// A field's name in a change line, for the fields that have one.
+fn change_label(field: &str) -> Option<&'static str> {
+    Some(match field {
+        "title" => "Title",
+        "type" => "Type",
+        "priority" => "Priority",
+        "assignee" => "Assignee",
+        "milestone" => "Milestone",
+        "startDate" => "Start",
+        "dueDate" => "Due",
+        "estimate" => "Estimate",
+        "blockedReason" => "Blocker",
+        _ => return None,
+    })
+}
+
+/// One side of a change, in plain words: "none" for nothing (or something
+/// that no longer exists), a priority by its name, text in quotes.
+fn change_value(field: &str, value: &Value) -> String {
+    match value {
+        Value::Null => "none".to_owned(),
+        Value::String(text) => match field {
+            "priority" => match text.as_str() {
+                "no_priority" => "No priority".to_owned(),
+                other => capitalized(other),
+            },
+            "title" | "blockedReason" => format!("“{text}”"),
+            _ => text.clone(),
+        },
+        Value::Number(number) => match number.as_f64() {
+            Some(value) if value.fract() == 0.0 && value.abs() < 1e15 => {
+                format!("{value:.0}")
+            }
+            Some(value) => value.to_string(),
+            None => number.to_string(),
+        },
+        other => other.to_string(),
+    }
+}
+
+/// A description change as its short line diff.
+fn description_text(change: &Value) -> String {
+    let diff = change
+        .get("diff")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let (diff, cut) = truncate_text(diff, DIFF_CHARACTERS);
+    let mut text = if diff.is_empty() {
+        "Edited the description".to_owned()
+    } else {
+        format!("Edited the description:\n{diff}")
+    };
+    if cut || change.get("truncated").and_then(Value::as_bool) == Some(true) {
+        text.push_str("\n(the rest of the change is left out)");
+    }
+    text
+}
+
+fn linked_task(id: Option<Uuid>, lookups: &Lookups) -> String {
+    id.and_then(|id| lookups.linked_tasks.get(&id))
+        .cloned()
+        .unwrap_or_else(|| "a task you can't see".to_owned())
+}
+
+fn dependency_text(added: bool, payload: &Value, lookups: &Lookups) -> String {
+    let blocking = uuid_at(payload, "blockingWorkItemId");
+    let blocked = uuid_at(payload, "blockedWorkItemId");
+    if blocked.is_some() && blocked == lookups.this_task {
+        let other = linked_task(blocking, lookups);
+        if added {
+            format!("Blocked by {other}")
+        } else {
+            format!("No longer blocked by {other}")
+        }
+    } else {
+        let other = linked_task(blocked, lookups);
+        if added {
+            format!("Blocks {other}")
+        } else {
+            format!("No longer blocks {other}")
+        }
+    }
+}
+
+fn relation_text(added: bool, payload: &Value, lookups: &Lookups) -> String {
+    let task = uuid_at(payload, "workItemId");
+    let other = uuid_at(payload, "otherWorkItemId");
+    let this_side = task.is_some() && task == lookups.this_task;
+    let name = linked_task(if this_side { other } else { task }, lookups);
+    let duplicate = payload.get("relation").and_then(Value::as_str) == Some("duplicates");
+    match (duplicate, this_side, added) {
+        (false, _, true) => format!("Related to {name}"),
+        (false, _, false) => format!("No longer related to {name}"),
+        (true, true, true) => format!("Marked a duplicate of {name}"),
+        (true, true, false) => format!("No longer a duplicate of {name}"),
+        (true, false, true) => format!("Duplicated by {name}"),
+        (true, false, false) => format!("No longer duplicated by {name}"),
+    }
 }
 
 fn criterion_text(
@@ -1191,5 +1393,99 @@ mod tests {
         let entry = describe(&row, &Lookups::default());
         assert_eq!(entry.text, "Repro attached");
         assert!(!entry.text_truncated);
+    }
+    #[test]
+    fn changes_read_as_before_and_after() {
+        let entry = describe(
+            &activity(
+                "work_item_updated",
+                "Work Item updated through MCP",
+                json!({
+                    "changedFields": ["priority", "dueDate", "estimate", "milestone"],
+                    "changes": {
+                        "priority": {"from": "high", "to": "urgent"},
+                        "dueDate": {"from": null, "to": "2026-10-20"},
+                        "estimate": {"from": 3.0, "to": 2.5},
+                        "milestone": {"from": "Beta", "to": null}
+                    }
+                }),
+            ),
+            &Lookups::default(),
+        );
+        assert_eq!(
+            entry.text,
+            "Priority: High → Urgent; Milestone: Beta → none; Due: none → 2026-10-20; Estimate: 3 → 2.5"
+        );
+        assert_eq!(entry.changed_fields.len(), 4);
+
+        let mut lookups = Lookups::default();
+        let ids = statuses(&mut lookups, &["Ready", "Doing"]);
+        let mixed = describe(
+            &activity(
+                "work_item_updated",
+                "Work Item updated",
+                json!({
+                    "changedFields": ["status", "title", "description"],
+                    "previousStatusId": ids[0], "statusId": ids[1],
+                    "changes": {
+                        "title": {"from": "Old", "to": "New"},
+                        "description": {"diff": "-one\n+two", "truncated": false}
+                    }
+                }),
+            ),
+            &lookups,
+        );
+        assert_eq!(
+            mixed.text,
+            "Moved from Ready to Doing; Title: “Old” → “New”\nEdited the description:\n-one\n+two"
+        );
+    }
+
+    #[test]
+    fn dependencies_and_relations_name_only_reachable_tasks() {
+        let (this, seen, hidden) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let mut lookups = Lookups {
+            this_task: Some(this),
+            ..Lookups::default()
+        };
+        lookups.linked_tasks.insert(seen, "WORK-2".to_owned());
+        let text = |kind: &str, payload: Value| {
+            describe(&activity(kind, "Linked", payload), &lookups).text
+        };
+        assert_eq!(
+            text(
+                "dependency_added",
+                json!({"blockingWorkItemId": seen, "blockedWorkItemId": this})
+            ),
+            "Blocked by WORK-2"
+        );
+        assert_eq!(
+            text(
+                "dependency_removed",
+                json!({"blockingWorkItemId": this, "blockedWorkItemId": hidden})
+            ),
+            "No longer blocks a task you can't see"
+        );
+        assert_eq!(
+            text(
+                "relation_added",
+                json!({"relation": "duplicates", "workItemId": this, "otherWorkItemId": seen})
+            ),
+            "Marked a duplicate of WORK-2"
+        );
+        assert_eq!(
+            text(
+                "relation_added",
+                json!({"relation": "duplicates", "workItemId": seen, "otherWorkItemId": this})
+            ),
+            "Duplicated by WORK-2"
+        );
+        assert_eq!(
+            text(
+                "relation_removed",
+                json!({"relation": "relates_to", "workItemId": seen, "otherWorkItemId": this})
+            ),
+            "No longer related to WORK-2"
+        );
     }
 }

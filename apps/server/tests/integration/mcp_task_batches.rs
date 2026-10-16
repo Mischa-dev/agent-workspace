@@ -1113,7 +1113,7 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
     assert_eq!(entries.len(), 3, "{opened}");
     assert_eq!(entries[0], "Created this task as a subtask of SHIP-1");
     assert!(
-        entries[1].contains("status from Backlog to Ready") && entries[1].contains("assignee"),
+        entries[1].contains("from Backlog to Ready") && entries[1].contains("Assignee: none → "),
         "{entries:?}"
     );
     assert!(entries[2].contains("position 1"), "{entries:?}");

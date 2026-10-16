@@ -225,6 +225,7 @@ phase added and why.
 | Replies | `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` |
 | Tasks | `task_list` (board order, filters, total), `task_open` (history on request), `task_create`, `task_create_many` (up to 100, with a preview), `task_update`, `task_update_many` (up to 200, all or nothing), `task_criteria`, `task_comment`, `task_mark_blocked`, `task_mark_ready_for_review`, `task_reorder`, `task_claim`, `task_release`, `task_link` (thread, message, page, decision, repository or PR), `task_link_pull_request` (older name for `task_link` with a PR), `task_move` |
 | Labels | `label_list`, `label_write` |
+| Planning | `task_depend` (blockers across projects of one workspace, cycles refused with the path), `task_relate` (relates to, duplicates), `task_watch`, `milestone_list`, `milestone_write`, and for owners and admins (people only) `workflow_update` |
 | Memory and search | `search`, `page_list`, `page_get`, `page_write`, `decision_record`, `decision_list` |
 | Code and approvals | `repository_get`, `pull_request_get`, `run_request`, `approval_get`, `approval_respond`, `external_event_poll` (for the older Hermes connector) |
 

@@ -20,11 +20,13 @@ pub mod github;
 pub mod health;
 pub mod idempotency;
 pub mod invitations;
+pub mod jobs;
 pub mod mcp;
 pub mod memberships;
 pub mod memory;
 pub mod message_content;
 pub mod message_edits;
+pub mod metrics;
 pub mod migration_preflight;
 pub mod outbox;
 pub mod policy;
@@ -42,11 +44,16 @@ pub mod retention;
 pub mod runs;
 pub mod scheduler;
 pub mod search;
+pub mod secrets;
 pub mod seed;
+pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
 pub mod work_item_commands;
+pub mod work_item_history;
 pub mod work_item_labels;
+pub mod work_item_planning;
+pub mod work_item_workflow;
 pub mod work_items;
 
 use std::sync::Arc;
@@ -103,6 +110,9 @@ pub fn router(state: AppState) -> Router {
         .merge(memory::router())
         .merge(search::router())
         .merge(connected_apps::router())
+        .merge(settings::router())
+        .merge(secrets::router())
+        .merge(metrics::router())
         .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
         .route("/api/v1", any(api_not_found))
@@ -114,6 +124,7 @@ pub fn router(state: AppState) -> Router {
         )
         .with_state(state)
         .layer(DefaultBodyLimit::max(MAX_APPLICATION_BODY_BYTES))
+        .layer(axum::middleware::from_fn(metrics::track_requests))
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
                 let request_id = request

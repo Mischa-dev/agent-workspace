@@ -628,6 +628,25 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
         "{placed}"
     );
     assert_eq!(versions().await, [2, 1, 2, 1, 2]);
+    // Each live event names the neighbours of the finished order, so a board
+    // applying them in turn ends up the same.
+    let placement = sqlx::query_scalar::<_, Value>(
+        "SELECT payload -> 'placement' FROM outbox_events WHERE event_type = 'work_item.updated' AND resource_id = $1 ORDER BY created_at DESC, event_id DESC LIMIT 1",
+    )
+    .bind(tasks[0])
+    .fetch_one(&setup.pool)
+    .await
+    .expect("placement");
+    assert_eq!(
+        placement["afterId"],
+        json!(tasks[3].to_string()),
+        "{placement}"
+    );
+    assert_eq!(
+        placement["beforeId"],
+        json!(tasks[2].to_string()),
+        "{placement}"
+    );
 
     // The same call again, or a task already on top, changes nothing.
     let again = reorder(json!({"taskIds": ["ORD-1", "ORD-3"], "afterTaskId": "ORD-4"})).await;

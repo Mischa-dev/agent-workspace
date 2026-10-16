@@ -36,6 +36,19 @@ pub(super) struct RunStartArguments {
     pub repository_id: Option<String>,
     /// A stable ID so a retry never starts a second run.
     pub client_request_id: Option<String>,
+    /// The harness to run on (for example `codex_app_server`), if the caller
+    /// has accounts on more than one. Defaults to their preferred account.
+    #[serde(default)]
+    pub harness: Option<String>,
+    /// A model from the harness's catalog. Defaults to the account's choice.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// A reasoning level the model offers.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// A speed the model offers.
+    #[serde(default)]
+    pub speed: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -334,6 +347,14 @@ pub(super) async fn run_start(
             StartRunRequest {
                 prompt: arguments.prompt.clone(),
                 repository_id,
+                config: Some(crate::provider::run_config::RunConfig {
+                    harness: arguments.harness.clone(),
+                    model: arguments.model.clone(),
+                    reasoning: arguments.reasoning.clone(),
+                    speed: arguments.speed.clone(),
+                    ..Default::default()
+                })
+                .filter(|config| *config != Default::default()),
             },
             Ok(key),
         )

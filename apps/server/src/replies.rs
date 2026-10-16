@@ -14,7 +14,13 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
-use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderMap, header},
+    response::IntoResponse,
+    routing::{get, post},
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde::Serialize;
@@ -27,8 +33,8 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
-        ActorView, enqueue_event, insert_audit_event, lock_conversation_access,
-        lock_conversation_for, parse_actor_kind,
+        ActorView, enqueue_event, insert_audit_event, insert_audit_event_for,
+        lock_conversation_access, lock_conversation_for, parse_actor_kind,
     },
     error::{ApiPath, AppError},
     external_events::enqueue_external_event,
@@ -50,6 +56,25 @@ pub fn router() -> Router<AppState> {
             post(continue_conversation),
         )
         .route("/api/v1/reply-requests/{id}/retry", post(retry_request))
+        .route("/api/v1/reply-requests/{id}/stop", post(stop_request))
+        .route("/agent-runner.md", get(runner_guide))
+}
+
+/// The runner contract (docs/agent-runner.md), for the people and agents
+/// setting a runner up.
+async fn runner_guide(State(state): State<AppState>) -> impl IntoResponse {
+    let origin = state
+        .config
+        .public_origin
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", state.config.server_addr));
+    (
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        include_str!("../../../docs/agent-runner.md").replace("{origin}", &origin),
+    )
 }
 
 /// A message that was just written, as seen by the reply rules.
@@ -74,13 +99,20 @@ pub(crate) async fn ask_for_replies(
     message: NewMessage<'_>,
 ) -> Result<(), AppError> {
     if matches!(message.conversation_kind, "channel" | "thread") {
-        // Project discussions ask only agents explicitly mentioned by a human.
-        // DMs and groups retain their existing delivery and turn rules below.
-        return if message.author_kind == "human" && !message.mentioned_actor_ids.is_empty() {
-            ask(transaction, &message, true).await
-        } else {
-            Ok(())
-        };
+        // Project discussions ask agents a person mentions, and in a thread
+        // also the agents already working there (follow-ups). DMs and groups
+        // retain their existing delivery and turn rules below.
+        if message.author_kind != "human" {
+            return Ok(());
+        }
+        if !message.mentioned_actor_ids.is_empty() {
+            ask(transaction, &message, true).await?;
+        }
+        if message.conversation_kind == "thread" {
+            let followers = thread_followers(transaction, &message).await?;
+            insert_requests(transaction, &message, &followers, false, true).await?;
+        }
+        return Ok(());
     }
     if !matches!(message.conversation_kind, "dm" | "group") {
         return Ok(());
@@ -199,6 +231,65 @@ async fn agents_to_ask(
     .await?)
 }
 
+/// How many of a thread's latest messages count when deciding which agents are
+/// still part of it.
+const FOLLOW_UP_WINDOW: i64 = 20;
+
+/// The agents a person's message in a project thread follows up with, without
+/// a new mention: the active agents who can see the thread and either have an
+/// open request there (including a channel tag answered in this thread) or
+/// wrote one of its latest messages. Agents the message mentions are asked
+/// separately, as a mention.
+async fn thread_followers(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: &NewMessage<'_>,
+) -> Result<Vec<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT membership.actor_id
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id
+        WHERE membership.project_id = $1
+          AND membership.enabled
+          AND actor.kind = 'external_agent'
+          AND actor.status = 'active'
+          AND actor.id <> $3
+          AND NOT (actor.id = ANY($4))
+          AND conversation_visible_to($2, actor.id)
+          AND (
+              EXISTS (
+                  SELECT 1 FROM reply_requests request
+                  WHERE request.agent_actor_id = actor.id
+                    AND (request.conversation_id = $2 OR request.thread_id = $2)
+                    AND request.status IN ('pending', 'claimed')
+              )
+              OR actor.id IN (
+                  SELECT recent.author_actor_id
+                  FROM (
+                      SELECT message.author_actor_id
+                      FROM conversation_entries entry
+                      JOIN messages message ON message.id = entry.message_id
+                      WHERE entry.conversation_id = $2
+                        AND message.id <> $5
+                        AND message.removed_at IS NULL
+                      ORDER BY entry.sequence DESC
+                      LIMIT $6
+                  ) recent
+              )
+          )
+        ORDER BY actor.id
+        "#,
+    )
+    .bind(message.project_id)
+    .bind(message.conversation_id)
+    .bind(message.author_actor_id)
+    .bind(message.mentioned_actor_ids)
+    .bind(message.message_id)
+    .bind(FOLLOW_UP_WINDOW)
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
 /// Ask each of `agents` about `message`, waking the ones newly asked, and
 /// return how many were. An agent already asked about this message keeps the
 /// request it has, whatever its status.
@@ -238,15 +329,27 @@ async fn insert_requests(
     }
     let mut asked = 0;
     for &agent in agents {
-        let inserted = sqlx::query_scalar::<_, Uuid>(
+        // When the agent is still working on a claim here, the new request
+        // queues behind it and says which claim it follows.
+        let inserted = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
             r#"
             INSERT INTO reply_requests (
                 id, project_id, conversation_id, message_id, agent_actor_id,
-                required, mentioned
+                required, mentioned, follows_request_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                (
+                    SELECT claimed.id FROM reply_requests claimed
+                    WHERE claimed.agent_actor_id = $5
+                      AND claimed.status = 'claimed'
+                      AND (claimed.conversation_id = $3 OR claimed.thread_id = $3)
+                    ORDER BY claimed.created_at DESC
+                    LIMIT 1
+                )
+            )
             ON CONFLICT (message_id, agent_actor_id) DO NOTHING
-            RETURNING id
+            RETURNING id, follows_request_id
             "#,
         )
         .bind(Uuid::now_v7())
@@ -258,7 +361,7 @@ async fn insert_requests(
         .bind(message.mentioned_actor_ids.contains(&agent))
         .fetch_optional(&mut **transaction)
         .await?;
-        if let Some(request_id) = inserted {
+        if let Some((request_id, follows)) = inserted {
             asked += 1;
             wake(
                 transaction,
@@ -266,6 +369,11 @@ async fn insert_requests(
                 message.conversation_id,
                 agent,
                 request_id,
+                if follows.is_some() {
+                    Wakeup::FollowUp
+                } else {
+                    Wakeup::Requested
+                },
             )
             .await?;
         }
@@ -364,14 +472,45 @@ pub(crate) async fn withdraw_requests(
     Ok(count)
 }
 
-/// Tell each of the agent's active connections that work is waiting: an inbox
-/// event for pollers, plus a webhook delivery if the connection has one.
+/// What a wakeup tells the agent happened to a reply request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wakeup {
+    /// Someone asked the agent for a reply.
+    Requested,
+    /// A person followed up in a thread where the agent is working; the
+    /// request names the claim it follows.
+    FollowUp,
+    /// A person pressed Stop.
+    Cancelled,
+}
+
+impl Wakeup {
+    pub(crate) fn event(self) -> &'static str {
+        match self {
+            Self::Requested => "reply.requested",
+            Self::FollowUp => "reply.followup",
+            Self::Cancelled => "reply.cancelled",
+        }
+    }
+
+    fn summary(self) -> &'static str {
+        match self {
+            Self::Requested => "You were asked to reply",
+            Self::FollowUp => "A person followed up where you're working",
+            Self::Cancelled => "A person stopped this request",
+        }
+    }
+}
+
+/// Tell each of the agent's active connections what happened: an inbox event
+/// for pollers, plus a webhook delivery if the connection has one.
 async fn wake(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     conversation_id: Uuid,
     agent_actor_id: Uuid,
     request_id: Uuid,
+    wakeup: Wakeup,
 ) -> Result<(), AppError> {
     let connections = sqlx::query_as::<_, (Uuid, bool)>(
         r#"
@@ -389,8 +528,8 @@ async fn wake(
             transaction,
             connection_id,
             project_id,
-            "reply.requested",
-            "You were asked to reply",
+            wakeup.event(),
+            wakeup.summary(),
             "reply_request",
             request_id,
             &format!("/messages/{conversation_id}"),
@@ -399,9 +538,9 @@ async fn wake(
         if has_webhook {
             sqlx::query(
                 r#"
-                INSERT INTO agent_webhook_deliveries (id, connection_id, reply_request_id)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (connection_id, reply_request_id) DO UPDATE
+                INSERT INTO agent_webhook_deliveries (id, connection_id, reply_request_id, event)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (connection_id, reply_request_id, event) DO UPDATE
                 SET attempts = 0, next_attempt_at = now(), delivered_at = NULL,
                     last_error = NULL
                 "#,
@@ -409,6 +548,7 @@ async fn wake(
             .bind(Uuid::now_v7())
             .bind(connection_id)
             .bind(request_id)
+            .bind(wakeup.event())
             .execute(&mut **transaction)
             .await?;
         }
@@ -430,6 +570,21 @@ pub(crate) async fn notify(
     .await
 }
 
+/// Push a refresh to browsers watching a request's conversation and, for a
+/// channel tag answered in a thread, that thread.
+pub(crate) async fn notify_request(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    thread_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    notify(transaction, project_id, conversation_id).await?;
+    if let Some(thread_id) = thread_id.filter(|thread_id| *thread_id != conversation_id) {
+        notify(transaction, project_id, thread_id).await?;
+    }
+    Ok(())
+}
+
 /// Mark the agent's claimed request answered by `reply_message_id`. Fails when
 /// the claim is gone (expired, superseded, or already answered), so the
 /// caller's transaction rolls the message back.
@@ -441,13 +596,14 @@ pub(crate) async fn complete_with_reply(
     conversation_id: Uuid,
     reply_message_id: Uuid,
 ) -> Result<(), AppError> {
-    let updated = sqlx::query(
+    let updated = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>)>(
         r#"
         UPDATE reply_requests
         SET status = 'replied', reply_message_id = $5, lease_expires_at = NULL,
             updated_at = now()
         WHERE id = $1 AND generation = $2 AND agent_actor_id = $3
-          AND conversation_id = $4 AND status = 'claimed'
+          AND COALESCE(thread_id, conversation_id) = $4 AND status = 'claimed'
+        RETURNING project_id, conversation_id, thread_id
         "#,
     )
     .bind(request_id)
@@ -455,6 +611,41 @@ pub(crate) async fn complete_with_reply(
     .bind(agent_actor_id)
     .bind(conversation_id)
     .bind(reply_message_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some((project_id, request_conversation_id, thread_id)) = updated {
+        notify_request(transaction, project_id, request_conversation_id, thread_id).await
+    } else {
+        Err(AppError::Conflict(
+            "reply request",
+            "not claimed by this agent any more",
+        ))
+    }
+}
+
+/// Keep the agent's claimed request open after an interim message, renewing
+/// its lease. Fails like `complete_with_reply` when the claim is gone, so the
+/// caller's transaction rolls the message back.
+pub(crate) async fn renew_claim(
+    transaction: &mut Transaction<'_, Postgres>,
+    request_id: Uuid,
+    generation: i32,
+    agent_actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<(), AppError> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE reply_requests
+        SET lease_expires_at = now() + make_interval(mins => $5), updated_at = now()
+        WHERE id = $1 AND generation = $2 AND agent_actor_id = $3
+          AND COALESCE(thread_id, conversation_id) = $4 AND status = 'claimed'
+        "#,
+    )
+    .bind(request_id)
+    .bind(generation)
+    .bind(agent_actor_id)
+    .bind(conversation_id)
+    .bind(LEASE_MINUTES)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() == 1 {
@@ -477,9 +668,17 @@ pub struct ReplyRequestView {
     pub mentioned: bool,
     pub status: String,
     pub reason: Option<String>,
+    /// What the agent says it is doing, while it holds the claim.
+    pub progress: Option<String>,
+    pub progress_at: Option<String>,
     pub updated_at: String,
     /// When the agent last used any of its connections.
     pub agent_last_seen_at: Option<String>,
+    /// Where the agent answers a channel tag: the thread started from the
+    /// message, once the agent picked it up.
+    pub thread_id: Option<Uuid>,
+    /// Set on a follow-up queued behind a request the agent is working on.
+    pub follows_request_id: Option<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
@@ -493,11 +692,16 @@ struct ReplyRequestRow {
     mentioned: bool,
     status: String,
     reason: Option<String>,
+    progress_text: Option<String>,
+    progress_at: Option<String>,
     updated_at: String,
     agent_last_seen_at: Option<String>,
+    thread_id: Option<Uuid>,
+    follows_request_id: Option<Uuid>,
 }
 
-/// Recent requests for a conversation's timeline, newest first.
+/// Recent requests for a conversation's timeline, newest first. A thread also
+/// shows the channel tags answered in it.
 pub(crate) async fn timeline_requests(
     pool: &PgPool,
     conversation_id: Uuid,
@@ -508,18 +712,25 @@ pub(crate) async fn timeline_requests(
                membership.display_name AS agent_name,
                membership.handle AS agent_handle,
                request.required, request.mentioned, request.status, request.reason,
+               -- A status describes work in progress, so only a live claim shows one.
+               CASE WHEN request.status = 'claimed' THEN request.progress_text END
+                   AS progress_text,
+               CASE WHEN request.status = 'claimed' THEN request.progress_at::text END
+                   AS progress_at,
                request.updated_at::text AS updated_at,
                (
                    SELECT max(connection.last_used_at)::text
                    FROM external_agent_connections connection
                    WHERE agent_connection_can_access(connection.id, request.project_id)
                      AND connection.actor_id = request.agent_actor_id
-               ) AS agent_last_seen_at
+               ) AS agent_last_seen_at,
+               request.thread_id,
+               request.follows_request_id
         FROM reply_requests request
         JOIN project_memberships membership
           ON membership.project_id = request.project_id
          AND membership.actor_id = request.agent_actor_id
-        WHERE request.conversation_id = $1
+        WHERE (request.conversation_id = $1 OR request.thread_id = $1)
           AND request.status <> 'superseded'
         ORDER BY request.created_at DESC, request.id
         LIMIT 60
@@ -550,8 +761,12 @@ pub(crate) async fn timeline_requests(
             mentioned: row.mentioned,
             status: row.status,
             reason: row.reason,
+            progress: row.progress_text,
+            progress_at: row.progress_at,
             updated_at: row.updated_at,
             agent_last_seen_at: row.agent_last_seen_at,
+            thread_id: row.thread_id,
+            follows_request_id: row.follows_request_id,
         })
         .collect();
     Ok((views, remaining))
@@ -734,13 +949,14 @@ async fn retry_request(
 ) -> Result<Json<RetryResponse>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let mut transaction = state.pool.begin().await?;
-    let (conversation_id, agent_actor_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
-        "SELECT conversation_id, agent_actor_id FROM reply_requests WHERE id = $1",
-    )
-    .bind(request_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("reply request"))?;
+    let (conversation_id, agent_actor_id, thread_id) =
+        sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>)>(
+            "SELECT conversation_id, agent_actor_id, thread_id FROM reply_requests WHERE id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound("reply request"))?;
     let conversation = lock_conversation_access(
         &mut transaction,
         &principal,
@@ -780,7 +996,7 @@ async fn retry_request(
         UPDATE reply_requests request
         SET status = 'pending', reason = NULL, updated_at = now()
         FROM messages message
-        WHERE request.id = $1 AND request.status IN ('expired', 'released')
+        WHERE request.id = $1 AND request.status IN ('expired', 'released', 'cancelled')
           AND message.id = request.message_id AND message.removed_at IS NULL
         "#,
     )
@@ -790,7 +1006,7 @@ async fn retry_request(
     if updated.rows_affected() != 1 {
         return Err(AppError::Conflict(
             "reply request",
-            "only expired or released requests can be retried",
+            "only expired, released or stopped requests can be retried",
         ));
     }
     wake(
@@ -799,9 +1015,16 @@ async fn retry_request(
         conversation_id,
         agent_actor_id,
         request_id,
+        Wakeup::Requested,
     )
     .await?;
-    notify(&mut transaction, conversation.project_id, conversation_id).await?;
+    notify_request(
+        &mut transaction,
+        conversation.project_id,
+        conversation_id,
+        thread_id,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(Json(RetryResponse {
         id: request_id,
@@ -809,24 +1032,171 @@ async fn retry_request(
     }))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StopResponse {
+    id: Uuid,
+    status: &'static str,
+    /// Every request stopped: this one and the agent's follow-ups queued
+    /// behind it in the same place.
+    stopped: usize,
+}
+
+/// Stop an agent's work on a request: a person's Stop button.
+async fn stop_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(request_id): ApiPath<Uuid>,
+) -> Result<Json<StopResponse>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let outcome = stop_request_in(
+        &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        request_id,
+    )
+    .await?;
+    insert_audit_event_for(
+        &mut transaction,
+        &headers,
+        &principal,
+        outcome.project_id,
+        "reply_request.stopped",
+        "reply_request",
+        request_id,
+        serde_json::json!({
+            "agent_actor_id": outcome.agent_actor_id,
+            "stopped": outcome.stopped.len(),
+        }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(StopResponse {
+        id: request_id,
+        status: "cancelled",
+        stopped: outcome.stopped.len(),
+    }))
+}
+
+/// What `stop_request_in` did.
+pub(crate) struct StopOutcome {
+    pub project_id: Uuid,
+    pub agent_actor_id: Uuid,
+    /// The requests stopped, the asked one first.
+    pub stopped: Vec<Uuid>,
+}
+
+/// Stop an agent's pending or claimed request, and the follow-ups queued
+/// behind it where it answers. People only, and only people who can see the
+/// conversation. The agent's next call on any of them is refused with the
+/// reason, and its connections get a `reply.cancelled` wakeup at once.
+/// Shared by the browser API and MCP; callers record their own audit rows.
+pub(crate) async fn stop_request_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor_kind: ActorKind,
+    request_id: Uuid,
+) -> Result<StopOutcome, AppError> {
+    if actor_kind != ActorKind::Human {
+        return Err(AppError::Forbidden);
+    }
+    let Some((conversation_id, answer_conversation_id, agent_actor_id)) =
+        sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+            r#"
+            SELECT conversation_id, COALESCE(thread_id, conversation_id), agent_actor_id
+            FROM reply_requests WHERE id = $1
+            "#,
+        )
+        .bind(request_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Err(AppError::NotFound("reply request"));
+    };
+    // The conversation's lock first, then the request rows (the order
+    // `withdraw_requests` documents). Someone who can't see the conversation
+    // gets the same answer as for a request that doesn't exist.
+    let conversation = match lock_conversation_for(
+        transaction,
+        actor_id,
+        actor_kind,
+        conversation_id,
+        Action::MessageSend,
+        false,
+    )
+    .await
+    {
+        Ok(conversation) => conversation,
+        Err(AppError::NotFound(_)) => return Err(AppError::NotFound("reply request")),
+        Err(error) => return Err(error),
+    };
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(conversation.project_id)
+    .bind(actor_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or_else(|| "someone".to_owned());
+    let stopped = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>)>(
+        r#"
+        UPDATE reply_requests
+        SET status = 'cancelled', lease_expires_at = NULL, reason = $4, updated_at = now()
+        WHERE agent_actor_id = $2
+          AND status IN ('pending', 'claimed')
+          AND (id = $1 OR (COALESCE(thread_id, conversation_id) = $3 AND status = 'pending'))
+        RETURNING id, conversation_id, thread_id
+        "#,
+    )
+    .bind(request_id)
+    .bind(agent_actor_id)
+    .bind(answer_conversation_id)
+    .bind(format!("Stopped by {name}."))
+    .fetch_all(&mut **transaction)
+    .await?;
+    if !stopped.iter().any(|(id, _, _)| *id == request_id) {
+        return Err(AppError::Conflict(
+            "reply request",
+            "only a waiting or working request can be stopped",
+        ));
+    }
+    let mut conversations = BTreeSet::new();
+    for (id, request_conversation_id, thread_id) in &stopped {
+        wake(
+            transaction,
+            conversation.project_id,
+            *request_conversation_id,
+            agent_actor_id,
+            *id,
+            Wakeup::Cancelled,
+        )
+        .await?;
+        conversations.insert(*request_conversation_id);
+        conversations.extend(*thread_id);
+    }
+    for conversation_id in conversations {
+        notify(transaction, conversation.project_id, conversation_id).await?;
+    }
+    let mut ids = stopped.into_iter().map(|(id, _, _)| id).collect::<Vec<_>>();
+    ids.sort_by_key(|id| *id != request_id);
+    Ok(StopOutcome {
+        project_id: conversation.project_id,
+        agent_actor_id,
+        stopped: ids,
+    })
+}
+
 /// Background loop: expire lapsed claims and deliver webhook wakeups.
 pub async fn run(state: AppState, mut shutdown: watch::Receiver<bool>) {
-    let client = match reqwest::Client::builder()
-        .timeout(WEBHOOK_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::error!(%error, "reply worker could not build its HTTP client");
-            return;
-        }
-    };
+    // Each delivery builds its own client, pinned to the address it checked
+    // (see `webhook_client`), so there is no shared one here.
     loop {
         if let Err(error) = expire_leases(&state.pool).await {
             tracing::warn!(category = error.log_category(), "reply lease sweep failed");
         }
-        if let Err(error) = deliver_webhooks(&state.pool, &client).await {
+        if let Err(error) = deliver_webhooks(&state).await {
             tracing::warn!(category = error.log_category(), "webhook delivery failed");
         }
         tokio::select! {
@@ -867,21 +1237,46 @@ struct DueDelivery {
     id: Uuid,
     connection_id: Uuid,
     reply_request_id: Uuid,
+    event: String,
     attempts: i32,
     agent_actor_id: Uuid,
-    request_pending: bool,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    thread_id: Option<Uuid>,
+    message_id: Uuid,
+    generation: i32,
+    follows_request_id: Option<Uuid>,
+    /// Whether what the wakeup says is still true: the request still waits
+    /// for the agent (or, for a stop, was stopped), and the agent can still
+    /// reach it.
+    still_true: bool,
+    wakeup_format: String,
     webhook_url: Option<String>,
+    /// Plaintext from before the secrets store; moved into it at startup.
     webhook_secret: Option<String>,
+    webhook_secret_id: Option<Uuid>,
 }
 
-async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(), AppError> {
+async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
+    let pool = &state.pool;
+    let trusted_origins = &state.config.webhook_trusted_origins;
     let mut transaction = pool.begin().await?;
     let due = sqlx::query_as::<_, DueDelivery>(
         r#"
         SELECT delivery.id, delivery.connection_id, delivery.reply_request_id,
-               delivery.attempts, request.agent_actor_id,
-               (request.status = 'pending' AND agent_connection_can_access(connection.id, request.project_id) AND conversation_visible_to(request.conversation_id, request.agent_actor_id)) AS request_pending,
-               connection.webhook_url, connection.webhook_secret
+               delivery.event, delivery.attempts, request.agent_actor_id,
+               request.project_id, request.conversation_id, request.thread_id,
+               request.message_id, request.generation, request.follows_request_id,
+               (
+                   CASE delivery.event
+                       WHEN 'reply.cancelled' THEN request.status = 'cancelled'
+                       ELSE request.status = 'pending'
+                   END
+                   AND agent_connection_can_access(connection.id, request.project_id)
+                   AND conversation_visible_to(request.conversation_id, request.agent_actor_id)
+               ) AS still_true,
+               connection.wakeup_format,
+               connection.webhook_url, connection.webhook_secret, connection.webhook_secret_id
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id
         JOIN external_agent_connections connection ON connection.id = delivery.connection_id
@@ -897,10 +1292,40 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
     .fetch_all(&mut *transaction)
     .await?;
     for delivery in due {
-        let (Some(url), Some(secret), true) = (
+        // A stored secret that can't be opened is a failed attempt, retried
+        // with backoff, not a wakeup quietly dropped.
+        let mut secret_unreadable = false;
+        let secret = match (&delivery.webhook_secret_id, &delivery.webhook_secret) {
+            (Some(id), _) => {
+                let revealed = match crate::secrets::keyring(&state.config) {
+                    Ok(keys) => crate::secrets::reveal(
+                        &mut *transaction,
+                        keys.as_ref(),
+                        *id,
+                        "agent_webhook.sign",
+                    )
+                    .await
+                    .ok(),
+                    Err(_) => None,
+                };
+                secret_unreadable = revealed.is_none();
+                revealed
+            }
+            (None, Some(plaintext)) => Some(crate::secrets::SecretValue::new(plaintext.clone())),
+            (None, None) => None,
+        };
+        let placeholder = crate::secrets::SecretValue::new(String::new());
+        // Bridges on the old format only understand "check your inbox", which
+        // a stop doesn't need.
+        let legacy_stop = delivery.wakeup_format == "inbox" && delivery.event == "reply.cancelled";
+        let (Some(url), Some(secret), true, false) = (
             delivery.webhook_url.as_deref(),
-            delivery.webhook_secret.as_deref(),
-            delivery.request_pending,
+            secret
+                .as_ref()
+                .or(secret_unreadable.then_some(&placeholder))
+                .map(crate::secrets::SecretValue::expose),
+            delivery.still_true,
+            legacy_stop,
         ) else {
             // Answered, superseded, or the webhook was removed: nothing to wake.
             sqlx::query("UPDATE agent_webhook_deliveries SET delivered_at = now() WHERE id = $1")
@@ -909,7 +1334,13 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
                 .await?;
             continue;
         };
-        let error = post_wakeup(client, url, secret, &delivery).await.err();
+        let error = if secret_unreadable {
+            Some("the webhook's signing secret couldn't be read")
+        } else {
+            post_wakeup(url, secret, &delivery, trusted_origins)
+                .await
+                .err()
+        };
         let attempts = delivery.attempts + 1;
         let backoff_seconds = (5_i64 << attempts.min(6)).min(300);
         sqlx::query(
@@ -944,25 +1375,53 @@ async fn deliver_webhooks(pool: &PgPool, client: &reqwest::Client) -> Result<(),
     Ok(())
 }
 
+/// The webhook body. Typed wakeups say what happened and where, so a runner
+/// can route them (to the session already working in a thread, say) without a
+/// round trip. Neither format carries message text: the runner claims the
+/// request to read it, and every read is checked against who can see the
+/// conversation.
+fn wakeup_body(delivery: &DueDelivery) -> serde_json::Value {
+    if delivery.wakeup_format == "inbox" {
+        return serde_json::json!({
+            "event": "inbox.available",
+            "deliveryId": delivery.id,
+            "agentId": delivery.agent_actor_id,
+            "replyRequestId": delivery.reply_request_id,
+        });
+    }
+    serde_json::json!({
+        "event": delivery.event,
+        "deliveryId": delivery.id,
+        "agentId": delivery.agent_actor_id,
+        "projectId": delivery.project_id,
+        "replyRequestId": delivery.reply_request_id,
+        "conversationId": delivery.conversation_id,
+        "threadId": delivery.thread_id,
+        "messageId": delivery.message_id,
+        "generation": delivery.generation,
+        "followsRequestId": delivery.follows_request_id,
+        // Filled in once agent sessions exist (roadmap A3).
+        "sessionRef": serde_json::Value::Null,
+    })
+}
+
 async fn post_wakeup(
-    client: &reqwest::Client,
     url: &str,
     secret: &str,
     delivery: &DueDelivery,
+    trusted_origins: &[String],
 ) -> Result<(), &'static str> {
-    let body = serde_json::json!({
-        "event": "inbox.available",
-        "deliveryId": delivery.id,
-        "agentId": delivery.agent_actor_id,
-        "replyRequestId": delivery.reply_request_id,
-    })
-    .to_string();
+    let (url, client) = webhook_client(url, trusted_origins).await?;
+    let body = wakeup_body(delivery);
+    let event = body["event"].as_str().unwrap_or_default().to_owned();
+    let body = body.to_string();
     let timestamp = unix_timestamp();
     let signature = sign(secret, &timestamp, &body).ok_or("could not sign the wakeup")?;
     let response = client
         .post(url)
         .header("content-type", "application/json")
         .header("x-workspace-delivery", delivery.id.to_string())
+        .header("x-workspace-event", event)
         .header("x-workspace-timestamp", &timestamp)
         .header("x-workspace-signature", format!("sha256={signature}"))
         .body(body)
@@ -974,6 +1433,115 @@ async fn post_wakeup(
     } else {
         Err("the webhook returned an error status")
     }
+}
+
+/// Validate webhook destinations without making a network request: public
+/// https only, unless the URL's origin is one the operator trusts
+/// (`AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`), which may also be http on a
+/// private or tailnet address. Credentials and fragments are never allowed.
+pub(crate) fn validate_webhook_url(
+    value: &str,
+    trusted_origins: &[String],
+) -> Result<reqwest::Url, AppError> {
+    let url = reqwest::Url::parse(value).map_err(|_| AppError::Validation("webhook URL"))?;
+    let host = url.host().ok_or(AppError::Validation("webhook URL"))?;
+    if value.len() > 500
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AppError::Validation("webhook URL"));
+    }
+    if is_trusted_origin(&url, trusted_origins) {
+        return Ok(url);
+    }
+    let loopback = match host {
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+        url::Host::Domain(_) => false,
+    };
+    if url.scheme() != "https"
+        || matches!(host, url::Host::Domain(name) if name.eq_ignore_ascii_case("localhost") || name.ends_with(".localhost"))
+        || matches!(host, url::Host::Ipv4(address) if !loopback && !public_ipv4(address))
+        || matches!(host, url::Host::Ipv6(address) if !loopback && !public_ipv6(address))
+        || loopback
+    {
+        return Err(AppError::Validation("webhook URL"));
+    }
+    Ok(url)
+}
+
+fn is_trusted_origin(url: &reqwest::Url, trusted_origins: &[String]) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && trusted_origins.contains(&url.origin().ascii_serialization())
+}
+
+async fn webhook_client(
+    value: &str,
+    trusted_origins: &[String],
+) -> Result<(reqwest::Url, reqwest::Client), &'static str> {
+    let url =
+        validate_webhook_url(value, trusted_origins).map_err(|_| "the webhook URL is unsafe")?;
+    let trusted = is_trusted_origin(&url, trusted_origins);
+    let host = url
+        .host_str()
+        .ok_or("the webhook URL is unsafe")?
+        .to_owned();
+    let port = url
+        .port_or_known_default()
+        .ok_or("the webhook URL is unsafe")?;
+    let addresses = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|_| "the webhook host could not be resolved")?
+        .collect::<Vec<_>>();
+    if addresses.is_empty()
+        || !trusted
+            && addresses.iter().any(|address| match address.ip() {
+                std::net::IpAddr::V4(ip) => !public_ipv4(ip),
+                std::net::IpAddr::V6(ip) => !public_ipv6(ip),
+            })
+    {
+        return Err("the webhook host resolved to an unsafe address");
+    }
+    // Pin the already-checked address so a second DNS lookup cannot be used
+    // for rebinding. Disabling ambient proxies also prevents them from
+    // changing the destination selected by this security check.
+    let client = reqwest::Client::builder()
+        .timeout(WEBHOOK_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .resolve(&host, addresses[0])
+        .build()
+        .map_err(|_| "the webhook client could not be built")?;
+    Ok((url, client))
+}
+
+fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(a == 0
+        || a == 10
+        || a == 127
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 192 && b == 168)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+        || a >= 224)
+}
+
+fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    !ip.is_unspecified()
+        && !ip.is_loopback()
+        && (segments[0] & 0xfe00) != 0xfc00
+        && (segments[0] & 0xffc0) != 0xfe80
+        && (segments[0] & 0xff00) != 0xff00
+        && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+        && ip.to_ipv4_mapped().is_none_or(public_ipv4)
 }
 
 /// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
@@ -1016,5 +1584,47 @@ mod tests {
         assert_eq!(signature.len(), 64);
         assert_ne!(Some(signature.clone()), sign("secret", "1700000001", "{}"));
         assert_ne!(Some(signature), sign("other", "1700000000", "{}"));
+    }
+
+    #[test]
+    fn browser_webhooks_reject_ssrf_and_credential_vectors() {
+        for value in [
+            "http://example.com/hook",
+            "https://localhost/hook",
+            "https://127.0.0.1/hook",
+            "https://169.254.169.254/latest/meta-data",
+            "https://10.0.0.1/hook",
+            "https://user:password@example.com/hook",
+            "https://example.com/hook#secret",
+        ] {
+            assert!(
+                validate_webhook_url(value, &[]).is_err(),
+                "accepted {value}"
+            );
+        }
+        assert!(validate_webhook_url("https://example.com/hook", &[]).is_ok());
+    }
+
+    #[test]
+    fn only_operator_trusted_origins_may_use_http_and_tailnet_addresses() {
+        let trusted = ["http://100.119.56.3:8732".to_owned()];
+        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &trusted).is_ok());
+        // Without the operator's say-so the same listener is refused.
+        assert!(validate_webhook_url("http://100.119.56.3:8732/wake", &[]).is_err());
+        for value in [
+            // Another port, scheme or host on the same network is not trusted.
+            "http://100.119.56.3:8733/wake",
+            "https://100.119.56.3:8732/wake",
+            "http://100.119.56.4:8732/wake",
+            "http://169.254.169.254/latest/meta-data",
+            // Credentials and fragments stay refused even for trusted origins.
+            "http://user:secret@100.119.56.3:8732/wake",
+            "http://100.119.56.3:8732/wake#secret",
+        ] {
+            assert!(
+                validate_webhook_url(value, &trusted).is_err(),
+                "accepted {value}"
+            );
+        }
     }
 }

@@ -304,7 +304,13 @@ async fn removed_message_text_vanishes_everywhere() {
         .as_str()
         .expect("answer")
         .to_owned();
-    let (status, removed_answer) = remove(&setup, &setup.browser, &general, &answer_id).await;
+    // A tag in a channel is answered in a thread started from the message.
+    let answered_in = claim["value"]["request"]["replyConversationId"]
+        .as_str()
+        .expect("answer thread")
+        .to_owned();
+    assert_ne!(answered_in, general);
+    let (status, removed_answer) = remove(&setup, &setup.browser, &answered_in, &answer_id).await;
     assert_eq!(status, StatusCode::OK, "{removed_answer}");
     assert_eq!(
         removed_answer["message"]["removed"]["removedBy"]["id"],
@@ -384,11 +390,16 @@ async fn removed_message_text_vanishes_everywhere() {
             .fetch_one(&setup.pool)
             .await
             .expect("plain text");
-    let mut threads = Vec::new();
-    for (key, name) in [
-        ("thread-suggested", plain_text.as_str()),
-        ("thread-named", "Rotation plan"),
-    ] {
+    // Mara's claim started a thread from the message, named after it; a
+    // person starts another and names it by hand.
+    let mut threads = vec![
+        claim["value"]["request"]["replyConversationId"]
+            .as_str()
+            .expect("Mara's thread")
+            .to_owned(),
+    ];
+    assert_ne!(threads[0], general);
+    for (key, name) in [("thread-named", "Rotation plan")] {
         let (status, thread) = send(
             app,
             setup.browser.request(

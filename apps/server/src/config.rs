@@ -3,7 +3,7 @@ use std::{
     fmt,
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -77,6 +77,10 @@ pub struct AppConfig {
     pub server_addr: SocketAddr,
     pub webhook_addr: SocketAddr,
     pub allowed_origins: Vec<String>,
+    /// Operator-set webhook origins (`scheme://host[:port]`) that may use
+    /// http and private or tailnet addresses, such as an agent host's wakeup
+    /// listener on a Tailscale IP. Every other webhook must be public https.
+    pub webhook_trusted_origins: Vec<String>,
     /// The address people and cloud agents use, e.g. `https://workspace.example.com`.
     /// OAuth metadata and MCP resource URLs are built from it. Defaults to the
     /// loopback server address.
@@ -99,6 +103,15 @@ pub struct AppConfig {
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
     pub log_filter: String,
+    /// The secrets master keyring (S1): an owner-only file outside the data
+    /// and release roots. Unset in development, a keyring under
+    /// `.agent-workspace-secrets/` in the working directory is created on
+    /// first use; unset elsewhere, encrypted secrets are unavailable.
+    pub secrets_key_path: Option<PathBuf>,
+    /// The bearer token `/metrics` requires (O2), as an owner-only file.
+    pub metrics_token_path: Option<PathBuf>,
+    /// Background jobs run at once in this process (F9).
+    pub job_concurrency: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -185,7 +198,8 @@ impl AppConfig {
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
         let allowed_origins = allowed_origins(values, environment)?;
-        let public_origin = public_origin(values)?;
+        let webhook_trusted_origins = webhook_trusted_origins(values)?;
+        let public_origin = public_origin(values, environment)?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
         validate_loopback("WEBHOOK_ADDR", webhook_addr, environment)?;
@@ -262,11 +276,37 @@ impl AppConfig {
         }
 
         let workos = workos_config(values, &data_root, &web_root)?;
+        let secrets_key_path =
+            optional_secret_path(values, "SECRETS_KEY_PATH", &data_root, &web_root, 64 * 1024)?;
+        // The master key opens every stored credential; a checkout (or an
+        // etckeeper `/etc`) could commit it.
+        if let Some(work_tree) = secrets_key_path
+            .as_deref()
+            .and_then(git_work_tree_containing)
+        {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}SECRETS_KEY_PATH"),
+                reason: format!(
+                    "{} is a Git work tree; keep the keyring outside it",
+                    work_tree.display()
+                ),
+            });
+        }
+        let metrics_token_path =
+            optional_secret_path(values, "METRICS_TOKEN_PATH", &data_root, &web_root, 4096)?;
+        let job_concurrency = parse(values, "JOB_CONCURRENCY", "4")?;
+        if !(1..=64).contains(&job_concurrency) {
+            return Err(ConfigError::Invalid {
+                key: format!("{PREFIX}JOB_CONCURRENCY"),
+                reason: "must be between 1 and 64".into(),
+            });
+        }
         Ok(Self {
             environment,
             server_addr,
             webhook_addr,
             allowed_origins,
+            webhook_trusted_origins,
             public_origin,
             database_url: SecretString::new(database_url),
             database_max_connections,
@@ -286,6 +326,9 @@ impl AppConfig {
             github,
             workos,
             log_filter,
+            secrets_key_path,
+            metrics_token_path,
+            job_concurrency,
         })
     }
 }
@@ -386,6 +429,80 @@ fn github_config(
     }))
 }
 
+fn optional_secret_path(
+    values: &BTreeMap<String, String>,
+    key: &str,
+    data_root: &Path,
+    web_root: &Path,
+    maximum_bytes: u64,
+) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(value) = values
+        .get(&format!("{PREFIX}{key}"))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    validate_secret_file(key, &path, data_root, web_root, maximum_bytes)?;
+    Ok(Some(path))
+}
+
+/// Whether `path` is absolute, has no `.` or `..` parts, and neither its
+/// text nor its resolved directory falls under a served or runtime root.
+fn secret_path_outside_roots(path: &Path, data_root: &Path, web_root: &Path) -> bool {
+    let plain = path
+        .components()
+        .all(|component| matches!(component, Component::RootDir | Component::Normal(_)));
+    // Compare resolved paths too: a symlinked directory could otherwise point
+    // into a served root while the text looks outside it.
+    let resolved = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .zip(path.file_name())
+        .map(|(parent, name)| parent.join(name));
+    let Some(resolved) = resolved else {
+        return false;
+    };
+    path.is_absolute()
+        && plain
+        && [data_root, web_root].into_iter().all(|root| {
+            let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            !path.starts_with(root) && !resolved.starts_with(&canonical)
+        })
+}
+
+/// Where `secret-key-init` may create a keyring: everywhere a configured
+/// secret file may live, and not inside a Git work tree (a checkout, or an
+/// `/etc` kept by etckeeper), where the key could be committed.
+pub fn validate_new_secret_location(path: &Path, config: &AppConfig) -> Result<(), String> {
+    if !secret_path_outside_roots(path, &config.data_root, &config.web_root) {
+        return Err(
+            "the path must be absolute, in an existing directory, and outside the data and web roots"
+                .into(),
+        );
+    }
+    path.parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .ok_or("the directory must exist")?;
+    if let Some(work_tree) = git_work_tree_containing(path) {
+        return Err(format!(
+            "{} is a Git work tree; keep the keyring outside it",
+            work_tree.display()
+        ));
+    }
+    Ok(())
+}
+
+/// The nearest Git work tree holding `path`'s resolved directory, if any.
+fn git_work_tree_containing(path: &Path) -> Option<PathBuf> {
+    let directory = std::fs::canonicalize(path.parent()?).ok()?;
+    directory
+        .ancestors()
+        .find(|ancestor| std::fs::symlink_metadata(ancestor.join(".git")).is_ok())
+        .map(Path::to_path_buf)
+}
+
 fn validate_secret_file(
     key: &str,
     path: &Path,
@@ -393,7 +510,7 @@ fn validate_secret_file(
     web_root: &Path,
     maximum_bytes: u64,
 ) -> Result<(), ConfigError> {
-    if !path.is_absolute() || path.starts_with(data_root) || path.starts_with(web_root) {
+    if !secret_path_outside_roots(path, data_root, web_root) {
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}{key}"),
             reason: "must be an absolute path outside runtime data and release roots".into(),
@@ -418,7 +535,10 @@ fn validate_secret_file(
     Ok(())
 }
 
-fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, ConfigError> {
+fn public_origin(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+) -> Result<Option<String>, ConfigError> {
     let Some(value) = values
         .get(&format!("{PREFIX}PUBLIC_ORIGIN"))
         .map(|value| value.trim().trim_end_matches('/'))
@@ -426,24 +546,60 @@ fn public_origin(values: &BTreeMap<String, String>) -> Result<Option<String>, Co
     else {
         return Ok(None);
     };
-    let parsed = value
-        .parse::<http::Uri>()
-        .map_err(|error| ConfigError::Invalid {
-            key: format!("{PREFIX}PUBLIC_ORIGIN"),
-            reason: error.to_string(),
-        })?;
-    if !matches!(parsed.scheme_str(), Some("http" | "https"))
-        || parsed.authority().is_none()
-        || parsed
-            .path_and_query()
-            .is_some_and(|path| path.as_str() != "/")
+    let parsed = url::Url::parse(value).map_err(|error| ConfigError::Invalid {
+        key: format!("{PREFIX}PUBLIC_ORIGIN"),
+        reason: error.to_string(),
+    })?;
+    let development_loopback = environment.is_development()
+        && parsed.scheme() == "http"
+        && parsed.host().is_some_and(|host| match host {
+            url::Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        });
+    if (parsed.scheme() != "https" && !development_loopback)
+        || parsed.host().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
     {
         return Err(ConfigError::Invalid {
             key: format!("{PREFIX}PUBLIC_ORIGIN"),
-            reason: "must be a scheme and host, such as https://workspace.example.com".into(),
+            reason: "must be an HTTPS origin without credentials, query, or fragment (development may use HTTP loopback)".into(),
         });
     }
     Ok(Some(value.to_owned()))
+}
+
+fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
+    let key = format!("{PREFIX}WEBHOOK_TRUSTED_ORIGINS");
+    let configured = values.get(&key).map(String::as_str).unwrap_or_default();
+    let mut origins = Vec::new();
+    for candidate in configured
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let invalid = |reason: &str| ConfigError::Invalid {
+            key: key.clone(),
+            reason: format!("{candidate}: {reason}"),
+        };
+        let url = reqwest::Url::parse(candidate).map_err(|error| invalid(&error.to_string()))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid("use an origin such as http://100.64.0.1:8732"));
+        }
+        origins.push(url.origin().ascii_serialization());
+    }
+    Ok(origins)
 }
 
 fn allowed_origins(
@@ -643,6 +799,81 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_file_may_not_reach_a_served_root_through_dots_or_symlinks() {
+        use std::os::unix::fs::{OpenOptionsExt as _, symlink};
+        let base = std::env::temp_dir().join(format!("aw-secret-path-{}", uuid::Uuid::new_v4()));
+        let web_root = base.join("release/web");
+        let data_root = base.join("data");
+        let outside = base.join("etc");
+        for directory in [&web_root, &data_root, &outside] {
+            std::fs::create_dir_all(directory).expect("make directory");
+        }
+        for file in [web_root.join("keyring"), outside.join("keyring")] {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(0o600)
+                .open(&file)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, b"k"))
+                .expect("write keyring");
+        }
+        symlink(&web_root, base.join("etc/linked-web")).expect("link");
+        let check = |path: PathBuf| {
+            validate_secret_file("SECRETS_KEY_PATH", &path, &data_root, &web_root, 64)
+        };
+        check(outside.join("keyring")).expect("a plain outside path is fine");
+        check(base.join("release/../release/web/keyring")).expect_err("dots into the web root");
+        check(base.join("etc/../release/web/keyring")).expect_err("dots anywhere");
+        check(base.join("etc/linked-web/keyring")).expect_err("a symlinked directory into it");
+        check(web_root.join("keyring")).expect_err("the web root itself");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_new_keyring_stays_out_of_served_roots_and_git_work_trees() {
+        let base = std::env::temp_dir().join(format!("aw-new-secret-{}", uuid::Uuid::new_v4()));
+        let checkout = base.join("checkout");
+        for directory in [
+            base.join("etc"),
+            checkout.join(".git"),
+            checkout.join("deep"),
+        ] {
+            std::fs::create_dir_all(directory).expect("make directory");
+        }
+        let mut config = AppConfig::from_values(&base_values()).expect("valid config");
+        config.web_root = base.join("release/web");
+        config.data_root = base.join("data");
+        std::fs::create_dir_all(&config.web_root).expect("make web root");
+        validate_new_secret_location(&base.join("etc/keyring"), &config)
+            .expect("a plain outside path is fine");
+        validate_new_secret_location(&config.web_root.join("keyring"), &config)
+            .expect_err("the web root");
+        validate_new_secret_location(&base.join("etc/../release/web/keyring"), &config)
+            .expect_err("dots into the web root");
+        validate_new_secret_location(&checkout.join("deep/keyring"), &config)
+            .expect_err("inside a Git work tree");
+        validate_new_secret_location(&base.join("missing/keyring"), &config)
+            .expect_err("a directory that doesn't exist");
+        // An existing keyring inside a checkout is refused at startup too.
+        let committed = checkout.join("deep/keyring");
+        std::fs::write(&committed, "k").expect("write keyring");
+        std::fs::set_permissions(
+            &committed,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .expect("owner only");
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_SECRETS_KEY_PATH".to_owned(),
+            committed.to_string_lossy().into_owned(),
+        );
+        let error = AppConfig::from_values(&values).expect_err("keyring in a checkout");
+        assert!(error.to_string().contains("Git work tree"), "{error}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn secrets_are_redacted_from_debug_output() {
         let config = AppConfig::from_values(&base_values()).expect("valid config");
         let debug = format!("{config:?}");
@@ -696,6 +927,38 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("wildcard must be rejected");
         assert!(error.to_string().contains("without paths or wildcards"));
+    }
+
+    #[test]
+    fn public_origin_rejects_credentials_and_insecure_production_urls() {
+        for origin in [
+            "https://user@example.com",
+            "https://example.com?next=evil",
+            "https://example.com/#fragment",
+            "http://example.com",
+        ] {
+            let mut values = base_values();
+            values.insert("AGENT_WORKSPACE_ENV".to_owned(), "production".to_owned());
+            values.insert(
+                "AGENT_WORKSPACE_ALLOWED_ORIGINS".to_owned(),
+                "https://example.com".to_owned(),
+            );
+            values.insert(
+                "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+                origin.to_owned(),
+            );
+            assert!(
+                AppConfig::from_values(&values).is_err(),
+                "accepted {origin}"
+            );
+        }
+
+        let mut development = base_values();
+        development.insert(
+            "AGENT_WORKSPACE_PUBLIC_ORIGIN".to_owned(),
+            "http://127.0.0.1:3100".to_owned(),
+        );
+        assert!(AppConfig::from_values(&development).is_ok());
     }
 
     #[test]
@@ -883,5 +1146,34 @@ mod tests {
         );
         let error = AppConfig::from_values(&values).expect_err("oversized secret must fail");
         assert!(error.to_string().contains("between 1 and 4096 bytes"));
+    }
+
+    #[test]
+    fn webhook_trusted_origins_are_exact_origins() {
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
+            " http://100.119.56.3:8732 , https://hooks.internal:443/ ".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(
+            config.webhook_trusted_origins,
+            ["http://100.119.56.3:8732", "https://hooks.internal"]
+        );
+        for invalid in [
+            "ftp://100.119.56.3",
+            "http://user:secret@100.119.56.3:8732",
+            "http://100.119.56.3:8732/wake",
+            "100.119.56.3:8732",
+        ] {
+            values.insert(
+                "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
+                invalid.to_owned(),
+            );
+            assert!(
+                AppConfig::from_values(&values).is_err(),
+                "accepted {invalid}"
+            );
+        }
     }
 }

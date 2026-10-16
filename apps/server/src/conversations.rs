@@ -76,6 +76,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/threads/{id}", axum::routing::patch(patch_thread))
         .route("/api/v1/channels/{id}/archive", post(archive_channel))
         .route("/api/v1/threads/{id}/archive", post(archive_thread))
+        .route("/api/v1/channels/{id}/restore", post(restore_channel))
+        .route("/api/v1/threads/{id}/restore", post(restore_thread))
         .route(
             "/api/v1/conversations/{id}/timeline",
             get(conversation_timeline),
@@ -482,6 +484,9 @@ pub(crate) struct RunRow {
     pub(crate) pull_request_automation_reason: Option<String>,
     pub(crate) queue_position: Option<i64>,
     pub(crate) failure_reason: Option<String>,
+    /// The run's frozen settings: harness, model, reasoning, speed and so on.
+    #[sqlx(default)]
+    pub(crate) config: serde_json::Value,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -712,6 +717,12 @@ struct ThreadAttention {
 struct ArchiveConversationResponse {
     conversation: ConversationView,
     fallback: ArchiveFallback,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreConversationResponse {
+    conversation: ConversationView,
 }
 
 #[derive(Debug, Serialize)]
@@ -1523,6 +1534,9 @@ pub(crate) struct MessageMcpCredential {
 pub(crate) struct ReplyCompletion {
     pub(crate) request_id: Uuid,
     pub(crate) generation: i32,
+    /// False for an interim message: the request stays claimed (its lease
+    /// renewed) so the agent can keep working and reply again.
+    pub(crate) final_reply: bool,
 }
 
 pub(crate) struct MessageAppendOutcome {
@@ -1716,15 +1730,26 @@ pub(crate) async fn append_message_command(
         },
     };
     if let Some(reply) = reply {
-        replies::complete_with_reply(
-            &mut transaction,
-            reply.request_id,
-            reply.generation,
-            actor.actor_id,
-            conversation.id,
-            message_id,
-        )
-        .await?;
+        if reply.final_reply {
+            replies::complete_with_reply(
+                &mut transaction,
+                reply.request_id,
+                reply.generation,
+                actor.actor_id,
+                conversation.id,
+                message_id,
+            )
+            .await?;
+        } else {
+            replies::renew_claim(
+                &mut transaction,
+                reply.request_id,
+                reply.generation,
+                actor.actor_id,
+                conversation.id,
+            )
+            .await?;
+        }
     }
     enqueue_external_message_events(
         &mut transaction,
@@ -2306,14 +2331,11 @@ async fn conversation_timeline(
     let (active_run, latest_terminal_run, approvals) =
         fetch_run_projection(&state, &principal, &conversation).await?;
     let capabilities = conversation_capabilities(&principal, &conversation)?;
-    let (reply_requests, agent_turns_remaining) =
-        if matches!(conversation.effective_kind(), "dm" | "group") {
-            let (requests, remaining) =
-                replies::timeline_requests(&state.pool, conversation.id).await?;
-            (requests, Some(remaining))
-        } else {
-            (Vec::new(), None)
-        };
+    let (reply_requests, remaining) =
+        replies::timeline_requests(&state.pool, conversation.id).await?;
+    // Only groups (and threads under them) have turns.
+    let agent_turns_remaining =
+        matches!(conversation.effective_kind(), "dm" | "group").then_some(remaining);
     Ok(Json(TimelineResponse {
         conversation: ConversationView::from(&conversation),
         linked_work_items,
@@ -2662,6 +2684,87 @@ async fn archive_conversation(
     Ok(Json(ArchiveConversationResponse {
         conversation: ConversationView::from(&archived),
         fallback,
+    }))
+}
+
+async fn restore_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ArchiveConversationRequest>,
+) -> Result<Json<RestoreConversationResponse>, AppError> {
+    restore_conversation(
+        &state,
+        &headers,
+        &principal,
+        conversation_id,
+        "channel",
+        request,
+    )
+    .await
+}
+
+async fn restore_thread(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<ArchiveConversationRequest>,
+) -> Result<Json<RestoreConversationResponse>, AppError> {
+    restore_conversation(
+        &state,
+        &headers,
+        &principal,
+        conversation_id,
+        "thread",
+        request,
+    )
+    .await
+}
+
+/// Undo for archive: brings a channel or thread back. The expected version is
+/// the one the archive returned, so a restore never undoes a later change.
+async fn restore_conversation(
+    state: &AppState,
+    headers: &HeaderMap,
+    principal: &AuthenticatedActor,
+    conversation_id: Uuid,
+    expected_kind: &'static str,
+    request: ArchiveConversationRequest,
+) -> Result<Json<RestoreConversationResponse>, AppError> {
+    require_authenticated_write(state, headers, principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let (conversation, restored) = set_conversation_archived(
+        &mut transaction,
+        principal.actor_id,
+        parse_actor_kind(&principal.actor_kind)?,
+        conversation_id,
+        &[expected_kind],
+        false,
+        Some(request.expected_version),
+    )
+    .await?;
+    let Some(restored) = restored else {
+        // Already active: nothing to undo.
+        transaction.commit().await?;
+        return Ok(Json(RestoreConversationResponse {
+            conversation: ConversationView::from(&conversation),
+        }));
+    };
+    insert_audit_event(
+        &mut transaction,
+        headers,
+        principal,
+        conversation.project_id,
+        "conversation.restored",
+        conversation.id,
+        serde_json::json!({"previous_version": conversation.version}),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(Json(RestoreConversationResponse {
+        conversation: ConversationView::from(&restored),
     }))
 }
 
@@ -3824,6 +3927,7 @@ async fn fetch_run_projection(
             run.id, run.state, run.repository_id, run.repository_workspace_id,
             run.provider_session_id, run.provider_turn_id,
             workspace.branch_name AS branch,
+            run.config,
             workspace.base_commit,
             workspace.published_commit,
             workspace.published_at::text AS published_at,
@@ -3873,6 +3977,7 @@ async fn fetch_run_projection(
             run.id, run.state, run.repository_id, run.repository_workspace_id,
             run.provider_session_id, run.provider_turn_id,
             workspace.branch_name AS branch,
+            run.config,
             workspace.base_commit,
             workspace.published_commit,
             workspace.published_at::text AS published_at,

@@ -1577,7 +1577,6 @@
   color: var(--content-fg);
   font: var(--t-body);
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }
 
 .aw-page-editor {
@@ -1638,4 +1637,26 @@
   .aw-copyline__label {
     grid-column: 1 / -1;
   }
+}
+
+.aw-token__settings {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--content-fg);
+  font: var(--t-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-agentform .aw-seg {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.aw-agentform__hint {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
 }

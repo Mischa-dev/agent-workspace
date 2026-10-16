@@ -2,7 +2,8 @@ import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { ConversationWorkItemReference } from '../conversations/types'
-import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, type ChipTone, type IconName } from '../ui'
+import { runSettingsFrom } from '../execution/api'
+import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatDateTime, type ChipTone, type IconName } from '../ui'
 import type { Approval, Run, RunState } from './ThreadPage'
 
 const RUN_STATES: Record<RunState, { label: string; tone: ChipTone; icon?: IconName; dots?: boolean; spin?: boolean }> = {
@@ -25,6 +26,10 @@ function shortId(value: string | null | undefined) {
 function ordinal(position: number) {
   const suffix = position % 10 === 1 && position % 100 !== 11 ? 'st' : position % 10 === 2 && position % 100 !== 12 ? 'nd' : position % 10 === 3 && position % 100 !== 13 ? 'rd' : 'th'
   return `${position}${suffix}`
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toLocaleUpperCase() + value.slice(1)
 }
 
 function words(value: string) {
@@ -54,19 +59,30 @@ function checksSummary(run: Run) {
 export function RunCard({ actions, notes, run }: { actions?: ReactNode; notes?: ReactNode; run: Run }) {
   const state = RUN_STATES[run.state]
   const checks = checksSummary(run)
+  const settings = runSettingsFrom(run.config)
+  const harness = settings?.harness ? capitalize(words(settings.harness)) : null
+  const settingsLine = [settings?.model, settings?.reasoning && `${settings.reasoning} reasoning`, settings?.speed]
+    .filter(Boolean)
+    .join(' · ')
   return (
     <section aria-label={`Run ${state.label.toLocaleLowerCase()}`} className="aw-card aw-run">
       <header className="aw-card__head">
         <Avatar kind="worker" name="Codex" seed="codex" size={24} />
         <div className="aw-card__titles">
-          <span className="aw-card__title">Codex run</span>
-          <span className="aw-card__sub">Updated {new Date(run.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span className="aw-card__title">{harness ? `${harness} run` : 'Agent run'}</span>
+          <span className="aw-card__sub">Updated {formatDateTime(run.updatedAt)}</span>
         </div>
         <StatusChip dots={state.dots} icon={state.icon} spin={state.spin} tone={state.tone}>
           {state.label}
           {run.state === 'queued' && run.queuePosition ? ` · ${ordinal(run.queuePosition)} in line` : ''}
         </StatusChip>
       </header>
+      {settingsLine ? (
+        <div className="aw-run__row">
+          <Icon name="settings" size={14} />
+          <span className="aw-run__meta">{settingsLine}</span>
+        </div>
+      ) : null}
       {run.branch ? (
         <div className="aw-run__row">
           <Icon name="branch" size={14} />

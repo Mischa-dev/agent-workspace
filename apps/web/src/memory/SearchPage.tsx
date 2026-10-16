@@ -6,7 +6,7 @@ import { requestJson } from '../api/client'
 import { useAuthenticatedSession } from '../auth/session'
 import { formatFullDate } from '../conversations/timeFormat'
 import { AppShell } from '../shell/AppShell'
-import { Banner, Button, EmptyState, MessageSkeleton, PageHeader, Row, RowList, StatusChip, TextField } from '../ui'
+import { Banner, Button, EmptyState, ListSkeleton, PageHeader, Row, RowList, StatusChip, TextField } from '../ui'
 
 type SearchHit = {
   kind: 'message' | 'thread' | 'task' | 'page' | 'decision'
@@ -70,7 +70,7 @@ export function SearchPage() {
             Search
           </Button>
         </form>
-        {results.isFetching ? <MessageSkeleton label="Searching" rows={2} /> : null}
+        {results.isFetching ? <ListSkeleton label="Searching" rows={3} /> : null}
         {results.isError ? <Banner tone="danger">Search didn’t work. Try different words.</Banner> : null}
         {results.data && results.data.hits.length === 0 ? (
           <EmptyState icon="search" title="Nothing found">
