@@ -30,9 +30,10 @@ on its own, by `agent-workspace-backup-key`:
 - It goes to a **different** off-host place.
 - It is uploaded when the file, its recipients or its destination changed
   (the script keeps their hashes in `/var/lib/agent-workspace-backup`), or
-  when the last upload is no longer listed at the destination. So pointing
-  `BACKUP_KEY_REMOTE` somewhere new, or emptying the old place, gets the key
-  there again on the next run.
+  when the last upload no longer reads back intact: each run fetches it and
+  checks its checksum. So pointing `BACKUP_KEY_REMOTE` somewhere new, or
+  losing or damaging the copy there, gets the key there again on the next
+  run.
 - Key sets are never pruned. An old dump may need the key that was current
   when it was made.
 

@@ -253,7 +253,8 @@ remote_put_set() {
       rsync --archive --partial --chmod=D0700,F0600 \
         --rsh="$(rsync_ssh_string)" \
         -- "${local_set}/" "${remote_host}:${remote_path}/${name}.partial/"
-      remote_shell mv -- "${remote_path}/${name}.partial" "${remote_path}/${name}"
+      # -T: never move the set inside an existing one of the same name.
+      remote_shell mv -T -- "${remote_path}/${name}.partial" "${remote_path}/${name}"
       ;;
   esac
 }

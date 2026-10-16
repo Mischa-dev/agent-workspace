@@ -24,7 +24,7 @@ use std::{
 
 use axum::{
     Router,
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -202,9 +202,10 @@ pub fn alert(alert: Alert) {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/metrics", get(serve_metrics))
-        .route("/api/v1/client-errors", post(report_client_error))
+    Router::new().route("/metrics", get(serve_metrics)).route(
+        "/api/v1/client-errors",
+        post(report_client_error).layer(DefaultBodyLimit::max(BROWSER_REPORT_MAX_BYTES)),
+    )
 }
 
 async fn serve_metrics(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -442,6 +443,10 @@ struct ClientErrorReport {
 /// caps what anyone can write to the logs through it.
 const BROWSER_REPORTS_PER_MINUTE: u32 = 60;
 
+/// The largest browser report read. The route's body limit stops reading
+/// past it, so an oversized request never gets buffered.
+const BROWSER_REPORT_MAX_BYTES: usize = 8 * 1024;
+
 /// Whether one more browser report fits this minute's budget, else how long
 /// until the next minute starts.
 fn take_browser_report_slot(now: Instant) -> Result<(), u64> {
@@ -470,9 +475,6 @@ async fn report_client_error(
     body: axum::body::Bytes,
 ) -> Result<StatusCode, AppError> {
     crate::auth::require_allowed_origin(&state.config, &headers)?;
-    if body.len() > 8 * 1024 {
-        return Err(AppError::PayloadTooLarge);
-    }
     if let Err(retry_after_seconds) = take_browser_report_slot(Instant::now()) {
         if let Ok(mut dropped) = registry().browser_errors_dropped.lock() {
             *dropped += 1;
@@ -480,6 +482,9 @@ async fn report_client_error(
         return Err(AppError::RateLimited {
             retry_after_seconds,
         });
+    }
+    if body.len() > BROWSER_REPORT_MAX_BYTES {
+        return Err(AppError::PayloadTooLarge);
     }
     let report = serde_json::from_slice::<ClientErrorReport>(&body)
         .map_err(|_| AppError::Invalid("JSON request body"))?;

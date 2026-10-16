@@ -1297,6 +1297,23 @@ async fn metrics_need_their_token_outside_development() {
     ] {
         assert!(text.contains(metric), "{metric} missing from\n{text}");
     }
+
+    // A browser report larger than its limit is refused before the body is
+    // read into memory.
+    let oversized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/client-errors")
+                .header("origin", "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(vec![b' '; 64 * 1024]))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]
