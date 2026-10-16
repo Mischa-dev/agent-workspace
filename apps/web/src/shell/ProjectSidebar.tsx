@@ -9,6 +9,7 @@ import type { SidebarThread } from '../conversations/types'
 import type { Project } from '../projects/types'
 import { Button, Dialog, TextField, type MenuEntry } from '../ui'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
+import { projectSettingsHref } from '../settings/paths'
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -46,7 +47,7 @@ export function ProjectSidebar({
   const menu: MenuEntry[] = [
     ...(canCreate ? [{ label: 'New channel', icon: 'plus' as const, onSelect: () => setCreating(true) }] : []),
     { label: 'Archived conversations', icon: 'archive', onSelect: () => go(`${base}/conversations/archived`) },
-    { label: 'Project settings', icon: 'settings', onSelect: () => go(`${base}/settings`) },
+    { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },
   ]
   const listedThread = sidebar.data?.channels.some((channel) => channel.threads.some((candidate) => candidate.id === thread?.id))
 

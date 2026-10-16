@@ -6,7 +6,9 @@ import { isApiError } from '../api/errors'
 import {
   installAuthenticatedSession,
   isAuthenticatedSession,
+  isTwoFactorChallenge,
   login,
+  loginTwoFactor,
   type SessionResponse,
   useSession,
 } from '../auth/session'
@@ -58,6 +60,9 @@ export function JoinPage() {
   const [password, setPassword] = useState('')
   const [passwordConfirmation, setPasswordConfirmation] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // An existing account with two-factor on signs in with a code before joining.
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const [code, setCode] = useState('')
 
   useEffect(() => {
     const token = tokenRef.current ?? ''
@@ -113,7 +118,19 @@ export function JoinPage() {
           await acceptExistingInvitation({ token, handle: handle.trim() }),
         )
       } else if (mode === 'existing') {
-        const authenticated = await login(loginName.trim(), password)
+        let authenticated
+        if (challenge) {
+          authenticated = await loginTwoFactor(challenge, code.trim())
+        } else {
+          authenticated = await login(loginName.trim(), password)
+          if (isTwoFactorChallenge(authenticated)) {
+            setChallenge(authenticated.challenge)
+            setPassword('')
+            return
+          }
+        }
+        setChallenge(null)
+        setCode('')
         if (!isAuthenticatedSession(authenticated)) {
           throw new Error('Sign-in did not establish a session.')
         }
@@ -135,7 +152,15 @@ export function JoinPage() {
     } catch (reason) {
       setPassword('')
       setPasswordConfirmation('')
-      setError(joinError(reason))
+      if (challenge && isApiError(reason) && reason.status === 404) {
+        setChallenge(null)
+        setError('That sign-in expired. Enter your password again.')
+      } else if (challenge && isApiError(reason) && reason.code === 'invalid_credentials') {
+        setCode('')
+        setError('That code didn’t work. Check your authenticator app and try again.')
+      } else {
+        setError(joinError(reason))
+      }
     } finally {
       setSubmitting(false)
     }
@@ -143,6 +168,8 @@ export function JoinPage() {
 
   const signedIn = isAuthenticatedSession(session.data)
   const invalid = !resolving && !invitation
+  const workspace = invitation?.kind === 'workspace'
+  const needsCode = !signedIn && mode === 'existing' && challenge !== null
 
   return (
     <AuthLayout
@@ -151,13 +178,19 @@ export function JoinPage() {
         resolving ? (
           <span aria-live="polite">Checking your invitation…</span>
         ) : invitation ? (
-          <>
-            Join <strong>{invitation.projectName}</strong> in {invitation.organizationName} as {invitation.role}.
-          </>
+          workspace ? (
+            <>
+              Join the <strong>{invitation.organizationName}</strong> workspace as {invitation.role}.
+            </>
+          ) : (
+            <>
+              Join <strong>{invitation.projectName}</strong> in {invitation.organizationName} as {invitation.role}.
+            </>
+          )
         ) : undefined
       }
       kicker="Private invitation"
-      title="Join a Project"
+      title={workspace ? 'Join a workspace' : 'Join a Project'}
       titleId="join-heading"
     >
 
@@ -177,7 +210,7 @@ export function JoinPage() {
                     checked={mode === 'new'}
                     disabled={submitting}
                     name="join-mode"
-                    onChange={() => setMode('new')}
+                    onChange={() => { setMode('new'); setChallenge(null) }}
                     type="radio"
                   />
                   Create an account
@@ -224,7 +257,7 @@ export function JoinPage() {
               </div>
             )}
             <div className="field">
-              <label htmlFor="join-handle">Project handle</label>
+              <label htmlFor="join-handle">{workspace ? 'Handle' : 'Project handle'}</label>
               <input
                 autoComplete="off"
                 disabled={submitting}
@@ -235,7 +268,7 @@ export function JoinPage() {
                 value={handle}
               />
             </div>
-            {!signedIn && (
+            {!signedIn && !needsCode && (
               <div className="field">
                 <label htmlFor="join-password">Password</label>
                 <input
@@ -248,6 +281,23 @@ export function JoinPage() {
                   type="password"
                   value={password}
                 />
+              </div>
+            )}
+            {needsCode && (
+              <div className="field">
+                <label htmlFor="join-two-factor-code">Two-factor code</label>
+                <input
+                  autoComplete="one-time-code"
+                  autoFocus
+                  disabled={submitting}
+                  id="join-two-factor-code"
+                  maxLength={32}
+                  onChange={(event) => setCode(event.target.value)}
+                  required
+                  spellCheck={false}
+                  value={code}
+                />
+                <p className="aw-field__note">The 6-digit code from your authenticator app, or a recovery code.</p>
               </div>
             )}
             {!signedIn && mode === 'new' && (
@@ -270,7 +320,9 @@ export function JoinPage() {
               disabled={
                 submitting ||
                 !handle.trim() ||
-                (!signedIn && (!loginName.trim() || password.length < 12)) ||
+                (needsCode
+                  ? !code.trim()
+                  : !signedIn && (!loginName.trim() || password.length < 12)) ||
                 (!signedIn && mode === 'new' && (!displayName.trim() || password !== passwordConfirmation))
               }
               type="submit"

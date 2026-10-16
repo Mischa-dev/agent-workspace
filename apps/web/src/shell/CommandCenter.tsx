@@ -6,6 +6,7 @@ import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '.
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { conversationTitle, openDm, useDirectOverview } from '../direct/api'
 import { projectLocationHref } from '../projects/locations'
+import { accountSettingsHref, projectSettingsHref } from '../settings/paths'
 import { useProject, useProjectSearch, useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
 import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
@@ -130,8 +131,11 @@ export function CommandCenter() {
       'go-board': () => inProject('/work-items?view=board'),
       'go-pages': () => inProject('/pages'),
       'go-decisions': () => inProject('/decisions'),
-      'go-settings': () => inProject('/settings'),
-      'go-appearance': () => go('/settings/appearance'),
+      'go-settings': () => {
+        const project = currentRef.current
+        go(project ? projectSettingsHref(project.id) : '/settings')
+      },
+      'go-appearance': () => go(accountSettingsHref('appearance')),
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
@@ -162,7 +166,7 @@ export function CommandCenter() {
         { id: 'p:pages', group: current.name, label: 'Pages', icon: 'list', shortcut: 'G P', onSelect: go(projectPath(id, '/pages')) },
         { id: 'p:decisions', group: current.name, label: 'Decisions', icon: 'circle-check', shortcut: 'G D', onSelect: go(projectPath(id, '/decisions')) },
         { id: 'p:archived', group: current.name, label: 'Archived conversations', icon: 'archive', onSelect: go(projectPath(id, '/conversations/archived')) },
-        { id: 'p:settings', group: current.name, label: 'Project settings', icon: 'settings', shortcut: 'G S', keywords: ['members', 'repositories', 'github', 'agents'], onSelect: go(projectPath(id, '/settings')) },
+        { id: 'p:settings', group: current.name, label: 'Project settings', icon: 'settings', shortcut: 'G S', keywords: ['members', 'repositories', 'github', 'agents', 'automation', 'environments'], onSelect: go(projectSettingsHref(id)) },
       )
       for (const channel of sidebar.data?.channels ?? []) {
         if (channel.archivedAt) continue
@@ -276,8 +280,10 @@ export function CommandCenter() {
       { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['inbox', 'dms'], onSelect: go('/messages') },
       { id: 'g:agents', group: 'Go to', label: 'Agents', icon: 'bot', onSelect: go('/messages/agents') },
       { id: 'g:search', group: 'Go to', label: 'Search', icon: 'search', shortcut: '/', onSelect: go('/search') },
-      { id: 'g:appearance', group: 'Go to', label: 'Appearance', icon: 'palette', shortcut: 'G A', keywords: ['theme', 'dark', 'light', 'density'], onSelect: go('/settings/appearance') },
-      { id: 'g:account', group: 'Go to', label: 'Account settings', icon: 'settings', keywords: ['profile', 'password', 'connected apps'], onSelect: go('/settings/account') },
+      { id: 'g:appearance', group: 'Go to', label: 'Appearance', icon: 'palette', shortcut: 'G A', keywords: ['theme', 'dark', 'light', 'density'], onSelect: go(accountSettingsHref('appearance')) },
+      { id: 'g:settings', group: 'Go to', label: 'Settings', icon: 'settings', keywords: ['account', 'profile', 'workspace', 'members', 'preferences'], onSelect: go('/settings') },
+      { id: 'g:security', group: 'Go to', label: 'Security', icon: 'shield-check', keywords: ['password', 'sessions', 'two-factor', '2fa', 'sign out'], onSelect: go(accountSettingsHref('security')) },
+      { id: 'g:api-tokens', group: 'Go to', label: 'API tokens', icon: 'key', keywords: ['token', 'mcp', 'credential'], onSelect: go(accountSettingsHref('api-tokens')) },
     )
 
     const listed = new Set(projects.map((project) => project.id))

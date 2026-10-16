@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { lazy, Suspense, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 
@@ -13,6 +13,9 @@ import {
 import { RealtimeProvider } from '../realtime/RealtimeProvider'
 import { CommandCenter } from '../shell/CommandCenter'
 import { DocumentTitle } from '../shell/DocumentTitle'
+
+// Loads after the page: it only keeps the account's saved theme in step.
+const AppearanceSync = lazy(() => import('../theme/AppearanceSync'))
 
 export function SessionBoundary() {
   const session = useSession()
@@ -85,6 +88,9 @@ export function SessionBoundary() {
         <Outlet />
         <CommandCenter />
         <DocumentTitle />
+        <Suspense fallback={null}>
+          <AppearanceSync />
+        </Suspense>
       </RealtimeProvider>
     </AuthenticatedSessionProvider>
   )
