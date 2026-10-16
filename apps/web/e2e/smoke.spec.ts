@@ -50,31 +50,42 @@ test('creates a task and moves it across the board', async ({ page }) => {
   await dialog.getByLabel('Type').selectOption({ label: 'Task' })
   await dialog.getByRole('button', { name: 'Create work item' }).click()
 
-  // Creating opens the new item.
-  await expect(page).toHaveURL(/\/work-items\/[^/]+$/)
-  await expect(page.getByText(title).first()).toBeVisible()
+  // Creating opens the new item in the task panel beside the list; the URL
+  // carries it, so the panel survives a reload or a shared link.
+  await expect(page).toHaveURL(/[?&]task=[^&]+/)
+  const heading = page.getByRole('heading', { name: new RegExp(`^${seeded.projectKey}-\\d+: ${title}$`) })
+  await expect(heading).toHaveCount(1)
+  // Its key is the Project key plus a number. Read it off the panel, since
+  // the seeded item sits on the same board.
+  const key = (await heading.textContent())?.split(':')[0]
+  expect(key).toMatch(new RegExp(`^${seeded.projectKey}-\\d+$`))
 
   await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/work-items`)
   await page.getByRole('radiogroup', { name: 'View' }).getByRole('radio', { name: 'Board' }).click()
   await expect(page).toHaveURL(/view=board/)
   const board = page.getByRole('region', { name: 'Work item board' })
-  const column = (name: string) => board.getByRole('region', { name: `${name} column` })
-  const card = (name: string) => column(name).getByRole('listitem').filter({ hasText: title })
+  const column = (name: string) => board.getByRole('region', { name, exact: true })
+  const card = (name: string) => column(name).getByRole('listitem', { name: `${key} ${title}` })
 
   // New items start in Backlog.
   await expect(card('Backlog')).toBeVisible()
-  // Its key is the Project key plus a number. Read it off the card itself,
-  // since the seeded item sits on the same board.
-  const key = (await card('Backlog').textContent())?.match(new RegExp(`${seeded.projectKey}-\\d+`))?.[0]
-  expect(key).toMatch(new RegExp(`^${seeded.projectKey}-\\d+$`))
 
-  // Move with the keyboard-friendly status menu: Backlog → Ready.
-  await card('Backlog').getByLabel(`Move ${key} to status`).selectOption({ label: 'Ready' })
+  // Move with the keyboard: Space picks the card up, an arrow carries it to
+  // the next column, Space drops it. Backlog → Ready.
+  // Each step waits for the board's screen-reader announcement, as a person
+  // would wait to see the card lift and move.
+  const announced = (text: string) => expect(page.getByText(text, { exact: true })).toBeAttached()
+  await card('Backlog').focus()
+  await page.keyboard.press('Space')
+  await announced(`Picked up ${key}. Arrow keys move it, Space drops it, Escape puts it back.`)
+  await page.keyboard.press('ArrowRight')
+  await announced('Ready, position 1.')
+  await page.keyboard.press('Space')
   await expect(card('Ready')).toBeVisible()
   await expect(card('Backlog')).toHaveCount(0)
 
   // And by dragging the card: Ready → In Progress.
-  await card('Ready').dragTo(column('In Progress'))
+  await card('Ready').dragTo(column('In Progress'), { steps: 10 })
   await expect(card('In Progress')).toBeVisible()
   await expect(card('Ready')).toHaveCount(0)
 

@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use chrono::NaiveDate;
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ use crate::{
         Action, ActorKind, Decision, Membership, MembershipRole, ProjectScope, Resource, Subject,
         authorize,
     },
+    work_item_history::FieldChanges,
     work_item_labels::{self, LabelDelta, LabelPlan, MAX_LABELS_PER_TASK},
 };
 
@@ -79,7 +81,51 @@ pub struct LockedWorkItem {
     pub board_rank: i64,
     pub archived: bool,
     pub blocked_reason: Option<String>,
+    pub milestone_id: Option<Uuid>,
+    pub start_date: Option<NaiveDate>,
+    pub due_date: Option<NaiveDate>,
+    pub estimate: Option<f64>,
 }
+
+/// The columns `LockedWorkItem` reads, for every query that locks a task.
+pub const LOCKED_WORK_ITEM_COLUMNS: &str = "id, number, version, title, description, type_id, status_id, priority, \
+    assignee_actor_id, parent_work_item_id, board_rank, archived_at IS NOT NULL AS archived, \
+    blocked_reason, milestone_id, start_date, due_date, estimate";
+
+/// Planning fields a new task can start with.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NewTaskFields {
+    pub milestone_id: Option<Uuid>,
+    pub start_date: Option<NaiveDate>,
+    pub due_date: Option<NaiveDate>,
+    pub estimate: Option<f64>,
+}
+
+/// Planning fields a change can set: `Some(None)` clears one.
+#[derive(Clone, Debug, Default)]
+pub struct TaskFieldChanges {
+    pub milestone_id: Option<Option<Uuid>>,
+    pub start_date: Option<Option<NaiveDate>>,
+    pub due_date: Option<Option<NaiveDate>>,
+    pub estimate: Option<Option<f64>>,
+    /// Marks the task blocked with this reason, or clears it.
+    pub blocked_reason: Option<Option<String>>,
+}
+
+impl TaskFieldChanges {
+    pub fn is_empty(&self) -> bool {
+        self.milestone_id.is_none()
+            && self.start_date.is_none()
+            && self.due_date.is_none()
+            && self.estimate.is_none()
+            && self.blocked_reason.is_none()
+    }
+}
+
+/// Most characters a blocked reason may have.
+pub const MAX_BLOCKED_REASON_CHARACTERS: usize = 2000;
+/// The largest estimate, in points or hours.
+pub const MAX_ESTIMATE: f64 = 100_000.0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConflictKind {
@@ -118,6 +164,7 @@ pub struct CreateWorkItemCommand<'a> {
     /// Where it goes in its status column. None puts it at the bottom without
     /// locking the column, as creates always have.
     pub board_placement: Option<BoardPlacement>,
+    pub fields: NewTaskFields,
     pub activity_summary: &'a str,
     pub activity_metadata: serde_json::Value,
     pub activity_number_metadata: AllocatedNumberMetadata,
@@ -144,6 +191,10 @@ pub enum CreateWorkItemOutcome {
     /// The subtask would sit deeper than MAX_SUBTASK_LEVELS.
     ParentTooDeep,
     InvalidPlacement(PlacementProblem),
+    /// The milestone isn't an active milestone of the project.
+    InvalidMilestone,
+    /// The start date is after the due date.
+    InvalidDates,
 }
 
 pub struct UpdateWorkItemCommand<'a> {
@@ -161,6 +212,7 @@ pub struct UpdateWorkItemCommand<'a> {
     /// puts the task at the bottom of its new column.
     pub board_placement: Option<BoardPlacement>,
     pub labels: Option<LabelDelta<'a>>,
+    pub fields: TaskFieldChanges,
     pub summary: &'a str,
     pub audit_action: &'a str,
     pub audit_version_metadata: AuditVersionMetadata,
@@ -194,6 +246,8 @@ pub enum UpdateWorkItemOutcome {
     },
     InvalidParent(ParentProblem),
     InvalidPlacement(PlacementProblem),
+    InvalidMilestone,
+    InvalidDates,
 }
 
 /// Why a task can't go under the parent it was given.
@@ -319,16 +373,14 @@ pub async fn lock_work_item(
     project_id: Uuid,
     work_item_id: Uuid,
 ) -> Result<Option<LockedWorkItem>, AppError> {
-    Ok(sqlx::query_as::<_, LockedWorkItem>(
+    Ok(sqlx::query_as::<_, LockedWorkItem>(&format!(
         r#"
-        SELECT id, number, version, title, description, type_id, status_id, priority,
-               assignee_actor_id, parent_work_item_id, board_rank,
-               archived_at IS NOT NULL AS archived, blocked_reason
+        SELECT {LOCKED_WORK_ITEM_COLUMNS}
         FROM work_items
         WHERE project_id = $1 AND id = $2
         FOR UPDATE
         "#,
-    )
+    ))
     .bind(project_id)
     .bind(work_item_id)
     .fetch_optional(&mut **transaction)
@@ -342,17 +394,15 @@ pub async fn lock_work_items(
     project_id: Uuid,
     work_item_ids: &[Uuid],
 ) -> Result<Vec<LockedWorkItem>, AppError> {
-    Ok(sqlx::query_as::<_, LockedWorkItem>(
+    Ok(sqlx::query_as::<_, LockedWorkItem>(&format!(
         r#"
-        SELECT id, number, version, title, description, type_id, status_id, priority,
-               assignee_actor_id, parent_work_item_id, board_rank,
-               archived_at IS NOT NULL AS archived, blocked_reason
+        SELECT {LOCKED_WORK_ITEM_COLUMNS}
         FROM work_items
         WHERE project_id = $1 AND id = ANY($2)
         ORDER BY id
         FOR UPDATE
         "#,
-    )
+    ))
     .bind(project_id)
     .bind(work_item_ids)
     .fetch_all(&mut **transaction)
@@ -374,6 +424,23 @@ pub async fn create_work_item(
     }
     if !validate_assignee(transaction, actor.project_id, command.assignee_actor_id).await? {
         return Ok(CreateWorkItemOutcome::InvalidAssignee);
+    }
+    if let Some(milestone_id) = command.fields.milestone_id
+        && !milestone_is_active(transaction, actor.project_id, milestone_id).await?
+    {
+        return Ok(CreateWorkItemOutcome::InvalidMilestone);
+    }
+    if let (Some(start), Some(due)) = (command.fields.start_date, command.fields.due_date)
+        && start > due
+    {
+        return Ok(CreateWorkItemOutcome::InvalidDates);
+    }
+    if command
+        .fields
+        .estimate
+        .is_some_and(|estimate| !valid_estimate(estimate))
+    {
+        return Err(AppError::Validation("estimate"));
     }
     if let Some(parent_id) = command.parent_work_item_id {
         let Some(parent) = lock_work_item(transaction, actor.project_id, parent_id).await? else {
@@ -440,8 +507,8 @@ pub async fn create_work_item(
         INSERT INTO work_items (
             id, project_id, number, title, description, type_id, status_id,
             priority, assignee_actor_id, created_by_actor_id, board_rank,
-            parent_work_item_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            parent_work_item_id, milestone_id, start_date, due_date, estimate
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         "#,
     )
     .bind(work_item_id)
@@ -456,8 +523,16 @@ pub async fn create_work_item(
     .bind(actor.actor_id)
     .bind(board_rank)
     .bind(command.parent_work_item_id)
+    .bind(command.fields.milestone_id)
+    .bind(command.fields.start_date)
+    .bind(command.fields.due_date)
+    .bind(command.fields.estimate)
     .execute(&mut **transaction)
     .await?;
+    add_watcher(transaction, actor.project_id, work_item_id, actor.actor_id).await?;
+    if let Some(assignee) = command.assignee_actor_id {
+        add_watcher(transaction, actor.project_id, work_item_id, assignee).await?;
+    }
     if !command.acceptance_criteria.is_empty() {
         let criteria = command
             .acceptance_criteria
@@ -500,6 +575,9 @@ pub async fn create_work_item(
         }
         if !labels_added.is_empty() {
             metadata.insert("labelsAdded".to_owned(), serde_json::json!(labels_added));
+        }
+        if let Some(milestone_id) = command.fields.milestone_id {
+            metadata.insert("milestoneId".to_owned(), serde_json::json!(milestone_id));
         }
     }
     let mut audit_metadata = command.audit_metadata;
@@ -599,6 +677,29 @@ pub async fn update_locked_work_item(
     {
         return Ok(UpdateWorkItemOutcome::InvalidAssignee);
     }
+    let fields = &command.fields;
+    let milestone_id = fields.milestone_id.unwrap_or(current.milestone_id);
+    if milestone_id != current.milestone_id
+        && let Some(milestone_id) = milestone_id
+        && !milestone_is_active(transaction, actor.project_id, milestone_id).await?
+    {
+        return Ok(UpdateWorkItemOutcome::InvalidMilestone);
+    }
+    let start_date = fields.start_date.unwrap_or(current.start_date);
+    let due_date = fields.due_date.unwrap_or(current.due_date);
+    if let (Some(start), Some(due)) = (start_date, due_date)
+        && start > due
+    {
+        return Ok(UpdateWorkItemOutcome::InvalidDates);
+    }
+    let estimate = fields.estimate.unwrap_or(current.estimate);
+    if estimate.is_some_and(|estimate| !valid_estimate(estimate)) {
+        return Err(AppError::Validation("estimate"));
+    }
+    let blocked_reason = fields
+        .blocked_reason
+        .clone()
+        .unwrap_or_else(|| current.blocked_reason.clone());
     let label_plan: Option<LabelPlan> = match command.labels {
         Some(delta) if !delta.is_empty() => {
             Some(work_item_labels::plan(transaction, actor.project_id, current.id, &delta).await?)
@@ -700,6 +801,21 @@ pub async fn update_locked_work_item(
     if label_plan.is_some() {
         changed_fields.push("labels".to_owned());
     }
+    if milestone_id != current.milestone_id {
+        changed_fields.push("milestone".to_owned());
+    }
+    if start_date != current.start_date {
+        changed_fields.push("startDate".to_owned());
+    }
+    if due_date != current.due_date {
+        changed_fields.push("dueDate".to_owned());
+    }
+    if estimate != current.estimate {
+        changed_fields.push("estimate".to_owned());
+    }
+    if blocked_reason != current.blocked_reason {
+        changed_fields.push("blockedReason".to_owned());
+    }
     if changed_fields.is_empty() {
         return Ok(UpdateWorkItemOutcome::Noop(current));
     }
@@ -712,6 +828,11 @@ pub async fn update_locked_work_item(
             plan,
         )
         .await?;
+    }
+    if assignee_actor_id != current.assignee_actor_id
+        && let Some(assignee) = assignee_actor_id
+    {
+        add_watcher(transaction, actor.project_id, current.id, assignee).await?;
     }
     if assignee_actor_id != current.assignee_actor_id {
         enqueue_external_work_item_event(
@@ -729,7 +850,16 @@ pub async fn update_locked_work_item(
         UPDATE work_items
         SET title = $3, description = $4, type_id = $5, status_id = $6,
             priority = $7, assignee_actor_id = $8, parent_work_item_id = $10,
-            board_rank = $11, version = version + 1, updated_at = now()
+            board_rank = $11, milestone_id = $12, start_date = $13, due_date = $14,
+            estimate = $15,
+            blocked_reason = $16,
+            blocked_at = CASE WHEN $16::text IS NULL THEN NULL
+                              WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_at
+                              ELSE now() END,
+            blocked_by_actor_id = CASE WHEN $16::text IS NULL THEN NULL
+                                       WHEN blocked_reason IS NOT DISTINCT FROM $16 THEN blocked_by_actor_id
+                                       ELSE $17::uuid END,
+            version = version + 1, updated_at = now()
         WHERE project_id = $1 AND id = $2 AND version = $9
         "#,
     )
@@ -744,6 +874,12 @@ pub async fn update_locked_work_item(
     .bind(command.expected_version)
     .bind(parent_work_item_id)
     .bind(board_rank)
+    .bind(milestone_id)
+    .bind(start_date)
+    .bind(due_date)
+    .bind(estimate)
+    .bind(blocked_reason.as_deref())
+    .bind(actor.actor_id)
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
@@ -751,6 +887,37 @@ pub async fn update_locked_work_item(
             "locked Work Item update lost its version",
         ));
     }
+    let mut changes = FieldChanges::default();
+    changes.text("title", Some(&current.title), Some(title));
+    changes.description(&current.description, description);
+    changes.id("type", Some(current.type_id), Some(type_id));
+    changes.value(
+        "priority",
+        serde_json::json!(current.priority),
+        serde_json::json!(priority),
+    );
+    changes.id("assignee", current.assignee_actor_id, assignee_actor_id);
+    changes.id("milestone", current.milestone_id, milestone_id);
+    changes.value(
+        "startDate",
+        serde_json::json!(current.start_date),
+        serde_json::json!(start_date),
+    );
+    changes.value(
+        "dueDate",
+        serde_json::json!(current.due_date),
+        serde_json::json!(due_date),
+    );
+    changes.value(
+        "estimate",
+        serde_json::json!(current.estimate),
+        serde_json::json!(estimate),
+    );
+    changes.text(
+        "blockedReason",
+        current.blocked_reason.as_deref(),
+        blocked_reason.as_deref(),
+    );
     let version = command
         .expected_version
         .checked_add(1)
@@ -769,6 +936,7 @@ pub async fn update_locked_work_item(
             .iter()
             .flat_map(|plan| plan.removed.iter().map(|label| label.id))
             .collect(),
+        changes,
         ..ChangePayload::default()
     };
     let activity_payload = payload.activity();
@@ -2224,6 +2392,8 @@ pub struct ChangePayload {
     pub labels_added: Vec<Uuid>,
     pub labels_removed: Vec<Uuid>,
     pub link: Option<LinkChange>,
+    /// Before and after of each changed field (work_item_history).
+    pub changes: FieldChanges,
 }
 
 #[derive(Clone, Debug)]
@@ -2274,6 +2444,12 @@ impl ChangePayload {
             );
             payload.insert("linked".to_owned(), serde_json::json!(link.linked));
         }
+        if !self.changes.is_empty() {
+            payload.insert(
+                "changes".to_owned(),
+                serde_json::Value::Object(self.changes.clone().into_map()),
+            );
+        }
         serde_json::Value::Object(payload)
     }
 
@@ -2313,6 +2489,91 @@ async fn select_definition(
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(AppError::Validation("Work Item definition"))
+}
+
+/// Whether `milestone_id` is an active milestone of the project.
+pub async fn milestone_is_active(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    milestone_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM project_milestones WHERE project_id = $1 AND id = $2 AND archived_at IS NULL)",
+    )
+    .bind(project_id)
+    .bind(milestone_id)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+pub fn valid_estimate(estimate: f64) -> bool {
+    estimate.is_finite() && (0.0..=MAX_ESTIMATE).contains(&estimate)
+}
+
+/// Starts `actor_id` watching a task, if they're an enabled member. People
+/// and agents who aren't (anymore) are skipped rather than refused, since
+/// watching follows from another change.
+pub async fn add_watcher(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    work_item_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO work_item_watchers (project_id, work_item_id, actor_id)
+        SELECT $1, $2, membership.actor_id
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id
+        WHERE membership.project_id = $1 AND membership.actor_id = $3
+          AND membership.enabled AND actor.status = 'active'
+          AND actor.kind IN ('human', 'external_agent')
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .bind(actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// Tells agents watching a task that it changed, through their connection's
+/// events. The assignee hears already, and nobody hears about their own
+/// change. People hear through notifications, which read the outbox.
+pub async fn notify_watching_agents(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+) -> Result<(), AppError> {
+    let watchers = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT watcher.actor_id
+        FROM work_item_watchers watcher
+        JOIN actors actor ON actor.id = watcher.actor_id AND actor.kind = 'external_agent'
+        JOIN work_items item ON item.id = watcher.work_item_id
+        WHERE watcher.work_item_id = $1 AND watcher.actor_id <> $2
+          AND item.assignee_actor_id IS DISTINCT FROM watcher.actor_id
+        ORDER BY watcher.actor_id
+        "#,
+    )
+    .bind(work_item_id)
+    .bind(actor.actor_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for watcher in watchers {
+        enqueue_external_work_item_event(
+            transaction,
+            actor.project_id,
+            work_item_id,
+            Some(watcher),
+            "work_item.changed",
+            "A Work Item you watch changed",
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub fn conflict_kind(current: &LockedWorkItem, expected_version: i64) -> Option<ConflictKind> {
@@ -2468,6 +2729,7 @@ pub async fn finalize_changes(
         "An assigned Work Item changed",
     )
     .await?;
+    notify_watching_agents(transaction, actor, work_item_id).await?;
     let audit_id = record_audit(
         transaction,
         actor,
@@ -2550,6 +2812,7 @@ pub async fn finalize_comment(
         "An assigned Work Item changed",
     )
     .await?;
+    notify_watching_agents(transaction, actor, work_item_id).await?;
     let audit_id = record_audit(
         transaction,
         actor,
@@ -2559,6 +2822,29 @@ pub async fn finalize_comment(
     )
     .await?;
     Ok((sequence, audit_id))
+}
+
+/// Records a comment copied in bulk (a task move carrying its history over)
+/// without telling anyone about each one. The caller's own change, committed
+/// in the same transaction, already sends the update and the agent events.
+pub async fn finalize_copied_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    work_item_id: Uuid,
+    comment_id: Uuid,
+    audit_action: &str,
+) -> Result<(), AppError> {
+    let sequence =
+        insert_comment_timeline(transaction, actor.project_id, work_item_id, comment_id).await?;
+    record_audit(
+        transaction,
+        actor,
+        audit_action,
+        work_item_id,
+        serde_json::json!({"commentId": comment_id, "sequence": sequence}),
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn insert_activity(

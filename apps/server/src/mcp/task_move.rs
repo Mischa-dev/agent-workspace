@@ -3,8 +3,10 @@
 //! A task can't change projects in place: its comments are immutable, and
 //! its links and authors belong to its project. So a move carries the task
 //! over into the target project (title, description, priority, status and
-//! type by name, the assignee if they're there, acceptance criteria,
-//! subtasks, labels, and every comment quoted with its author and date), then
+//! type by name, the assignee if they're there, start and due dates, the
+//! estimate, the milestone by name if the target has it, acceptance
+//! criteria, subtasks, labels, and every comment quoted with its author and
+//! date), then
 //! archives the original. The original keeps its history and links, and its
 //! key keeps opening the new task (migration 0043).
 
@@ -25,8 +27,9 @@ use crate::{
     policy::{Action, Decision},
     work_item_commands::{
         AllocatedNumberMetadata, ChangeFinalization, CommandActor, CreateWorkItemCommand,
-        CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, authorize_mutation, create_work_item,
-        finalize_change, finalize_comment, insert_criteria, lock_membership,
+        CreateWorkItemOutcome, MAX_SUBTASK_LEVELS, NewTaskFields, authorize_mutation,
+        create_work_item, finalize_change, finalize_comment, finalize_copied_comment,
+        insert_criteria, lock_membership,
     },
     work_item_labels::{self, LabelLimit, MAX_LABELS_PER_TASK, SkipReason},
 };
@@ -90,6 +93,10 @@ struct SourceTask {
     assignee_name: Option<String>,
     blocked_reason: Option<String>,
     version: i64,
+    start_date: Option<chrono::NaiveDate>,
+    due_date: Option<chrono::NaiveDate>,
+    estimate: Option<f64>,
+    milestone_name: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -224,9 +231,12 @@ pub(super) async fn task_move(
                    item_type.name AS type_name, status.name AS status_name,
                    status.semantic_category AS status_category,
                    item.assignee_actor_id, assignee.display_name AS assignee_name,
-                   item.blocked_reason, item.version
+                   item.blocked_reason, item.version, item.start_date, item.due_date,
+                   item.estimate, milestone.name AS milestone_name
             FROM tree
             JOIN work_items item ON item.id = tree.id
+            LEFT JOIN project_milestones milestone
+              ON milestone.project_id = item.project_id AND milestone.id = item.milestone_id
             JOIN projects project ON project.id = item.project_id
             JOIN work_item_types item_type
               ON item_type.project_id = item.project_id AND item_type.id = item.type_id
@@ -261,11 +271,25 @@ pub(super) async fn task_move(
         .fetch_one(&mut *transaction)
         .await?;
 
+        // An estimate means points or hours by its project's setting; between
+        // projects that differ it isn't carried over.
+        let (_, source_unit) =
+            crate::work_item_workflow::task_settings(&mut transaction, source_project_id).await?;
+        let (_, target_unit) =
+            crate::work_item_workflow::task_settings(&mut transaction, target_project_id).await?;
+        let same_unit = source_unit == target_unit;
+
         let mut notes = Vec::new();
         let mut moved = Vec::new();
         let mut new_ids = std::collections::HashMap::new();
         for task in &tasks {
             let status_id = matching_status(&mut transaction, target_project_id, task).await?;
+            if status_id.is_none() {
+                notes.push(format!(
+                    "{target_key} has no status named {} and none in its group ({}), so {} starts in {target_key}'s default status.",
+                    task.status_name, task.status_category, task.key
+                ));
+            }
             let type_id = sqlx::query_scalar::<_, Uuid>(
                 "SELECT id FROM work_item_types WHERE project_id = $1 AND enabled AND lower(name) = lower($2)",
             )
@@ -320,6 +344,33 @@ pub(super) async fn task_move(
                 )
                 .await?;
             }
+            // A milestone goes by name: the target's active one with the same
+            // name, if it has one.
+            let milestone_id = match &task.milestone_name {
+                Some(name) => {
+                    let found = sqlx::query_scalar::<_, Uuid>(
+                        "SELECT id FROM project_milestones WHERE project_id = $1 AND archived_at IS NULL AND lower(name) = lower($2)",
+                    )
+                    .bind(target_project_id)
+                    .bind(name)
+                    .fetch_optional(&mut *transaction)
+                    .await?;
+                    if found.is_none() {
+                        notes.push(format!(
+                            "{target_key} has no milestone called \"{name}\", so the task moved from {} isn't in one.",
+                            task.key
+                        ));
+                    }
+                    found
+                }
+                None => None,
+            };
+            if let (Some(estimate), false) = (task.estimate, same_unit) {
+                notes.push(format!(
+                    "{target_key} estimates in {target_unit}, not {source_unit}, so the estimate of {estimate} {source_unit} on {} wasn't carried over.",
+                    task.key
+                ));
+            }
             let summary = format!("Work Item moved from {}", task.key);
             let outcome = create_work_item(
                 &mut transaction,
@@ -335,6 +386,12 @@ pub(super) async fn task_move(
                     label_ids: &labels.ids,
                     acceptance_criteria: &[],
                     board_placement: None,
+                    fields: NewTaskFields {
+                        milestone_id,
+                        start_date: task.start_date,
+                        due_date: task.due_date,
+                        estimate: if same_unit { task.estimate } else { None },
+                    },
                     activity_summary: &summary,
                     activity_metadata: serde_json::json!({ "movedFrom": task.key }),
                     activity_number_metadata: AllocatedNumberMetadata::Include,
@@ -393,7 +450,7 @@ pub(super) async fn task_move(
                 provenance.push_str(&format!("\n\nStill linked on {}:", task.key));
                 provenance.push_str(&links_left_behind_text(&links));
             }
-            add_comment(&mut transaction, &target_actor, new_id, &provenance).await?;
+            add_comment(&mut transaction, &target_actor, new_id, &provenance, Notify::Yes).await?;
             let comments = sqlx::query_as::<_, SourceComment>(
                 r#"
                 SELECT COALESCE(author.display_name, 'Someone') AS author,
@@ -405,25 +462,33 @@ pub(super) async fn task_move(
                  AND author.actor_id = comment.author_actor_id
                 WHERE comment.project_id = $1 AND comment.work_item_id = $2
                 ORDER BY comment.created_at, comment.id
+                LIMIT $3
                 "#,
             )
             .bind(source_project_id)
             .bind(task.id)
+            .bind(MAX_COMMENTS as i64)
             .fetch_all(&mut *transaction)
             .await?;
-            for comment in comments.iter().take(MAX_COMMENTS) {
+            let comment_count = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM work_item_comments WHERE project_id = $1 AND work_item_id = $2",
+            )
+            .bind(source_project_id)
+            .bind(task.id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            for comment in &comments {
                 let text = comment.plain_text.chars().take(MAX_QUOTED_CHARACTERS).collect::<String>();
                 let quoted = format!(
                     "{} wrote on {} (on {}):\n\n{}",
                     comment.author, comment.created_at, task.key, text
                 );
-                add_comment(&mut transaction, &target_actor, new_id, &quoted).await?;
+                add_comment(&mut transaction, &target_actor, new_id, &quoted, Notify::No).await?;
             }
-            if comments.len() > MAX_COMMENTS {
+            if comment_count > MAX_COMMENTS as i64 {
                 notes.push(format!(
                     "{} has {} comments; the first {MAX_COMMENTS} were carried over and the rest are on the original.",
-                    task.key,
-                    comments.len()
+                    task.key, comment_count
                 ));
             }
 
@@ -436,6 +501,7 @@ pub(super) async fn task_move(
                     "Moved to {new_key}: {}",
                     public_url(state, &format!("/projects/{target_project_id}/work-items/{new_id}"))
                 ),
+                Notify::Yes,
             )
             .await?;
             archive(&mut transaction, &source_actor, task, &new_key).await?;
@@ -676,11 +742,20 @@ async fn links_left_behind(
     .await?)
 }
 
+/// Whether adding a comment tells watchers and the assignee. Copied history
+/// doesn't: the move's own comment already did, once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Notify {
+    Yes,
+    No,
+}
+
 async fn add_comment(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     work_item_id: Uuid,
     text: &str,
+    notify: Notify,
 ) -> Result<(), AppError> {
     let validated = MessageContent::from_plain_text(text.to_owned())
         .map_err(|_| AppError::Validation("comment"))?;
@@ -710,6 +785,16 @@ async fn add_comment(
     .bind(text)
     .execute(&mut **transaction)
     .await?;
+    if notify == Notify::No {
+        return finalize_copied_comment(
+            transaction,
+            actor,
+            work_item_id,
+            comment_id,
+            "work_item.mcp_move_comment",
+        )
+        .await;
+    }
     finalize_comment(
         transaction,
         actor,
@@ -768,16 +853,27 @@ async fn already_moved(
     source_id: Uuid,
 ) -> Result<Option<Vec<MovedTask>>, AppError> {
     let rows = sqlx::query_as::<_, (String, String, Uuid, Uuid, String)>(
+        // The moved subtasks have aliases of their own, keyed by their own
+        // source IDs, so the whole source tree is walked.
         r#"
+        WITH RECURSIVE source_tree(id, depth) AS (
+            SELECT $1::uuid, 0
+            UNION ALL
+            SELECT child.id, source_tree.depth + 1
+            FROM work_items child
+            JOIN source_tree ON child.parent_work_item_id = source_tree.id
+            WHERE source_tree.depth < 50
+        )
         SELECT alias.project_key || '-' || alias.number,
                project.project_key || '-' || item.number,
                item.id, item.project_id, item.title
-        FROM work_item_key_aliases alias
+        FROM source_tree
+        JOIN work_item_key_aliases alias ON alias.source_work_item_id = source_tree.id
         JOIN work_items item ON item.id = alias.work_item_id
         JOIN projects project ON project.id = item.project_id
-        WHERE alias.source_work_item_id = $1
-          AND actor_can_access_project($2, $3, item.project_id)
+        WHERE actor_can_access_project($2, $3, item.project_id)
           AND ($4::uuid IS NULL OR item.project_id = $4)
+        ORDER BY source_tree.depth, alias.number
         "#,
     )
     .bind(source_id)

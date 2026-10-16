@@ -18,6 +18,7 @@ import { useArchiveProject, useProject } from './hooks'
 import { projectLocationHref } from './locations'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
+import { WorkflowSettings } from '../work-items/WorkflowSettings'
 
 type SettingsTab = { id: string; label: string; icon: IconName }
 
@@ -29,6 +30,7 @@ function settingsTabs(project: Project, organizationRole: string | undefined): S
     ...(manage && organizationRole ? [{ id: 'members', label: 'Members', icon: 'users' as const }] : []),
     ...(manage ? [{ id: 'agents', label: 'Agents', icon: 'bot' as const }] : []),
     ...(member ? [{ id: 'codex', label: 'Codex', icon: 'terminal' as const }] : []),
+    ...(member ? [{ id: 'workflow', label: 'Workflow', icon: 'work' as const }] : []),
     { id: 'repositories', label: 'Repositories', icon: 'repo' as const },
     ...(manage ? [{ id: 'github', label: 'GitHub', icon: 'pull-request' as const }] : []),
   ]
@@ -181,6 +183,8 @@ export function ProjectSettingsPage() {
         )}
 
         {current === 'agents' && <ExternalAgentSettings projectId={project.data.id} />}
+
+        {current === 'workflow' && <WorkflowSettings projectId={project.data.id} />}
 
         {current === 'codex' && (
           <>
