@@ -1,14 +1,10 @@
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type InfiniteData,
-  type QueryClient,
-} from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
+import { inboxKeys, invalidateInbox } from './summary'
+
+export { affectsInbox, inboxKeys, invalidateInbox, useInboxSummary } from './summary'
 
 export type InboxView = 'inbox' | 'unread' | 'snoozed' | 'archived'
 export type InboxCategory = 'all' | 'mentions' | 'tasks' | 'runs' | 'pull_requests'
@@ -124,38 +120,6 @@ export function normalizePage(value: unknown): InboxPage {
     nextCursor: text(record.nextCursor),
     unreadCount: typeof record.unreadCount === 'number' ? record.unreadCount : 0,
   }
-}
-
-export const inboxKeys = {
-  root: ['inbox'] as const,
-  summary: ['inbox', 'summary'] as const,
-  list: (view: InboxView, category: InboxCategory) => ['inbox', 'list', view, category] as const,
-}
-
-/** Which realtime events can change what the inbox shows. */
-export function affectsInbox(type: string) {
-  return (
-    type === 'notifications.updated' ||
-    type === 'conversation.message.updated' ||
-    type === 'conversation.member.removed' ||
-    type === 'project.membership.updated'
-  )
-}
-
-export function invalidateInbox(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: inboxKeys.root })
-}
-
-export function useInboxSummary(enabled = true) {
-  return useQuery({
-    queryKey: inboxKeys.summary,
-    queryFn: async () => {
-      const record = asRecord(await requestJson<unknown>('/api/v1/inbox/summary'))
-      return { unreadCount: typeof record.unreadCount === 'number' ? record.unreadCount : 0 }
-    },
-    enabled,
-    staleTime: 15_000,
-  })
 }
 
 export function useInbox(view: InboxView, category: InboxCategory) {

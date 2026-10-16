@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
-import { affectsInbox, invalidateInbox } from '../inbox/api'
+import { affectsInbox, invalidateInbox } from '../inbox/summary'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
   dropRemovedConversation,
