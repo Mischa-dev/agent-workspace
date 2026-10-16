@@ -79,10 +79,14 @@ pub(super) async fn settings_get(
             Action::ProjectView,
         )
         .await?;
+        // The canonical check also covers this credential's agent
+        // connection, which may have been turned off since sign-in.
         let organization_id = sqlx::query_scalar::<_, uuid::Uuid>(
-            "SELECT organization_id FROM projects WHERE id = $1",
+            "SELECT organization_id FROM projects WHERE id = $1 AND actor_can_access_project($2, $3, id)",
         )
         .bind(principal.project_id)
+        .bind(principal.actor_id)
+        .bind(principal.external_agent_connection_id)
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::NotFound("project"))?;
