@@ -14,7 +14,8 @@
 #   redhat  The always-on Red Hat host (4 threads), as aw-runner.
 # Each machine keeps its checkout and build cache between runs, so a run only
 # rebuilds what changed, and runs one CI job at a time (a lock in its work
-# directory); a busy machine is skipped and, if all are busy, run.sh waits.
+# directory). While the laptop is up and idle, a job waits for it rather than
+# falling back to the Red Hat host; if all are busy, run.sh waits.
 set -euo pipefail
 
 areas="rust,web"
@@ -105,7 +106,7 @@ release() {
   load_host "${held_host}"
   remote "cd ${work} && if grep -qs '^${run_id} ' lock/owner; then
       pg=\$(cat lock/pgid 2>/dev/null); [ -n \"\$pg\" ] && kill -TERM -- -\$pg 2>/dev/null;
-      rm -rf lock; fi" 2>/dev/null || true
+      rm -rf lock; date +%s > last_done; fi" 2>/dev/null || true
   held_host=""
 }
 trap 'release' EXIT
@@ -119,21 +120,26 @@ waited=""
 while [ -z "${held_host}" ]; do
   for host in "${hosts[@]}"; do
     load_host "${host}"
-    if [ "${probe}" = yes ]; then
-      if ! status="$(CI_MIN_FREE_GB=7 remote "bash -s" < "${here}/probe.sh" 2>/dev/null)"; then
-        [ -z "${waited}" ] && echo "ci: ${host} is off or unreachable"
-        continue
-      fi
-      if [ "${status}" != ok ]; then
-        [ -z "${waited}" ] && echo "ci: ${host} skipped (${status#busy: })"
-        continue
-      fi
+    lock="$(acquire)"
+    if [ -z "${lock}" ]; then
+      [ -z "${waited}" ] && echo "ci: ${host} is off or unreachable"
+      continue
     fi
-    if [ "$(acquire)" = acquired ]; then
-      held_host="${host}"
-      break
+    if [ "${lock}" = busy ]; then
+      [ -z "${waited}" ] && echo "ci: ${host} is running another CI job"
+      # The laptop is so much faster that waiting for it beats the next host.
+      [ "${probe}" = yes ] && break
+      continue
     fi
-    [ -z "${waited}" ] && echo "ci: ${host} is running another CI job"
+    if [ "${probe}" = yes ] &&
+      status="$(remote "export CI_MIN_FREE_GB=7; [ \$((\$(date +%s) - \$(cat ${work}/last_done 2>/dev/null || echo 0))) -lt 180 ] && export CI_RECENT_RUN=1; bash -s" < "${here}/probe.sh" 2>/dev/null)" &&
+      [ "${status}" != ok ]; then
+      [ -z "${waited}" ] && echo "ci: ${host} skipped (${status#busy: })"
+      remote "cd ${work} && grep -qs '^${run_id} ' lock/owner && rm -rf lock" 2>/dev/null || true
+      continue
+    fi
+    held_host="${host}"
+    break
   done
   if [ -z "${held_host}" ]; then
     if [ "$(date +%s)" -gt "${deadline}" ]; then
