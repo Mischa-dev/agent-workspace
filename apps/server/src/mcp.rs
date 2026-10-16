@@ -81,6 +81,7 @@ mod task_batch;
 mod task_drafts;
 mod task_move;
 mod tasks;
+mod views_data;
 mod workflow;
 mod writes;
 
@@ -1323,6 +1324,108 @@ impl McpServer {
     ) -> Json<common::ToolResult<planning::DependencyValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(planning::task_depend(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's saved views: the built-in My tasks, Ready for agents, Blocked and Recently changed, plus views people saved (yours and shared ones). Pass a view's name as `view` to task_list to list its tasks.",
+        annotations(
+            title = "List saved views",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn view_list(
+        &self,
+        Parameters(arguments): Parameters<views_data::ViewListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::ViewListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::view_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Your work across your projects (or one, with projectId): tasks assigned to you that aren't finished (due first), tasks you or agents you set up are working on, and tasks in review that you made or watch.",
+        annotations(title = "My work", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn my_work(
+        &self,
+        Parameters(arguments): Parameters<views_data::MyWorkArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::MyWorkValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::my_work(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's task templates (title, description, labels, acceptance criteria and subtasks a new task starts with) and the schedules that make tasks from them.",
+        annotations(
+            title = "List task templates",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn template_list(
+        &self,
+        Parameters(arguments): Parameters<views_data::TemplateListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TemplateListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::template_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a task, with its subtasks, labels and acceptance criteria, from a task template (by name or ID). You can give it its own title, assignee, milestone and dates.",
+        annotations(
+            title = "Task from template",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn task_from_template(
+        &self,
+        Parameters(arguments): Parameters<views_data::TaskFromTemplateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TaskFromTemplateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::task_from_template(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's GitHub issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId and commit: true to create them. Rows imported before from the same source are skipped.",
+        annotations(
+            title = "Import tasks",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn task_import(
+        &self,
+        Parameters(arguments): Parameters<views_data::TaskImportArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TaskImportValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::task_import(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Export a project's workflow, labels, milestones and tasks as JSON (up to 500 tasks here), with links to download all of it as JSON or as CSV that imports back.",
+        annotations(
+            title = "Export project",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_export(
+        &self,
+        Parameters(arguments): Parameters<views_data::ProjectExportArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::ProjectExportValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::project_export(&self.state, principal, arguments).await)
     }
 
     #[tool(

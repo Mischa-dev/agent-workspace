@@ -355,6 +355,47 @@ impl ListSpec {
     }
 }
 
+/// Board swimlanes a saved view can keep beside the list query.
+const LANES: [&str; 5] = ["none", "assignee", "priority", "milestone", "type"];
+
+/// A saved view's list parameters (filters, sort, grouping, board columns
+/// and lanes), read exactly as a list request reads them. "me" as the
+/// assignee stands for `reader`, whoever opens the view.
+pub(super) fn saved_query_spec(
+    params: &BTreeMap<String, String>,
+    reader: Uuid,
+) -> Result<ListSpec, AppError> {
+    let mut list = BTreeMap::new();
+    for (key, value) in params {
+        match key.as_str() {
+            "columnsBy" => {
+                Grouping::parse(value, true)?;
+            }
+            "lanes" if LANES.contains(&value.as_str()) => {}
+            "lanes" => return Err(AppError::Validation("lanes")),
+            "cursor" | "limit" => return Err(AppError::Validation("query")),
+            "assigneeActorId" if value == "me" => {
+                list.insert(key.clone(), reader.to_string());
+            }
+            _ => {
+                list.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    let encoded = serde_urlencoded::to_string(&list).map_err(|_| AppError::Validation("query"))?;
+    let query: TaskListQuery =
+        serde_urlencoded::from_str(&encoded).map_err(|_| AppError::Validation("query"))?;
+    Ok(ListSpec {
+        filters: Filters::parse(&query)?,
+        sort: Sort::parse(query.sort.as_deref())?,
+        grouping: query
+            .group_by
+            .as_deref()
+            .map(|value| Grouping::parse(value, false))
+            .transpose()?,
+    })
+}
+
 fn parse_date(value: Option<&str>, field: &'static str) -> Result<Option<NaiveDate>, AppError> {
     value
         .map(|value| {
@@ -1303,7 +1344,7 @@ fn limit(value: Option<u16>) -> i64 {
 
 /// Filter IDs must belong to the project, so a list can't probe another
 /// project's statuses or members.
-async fn validate_filter_ids(
+pub(super) async fn validate_filter_ids(
     pool: &PgPool,
     project_id: Uuid,
     filters: &Filters,

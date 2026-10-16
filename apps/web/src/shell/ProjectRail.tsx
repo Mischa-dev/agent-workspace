@@ -166,6 +166,7 @@ export function ProjectRail({
           onClick={onNavigate}
           to="/inbox"
         />
+        <UtilityTile active={location.pathname === '/my-work'} icon="checklist" label="My work" onClick={onNavigate} to="/my-work" />
         <UtilityTile
           active={inMessages}
           badge={unreadConversations}
