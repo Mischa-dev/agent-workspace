@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -7,10 +7,10 @@ import { clearAuthenticatedQueryCache, logout, type SessionUser } from '../auth/
 import { useDirectOverview } from '../direct/api'
 import { useInboxSummary } from '../inbox/api'
 import { projectLocationHref } from '../projects/locations'
-import { useProjects, useSwitchProject, useUpdateProjectNavigation } from '../projects/hooks'
-import { ProjectSwitcher } from '../projects/ProjectSwitcher'
+import { useProjects, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
+import { openCommandMenu, useCommandState } from './commandStore'
 
 function projectRecency(project: Project) {
   const value = project.navigation.lastOpenedAt
@@ -95,12 +95,10 @@ export function ProjectRail({
   const unreadConversations = direct.data?.conversations.filter((conversation) => conversation.unread).length ?? 0
   const inboxUnread = useInboxSummary().data?.unreadCount ?? 0
   const switchProject = useSwitchProject()
-  const updateNavigation = useUpdateProjectNavigation()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
-  const searchButtonRef = useRef<HTMLButtonElement>(null)
-  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
   const pinned = projects.filter((project) => project.navigation.pinned)
@@ -114,30 +112,11 @@ export function ProjectRail({
     visibleProjects.push(activeProject)
   }
 
-  // Cmd/Ctrl+K finds a Project from anywhere.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && !event.shiftKey && !event.altKey) {
-        event.preventDefault()
-        setStatus(null)
-        setSwitcherOpen(true)
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [])
-
-  const closeSwitcher = () => {
-    setSwitcherOpen(false)
-    window.requestAnimationFrame(() => searchButtonRef.current?.focus())
-  }
-
   const selectProject = async (project: Project, event: MouseEvent<HTMLAnchorElement>) => {
     if (!unmodifiedPrimaryClick(event)) return
     event.preventDefault()
     setStatus(null)
     if (!project.capabilities.navigationWrite) {
-      setSwitcherOpen(false)
       onSpaceSelected()
       navigate(projectHref(project))
       return
@@ -148,25 +127,10 @@ export function ProjectRail({
         expectedVersion: project.navigation.version,
         navigation: project.navigation,
       })
-      setSwitcherOpen(false)
       onSpaceSelected()
       navigate(result.href)
     } catch (reason) {
       setStatus(isApiError(reason) ? reason.message : 'Couldn’t switch Projects. Try again.')
-    }
-  }
-
-  const togglePin = async (project: Project) => {
-    setStatus(null)
-    try {
-      await updateNavigation.mutateAsync({
-        projectId: project.id,
-        expectedVersion: project.navigation.version,
-        navigation: project.navigation,
-        pinned: !project.navigation.pinned,
-      })
-    } catch (reason) {
-      setStatus(isApiError(reason) ? reason.message : 'Couldn’t update the pin. Try again.')
     }
   }
 
@@ -231,17 +195,19 @@ export function ProjectRail({
           <UtilityTile icon="plus" label="Create Project" onClick={onNavigate} to="/projects/new" />
         ) : null}
         <span className="aw-rail__spacer" />
-        <Tooltip label="Find a Project" shortcut="⌘K" side="right">
+        <Tooltip label="Go anywhere or run a command" shortcut="⌘K" side="right">
           <button
-            aria-expanded={switcherOpen}
+            aria-expanded={commandMenuOpen}
             aria-haspopup="dialog"
-            aria-label="Search Projects"
+            aria-label="Search and commands"
             className="aw-tile aw-tile--utility aw-tile--quiet"
-            onClick={() => {
+            onClick={(event) => {
               setStatus(null)
-              setSwitcherOpen(true)
+              // Focus comes back here when the menu closes, also after a tap.
+              event.currentTarget.focus()
+              onNavigate()
+              openCommandMenu()
             }}
-            ref={searchButtonRef}
             type="button"
           >
             <TileFace>
@@ -276,17 +242,6 @@ export function ProjectRail({
           {status}
         </p>
       </nav>
-
-      {switcherOpen && (
-        <ProjectSwitcher
-          currentProjectId={currentProjectId}
-          error={status}
-          onClose={closeSwitcher}
-          onSelect={(project, event) => void selectProject(project, event)}
-          onTogglePin={(project) => void togglePin(project)}
-          projects={projects}
-        />
-      )}
 
       {location.pathname === '/home' && projectsQuery.isError && (
         <p className="visually-hidden" role="alert">

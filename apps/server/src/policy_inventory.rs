@@ -224,6 +224,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "conversations",
         Post,
+        "/api/v1/channels/{id}/restore",
+        ConversationArchive
+    ),
+    policy_route!(
+        "conversations",
+        Post,
+        "/api/v1/threads/{id}/restore",
+        ConversationArchive
+    ),
+    policy_route!(
+        "conversations",
+        Post,
         "/api/v1/conversations/{id}/mark-seen",
         ReadStateUpdate
     ),

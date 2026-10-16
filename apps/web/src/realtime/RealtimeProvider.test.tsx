@@ -53,6 +53,8 @@ describe('authenticated realtime provider', () => {
   it('opens one session socket and ignores duplicate or future durable events', async () => {
     const queryClient = new QueryClient()
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const boardKey = ['project', projectId, 'threads', conversationId]
+    queryClient.setQueryData(boardKey, [])
     render(
       <QueryClientProvider client={queryClient}>
         <RealtimeProvider>
@@ -75,13 +77,13 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(4))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
-    // Thread boards are keyed outside the project; every event refreshes them.
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['threads'] })
+    // Thread boards are project queries, so the project refresh reaches them.
+    expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(true)
   })
 
   it('blanks a removed message in cached timelines and pins before refetching', async () => {
@@ -113,11 +115,11 @@ describe('authenticated realtime provider', () => {
         },
       ],
     })
-    queryClient.setQueryData(['pins', conversationId], {
+    queryClient.setQueryData(['project', projectId, 'memory', 'pins', conversationId], {
       pins: [{ kind: 'message', id: removedId, title: 'Bob', text: 'ghp_secret' }],
     })
     // A thread named from the message's first line, on a board that's open.
-    const threadsKey = ['threads', conversationId]
+    const threadsKey = ['project', projectId, 'threads', conversationId]
     queryClient.setQueryData(threadsKey, [
       { id: runId, name: 'ghp_secret', status: 'Open', originMessageId: removedId, messageCount: 1 },
     ])
@@ -148,12 +150,12 @@ describe('authenticated realtime provider', () => {
     // Synchronous: no refetch has run yet.
     expect(JSON.stringify(queryClient.getQueryData(timelineKey))).not.toContain('ghp_secret')
     // Pins on no screen are forgotten outright; shown ones lose the message.
-    expect(JSON.stringify(queryClient.getQueryData(['pins', conversationId]) ?? null)).not.toContain('ghp_secret')
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['pins'] })
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['search'] })
+    expect(
+      JSON.stringify(queryClient.getQueryData(['project', projectId, 'memory', 'pins', conversationId]) ?? null),
+    ).not.toContain('ghp_secret')
     // The open board shows the neutral name at once and refetches the real one.
     expect(JSON.stringify(queryClient.getQueryData(threadsKey))).not.toContain('ghp_secret')
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['threads'] })
+    expect(queryClient.getQueryState(threadsKey)?.isInvalidated).toBe(true)
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] }))
     unsubscribe()
   })

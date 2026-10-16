@@ -1,0 +1,264 @@
+/* Markdown: pages, descriptions and comments rendered by ui/markdown */
+.aw-md {
+  min-width: 0;
+  color: var(--content-fg);
+  font: var(--t-body);
+  overflow-wrap: anywhere;
+}
+
+.aw-md > :first-child {
+  margin-top: 0;
+}
+
+.aw-md > :last-child {
+  margin-bottom: 0;
+}
+
+.aw-md p,
+.aw-md ul,
+.aw-md ol,
+.aw-md blockquote,
+.aw-md pre,
+.aw-md .aw-md__table {
+  margin: 0 0 var(--space-3);
+}
+
+.aw-md p,
+.aw-md li,
+.aw-md th,
+.aw-md td {
+  white-space: pre-line;
+}
+
+/* Short Markdown inside a row, such as a decision's reasoning */
+.aw-md.aw-row__text {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  white-space: normal;
+}
+
+.aw-md.aw-row__text p {
+  margin-bottom: var(--space-1);
+}
+
+.aw-md h1,
+.aw-md h2,
+.aw-md h3,
+.aw-md h4,
+.aw-md h5,
+.aw-md h6 {
+  margin: var(--space-5) 0 var(--space-2);
+  color: var(--content-fg);
+}
+
+.aw-md h1 {
+  font: var(--t-display);
+}
+
+.aw-md h2 {
+  font: var(--t-title);
+}
+
+.aw-md h3 {
+  font: var(--t-heading);
+}
+
+.aw-md h4,
+.aw-md h5,
+.aw-md h6 {
+  font: var(--t-ui-strong);
+}
+
+.aw-md h6 {
+  color: var(--content-fg-muted);
+}
+
+.aw-md a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.aw-md a.aw-md__task-key {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.aw-md a.aw-md__task-key:hover {
+  text-decoration: underline;
+}
+
+.aw-md ul,
+.aw-md ol {
+  padding-left: var(--space-6);
+}
+
+.aw-md li + li,
+.aw-md li > ul,
+.aw-md li > ol {
+  margin-top: var(--space-1);
+}
+
+.aw-md li > ul,
+.aw-md li > ol,
+.aw-md li > p:last-child {
+  margin-bottom: 0;
+}
+
+.aw-md ul.aw-md__tasks {
+  padding-left: var(--space-2);
+  list-style: none;
+}
+
+.aw-md li.aw-md__task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-2);
+  align-items: baseline;
+}
+
+.aw-md li.aw-md__task > input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  translate: 0 2px;
+}
+
+.aw-md li.aw-md__task > :not(input) {
+  grid-column: 2;
+}
+
+.aw-md li.aw-md__task:has(> input:checked) > .aw-md__item-text {
+  color: var(--content-fg-muted);
+  text-decoration: line-through;
+}
+
+.aw-md blockquote {
+  padding: 0 0 0 var(--space-3);
+  border-left: 3px solid var(--content-border);
+  color: var(--content-fg-muted);
+}
+
+.aw-md hr {
+  margin: var(--space-5) 0;
+  border: 0;
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-md .aw-md__code {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font: var(--t-code);
+  font-size: 0.88em;
+}
+
+.aw-md .aw-md__pre {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.aw-md .aw-md__pre code {
+  font: var(--t-code);
+}
+
+.aw-md-tok--keyword {
+  color: var(--mention-fg);
+}
+
+.aw-md-tok--string {
+  color: var(--success);
+}
+
+.aw-md-tok--comment {
+  color: var(--content-fg-muted);
+  font-style: italic;
+}
+
+.aw-md-tok--number {
+  color: var(--warning);
+}
+
+.aw-md-tok--property {
+  color: var(--agent);
+}
+
+.aw-md .aw-md__table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.aw-md table {
+  border-collapse: collapse;
+  font: var(--t-small);
+}
+
+.aw-md th,
+.aw-md td {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--content-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.aw-md th {
+  background: var(--surface-sunken);
+  font-weight: 700;
+}
+
+.aw-md .aw-md__overflow {
+  color: var(--content-fg-muted);
+  white-space: pre-wrap;
+}
+
+/* Markdown editor */
+.aw-md-editor {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-md-editor__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.aw-md-editor__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-md-editor__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-half);
+}
+
+.aw-md-editor__field textarea {
+  font: var(--t-code);
+}
+
+.aw-md-editor__preview {
+  min-height: 120px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.aw-md-editor__empty {
+  color: var(--content-fg-muted);
+}

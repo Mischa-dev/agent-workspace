@@ -193,11 +193,16 @@ export function InboxPage() {
     }
   }
 
+  const lastG = useRef(0)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || typingTarget(event.target)) return
       if (document.querySelector('[role="dialog"], [role="menu"]')) return
       const key = event.key
+      // The second key of a global "G then …" shortcut (G S, G A) is not ours.
+      const afterG = Date.now() - lastG.current <= 1_200
+      lastG.current = key === 'g' ? Date.now() : 0
+      if (afterG) return
       const current = selected ?? undefined
       if (key === 'j' || key === 'ArrowDown') {
         event.preventDefault()
@@ -224,9 +229,6 @@ export function InboxPage() {
       } else if (key === 'a' && current?.approval?.status === 'pending' && current.approval.kind === 'approval') {
         event.preventDefault()
         void answer(current, 'approve')
-      } else if (key === '?') {
-        event.preventDefault()
-        setHelpOpen((value) => !value)
       } else if (key === 'Escape' && detailOpen) {
         setDetailOpen(false)
       }
@@ -273,7 +275,7 @@ export function InboxPage() {
             ))}
           </div>
           <button aria-expanded={helpOpen} className="aw-inbox__help-toggle" onClick={() => setHelpOpen((value) => !value)} type="button">
-            <Kbd>?</Kbd> Shortcuts
+            Inbox shortcuts
           </button>
         </div>
         {helpOpen ? (

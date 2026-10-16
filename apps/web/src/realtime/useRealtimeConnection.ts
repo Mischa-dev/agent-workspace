@@ -27,6 +27,7 @@ import {
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
+import { applyWorkItemChange, workItemChange } from './workItemPatches'
 
 const MAX_RECENT_EVENT_IDS = 512
 const INVALIDATION_DELAY_MS = 40
@@ -68,6 +69,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
     const pendingDeltas: Record<string, Record<string, string>> = {}
     const streamRunIds: Record<string, Record<string, string>> = {}
     const invalidationTimers = new Map<string, number>()
+    let workItemQueue: Promise<void> = Promise.resolve()
 
     const remember = (eventId: string) => {
       if (recentIds.has(eventId)) return false
@@ -88,9 +90,6 @@ export function useRealtimeConnection(): RealtimeContextValue {
         // DMs and groups live in a Project the client does not list, so
         // refresh the Messages overview on any change.
         void queryClient.invalidateQueries({ queryKey: ['direct'] })
-        // Thread boards are keyed by conversation, outside the project, and
-        // change with threads: new ones, renames, replies, removed origins.
-        void queryClient.invalidateQueries({ queryKey: ['threads'] })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -112,10 +111,30 @@ export function useRealtimeConnection(): RealtimeContextValue {
       invalidationTimers.set(key, timer)
     }
 
+    // A changed task is patched into lists, boards and its detail in place.
+    // Everything else in the project that might show it converges by HTTP,
+    // leaving the patched work-item views alone.
+    const invalidateAroundWorkItem = (projectId: string, workItemId: string) => {
+      const key = `${projectId}:work-item:${workItemId}`
+      if (invalidationTimers.has(key)) return
+      const timer = window.setTimeout(() => {
+        invalidationTimers.delete(key)
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.workItemTimeline(projectId, workItemId),
+        })
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === 'project' &&
+            query.queryKey[1] === projectId &&
+            query.queryKey[2] !== 'work-items',
+        })
+      }, INVALIDATION_DELAY_MS)
+      invalidationTimers.set(key, timer)
+    }
+
     const refetchAuthenticatedState = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects })
       void queryClient.invalidateQueries({ queryKey: ['direct'] })
-      void queryClient.invalidateQueries({ queryKey: ['threads'] })
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })
@@ -251,6 +270,15 @@ export function useRealtimeConnection(): RealtimeContextValue {
           if (reactions) {
             setReactionUpdates((current) => rememberReactionUpdate(current, reactions))
             invalidateReactions(envelope.projectId, reactions.conversationId)
+            return
+          }
+          const workItem = workItemChange(envelope)
+          if (workItem) {
+            // One at a time, in event order: a card's neighbours may be moving too.
+            workItemQueue = workItemQueue
+              .then(() => applyWorkItemChange(queryClient, envelope.projectId, workItem))
+              .catch(() => undefined)
+            invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return
           }
           const removedFrom = removedConversationId(envelope)
