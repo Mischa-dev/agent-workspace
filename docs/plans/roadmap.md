@@ -106,8 +106,8 @@ records or child environments.
    copy. Settings screens and the Launch dialog are drawn from what an adapter
    declares, so adding a harness needs no web code.
 2. **Set it once, override where needed.** A setting resolves from the launch,
-   then the project, then the workspace, then the built-in default, and always
-   says where its value came from.
+   then the project, then your own setting, then the workspace, then the
+   built-in default, and always says where its value came from.
 3. **Secrets are write-only.** Keys are encrypted at rest, shown only by their
    last four characters, and handed to nothing but the adapter call that needs
    them. Your Anthropic key goes into Workspace settings, under AI and models,
@@ -520,7 +520,7 @@ limit resets in 2 h · 38% unused' with a Launch button.
 
 #### W10. AI planning
 
-*7 items · Starts when W1 and W3 have merged · 2 add a migration*
+*7 items · Starts when W1 and W3 have merged · 3 add a migration*
 
 Moment 3's brain: the model gateway on your key from settings, suggested
 dependencies and blockers in a review queue and on a graph, ready-and-next
@@ -899,12 +899,15 @@ that needs it.
 One settings table (scope: workspace, project or user; key; JSON value;
 version) and a typed registry in Rust where each key declares its type,
 allowed scopes, default and validation. A value resolves from the launch
-override, then the project, then the workspace, then the built-in default, and
-always reports where it came from. HTTP `GET /settings/effective?projectId=`
-and an MCP `settings_get`; changes are people-only, owner or admin.
+override, then the project, then the person's own setting, then the workspace,
+then the built-in default, and always reports where it came from. HTTP
+`GET /settings/effective?projectId=` and an MCP `settings_get`. Changes are
+people-only: owners and admins change the workspace's and a project's
+settings, and every member changes their own.
 
 **Done when:** A project overrides the default model, the UI says it overrides
-the workspace, and Reset falls back to the workspace value.
+the workspace, and Reset falls back to the workspace value; a member who isn't
+an admin can change their own settings and nobody else's.
 
 #### S3. One settings area
 
@@ -1556,16 +1559,19 @@ private thread ever sees a suggestion drawn from it.
 
 #### AI3. Plan to tasks
 
-*In [W10](#w10-ai-planning) AI planning · Needs AI1, V3*
+*In [W10](#w10-ai-planning) AI planning · Needs AI1, V3 · Migration*
 
 Paste a plan or pick a page and get a proposed tree of tasks with criteria,
 labels, milestones and dependencies; edit the preview, then commit through
 `task_create_many`. A plan bigger than one call (100 tasks) commits in
-batches, each with its own idempotency key, and links between batches are
-added once every task exists, so a retry never duplicates a batch.
+batches, and links between batches are added once every task exists. The
+import keeps its own record of each batch and the tasks it made, since the
+tool only replays a request for 24 hours, so resuming an import at any time
+skips the batches that finished.
 
 **Done when:** This roadmap's 103 items import as tasks, milestones and
-dependencies in one go.
+dependencies in one go, and resuming a half-finished import a day later
+creates nothing twice.
 
 #### AI4. Triage on create
 
@@ -1928,11 +1934,15 @@ personal tokens with scopes (S7), and a docs page.
 *In [W14](#w14-automations-and-api) Automations and API · Needs F9 ·
 Migration*
 
-Workspace subscriptions to events (task, run, pull request, message), signed
-and retried, with a delivery log and PR #128's address checks. Each delivery
+Subscriptions to a workspace's events (task, run, pull request, message), each
+owned by the person or connected app that made it and delivering only what
+that owner can see now: access is checked again on every delivery, and a
+message event goes through `conversation_visible_to` for the owner. Signed and
+retried, with a delivery log and PR #128's address checks. Each delivery
 carries one id across its retries, so a receiver can drop a repeat.
 
-**Done when:** An external service hears about every finished run.
+**Done when:** An external service hears about every finished run, and never
+about a message in a conversation its subscription's owner can't see.
 
 #### X5. Automations
 
