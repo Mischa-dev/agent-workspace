@@ -1404,3 +1404,12 @@ button.aw-reaction:focus-visible {
     padding: 2px var(--space-3);
   }
 }
+
+.aw-reply--cancelled .aw-reply__icon,
+.aw-reply--error {
+  color: var(--danger);
+}
+
+.aw-replies--trailing {
+  padding: var(--space-1) var(--space-4) var(--space-2) calc(var(--space-4) + var(--size-avatar) + var(--space-3));
+}

@@ -103,6 +103,11 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
         "the suggested name carries the token: {thread}"
     );
     let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+    assert_eq!(
+        claim["value"]["request"]["replyConversationId"],
+        thread_id.as_str(),
+        "Mara answered in the thread her claim started from the paste"
+    );
 
     // Mara can't take it down herself, or edit it away.
     let refused = mara("message_delete", json!({"messageId": pasted_id})).await;
@@ -181,7 +186,16 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
         let tombstone = item(&read, &pasted_id);
         assert_eq!(tombstone["removed"], true, "{tombstone}");
         assert_eq!(tombstone["text"], "", "{tombstone}");
-        let ack = &item(&read, &ask_id)["reactions"];
+        // A tag in a channel is answered in the thread started from it.
+        let thread_read = tool(
+            app,
+            token_,
+            session_,
+            "conversation_read",
+            json!({"conversationId": thread_id}),
+        )
+        .await;
+        let ack = &item(&thread_read, &ask_id)["reactions"];
         assert_eq!(ack[0]["name"], "check", "{ack}");
         assert_eq!(ack[0]["count"], 1, "{ack}");
         assert!(
@@ -220,7 +234,7 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
     // own send.
     let shown = timeline_message(&setup, &bob, &general, &pasted_id).await;
     assert!(!shown.to_string().contains(&token), "{shown}");
-    let ack = timeline_message(&setup, &bob, &general, &ask_id).await;
+    let ack = timeline_message(&setup, &bob, &thread_id, &ask_id).await;
     assert_eq!(ack["reactions"][0]["name"], "check", "{ack}");
     for uri in [
         format!("/api/v1/conversations/{general}/timeline"),

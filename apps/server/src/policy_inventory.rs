@@ -382,6 +382,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/reply-requests/{id}/retry",
         MessageSend
     ),
+    policy_route!(
+        "replies",
+        Post,
+        "/api/v1/reply-requests/{id}/stop",
+        MessageSend
+    ),
     // Editing and removing your own message needs MessageSend. Removing
     // someone else's also needs MessageModerate, checked in the handler.
     policy_route!(

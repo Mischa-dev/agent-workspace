@@ -710,7 +710,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Agents: answer a claimed reply request. Posts your text in the conversation as you; @handles become mentions.",
+        description = "Agents: answer a claimed reply request. Posts your text in the conversation as you; @handles become mentions. Closes the request unless you pass final: false, which posts an interim message and keeps your claim.",
         annotations(
             title = "Send reply",
             read_only_hint = false,
@@ -728,6 +728,27 @@ impl McpServer {
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let principal = principal_or!(parts, replies::ReplyToolResult::denied());
         Json(replies::reply_send(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Agents: say what you're doing on a claimed reply request, in one short line (\"Running the server tests\"). People see it next to your name until you reply. Also renews the claim, so report progress at least every 15 minutes during long work.",
+        annotations(
+            title = "Report progress",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_progress(
+        &self,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyProgressArguments>>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::ProgressProjection>> {
+        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
+        Json(replies::reply_progress(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -770,6 +791,27 @@ impl McpServer {
     ) -> Json<replies::ReplyToolResult<replies::ResolutionProjection>> {
         let principal = principal_or!(parts, replies::ReplyToolResult::denied());
         Json(replies::reply_release(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "People: stop an agent's work on a reply request, as the Stop button on its status line does. Its follow-ups queued behind it stop too. The agent hears at once, and its next call on the request is refused.",
+        annotations(
+            title = "Stop agent",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn reply_stop(
+        &self,
+        Parameters(Scoped {
+            args: arguments, ..
+        }): Parameters<Scoped<replies::ReplyStopArguments>>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<replies::ReplyToolResult<replies::StopProjection>> {
+        let principal = principal_or!(parts, replies::ReplyToolResult::denied());
+        Json(replies::reply_stop(&self.state, principal, arguments).await)
     }
 
     // -- Tasks ---------------------------------------------------------------

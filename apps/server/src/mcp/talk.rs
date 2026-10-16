@@ -1940,7 +1940,7 @@ fn thread_path(parent: &ConversationAccessRow, thread_id: Uuid) -> String {
     }
 }
 
-async fn unique_thread_name(
+pub(super) async fn unique_thread_name(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     parent_id: Uuid,
     base: &str,
