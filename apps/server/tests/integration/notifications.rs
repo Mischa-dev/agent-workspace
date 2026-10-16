@@ -335,7 +335,9 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     );
     assert_eq!(attention(&setup, &ben_browser, &project).await, 1);
 
-    // Changing other fields doesn't notify again.
+    // Ben watches the task he was assigned; Cara is in the project but
+    // doesn't watch it. A rename reaches Ben only.
+    let (_cara, cara_browser) = add_person(&setup, &[&project], "cara").await;
     let (status, updated) = send(
         &setup.app,
         setup.browser.request(
@@ -348,10 +350,65 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     drain(&setup).await;
-    assert_eq!(
-        inbox(&setup, &ben_browser, "?view=unread").await["unreadCount"],
-        1
-    );
+    let page = inbox(&setup, &ben_browser, "?category=tasks&view=unread").await;
+    let watched = items(&page)
+        .iter()
+        .find(|item| item["kind"] == "task_changed")
+        .unwrap_or_else(|| panic!("{page}"));
+    assert_eq!(watched["title"], "Owner updated TSK-1");
+    assert_eq!(page["unreadCount"], 2);
+    assert!(items(&inbox(&setup, &cara_browser, "").await).is_empty());
+
+    // A plain comment reaches watchers, and repeats collapse into one row.
+    let (status, comment) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("{base}/{task}/comments"),
+            Some("comment-two"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Went with teal"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    drain(&setup).await;
+    let page = inbox(&setup, &ben_browser, "?category=tasks").await;
+    let watched = items(&page)
+        .iter()
+        .filter(|item| item["kind"] == "task_changed")
+        .collect::<Vec<_>>();
+    assert_eq!(watched.len(), 1, "{page}");
+    assert_eq!(watched[0]["title"], "Owner commented on TSK-1");
+    assert_eq!(watched[0]["preview"], "Went with teal");
+    assert_eq!(watched[0]["count"], 2);
+
+    // Once Ben stops watching, changes stop reaching him.
+    sqlx::query("DELETE FROM work_item_watchers WHERE work_item_id = $1::uuid AND actor_id = $2")
+        .bind(&task)
+        .bind(ben)
+        .execute(&setup.pool)
+        .await
+        .expect("stop watching");
+    let (status, _) = update(
+        &setup,
+        &ben_browser,
+        json!({"action": "archive", "all": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, comment) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("{base}/{task}/comments"),
+            Some("comment-three"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "One more"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    drain(&setup).await;
+    assert!(items(&inbox(&setup, &ben_browser, "").await).is_empty());
 }
 
 #[tokio::test]

@@ -22,7 +22,7 @@
 //! to your runs or tasks. Later workstreams add kinds of their own through
 //! `NewNotification` (the kind column is open-ended).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use axum::{
     Json, Router,
@@ -64,6 +64,8 @@ pub mod kind {
     pub const RUN_FAILED: &str = "run_failed";
     pub const CHECKS_FAILED: &str = "checks_failed";
     pub const REVIEW_REQUESTED: &str = "review_requested";
+    /// Someone else changed or commented on a task you watch.
+    pub const TASK_CHANGED: &str = "task_changed";
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -83,7 +85,7 @@ impl Category {
         match self {
             Self::All => None,
             Self::Mentions => Some(&[kind::MENTION, kind::COMMENT_MENTION]),
-            Self::Tasks => Some(&[kind::ASSIGNED, kind::COMMENT_MENTION]),
+            Self::Tasks => Some(&[kind::ASSIGNED, kind::COMMENT_MENTION, kind::TASK_CHANGED]),
             Self::Runs => Some(&[
                 kind::APPROVAL_REQUESTED,
                 kind::RUN_WAITING,
@@ -470,6 +472,17 @@ struct AssignmentRow {
     assignee_actor_id: Uuid,
 }
 
+#[derive(FromRow)]
+struct WatchedChangeRow {
+    /// The activity or comment this change is.
+    change_id: Uuid,
+    actor_id: Uuid,
+    comment_id: Option<Uuid>,
+    /// created, updated, archived, restored or commented.
+    change: String,
+    recipient_actor_id: Uuid,
+}
+
 /// What a task change means for people. `work_item.updated` carries only the
 /// task and its version, so this finds the comment and activity rows written
 /// in the same transaction as the event: they share its `created_at`
@@ -558,6 +571,69 @@ async fn work_item_changes(
         );
         notification.actor_id = Some(row.actor_id);
         notification.work_item_id = Some(work_item_id);
+        notifications.push(notification);
+    }
+    // Watchers hear about every other change, unless this event already
+    // mentioned or assigned them.
+    let changes = sqlx::query_as::<_, WatchedChangeRow>(
+        r#"
+        WITH changes AS (
+            SELECT activity.id AS change_id, activity.actor_id, NULL::uuid AS comment_id,
+                   replace(activity.kind, 'work_item_', '') AS change,
+                   activity.project_id, activity.work_item_id
+            FROM outbox_events event
+            JOIN work_item_activity activity
+              ON activity.project_id = event.project_id
+             AND activity.work_item_id = $3
+             AND activity.created_at = event.created_at
+            WHERE event.event_id = $1 AND event.project_id = $2
+            UNION ALL
+            SELECT comment.id, comment.author_actor_id, comment.id, 'commented',
+                   comment.project_id, comment.work_item_id
+            FROM outbox_events event
+            JOIN work_item_comments comment
+              ON comment.project_id = event.project_id
+             AND comment.work_item_id = $3
+             AND comment.created_at = event.created_at
+            WHERE event.event_id = $1 AND event.project_id = $2
+        )
+        SELECT change.change_id, change.actor_id, change.comment_id, change.change,
+               watcher.actor_id AS recipient_actor_id
+        FROM changes change
+        JOIN work_item_watchers watcher
+          ON watcher.project_id = change.project_id
+         AND watcher.work_item_id = change.work_item_id
+        WHERE watcher.actor_id <> change.actor_id
+          AND actor_can_access_project(watcher.actor_id, NULL, change.project_id)
+        ORDER BY change.change_id, watcher.actor_id
+        "#,
+    )
+    .bind(event_id)
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let told = notifications
+        .iter()
+        .map(|notification| notification.recipient_actor_id)
+        .collect::<HashSet<_>>();
+    for row in changes {
+        if told.contains(&row.recipient_actor_id) {
+            continue;
+        }
+        let mut notification = NewNotification::new(
+            project_id,
+            row.recipient_actor_id,
+            kind::TASK_CHANGED,
+            "work_item",
+            work_item_id,
+            format!("watch:{work_item_id}"),
+            format!("watch:{}", row.change_id),
+        );
+        notification.actor_id = Some(row.actor_id);
+        notification.work_item_id = Some(work_item_id);
+        notification.comment_id = row.comment_id;
+        notification.detail = serde_json::json!({ "change": row.change });
         notifications.push(notification);
     }
     Ok(notifications)
@@ -1197,6 +1273,18 @@ fn view(row: NotificationRow) -> NotificationView {
             format!("{who} assigned you {task_key}"),
             row.work_item_title.clone(),
         ),
+        kind::TASK_CHANGED => (
+            match row.detail.get("change").and_then(serde_json::Value::as_str) {
+                Some("commented") => format!("{who} commented on {task_key}"),
+                Some("archived") => format!("{who} archived {task_key}"),
+                Some("restored") => format!("{who} restored {task_key}"),
+                Some("created") => format!("{who} created {task_key}"),
+                _ => format!("{who} updated {task_key}"),
+            },
+            row.comment_preview
+                .clone()
+                .or_else(|| row.work_item_title.clone()),
+        ),
         kind::APPROVAL_REQUESTED => (
             if question {
                 format!("A run in {place} has a question for you")
@@ -1550,6 +1638,7 @@ mod tests {
             kind::RUN_FAILED,
             kind::CHECKS_FAILED,
             kind::REVIEW_REQUESTED,
+            kind::TASK_CHANGED,
         ] {
             assert!(covered.contains(built_in), "{built_in}");
         }

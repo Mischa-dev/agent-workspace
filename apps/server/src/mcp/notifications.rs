@@ -37,8 +37,8 @@ pub(super) struct NotificationListArguments {
 pub(super) struct NotificationLine {
     pub id: String,
     /// mention, comment_mention, assigned, approval_requested, run_waiting,
-    /// run_completed, run_failed, checks_failed, review_requested, or a kind
-    /// added later.
+    /// run_completed, run_failed, checks_failed, review_requested,
+    /// task_changed, or a kind added later.
     pub kind: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]

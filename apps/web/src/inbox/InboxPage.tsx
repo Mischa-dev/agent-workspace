@@ -62,6 +62,7 @@ const KIND_ICON: Record<string, IconName> = {
   run_failed: 'circle-alert',
   checks_failed: 'triangle-alert',
   review_requested: 'pull-request',
+  task_changed: 'work',
 }
 
 function isView(value: string | null): value is InboxView {
