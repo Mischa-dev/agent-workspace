@@ -346,15 +346,15 @@ fn link_parents(rows: &mut [ImportRow]) {
         .enumerate()
         .map(|(index, row)| (row.title.to_lowercase(), index))
         .collect::<BTreeMap<_, _>>();
-    for index in 0..rows.len() {
-        let Some(reference) = rows[index].parent_reference.take() else {
+    for (index, row) in rows.iter_mut().enumerate() {
+        let Some(reference) = row.parent_reference.take() else {
             continue;
         };
         let key = reference.to_lowercase();
         let parent = by_id.get(&key).or_else(|| by_title.get(&key)).copied();
         // Only an earlier row can be a parent, so creating in order always
         // has the parent first and a loop can't form.
-        rows[index].parent = parent.filter(|parent| *parent < index);
+        row.parent = parent.filter(|parent| *parent < index);
     }
 }
 
@@ -640,10 +640,10 @@ mod tests {
     fn csv_handles_quotes_line_breaks_and_semicolons() {
         let records =
             parse_csv("Title,Body\r\n\"Fix \"\"login\"\"\",\"line one\nline two\"\n\n,\nNext,x\n")
-                .unwrap();
+                .expect("test input is valid");
         assert_eq!(records.len(), 3);
         assert_eq!(records[1], vec!["Fix \"login\"", "line one\nline two"]);
-        let semicolons = parse_csv("Title;Status\nA;Done\n").unwrap();
+        let semicolons = parse_csv("Title;Status\nA;Done\n").expect("test input is valid");
         assert_eq!(semicolons[1], vec!["A", "Done"]);
         assert!(parse_csv("Title\n\"open").is_err());
     }
@@ -653,14 +653,14 @@ mod tests {
         let text = "ID,Team,Title,Description,Status,Estimate,Priority,Project,Assignee,Labels,Due Date,Parent issue\n\
                     ENG-1,Eng,Ship it,,In Progress,3,High,Launch,ana,\"Bug, Frontend\",2026-11-01,\n\
                     ENG-2,Eng,Write docs,,Done,,No priority,Launch,,,,ENG-1\n";
-        let records = parse_csv(text).unwrap();
+        let records = parse_csv(text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
         assert_eq!(mapping.get("externalId").map(String::as_str), Some("ID"));
         assert_eq!(
             mapping.get("milestone").map(String::as_str),
             Some("Project")
         );
-        let rows = csv_rows(&records, &mapping).unwrap();
+        let rows = csv_rows(&records, &mapping).expect("test input is valid");
         assert_eq!(rows[0].title, "Ship it");
         assert_eq!(rows[0].labels.len(), 2);
         assert_eq!(rows[0].estimate.as_deref(), Some("3"));
@@ -671,9 +671,9 @@ mod tests {
     #[test]
     fn jira_repeated_label_columns_all_count() {
         let text = "Summary,Issue key,Issue Type,Status,Labels,Labels,Due Date\nA,PRJ-1,Bug,Open,one,two,16/Oct/26\n";
-        let records = parse_csv(text).unwrap();
+        let records = parse_csv(text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
-        let rows = csv_rows(&records, &mapping).unwrap();
+        let rows = csv_rows(&records, &mapping).expect("test input is valid");
         assert_eq!(
             rows[0]
                 .labels
@@ -684,7 +684,7 @@ mod tests {
         );
         assert_eq!(rows[0].type_name.as_deref(), Some("Bug"));
         assert_eq!(
-            date_of(rows[0].due_date.as_deref().unwrap()),
+            date_of(rows[0].due_date.as_deref().expect("test input is valid")),
             chrono::NaiveDate::from_ymd_opt(2026, 10, 16)
         );
     }
@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn markdown_lists_become_tasks_and_subtasks() {
         let text = "# Launch\n\n- [ ] Ship the app #release\n  Notes about it\n  - [x] Write tests\n- Plain item\n\n## Later\n1. Numbered #idea\n";
-        let rows = markdown_rows(text, true).unwrap();
+        let rows = markdown_rows(text, true).expect("test input is valid");
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].title, "Ship the app");
         assert_eq!(rows[0].labels[0].name, "release");
@@ -702,7 +702,11 @@ mod tests {
         assert!(rows[1].done);
         assert_eq!(rows[2].parent, None);
         assert_eq!(rows[3].milestone.as_deref(), Some("Later"));
-        assert!(markdown_rows(text, false).unwrap()[0].milestone.is_none());
+        assert!(
+            markdown_rows(text, false).expect("test input is valid")[0]
+                .milestone
+                .is_none()
+        );
     }
 
     #[test]
@@ -712,7 +716,7 @@ mod tests {
             {"number": 2, "title": "PR", "state": "open", "pull_request": {}},
             {"number": 3, "title": "Won't do", "state": "closed", "state_reason": "not_planned"}
         ]))
-        .unwrap();
+        .expect("test input is valid");
         let rows = github_rows(issues);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].labels[0].color.as_deref(), Some("#d73a4a"));

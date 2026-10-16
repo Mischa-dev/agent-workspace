@@ -292,7 +292,12 @@ async fn saved_views_stay_private_unless_shared() {
     let ready = views_named(&list, "Ready for agents");
     assert_eq!(ready.len(), 1, "{list}");
     assert_eq!(ready[0]["pinned"], true);
-    assert!(ready[0]["href"].as_str().unwrap().contains("ready=true"));
+    assert!(
+        ready[0]["href"]
+            .as_str()
+            .expect("present")
+            .contains("ready=true")
+    );
     assert_eq!(ready[0]["canDelete"], false);
 
     let (status, mine) = fixture
@@ -410,7 +415,7 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
         .as_str()
         .expect("recurring")
         .parse::<Uuid>()
-        .unwrap();
+        .expect("valid");
     assert!(recurring["nextRunAt"].is_string(), "{recurring}");
 
     let count_made = || async {
@@ -614,7 +619,7 @@ async fn export_text(fixture: &Fixture, uri: &str) -> String {
     assert!(
         response.headers()[header::CONTENT_DISPOSITION]
             .to_str()
-            .unwrap()
+            .expect("valid")
             .contains("attachment")
     );
     String::from_utf8(

@@ -1116,7 +1116,7 @@ pub(super) async fn update_import(
                 request
                     .mapping
                     .clone()
-                    .or_else(|| Some(record.mapping()).filter(|_| record.source == "csv")),
+                    .or_else(|| (record.source == "csv").then(|| record.mapping())),
                 &options,
             ) {
                 Ok(read) => read,
@@ -2046,16 +2046,16 @@ mod tests {
             updated_at: Utc::now(),
         };
         let text = tasks_csv(&[task]);
-        let records = parse_csv(&text).unwrap();
+        let records = parse_csv(&text).expect("test input is valid");
         let mapping = auto_mapping(&records[0]);
-        let rows = csv_rows(&records, &mapping).unwrap();
+        let rows = csv_rows(&records, &mapping).expect("test input is valid");
         assert_eq!(rows[0].title, "'=SUM(A1), \"quoted\"");
         assert_eq!(rows[0].description, "two\nlines");
         assert_eq!(rows[0].labels.len(), 2);
         assert_eq!(rows[0].milestone.as_deref(), Some("Launch"));
         assert_eq!(rows[0].external_id.as_deref(), Some("AW-1"));
         assert_eq!(
-            priority_of(rows[0].priority.as_deref().unwrap()),
+            priority_of(rows[0].priority.as_deref().expect("test input is valid")),
             Some("no_priority")
         );
     }
