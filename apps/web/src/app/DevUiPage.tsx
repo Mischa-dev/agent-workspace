@@ -9,7 +9,6 @@ import {
   Badge,
   Banner,
   Button,
-  CommandMenu,
   DocumentSkeleton,
   EmptyState,
   ErrorState,
@@ -28,6 +27,7 @@ import {
   type BannerTone,
   type ChipTone,
 } from '../ui'
+import { CommandMenu } from '../ui/commandMenu'
 import { Markdown, MarkdownEditor } from '../ui/markdown'
 
 const SAMPLE_MARKDOWN = `## Ship the toast
