@@ -420,6 +420,20 @@ async fn analyze_suggests_and_accepting_updates_readiness_and_the_graph() {
     assert_eq!(suggested["from"], api["id"]);
     assert_eq!(suggested["to"], page["id"]);
 
+    // W11's timeline draws the same suggestion dashed between dated tasks.
+    sqlx::query("UPDATE work_items SET due_date = current_date + 7 WHERE project_id = $1")
+        .bind(fixture.project_id)
+        .execute(&fixture.pool)
+        .await
+        .expect("dates");
+    let (status, timeline) = fixture.member.get(&format!("{base}/timeline")).await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    assert_eq!(
+        timeline["suggestedDependencies"],
+        json!([{"blockingId": api["id"], "blockedId": page["id"]}]),
+        "{timeline}"
+    );
+
     let (status, ranking) = fixture.owner.get(&format!("{base}/ai/ready")).await;
     assert_eq!(status, StatusCode::OK, "{ranking}");
     let ready_ids = |ranking: &Value| {
@@ -458,6 +472,13 @@ async fn analyze_suggests_and_accepting_updates_readiness_and_the_graph() {
 
     let (_, ranking) = fixture.owner.get(&format!("{base}/ai/ready")).await;
     assert!(!ready_ids(&ranking).contains(&page["id"]), "blocked now");
+    let (_, timeline) = fixture.owner.get(&format!("{base}/timeline")).await;
+    assert_eq!(
+        timeline["suggestedDependencies"],
+        json!([]),
+        "accepted: a real dependency now"
+    );
+    assert_eq!(timeline["dependencies"].as_array().map(Vec::len), Some(1));
     assert!(ready_ids(&ranking).contains(&api["id"]));
     let api_rank = ranking["tasks"]
         .as_array()

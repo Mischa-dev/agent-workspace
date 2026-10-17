@@ -56,6 +56,13 @@ pub enum AuditAttribution {
         oauth_grant_id: Option<Uuid>,
         external_agent_connection_id: Option<Uuid>,
     },
+    /// Background work acting later for the person who set it up, such as
+    /// a recurring task. It rechecks their access before it acts.
+    Job {
+        job_id: Uuid,
+        /// What set it up, such as "recurring_task", as the audit row's client.
+        source: &'static str,
+    },
 }
 
 #[derive(Debug, FromRow)]
@@ -3010,6 +3017,28 @@ pub async fn record_audit_for(
             .bind(oauth_grant_id)
             .bind(external_agent_connection_id)
             .bind(target_kind)
+            .execute(&mut **transaction)
+            .await?;
+        }
+        AuditAttribution::Job { job_id, source } => {
+            sqlx::query(
+                r#"
+                INSERT INTO audit_events (
+                    id, actor_id, project_id, authentication_class, action,
+                    target_kind, target_id, outcome, request_id, metadata,
+                    channel, client_name
+                ) VALUES ($1, $2, $3, 'background_job', $4, $5, $6, 'succeeded', $7, $8, 'system', $9)
+                "#,
+            )
+            .bind(audit_id)
+            .bind(actor.actor_id)
+            .bind(actor.project_id)
+            .bind(action)
+            .bind(target_kind)
+            .bind(target_id)
+            .bind(job_id.to_string())
+            .bind(metadata)
+            .bind(*source)
             .execute(&mut **transaction)
             .await?;
         }

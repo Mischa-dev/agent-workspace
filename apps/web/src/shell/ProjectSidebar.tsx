@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -10,6 +10,8 @@ import type { Project } from '../projects/types'
 import { Button, Dialog, TextField, type MenuEntry } from '../ui'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 import { projectSettingsHref } from '../settings/paths'
+
+const PinnedViews = lazy(() => import('./PinnedViews'))
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -59,10 +61,14 @@ export function ProjectSidebar({
         <SidebarLink icon="checklist" label="Milestones" onNavigate={onNavigate} to={`${base}/milestones`} />
         <SidebarLink icon="play" label="Up next" onNavigate={onNavigate} to={`${base}/next`} />
         <SidebarLink icon="branch" label="Graph" onNavigate={onNavigate} to={`${base}/graph`} />
+        <SidebarLink icon="clock" label="Timeline" onNavigate={onNavigate} to={`${base}/timeline`} />
         <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
         <SidebarLink icon="check" label="Decisions" onNavigate={onNavigate} to={`${base}/decisions`} />
         <SidebarLink icon="search" label="Search" onNavigate={onNavigate} to={`/search?projectId=${encodeURIComponent(project.id)}`} />
       </ul>
+      <Suspense fallback={null}>
+        <PinnedViews onNavigate={onNavigate} projectId={project.id} />
+      </Suspense>
       <SidebarSection addLabel="New channel" label="Channels" onAdd={canCreate ? () => setCreating(true) : undefined}>
         {(sidebar.data?.channels ?? []).flatMap((channel) => {
           const selected = channel.id === selectedChannelId

@@ -692,6 +692,45 @@ struct SuggestedEdge {
 }
 
 /// The project's dependency graph as `reader` may see it.
+/// Pending "blocks" suggestions between `task_ids` (all in `project_id`), as
+/// (blocking, blocked) pairs, only the ones the reader may see and only where
+/// the dependency doesn't exist yet. W11's timeline draws them dashed.
+pub async fn suggested_blocks(
+    executor: impl sqlx::PgExecutor<'_>,
+    reader: Reader,
+    project_id: Uuid,
+    task_ids: &[Uuid],
+) -> Result<Vec<(Uuid, Uuid)>, AppError> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"
+        SELECT suggestion.other_work_item_id, suggestion.work_item_id
+        FROM ai_suggestions suggestion
+        WHERE suggestion.project_id = $1 AND suggestion.kind = 'blocks'
+          AND suggestion.status = 'pending'
+          AND suggestion.other_project_id = $1
+          AND suggestion.work_item_id = ANY($2)
+          AND suggestion.other_work_item_id = ANY($2)
+          AND NOT EXISTS (
+              SELECT 1 FROM work_item_dependencies dependency
+              WHERE dependency.project_id = $1
+                AND dependency.blocked_work_item_id = suggestion.work_item_id
+                AND dependency.blocking_work_item_id = suggestion.other_work_item_id
+          )
+          AND ai_suggestion_visible_to(suggestion.id, $3, $4)
+        ORDER BY suggestion.other_work_item_id, suggestion.work_item_id
+        "#,
+    )
+    .bind(project_id)
+    .bind(task_ids)
+    .bind(reader.actor_id)
+    .bind(reader.connection_id)
+    .fetch_all(executor)
+    .await?)
+}
+
 pub async fn graph(
     pool: &PgPool,
     reader: Reader,

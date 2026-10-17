@@ -99,6 +99,8 @@ export function CommandPalette() {
       list.push(
         { id: 'p:tasks', group: current.name, label: 'Tasks', icon: 'checklist', shortcut: 'G T', onSelect: go(projectPath(id, '/work-items')) },
         { id: 'p:board', group: current.name, label: 'Board', icon: 'board', shortcut: 'G B', onSelect: go(projectPath(id, '/work-items?view=board')) },
+        { id: 'p:timeline', group: current.name, label: 'Timeline', icon: 'clock', keywords: ['gantt', 'roadmap', 'schedule', 'milestones'], onSelect: go(projectPath(id, '/timeline')) },
+        { id: 'p:ready', group: current.name, label: 'Ready for agents', icon: 'bot', keywords: ['view', 'unclaimed'], onSelect: go(projectPath(id, '/work-items?ready=true&claimed=false&sort=priority')) },
         { id: 'p:overview', group: current.name, label: 'Overview', icon: 'home', onSelect: go(projectPath(id)) },
         { id: 'p:next', group: current.name, label: 'Up next', icon: 'play', keywords: ['ready', 'what to do', 'ranking', 'priorities'], onSelect: go(projectPath(id, '/next')) },
         { id: 'p:suggestions', group: current.name, label: 'AI suggestions', icon: 'bot', keywords: ['dependencies', 'blockers', 'review', 'triage'], onSelect: go(projectPath(id, '/suggestions')) },
@@ -218,6 +220,7 @@ export function CommandPalette() {
 
     list.push(
       { id: 'g:home', group: 'Go to', label: 'Home', icon: 'home', shortcut: 'G H', onSelect: go('/home') },
+      { id: 'g:my-work', group: 'Go to', label: 'My work', icon: 'checklist', shortcut: 'G W', keywords: ['assigned', 'tasks', 'review', 'claimed'], onSelect: go('/my-work') },
       { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['inbox', 'dms'], onSelect: go('/messages') },
       { id: 'g:agents', group: 'Go to', label: 'Agents', icon: 'bot', onSelect: go('/messages/agents') },
       { id: 'g:search', group: 'Go to', label: 'Search', icon: 'search', shortcut: '/', onSelect: go('/search') },

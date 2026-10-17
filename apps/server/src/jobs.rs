@@ -363,6 +363,8 @@ pub fn default_registry() -> JobRegistry {
     let mut registry = JobRegistry::new();
     crate::retention::register_jobs(&mut registry);
     crate::ai::register_jobs(&mut registry);
+    crate::work_items::templates::register_jobs(&mut registry);
+    crate::work_items::imports::register_jobs(&mut registry);
     registry.register(PRUNE_KIND, |context| async move {
         prune_finished(&context.state.pool).await?;
         Ok(())

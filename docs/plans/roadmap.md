@@ -567,18 +567,18 @@ roadmap's JSON becomes tasks, milestones and dependencies through plan to
 tasks; and it all runs against a fake provider in tests and your Anthropic key
 from settings.
 
-#### W11. Views and data
+#### W11. Views and data (#143)
 
 *5 items · Starts when W1 and W3 have merged · 2 add a migration*
 
 The rest of what a whole project needs: saved views, My work, a timeline,
 import and export, and templates.
 
-- [ ] [V5](#v5-saved-views) Saved views
-- [ ] [V6](#v6-my-work) My work
-- [ ] [V8](#v8-timeline) Timeline
-- [ ] [T9](#t9-import-and-export) Import and export
-- [ ] [T10](#t10-templates-and-recurring-tasks) Templates and recurring tasks
+- [x] [V5](#v5-saved-views) Saved views
+- [x] [V6](#v6-my-work) My work
+- [x] [V8](#v8-timeline) Timeline
+- [x] [T9](#t9-import-and-export) Import and export
+- [x] [T10](#t10-templates-and-recurring-tasks) Templates and recurring tasks
 
 **Owns:** New views, import and export, and templates modules, the sidebar's
 pinned views, and the My work, timeline and import pages.
