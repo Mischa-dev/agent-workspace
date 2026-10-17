@@ -58,7 +58,7 @@ their own pages; nobody else will.
 
 ## Areas
 
-The areas below passed this list in W13. A workstream that adds or
+The areas below passed this list in W13 (#149). A workstream that adds or
 reshapes pages in an area re-runs the list for those pages.
 
 | Area | Pages |
