@@ -1471,7 +1471,11 @@ impl McpServer {
 
     #[tool(
         description = "Your outgoing webhooks: each one's URL, the events it hears, whether it's on, and its last delivery; plus every event type and how receivers check a delivery's signature. Secrets are never shown again after they're made.",
-        annotations(title = "List webhooks", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "List webhooks",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn webhook_list(
         &self,
@@ -1503,7 +1507,11 @@ impl McpServer {
 
     #[tool(
         description = "A webhook's delivery log, newest first: each delivery's id (the same on every retry), event, state, attempts, last status code and error.",
-        annotations(title = "Webhook deliveries", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "Webhook deliveries",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn webhook_deliveries(
         &self,
@@ -1516,7 +1524,11 @@ impl McpServer {
 
     #[tool(
         description = "A project's automation rules: each one's trigger, conditions (a saved view's filters), actions, who it acts as, whether it's on and why the server turned it off.",
-        annotations(title = "List automations", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "List automations",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn automation_list(
         &self,
@@ -1548,7 +1560,11 @@ impl McpServer {
 
     #[tool(
         description = "What an automation rule did each time it fired, newest first: the cause, each action's result, and why a firing was skipped.",
-        annotations(title = "Automation history", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "Automation history",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn automation_runs(
         &self,

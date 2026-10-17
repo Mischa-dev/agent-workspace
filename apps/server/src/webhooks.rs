@@ -284,7 +284,9 @@ fn normalize_events(values: &[String]) -> Result<Vec<String>, AppError> {
         .collect::<Vec<_>>();
     events.sort();
     events.dedup();
-    if events.is_empty() || events.len() > 20 || !events.iter().all(|event| events::is_event_type(event))
+    if events.is_empty()
+        || events.len() > 20
+        || !events.iter().all(|event| events::is_event_type(event))
     {
         return Err(AppError::Validation("eventTypes"));
     }
@@ -348,7 +350,10 @@ async fn store_secret(
     Ok((stored.id, value))
 }
 
-async fn fetch(executor: impl PgExecutor<'_>, webhook_id: Uuid) -> Result<SubscriptionRow, AppError> {
+async fn fetch(
+    executor: impl PgExecutor<'_>,
+    webhook_id: Uuid,
+) -> Result<SubscriptionRow, AppError> {
     sqlx::query_as::<_, SubscriptionRow>(&format!(
         "{SUBSCRIPTION_SELECT} WHERE subscription.id = $1"
     ))
@@ -490,8 +495,14 @@ pub(crate) async fn create(
         ));
     }
     let id = Uuid::now_v7();
-    let (secret_id, secret) =
-        store_secret(state, &mut transaction, organization_id, caller.actor_id, id).await?;
+    let (secret_id, secret) = store_secret(
+        state,
+        &mut transaction,
+        organization_id,
+        caller.actor_id,
+        id,
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT INTO webhook_subscriptions (
@@ -606,7 +617,11 @@ pub(crate) async fn update(
     Ok(fetch(&state.pool, webhook_id).await?.into())
 }
 
-pub(crate) async fn delete(state: &AppState, caller: &Caller, webhook_id: Uuid) -> Result<(), AppError> {
+pub(crate) async fn delete(
+    state: &AppState,
+    caller: &Caller,
+    webhook_id: Uuid,
+) -> Result<(), AppError> {
     require_person(caller)?;
     let mut transaction = state.pool.begin().await?;
     let current = owned(&mut *transaction, caller, webhook_id).await?;
@@ -735,7 +750,11 @@ const DELIVERY_COLUMNS: &str = r#"
     last_error, duration_ms, occurred_at, created_at, delivered_at
 "#;
 
-async fn delivery(pool: &PgPool, webhook_id: Uuid, delivery_id: Uuid) -> Result<DeliveryView, AppError> {
+async fn delivery(
+    pool: &PgPool,
+    webhook_id: Uuid,
+    delivery_id: Uuid,
+) -> Result<DeliveryView, AppError> {
     sqlx::query_as::<_, DeliveryView>(&format!(
         "SELECT {DELIVERY_COLUMNS} FROM webhook_deliveries WHERE id = $1 AND subscription_id = $2"
     ))
@@ -804,23 +823,27 @@ async fn queue_delivery(
 /// and whose owner can see it now, and queues it. A subscription sees an
 /// event once, however often it's routed.
 pub(crate) async fn fan_out(state: &AppState, event: &Event) -> Result<usize, AppError> {
-    let candidates = sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        SELECT subscription.id, subscription.owner_actor_id
-        FROM webhook_subscriptions subscription
+    let candidates = sqlx::query_as::<_, SubscriptionRow>(&format!(
+        r#"{SUBSCRIPTION_SELECT}
         WHERE subscription.organization_id = $1
           AND subscription.state = 'active'
           AND (subscription.project_id IS NULL OR subscription.project_id = $2)
-          AND $3 = ANY(subscription.event_types)
-        "#,
-    )
+          AND $3 = ANY(subscription.event_types)"#
+    ))
     .bind(event.organization_id)
     .bind(event.project_id)
     .bind(&event.event_type)
     .fetch_all(&state.pool)
     .await?;
     let mut queued = 0;
-    for (subscription_id, owner) in candidates {
+    for subscription in candidates {
+        let subscription_id = subscription.id;
+        let owner = subscription.owner_actor_id;
+        // An owner who left turns it off now rather than at the next delivery.
+        if let Some(reason) = owner_refusal(&state.pool, &subscription).await? {
+            turn_off(&state.pool, subscription_id, reason).await?;
+            continue;
+        }
         if !visible_to(&state.pool, owner, event.project_id, &event.subject).await? {
             continue;
         }
@@ -1001,7 +1024,13 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
     }
     let subscription = fetch(pool, due.subscription_id).await?;
     if subscription.state != "active" {
-        finish_delivery(pool, due.id, "skipped", Some("The webhook is paused or off.")).await?;
+        finish_delivery(
+            pool,
+            due.id,
+            "skipped",
+            Some("The webhook is paused or off."),
+        )
+        .await?;
         return Ok(());
     }
     // Principle 9: the owner's access now, not when they subscribed.
@@ -1029,7 +1058,13 @@ async fn deliver(context: &JobContext) -> Result<(), JobError> {
         return Ok(());
     };
     let Some(secret_id) = subscription.secret_id else {
-        finish_delivery(pool, due.id, "failed", Some("The webhook has no signing secret.")).await?;
+        finish_delivery(
+            pool,
+            due.id,
+            "failed",
+            Some("The webhook has no signing secret."),
+        )
+        .await?;
         return Ok(());
     };
     let keys = secrets::keyring(&state.config)
@@ -1252,7 +1287,18 @@ async fn build_body(
             let Some(run_id) = subject.agent_run_id else {
                 return Ok(None);
             };
-            let Some(run) = sqlx::query_as::<_, (Uuid, Uuid, String, Option<String>, Option<String>, DateTime<Utc>, Option<DateTime<Utc>>)>(
+            let Some(run) = sqlx::query_as::<
+                _,
+                (
+                    Uuid,
+                    Uuid,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    DateTime<Utc>,
+                    Option<DateTime<Utc>>,
+                ),
+            >(
                 r#"
                 SELECT run.id, run.conversation_id, run.state, run.config->>'harness',
                        run.failure_reason, run.created_at, run.finished_at
@@ -1291,16 +1337,17 @@ async fn build_body(
             let Some(pull_request_id) = subject.pull_request_id else {
                 return Ok(None);
             };
-            let Some(pr) = sqlx::query_as::<_, (Uuid, i64, String, String, String, String, String, String)>(
-                r#"
+            let Some(pr) =
+                sqlx::query_as::<_, (Uuid, i64, String, String, String, String, String, String)>(
+                    r#"
                 SELECT pr.id, pr.pull_request_number, pr.title, pr.html_url, pr.state,
                        pr.checks_state, pr.head_sha, pr.head_ref
                 FROM github_pull_requests pr WHERE pr.id = $1
                 "#,
-            )
-            .bind(pull_request_id)
-            .fetch_optional(pool)
-            .await?
+                )
+                .bind(pull_request_id)
+                .fetch_optional(pool)
+                .await?
             else {
                 return Ok(None);
             };
@@ -1328,8 +1375,10 @@ async fn build_body(
                 SELECT message.id, message.author_actor_id,
                        COALESCE(
                            (SELECT display_name FROM users WHERE actor_id = message.author_actor_id),
-                           (SELECT display_name FROM external_agent_connections
-                            WHERE actor_id = message.author_actor_id LIMIT 1)
+                           (SELECT membership.display_name FROM project_memberships membership
+                            JOIN conversations conversation ON conversation.id = message.conversation_id
+                            WHERE membership.project_id = conversation.project_id
+                              AND membership.actor_id = message.author_actor_id)
                        ),
                        message.plain_text, message.removed_at IS NOT NULL, message.created_at
                 FROM messages message
@@ -1390,7 +1439,10 @@ async fn create_route(
 ) -> Result<(StatusCode, Json<CreatedWebhook>), AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    Ok((StatusCode::CREATED, Json(create(&state, &caller, request).await?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(create(&state, &caller, request).await?),
+    ))
 }
 
 async fn update_route(
@@ -1457,7 +1509,14 @@ async fn deliveries_route(
 ) -> Result<Json<DeliveryPage>, AppError> {
     let caller = Caller::browser(&principal)?;
     Ok(Json(
-        deliveries(&state, &caller, webhook_id, query.cursor.as_deref(), query.limit).await?,
+        deliveries(
+            &state,
+            &caller,
+            webhook_id,
+            query.cursor.as_deref(),
+            query.limit,
+        )
+        .await?,
     ))
 }
 

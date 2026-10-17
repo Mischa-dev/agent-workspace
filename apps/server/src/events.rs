@@ -110,7 +110,11 @@ pub(crate) struct RoutePayload {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub(crate) enum RouteSource {
     Message {
         conversation_id: Uuid,
@@ -417,7 +421,14 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                 linked_pull_requests(pool, payload, PullRequestLink::Run(*agent_run_id))
                     .await?
                     .into_iter()
-                    .map(|(event_type, key, subject)| event(event_type, key, None, subject)),
+                    .map(|(event_type, key, subject)| {
+                        let subject = Subject {
+                            agent_run_id: Some(*agent_run_id),
+                            work_item_id,
+                            ..subject
+                        };
+                        event(event_type, key, None, subject)
+                    }),
             );
         }
         RouteSource::WorkItem {
@@ -472,7 +483,7 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                 }
                 changed.sort();
                 changed.dedup();
-                                events.push(event(
+                events.push(event(
                     "task.updated",
                     format!("task.updated:{work_item_id}:{version}"),
                     activity.actor_id,
@@ -487,7 +498,13 @@ async fn expand(pool: &PgPool, payload: &RoutePayload) -> Result<Vec<Event>, App
                 linked_pull_requests(pool, payload, PullRequestLink::WorkItem(*work_item_id))
                     .await?
                     .into_iter()
-                    .map(|(event_type, key, subject)| event(event_type, key, None, subject)),
+                    .map(|(event_type, key, subject)| {
+                        let subject = Subject {
+                            work_item_id: Some(*work_item_id),
+                            ..subject
+                        };
+                        event(event_type, key, None, subject)
+                    }),
             );
         }
     }

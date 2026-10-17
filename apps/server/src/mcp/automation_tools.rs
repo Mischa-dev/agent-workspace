@@ -42,14 +42,17 @@ fn finish(result: Result<Value, AppError>, operation: &'static str) -> ToolResul
     }
 }
 
-fn id_argument(
-    value: Option<&str>,
-    field: &'static str,
-) -> Result<uuid::Uuid, ToolResult<Value>> {
+fn id_argument(value: Option<&str>, field: &'static str) -> Result<uuid::Uuid, ToolResult<Value>> {
     match value.map(parse_id) {
         Some(Some(id)) => Ok(id),
-        Some(None) => Err(ToolResult::invalid(field, format!("Use an ID for {field}."))),
-        None => Err(ToolResult::invalid(field, format!("{field} is required here."))),
+        Some(None) => Err(ToolResult::invalid(
+            field,
+            format!("Use an ID for {field}."),
+        )),
+        None => Err(ToolResult::invalid(
+            field,
+            format!("{field} is required here."),
+        )),
     }
 }
 
@@ -188,7 +191,9 @@ pub(super) async fn webhook_write(
             WebhookOperation::RotateSecret => {
                 to_value(webhooks::rotate_secret(state, &caller, webhook_id).await?)
             }
-            WebhookOperation::Test => to_value(webhooks::send_test(state, &caller, webhook_id).await?),
+            WebhookOperation::Test => {
+                to_value(webhooks::send_test(state, &caller, webhook_id).await?)
+            }
             WebhookOperation::Redeliver => {
                 let delivery_id = arguments
                     .delivery_id

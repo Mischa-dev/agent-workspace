@@ -279,6 +279,37 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/api-tokens/{credential_id}/revoke",
         CredentialManage
     ),
+    policy_route!("webhooks", Post, "/api/v1/webhooks", CredentialManage),
+    policy_route!(
+        "webhooks",
+        Patch,
+        "/api/v1/webhooks/{webhook_id}",
+        CredentialManage
+    ),
+    policy_route!(
+        "webhooks",
+        Delete,
+        "/api/v1/webhooks/{webhook_id}",
+        CredentialManage
+    ),
+    policy_route!(
+        "webhooks",
+        Post,
+        "/api/v1/webhooks/{webhook_id}/rotate-secret",
+        CredentialManage
+    ),
+    policy_route!(
+        "webhooks",
+        Post,
+        "/api/v1/webhooks/{webhook_id}/test",
+        CredentialManage
+    ),
+    policy_route!(
+        "webhooks",
+        Post,
+        "/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+        CredentialManage
+    ),
     boundary_route!(
         "account_security",
         Put,
@@ -785,6 +816,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     boundary_route!("mcp/oauth", Post, "/oauth/token", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/revoke", OAuthProtocol),
     boundary_route!("mcp", Protocol, "/api/v1/mcp", McpProtocol),
+    boundary_route!("public_api", Post, "/api/public/v1/{tool}", McpProtocol),
     policy_route!(
         "projects",
         Post,
@@ -850,6 +882,30 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
         WorkerInvoke
+    ),
+    policy_route!(
+        "automations",
+        Post,
+        "/api/v1/projects/{project_id}/automations",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "automations",
+        Patch,
+        "/api/v1/projects/{project_id}/automations/{rule_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "automations",
+        Delete,
+        "/api/v1/projects/{project_id}/automations/{rule_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "automations",
+        Post,
+        "/api/v1/projects/{project_id}/automations/{rule_id}/run",
+        WorkItemEdit
     ),
     policy_route!(
         "work_items",
@@ -1166,6 +1222,7 @@ mod tests {
         ("workspace", include_str!("workspace.rs")),
         ("audit_log", include_str!("audit_log.rs")),
         ("mcp/oauth", include_str!("mcp/oauth.rs")),
+        ("public_api", include_str!("public_api.rs")),
         ("projects", include_str!("projects.rs")),
         ("repositories", include_str!("repositories.rs")),
         ("work_items", include_str!("work_items.rs")),
@@ -1174,9 +1231,11 @@ mod tests {
         ("external_agents", include_str!("external_agents.rs")),
         ("memory", include_str!("memory.rs")),
         ("connected_apps", include_str!("connected_apps.rs")),
+        ("webhooks", include_str!("webhooks.rs")),
         ("settings", include_str!("settings.rs")),
         ("environments", include_str!("environments.rs")),
         ("launch", include_str!("launch.rs")),
+        ("automations", include_str!("automations.rs")),
         ("agent_sessions", include_str!("agent_sessions.rs")),
         ("secrets", include_str!("secrets.rs")),
         ("metrics", include_str!("metrics.rs")),

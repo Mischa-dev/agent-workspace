@@ -974,7 +974,10 @@ pub(crate) async fn matching_tasks(
     ));
     builder.push_bind(project_id);
     if let Some(ids) = work_item_ids {
-        builder.push(" AND item.id = ANY(").push_bind(ids.to_vec()).push(")");
+        builder
+            .push(" AND item.id = ANY(")
+            .push_bind(ids.to_vec())
+            .push(")");
     }
     spec.filters.push_where(&mut builder);
     builder.push(" ORDER BY item.created_at, item.id LIMIT ");

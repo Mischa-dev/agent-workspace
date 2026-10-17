@@ -112,15 +112,19 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 
 /// What makes a rule fire.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Trigger {
     /// A task is created (and matches the conditions, if any).
     TaskCreated {},
     /// A task starts matching the conditions: fires when it enters them,
     /// not on every change while it matches.
     TaskMatches {},
-    /// A run finishes. outcomes narrows it to completed, failed or
-    /// cancelled; empty means any.
+    /// A run finishes. outcomes narrows it to completed, failed, canceled
+    /// or interrupted; empty means any.
     RunFinished {
         #[serde(default)]
         outcomes: Vec<String>,
@@ -276,7 +280,11 @@ pub enum Recipients {
 /// {{task.url}}, {{task.status}}, {{run.state}}, {{pr.number}},
 /// {{pr.title}}, {{pr.url}}, {{rule.name}} and {{event}}.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Action {
     /// Launch an agent on the task (or the matching tasks) with the
     /// project's run defaults. On a pull request with no task, starts a run
@@ -326,8 +334,14 @@ impl Action {
     }
 }
 
-const SET_FIELDS: &[&str] = &["status", "priority", "assignee", "add_label", "remove_label"];
-const RUN_OUTCOMES: &[&str] = &["completed", "failed", "cancelled"];
+const SET_FIELDS: &[&str] = &[
+    "status",
+    "priority",
+    "assignee",
+    "add_label",
+    "remove_label",
+];
+const RUN_OUTCOMES: &[&str] = &["completed", "failed", "canceled", "interrupted"];
 
 fn clean_text(value: &str, field: &'static str) -> Result<String, AppError> {
     let value = value.trim();
@@ -389,7 +403,9 @@ fn check_shape(
                 return Err(AppError::Validation("trigger.every"));
             }
             match frequency.as_str() {
-                "weekly" if weekdays.is_empty() || weekdays.iter().any(|d| !(1..=7).contains(d)) => {
+                "weekly"
+                    if weekdays.is_empty() || weekdays.iter().any(|d| !(1..=7).contains(d)) =>
+                {
                     return Err(AppError::Validation("trigger.weekdays"));
                 }
                 "monthly" if !month_day.is_some_and(|day| (1..=31).contains(&day)) => {
@@ -455,8 +471,13 @@ fn check_shape(
                 "a scheduled or capacity rule that launches or changes tasks needs conditions to pick them",
             ));
         }
-        if matches!(action, Action::Notify { recipients: Recipients::Assignee, .. })
-            && matches!(trigger, Trigger::MessagePosted { .. })
+        if matches!(
+            action,
+            Action::Notify {
+                recipients: Recipients::Assignee,
+                ..
+            }
+        ) && matches!(trigger, Trigger::MessagePosted { .. })
         {
             return Err(AppError::Invalid("a message has no assignee to notify"));
         }
@@ -496,8 +517,9 @@ const RULE_SELECT: &str = r#"
     SELECT rule.id, rule.organization_id, rule.project_id, rule.owner_actor_id,
            COALESCE(
                person.display_name,
-               (SELECT display_name FROM external_agent_connections
-                WHERE actor_id = rule.owner_actor_id LIMIT 1)
+               (SELECT membership.display_name FROM project_memberships membership
+                WHERE membership.project_id = rule.project_id
+                  AND membership.actor_id = rule.owner_actor_id)
            ) AS owner_name,
            rule.via_oauth_grant_id, rule.external_agent_connection_id, rule.name,
            rule.enabled, rule.trigger, rule.view_id, view.name AS view_name,
@@ -647,7 +669,7 @@ async fn reader_access(
         PolicyAction::WorkItemEdit,
     )
     .await
-    .unwrap_or(false);
+    .is_ok();
     let admin = caller.actor_kind == ActorKind::Human
         && crate::memory::project_access(
             pool,
@@ -657,7 +679,7 @@ async fn reader_access(
             PolicyAction::ProjectManage,
         )
         .await
-        .unwrap_or(false);
+        .is_ok();
     Ok((can_edit && caller.can_write, admin))
 }
 
@@ -740,7 +762,11 @@ async fn check_references(
     Ok(())
 }
 
-async fn fetch(executor: impl PgExecutor<'_>, project_id: Uuid, rule_id: Uuid) -> Result<RuleRow, AppError> {
+async fn fetch(
+    executor: impl PgExecutor<'_>,
+    project_id: Uuid,
+    rule_id: Uuid,
+) -> Result<RuleRow, AppError> {
     sqlx::query_as::<_, RuleRow>(&format!(
         "{RULE_SELECT} WHERE rule.project_id = $1 AND rule.id = $2"
     ))
@@ -785,7 +811,11 @@ pub struct UpdateRule {
     pub enabled: Option<bool>,
 }
 
-pub(crate) async fn list(state: &AppState, caller: &Caller, project_id: Uuid) -> Result<RuleList, AppError> {
+pub(crate) async fn list(
+    state: &AppState,
+    caller: &Caller,
+    project_id: Uuid,
+) -> Result<RuleList, AppError> {
     let (can_create, admin) = reader_access(&state.pool, caller, project_id).await?;
     let rows = sqlx::query_as::<_, RuleRow>(&format!(
         "{RULE_SELECT} WHERE rule.project_id = $1 ORDER BY rule.created_at, rule.id LIMIT 200"
@@ -794,7 +824,10 @@ pub(crate) async fn list(state: &AppState, caller: &Caller, project_id: Uuid) ->
     .fetch_all(&state.pool)
     .await?;
     Ok(RuleList {
-        rules: rows.into_iter().map(|row| view(row, caller, admin)).collect(),
+        rules: rows
+            .into_iter()
+            .map(|row| view(row, caller, admin))
+            .collect(),
         can_create,
     })
 }
@@ -810,7 +843,11 @@ pub(crate) async fn create(
         return Err(AppError::Forbidden);
     }
     let name = normalize_name(&request.name)?;
-    check_shape(&mut request.trigger, &request.conditions, &mut request.actions)?;
+    check_shape(
+        &mut request.trigger,
+        &request.conditions,
+        &mut request.actions,
+    )?;
     check_references(
         state,
         project_id,
@@ -883,7 +920,11 @@ pub(crate) async fn create(
     )
     .await?;
     transaction.commit().await?;
-    Ok(view(fetch(&state.pool, project_id, id).await?, caller, admin))
+    Ok(view(
+        fetch(&state.pool, project_id, id).await?,
+        caller,
+        admin,
+    ))
 }
 
 pub(crate) async fn update(
@@ -921,16 +962,34 @@ pub(crate) async fn update(
         Some(name) => normalize_name(name)?,
         None => current.name.clone(),
     };
-    let mut trigger = request.trigger.clone().map_or_else(|| current.trigger(), Ok)?;
-    let conditions = request.conditions.clone().unwrap_or_else(|| current.conditions());
-    let mut actions = request.actions.clone().map_or_else(|| current.actions(), Ok)?;
+    let mut trigger = request
+        .trigger
+        .clone()
+        .map_or_else(|| current.trigger(), Ok)?;
+    let conditions = request
+        .conditions
+        .clone()
+        .unwrap_or_else(|| current.conditions());
+    let mut actions = request
+        .actions
+        .clone()
+        .map_or_else(|| current.actions(), Ok)?;
     let enabled = request.enabled.unwrap_or(current.enabled);
     if !only_turning_off {
         check_shape(&mut trigger, &conditions, &mut actions)?;
-        check_references(state, project_id, caller.actor_id, &conditions, &trigger, &actions)
-            .await?;
+        check_references(
+            state,
+            project_id,
+            caller.actor_id,
+            &conditions,
+            &trigger,
+            &actions,
+        )
+        .await?;
     }
-    let next_run_at = enabled.then(|| next_run_after(&trigger, Utc::now())).flatten();
+    let next_run_at = enabled
+        .then(|| next_run_after(&trigger, Utc::now()))
+        .flatten();
     let mut transaction = state.pool.begin().await?;
     let updated = sqlx::query(
         r#"
@@ -978,7 +1037,11 @@ pub(crate) async fn update(
     )
     .await?;
     transaction.commit().await?;
-    Ok(view(fetch(&state.pool, project_id, rule_id).await?, caller, admin))
+    Ok(view(
+        fetch(&state.pool, project_id, rule_id).await?,
+        caller,
+        admin,
+    ))
 }
 
 pub(crate) async fn delete(
@@ -1184,16 +1247,27 @@ async fn task_matches(
     work_item_id: Uuid,
 ) -> Result<Result<bool, &'static str>, AppError> {
     let Some(params) = condition_params(pool, rule).await? else {
-        return Ok(Err("Turned off because the saved view its conditions use was deleted."));
+        return Ok(Err(
+            "Turned off because the saved view its conditions use was deleted.",
+        ));
     };
     if params.is_empty() {
         return Ok(Ok(true));
     }
-    match views::matching_tasks(pool, rule.project_id, &params, rule.owner_actor_id, Some(&[work_item_id]), 1).await {
+    match views::matching_tasks(
+        pool,
+        rule.project_id,
+        &params,
+        rule.owner_actor_id,
+        Some(&[work_item_id]),
+        1,
+    )
+    .await
+    {
         Ok(found) => Ok(Ok(!found.is_empty())),
-        Err(AppError::Validation(_) | AppError::Invalid(_)) => {
-            Ok(Err("Turned off because its conditions can't be read any more."))
-        }
+        Err(AppError::Validation(_) | AppError::Invalid(_)) => Ok(Err(
+            "Turned off because its conditions can't be read any more.",
+        )),
         Err(error) => Err(error),
     }
 }
@@ -1247,8 +1321,15 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             continue;
         };
         let subject = &event.subject;
+        // A maker who lost access turns the rule off instead of it acting
+        // for them.
+        if let Err(reason) = acting_access(pool, &rule).await? {
+            disable(state, &rule, &reason).await?;
+            continue;
+        }
         // Only what its maker could see fires it.
-        if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await? {
+        if !crate::webhooks::visible_to(pool, rule.owner_actor_id, rule.project_id, subject).await?
+        {
             continue;
         }
         let wanted = match &trigger {
@@ -1267,8 +1348,7 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
                 contains,
             } => {
                 event.actor_id != Some(rule.owner_actor_id)
-                    && conversation_id
-                        .is_none_or(|only| subject.conversation_id == Some(only))
+                    && conversation_id.is_none_or(|only| subject.conversation_id == Some(only))
                     && match contains {
                         Some(text) => message_contains(pool, subject, text).await?,
                         None => true,
@@ -1324,9 +1404,15 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             continue;
         }
         let mut transaction = pool.begin().await?;
-        if queue_fire(&mut transaction, &rule, &dedupe, &summary_for(event), subject)
-            .await?
-            .is_some()
+        if queue_fire(
+            &mut transaction,
+            &rule,
+            &dedupe,
+            &summary_for(event),
+            subject,
+        )
+        .await?
+        .is_some()
         {
             fired += 1;
         }
@@ -1526,7 +1612,11 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
     let actor_kind = match row.kind.as_str() {
         "human" => ActorKind::Human,
         "external_agent" => ActorKind::ExternalAgent,
-        _ => return Ok(Err(format!("Turned off because {who} can't run automations."))),
+        _ => {
+            return Ok(Err(format!(
+                "Turned off because {who} can't run automations."
+            )));
+        }
     };
     if row.project_archived {
         return Ok(Err("Turned off because the project is archived.".to_owned()));
@@ -1559,7 +1649,7 @@ async fn acting_access(pool: &PgPool, rule: &RuleRow) -> Result<Result<Acting, S
         PolicyAction::WorkItemEdit,
     )
     .await
-    .unwrap_or(false);
+    .is_ok();
     if !can_edit {
         return Ok(Err(format!(
             "Turned off because {who}, who made it, can no longer make changes in this project."
@@ -1611,11 +1701,10 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
     .bind(rule.organization_id)
     .fetch_one(&mut *transaction)
     .await?;
-    let project_name =
-        sqlx::query_scalar::<_, String>("SELECT name FROM projects WHERE id = $1")
-            .bind(rule.project_id)
-            .fetch_one(&mut *transaction)
-            .await?;
+    let project_name = sqlx::query_scalar::<_, String>("SELECT name FROM projects WHERE id = $1")
+        .bind(rule.project_id)
+        .fetch_one(&mut *transaction)
+        .await?;
     let mut recipients: Vec<(Uuid, Uuid)> = Vec::new();
     if owner_is_person {
         let in_project =
@@ -1782,7 +1871,11 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
             Ok(acting) => acting,
             Err(reason) => {
                 disable(state, &rule, &reason).await?;
-                let state_name = if results.is_empty() { "skipped" } else { "partial" };
+                let state_name = if results.is_empty() {
+                    "skipped"
+                } else {
+                    "partial"
+                };
                 return finish(pool, run_id, state_name, Some(&reason), &results).await;
             }
         };
@@ -1869,7 +1962,12 @@ impl Context {
         if let Some(id) = work_item_id
             && let Some(task) = crate::webhooks::task_data(state, rule.project_id, id).await?
         {
-            let text = |key: &str| task.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+            let text = |key: &str| {
+                task.get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
             variables.push(("task.key", text("key")));
             variables.push(("task.title", text("title")));
             variables.push(("task.status", text("status")));
@@ -1957,7 +2055,15 @@ async fn target_tasks(
     if params.is_empty() {
         return Ok(Ok(Vec::new()));
     }
-    Ok(Ok(views::matching_tasks(pool, rule.project_id, &params, rule.owner_actor_id, None, limit).await?))
+    Ok(Ok(views::matching_tasks(
+        pool,
+        rule.project_id,
+        &params,
+        rule.owner_actor_id,
+        None,
+        limit,
+    )
+    .await?))
 }
 
 /// The maker, as an MCP caller confined to the rule's project, for actions
@@ -1971,7 +2077,10 @@ fn principal_for(rule: &RuleRow, acting: &Acting) -> McpPrincipal {
         actor_kind: acting.actor_kind,
         project_id: rule.project_id,
         external_agent_connection_id: acting.connection_id,
-        client_name: format!("Automation: {}", rule.name).chars().take(80).collect(),
+        client_name: format!("Automation: {}", rule.name)
+            .chars()
+            .take(80)
+            .collect(),
         scopes: vec!["read".to_owned(), "write".to_owned()],
         authentication_class: "automation",
         account_wide: false,
@@ -1994,7 +2103,7 @@ async fn call_tool(
             mcp::DirectCallError::Refused(error) => error.to_string(),
         })?;
     match result.get("outcome").and_then(Value::as_str) {
-        None | Some("ok" | "success" | "created" | "updated" | "unchanged" | "sent") => Ok(result),
+        None | Some("ok" | "applied") => Ok(result),
         Some(_) => Err(result
             .get("message")
             .or_else(|| result.get("error"))
@@ -2059,14 +2168,13 @@ async fn run_action(
                 // A pull request with no task: start a run in the thread of
                 // the run that opened it.
                 if let (Some(run_id), Some(prompt)) = (context.agent_run_id, prompt) {
-                    let (conversation_id, repository_id) =
-                        sqlx::query_as::<_, (Uuid, Uuid)>(
-                            "SELECT conversation_id, repository_id FROM agent_runs WHERE id = $1",
-                        )
-                        .bind(run_id)
-                        .fetch_one(&state.pool)
-                        .await
-                        .map_err(|error| database(error.into()))?;
+                    let (conversation_id, repository_id) = sqlx::query_as::<_, (Uuid, Uuid)>(
+                        "SELECT conversation_id, repository_id FROM agent_runs WHERE id = $1",
+                    )
+                    .bind(run_id)
+                    .fetch_one(&state.pool)
+                    .await
+                    .map_err(|error| database(error.into()))?;
                     let (_, started) = crate::api::start_run_in(
                         state,
                         &caller,
@@ -2154,7 +2262,10 @@ async fn run_action(
             }
             match last_error {
                 Some(error) if changed == 0 => Err(error),
-                Some(error) => Ok(format!("Changed {changed} of {} tasks; {error}", tasks.len())),
+                Some(error) => Ok(format!(
+                    "Changed {changed} of {} tasks; {error}",
+                    tasks.len()
+                )),
                 None => Ok(format!(
                     "Changed {changed} task{}.",
                     if changed == 1 { "" } else { "s" }
@@ -2309,7 +2420,9 @@ async fn update_route(
 ) -> Result<Json<RuleView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    Ok(Json(update(&state, &caller, project_id, rule_id, request).await?))
+    Ok(Json(
+        update(&state, &caller, project_id, rule_id, request).await?,
+    ))
 }
 
 async fn delete_route(
@@ -2333,7 +2446,9 @@ async fn run_now_route(
 ) -> Result<Json<RunView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let caller = Caller::browser(&principal)?;
-    Ok(Json(run_now(&state, &caller, project_id, rule_id, request).await?))
+    Ok(Json(
+        run_now(&state, &caller, project_id, rule_id, request).await?,
+    ))
 }
 
 async fn runs_route(
@@ -2363,14 +2478,14 @@ mod tests {
         let trigger: Trigger = serde_json::from_value(serde_json::json!({
             "kind": "run_finished", "outcomes": ["failed"]
         }))
-        .unwrap();
+        .expect("trigger");
         assert_eq!(trigger.kind(), "run_finished");
         let action: Action = serde_json::from_value(serde_json::json!({
             "kind": "post_message",
             "conversationId": "0190a0a0-0000-7000-8000-000000000000",
             "text": "hi"
         }))
-        .unwrap();
+        .expect("action");
         assert!(matches!(action, Action::PostMessage { .. }));
         assert!(serde_json::from_value::<Trigger>(serde_json::json!({"kind": "never"})).is_err());
     }
@@ -2378,10 +2493,24 @@ mod tests {
     #[test]
     fn shapes_are_checked() {
         let mut actions = vec![notify()];
-        check_shape(&mut Trigger::TaskCreated {}, &Conditions::default(), &mut actions).unwrap();
-        assert!(matches!(&actions[0], Action::Notify { message, .. } if message == "Ready: {{task.key}}"));
+        check_shape(
+            &mut Trigger::TaskCreated {},
+            &Conditions::default(),
+            &mut actions,
+        )
+        .expect("valid rule");
+        assert!(
+            matches!(&actions[0], Action::Notify { message, .. } if message == "Ready: {{task.key}}")
+        );
         // Matching needs conditions to match against.
-        assert!(check_shape(&mut Trigger::TaskMatches {}, &Conditions::default(), &mut actions).is_err());
+        assert!(
+            check_shape(
+                &mut Trigger::TaskMatches {},
+                &Conditions::default(),
+                &mut actions
+            )
+            .is_err()
+        );
         // A schedule that launches needs conditions to pick tasks.
         let mut schedule = Trigger::Schedule {
             frequency: "daily".to_owned(),
@@ -2401,7 +2530,7 @@ mod tests {
             view_id: None,
             filters: [("status".to_owned(), "Todo".to_owned())].into(),
         };
-        check_shape(&mut schedule, &conditions, &mut launch).unwrap();
+        check_shape(&mut schedule, &conditions, &mut launch).expect("valid rule");
         // Agent profiles wait for W12.
         let mut profile = vec![Action::Launch {
             environment_id: None,
@@ -2417,8 +2546,8 @@ mod tests {
             time: "09:00".to_owned(),
             timezone: "Mars/Olympus".to_owned(),
         };
-        assert!(check_shape(&mut bad_zone, &conditions, &mut vec![notify()]).is_err());
-        assert!(check_shape(&mut Trigger::TaskCreated {}, &conditions, &mut vec![]).is_err());
+        assert!(check_shape(&mut bad_zone, &conditions, &mut [notify()]).is_err());
+        assert!(check_shape(&mut Trigger::TaskCreated {}, &conditions, &mut []).is_err());
     }
 
     #[test]
@@ -2433,7 +2562,10 @@ mod tests {
         };
         // Saturday 17 October 2026, noon UTC: next is Monday 19th, 09:00 in
         // New York, which is 13:00 UTC (daylight time).
-        let after = Utc.with_ymd_and_hms(2026, 10, 17, 12, 0, 0).unwrap();
+        let after = Utc
+            .with_ymd_and_hms(2026, 10, 17, 12, 0, 0)
+            .single()
+            .expect("valid time");
         assert_eq!(
             next_run_after(&trigger, after),
             Some(Utc.with_ymd_and_hms(2026, 10, 19, 13, 0, 0).unwrap())
