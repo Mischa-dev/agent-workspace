@@ -49,7 +49,7 @@ export function AgentProfiles({ projectId }: { projectId: string }) {
           </Button>
         </div>
       ) : null}
-      {data && data.profiles.length === 0 ? (
+      {data && data.ready && data.profiles.length === 0 ? (
         <p className="aw-agentprofiles__quiet">
           {data.canManage ? 'No project agents yet. Start from a template above.' : 'No project agents yet. A project admin can add them.'}
         </p>

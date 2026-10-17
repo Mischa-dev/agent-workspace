@@ -33,6 +33,21 @@ const keyPages: KeyPage[] = [
     ready: (page) => expect(page.getByRole('region', { name: 'Work item board' })).toBeVisible(),
   },
   {
+    name: 'runs',
+    path: () => '/runs',
+    ready: (page) => expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible(),
+  },
+  {
+    name: 'project-agents',
+    path: () => `/settings/projects/${seededValue('E2E_PROJECT_ID')}/agents`,
+    ready: (page) => expect(page.getByRole('heading', { name: 'Project agents' })).toBeVisible(),
+  },
+  {
+    name: 'harnesses',
+    path: () => '/settings/workspace/harnesses',
+    ready: (page) => expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible(),
+  },
+  {
     name: 'appearance',
     path: () => '/settings/appearance',
     ready: (page) => expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible(),
@@ -74,6 +89,19 @@ for (const { scheme, theme } of schemes) {
           animations: 'disabled',
         })
         expect(errors, 'uncaught errors on the page').toEqual([])
+      })
+
+      test(`${keyPage.name} on a phone`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 })
+        await page.goto(keyPage.path())
+        await keyPage.ready(page)
+        await page.screenshot({
+          path: path.join(screenshotDir, `${keyPage.name}-${scheme}-phone.png`),
+          fullPage: true,
+          animations: 'disabled',
+        })
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+        expect(overflow, 'horizontal scroll on a 390 px phone').toBeLessThanOrEqual(0)
       })
     }
   })

@@ -31,8 +31,9 @@ working one in about 50 lines.
 ### How a turn runs
 
 Each turn is one process. When it ends, the run commits what changed in the
-worktree, publishes the branch and opens the pull request. The harness only
-edits files in its worktree: it never pushes, and it doesn't need GitHub
+worktree to the run's branch. A person opens the pull request from the run
+card, which pushes the branch through the project's GitHub App. The harness
+only edits files in its worktree: it never pushes, and it doesn't need GitHub
 credentials.
 
 **Arguments.** The registered argument list is expanded for each turn. An
