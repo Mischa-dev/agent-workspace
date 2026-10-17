@@ -5,6 +5,7 @@ import { queryKeys } from '../api/queryKeys'
 import { Button, ErrorState, Icon, MessageSkeleton, actorKind, Avatar } from '../ui'
 import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
+import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
 import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { allowedStatuses } from './pickerModel'
@@ -14,6 +15,7 @@ import { priorityLabel } from './constants'
 import { useAssignableActors } from './hooks'
 import { useBoard, useInvalidateWorkItems, useMilestones } from './planningHooks'
 import { useTaskShortcuts } from './shortcutKeys'
+import { useDoneCount } from './useDoneWork'
 import { TaskGlyph } from './TaskGlyph'
 import { editErrorMessage, useApplyPick } from './taskEdits'
 import type { BoardColumn, WorkItemBoardResponse, WorkItemCard, WorkItemPriority, WorkItemWorkflow } from './types'
@@ -44,6 +46,7 @@ export function WorkItemBoard({
   onClosePanel,
   onManageLabels,
   onOpenTask,
+  onToggleDone,
   openTaskId,
   projectId,
   state,
@@ -54,12 +57,20 @@ export function WorkItemBoard({
   onClosePanel: () => void
   onManageLabels: () => void
   onOpenTask: (id: string) => void
+  onToggleDone: () => void
   openTaskId: string | null
   projectId: string
   state: ListState
   workflow: WorkItemWorkflow
 }) {
-  const query = useMemo(() => boardQuery(state), [state])
+  // Done and canceled work sits behind the Show done toggle. A status board
+  // loads its done columns and folds them away; other boards leave done tasks
+  // out of the query until the toggle is open.
+  const tucked = tucksDone(state.filters)
+  const query = useMemo(
+    () => (tucked && !state.showDone && state.columnsBy !== 'status' ? withoutDone(boardQuery(state)) : boardQuery(state)),
+    [state, tucked],
+  )
   const boardKey = queryKeys.workItemBoard(projectId, query)
   const board = useBoard(projectId, query, true)
   const queryClient = useQueryClient()
@@ -73,8 +84,17 @@ export function WorkItemBoard({
   const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement; card: WorkItemCard } | null>(null)
   const [loadingColumn, setLoadingColumn] = useState<string | null>(null)
 
-  const columns = useMemo(() => board.data?.columns ?? [], [board.data])
   const columnsBy = board.data?.columnsBy ?? state.columnsBy
+  const statusColumns = useMemo(
+    () =>
+      board.data && columnsBy === 'status'
+        ? statusBoardColumns(board.data.columns, workflow, { tucked, showDone: state.showDone, hideDone: state.filters.includeDone === 'false' })
+        : null,
+    [board.data, columnsBy, state.filters.includeDone, state.showDone, tucked, workflow],
+  )
+  const columns = useMemo(() => statusColumns?.visible ?? board.data?.columns ?? [], [board.data, statusColumns])
+  const otherDoneCount = useDoneCount(projectId, state.filters, workflow, tucked && state.columnsBy !== 'status')
+  const doneCount = statusColumns ? statusColumns.doneTotal : otherDoneCount
   const milestones = useMilestones(projectId)
   const assignees = useAssignableActors(projectId, '')
   const knownLanes = useMemo(() => {
@@ -438,6 +458,14 @@ export function WorkItemBoard({
   const firstCard = columns.flatMap((column) => column.items.map((card) => dragIdFor(column.key, card.id)))[0] ?? null
   const tabStop = focusedId ?? firstCard
   const columnCount = Math.max(1, columns.length)
+  const doneToggle =
+    tucked && (doneCount > 0 || state.showDone) ? (
+      <div className="aw-tboard__done">
+        <Button aria-expanded={state.showDone} className="aw-tboard__donebtn" icon="circle-check" onClick={onToggleDone} size="sm" variant="ghost">
+          {state.showDone ? 'Hide done' : 'Show done'} ({doneCount.toLocaleString()})
+        </Button>
+      </div>
+    ) : null
 
   return (
     <div className="aw-tboard-wrap">
@@ -455,6 +483,7 @@ export function WorkItemBoard({
         style={{ '--aw-board-columns': columnCount } as CSSProperties}
         tabIndex={-1}
       >
+        <div className="aw-tboard__body">
         <div className="aw-tboard__grid">
           {columns.map((column) => (
             <header className="aw-tboard__head" key={column.key}>
@@ -520,6 +549,8 @@ export function WorkItemBoard({
                 </div>
               ))
             : null}
+        </div>
+        {doneToggle}
         </div>
       </div>
       {drag.drag && draggedCard ? (

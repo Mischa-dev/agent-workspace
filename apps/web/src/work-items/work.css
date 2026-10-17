@@ -206,6 +206,10 @@
   cursor: pointer;
 }
 
+.aw-tasks__donetoggle {
+  color: var(--content-fg-muted);
+}
+
 .aw-tasks__chevron {
   color: var(--content-fg-muted);
   transition: transform var(--duration-fast) var(--ease-out);
@@ -381,12 +385,39 @@
   overscroll-behavior-x: contain;
 }
 
+.aw-tboard__body {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+  min-width: min-content;
+}
+
 .aw-tboard__grid {
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: repeat(var(--aw-board-columns), minmax(272px, 1fr));
   gap: var(--space-2) var(--space-3);
   align-items: start;
   min-width: min-content;
+}
+
+/* The narrow column after the board that folds done and canceled work away. */
+.aw-tboard__done {
+  flex: 0 0 auto;
+  width: 44px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-tboard__donebtn {
+  position: sticky;
+  top: 0;
+  width: 100%;
+  height: auto;
+  min-height: 160px;
+  padding: var(--space-3) 0;
+  writing-mode: vertical-rl;
+  white-space: nowrap;
 }
 
 .aw-tboard__head {
@@ -577,6 +608,10 @@
   .aw-tboard__cell,
   .aw-tboard__head {
     scroll-snap-align: start;
+  }
+
+  .aw-tboard__done {
+    scroll-snap-align: end;
   }
 }
 

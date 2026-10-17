@@ -19,7 +19,7 @@ const FIELD_LABELS: Record<string, string> = {
 
 /** The view as it would be saved: filters, sort, grouping and board setup, without the open task. */
 function draftFrom(state: ListState, actorId: string): Omit<ViewDraft, 'name' | 'shared'> {
-  const parameters = writeListState({ ...state, task: null, savedView: null, fields: null, view: 'list' })
+  const parameters = writeListState({ ...state, task: null, savedView: null, fields: null, view: 'list', showDone: false })
   const query = Object.fromEntries(parameters.entries())
   // "Me" follows whoever opens the view, so a shared "assigned to me" view works for everyone.
   if (query.assigneeActorId === actorId) query.assigneeActorId = 'me'

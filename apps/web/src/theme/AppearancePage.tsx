@@ -24,6 +24,7 @@ import {
   decodeTheme,
   encodeTheme,
   fixContrast,
+  loadClassicThemes,
   toHex,
   type Rgb,
 } from './slots'
@@ -61,6 +62,12 @@ function useResolvedColors(revision: string) {
   }, [revision])
   return colors
 }
+
+const PRESET_GROUPS = [
+  { id: 'workspace', label: 'Agent Workspace' },
+  { id: 'dark', label: 'Classic dark' },
+  { id: 'light', label: 'Classic light' },
+] as const
 
 function PresetMini({ id }: { id: string }) {
   return (
@@ -186,6 +193,8 @@ export default function AppearancePage() {
   const colors = useResolvedColors(revision)
   const code = encodeTheme(theme.preset, theme.overrides)
   useEffect(() => () => window.clearTimeout(copiedTimer.current), [])
+  // The classic presets' previews need their stylesheet even when an Agent Workspace preset is in use.
+  useEffect(() => loadClassicThemes(), [])
 
   const failing = useMemo(
     () =>
@@ -240,33 +249,44 @@ export default function AppearancePage() {
         <div className="aw-appearance__layout">
           <div className="aw-appearance__controls">
             <Section title="Theme">
-              <div aria-label="Theme" className="aw-presets" role="radiogroup">
-                {THEME_PRESETS.map((preset) => (
-                  <button
-                    aria-checked={theme.theme === preset.id}
-                    className="aw-preset"
-                    key={preset.id}
-                    onClick={() => theme.setTheme(preset.id)}
-                    role="radio"
-                    type="button"
-                  >
-                    <PresetMini id={preset.id} />
-                    <span className="aw-preset__name">{preset.name}</span>
-                  </button>
+              <div aria-label="Theme" className="aw-preset-groups" role="radiogroup">
+                {PRESET_GROUPS.map((group) => (
+                  <div aria-labelledby={`aw-presets-${group.id}`} className="aw-preset-group" key={group.id} role="group">
+                    <h3 className="aw-preset-group__title" id={`aw-presets-${group.id}`}>
+                      {group.label}
+                    </h3>
+                    <div className="aw-presets">
+                      {THEME_PRESETS.filter((preset) => preset.group === group.id).map((preset) => (
+                        <button
+                          aria-checked={theme.theme === preset.id}
+                          className="aw-preset"
+                          key={preset.id}
+                          onClick={() => theme.setTheme(preset.id)}
+                          role="radio"
+                          type="button"
+                        >
+                          <PresetMini id={preset.id} />
+                          <span className="aw-preset__name">{preset.name}</span>
+                        </button>
+                      ))}
+                      {group.id === 'workspace' ? (
+                        <button
+                          aria-checked={theme.theme === 'system'}
+                          className="aw-preset"
+                          onClick={() => theme.setTheme('system')}
+                          role="radio"
+                          type="button"
+                        >
+                          <span aria-hidden="true" className="aw-mini aw-mini--split">
+                            <PresetMini id="indigo" />
+                            <PresetMini id="midnight" />
+                          </span>
+                          <span className="aw-preset__name">Match system</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                 ))}
-                <button
-                  aria-checked={theme.theme === 'system'}
-                  className="aw-preset"
-                  onClick={() => theme.setTheme('system')}
-                  role="radio"
-                  type="button"
-                >
-                  <span aria-hidden="true" className="aw-mini aw-mini--split">
-                    <PresetMini id="indigo" />
-                    <PresetMini id="midnight" />
-                  </span>
-                  <span className="aw-preset__name">Match system</span>
-                </button>
               </div>
             </Section>
 

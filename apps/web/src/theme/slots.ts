@@ -1,17 +1,57 @@
 /** Theme presets and the color slots a person can change. Mirrors the design system's tokens. */
 
+/**
+ * The workspace's own presets live in styles/tokens.css. Classic ones (group
+ * dark or light) live in public/themes/classic.css, which loads only when one
+ * is in use; public/theme-boot.js keeps the same ids.
+ */
 export const THEME_PRESETS = [
-  { id: 'indigo', name: 'Indigo' },
-  { id: 'midnight', name: 'Midnight' },
-  { id: 'daylight', name: 'Daylight' },
-  { id: 'evergreen', name: 'Evergreen' },
-  { id: 'graphite', name: 'Graphite' },
-] as const
+  { id: 'indigo', name: 'Indigo', group: 'workspace' },
+  { id: 'midnight', name: 'Midnight', group: 'workspace' },
+  { id: 'daylight', name: 'Daylight', group: 'workspace' },
+  { id: 'evergreen', name: 'Evergreen', group: 'workspace' },
+  { id: 'graphite', name: 'Graphite', group: 'workspace' },
+  { id: 'nord', name: 'Nord', group: 'dark' },
+  { id: 'dracula', name: 'Dracula', group: 'dark' },
+  { id: 'gruvbox-dark', name: 'Gruvbox Dark', group: 'dark' },
+  { id: 'solarized-dark', name: 'Solarized Dark', group: 'dark' },
+  { id: 'catppuccin-frappe', name: 'Catppuccin Frappé', group: 'dark' },
+  { id: 'catppuccin-macchiato', name: 'Catppuccin Macchiato', group: 'dark' },
+  { id: 'catppuccin-mocha', name: 'Catppuccin Mocha', group: 'dark' },
+  { id: 'tokyo-night', name: 'Tokyo Night', group: 'dark' },
+  { id: 'one-dark', name: 'One Dark', group: 'dark' },
+  { id: 'rose-pine', name: 'Rosé Pine', group: 'dark' },
+  { id: 'github-dark', name: 'GitHub Dark', group: 'dark' },
+  { id: 'monokai', name: 'Monokai', group: 'dark' },
+  { id: 'gruvbox-light', name: 'Gruvbox Light', group: 'light' },
+  { id: 'solarized-light', name: 'Solarized Light', group: 'light' },
+  { id: 'catppuccin-latte', name: 'Catppuccin Latte', group: 'light' },
+  { id: 'rose-pine-dawn', name: 'Rosé Pine Dawn', group: 'light' },
+  { id: 'github-light', name: 'GitHub Light', group: 'light' },
+] as const satisfies readonly { id: string; name: string; group: 'workspace' | 'dark' | 'light' }[]
 
 export type ThemePreset = (typeof THEME_PRESETS)[number]['id']
 
 export function isThemePreset(value: unknown): value is ThemePreset {
   return THEME_PRESETS.some((preset) => preset.id === value)
+}
+
+/** Where the classic presets' stylesheet is served; public/theme-boot.js uses the same path. */
+export const CLASSIC_THEMES_HREF = '/themes/classic.css'
+
+export function isClassicPreset(preset: ThemePreset) {
+  return THEME_PRESETS.some((entry) => entry.id === preset && entry.group !== 'workspace')
+}
+
+/** Load the classic presets' stylesheet once; theme-boot.js already has when a classic preset was saved. */
+export function loadClassicThemes(onLoad?: () => void) {
+  if (typeof document === 'undefined' || document.querySelector('link[data-classic-themes]')) return
+  const link = document.createElement('link')
+  link.rel = 'stylesheet'
+  link.href = CLASSIC_THEMES_HREF
+  link.dataset.classicThemes = ''
+  if (onLoad) link.addEventListener('load', onLoad, { once: true })
+  document.head.appendChild(link)
 }
 
 /** [slot, label, shown in the main list] */

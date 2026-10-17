@@ -7,7 +7,7 @@ import {
   writeAppearancePreferences,
   type AppearancePreferences,
 } from './preferences'
-import { ALL_SLOTS, DERIVED_SLOTS, themeProperties } from './slots'
+import { ALL_SLOTS, DERIVED_SLOTS, isClassicPreset, loadClassicThemes, themeProperties } from './slots'
 import { ThemeContext, type ThemeContextValue } from './themeContext'
 import { syncThemeColor } from './themeColor'
 
@@ -31,6 +31,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const root = document.documentElement
+    if (isClassicPreset(preset)) loadClassicThemes(syncThemeColor)
     root.dataset.theme = preset
     root.dataset.themePreference = preferences.theme
     root.dataset.density = preferences.density

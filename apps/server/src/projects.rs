@@ -399,47 +399,18 @@ async fn create_project(
     .execute(&mut *transaction)
     .await?;
 
-    let project_id = Uuid::now_v7();
-    let insert = sqlx::query(
-        r#"
-        INSERT INTO projects (
-            id, organization_id, project_key, name
-        )
-        VALUES ($1, $2, $3, $4)
-        "#,
+    let project_id = insert_new_project(
+        &mut transaction,
+        request.organization_id,
+        &key,
+        &name,
+        ProjectOwner {
+            actor_id: principal.actor_id,
+            display_name: &principal.display_name,
+            login_name: &principal.login_name,
+        },
     )
-    .bind(project_id)
-    .bind(request.organization_id)
-    .bind(&key)
-    .bind(&name)
-    .execute(&mut *transaction)
-    .await;
-    if let Err(error) = insert {
-        if database_constraint(&error) == Some("projects_organization_key_unique") {
-            return Err(AppError::ProjectKeyConflict);
-        }
-        return Err(error.into());
-    }
-    sqlx::query(
-        r#"
-        INSERT INTO project_memberships (
-            id, project_id, actor_id, role, display_name, handle
-        )
-        VALUES ($1, $2, $3, 'owner', $4, $5)
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .bind(&principal.display_name)
-    .bind(membership_handle(&principal.login_name))
-    .execute(&mut *transaction)
     .await?;
-    sqlx::query("INSERT INTO project_counters (project_id, next_work_item_number) VALUES ($1, 1)")
-        .bind(project_id)
-        .execute(&mut *transaction)
-        .await?;
-    crate::work_items::ensure_default_workflow(&mut transaction, project_id).await?;
     let applied_template = match request.template_id {
         Some(template_id) => Some(
             crate::work_items::project_templates::apply_to_new_project(
@@ -453,28 +424,6 @@ async fn create_project(
         ),
         None => None,
     };
-    sqlx::query(
-        r#"
-        INSERT INTO project_instructions (project_id, content)
-        VALUES ($1, '')
-        "#,
-    )
-    .bind(project_id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO project_navigation_states (
-            project_id, actor_id, location_kind, context_drawer_open,
-            filters, last_opened_at, version
-        )
-        VALUES ($1, $2, 'project_overview', false, '{}'::jsonb, now(), 1)
-        "#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
 
     let project = ProjectView {
         id: project_id,
@@ -536,6 +485,90 @@ async fn create_project(
     .await?;
     transaction.commit().await?;
     project_response(StatusCode::CREATED, project)
+}
+
+/// Who a new Project is created for: they become its owner.
+pub(crate) struct ProjectOwner<'a> {
+    pub actor_id: Uuid,
+    pub display_name: &'a str,
+    pub login_name: &'a str,
+}
+
+/// The rows every new Project starts with: the Project, its owner, its task
+/// counter, the default workflow, empty instructions and the owner's
+/// navigation state. The web app and the MCP project_create tool both create
+/// Projects through this, after checking the creator may.
+pub(crate) async fn insert_new_project(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: Uuid,
+    key: &str,
+    name: &str,
+    owner: ProjectOwner<'_>,
+) -> Result<Uuid, AppError> {
+    let project_id = Uuid::now_v7();
+    let insert = sqlx::query(
+        r#"
+        INSERT INTO projects (
+            id, organization_id, project_key, name
+        )
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(project_id)
+    .bind(organization_id)
+    .bind(key)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await;
+    if let Err(error) = insert {
+        if database_constraint(&error) == Some("projects_organization_key_unique") {
+            return Err(AppError::ProjectKeyConflict);
+        }
+        return Err(error.into());
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO project_memberships (
+            id, project_id, actor_id, role, display_name, handle
+        )
+        VALUES ($1, $2, $3, 'owner', $4, $5)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(project_id)
+    .bind(owner.actor_id)
+    .bind(owner.display_name)
+    .bind(membership_handle(owner.login_name))
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query("INSERT INTO project_counters (project_id, next_work_item_number) VALUES ($1, 1)")
+        .bind(project_id)
+        .execute(&mut **transaction)
+        .await?;
+    crate::work_items::ensure_default_workflow(transaction, project_id).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO project_instructions (project_id, content)
+        VALUES ($1, '')
+        "#,
+    )
+    .bind(project_id)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO project_navigation_states (
+            project_id, actor_id, location_kind, context_drawer_open,
+            filters, last_opened_at, version
+        )
+        VALUES ($1, $2, 'project_overview', false, '{}'::jsonb, now(), 1)
+        "#,
+    )
+    .bind(project_id)
+    .bind(owner.actor_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(project_id)
 }
 
 async fn get_project(
@@ -1105,10 +1138,26 @@ fn authorize_organization_create(
     organization_id: Uuid,
     role: &str,
 ) -> Result<(), AppError> {
-    let role = membership_role(role)?;
-    let subject = Subject::new(
+    authorize_project_create(
         principal.actor_id,
         actor_kind(&principal.actor_kind)?,
+        organization_id,
+        role,
+    )
+}
+
+/// Whether this actor, with this role in the workspace, may create Projects
+/// there.
+pub(crate) fn authorize_project_create(
+    actor_id: Uuid,
+    kind: ActorKind,
+    organization_id: Uuid,
+    role: &str,
+) -> Result<(), AppError> {
+    let role = membership_role(role)?;
+    let subject = Subject::new(
+        actor_id,
+        kind,
         true,
         Some(Membership::organization(organization_id, role, true)),
         None,
@@ -1209,7 +1258,7 @@ fn allowed(decision: Decision) -> Result<(), AppError> {
     }
 }
 
-fn normalize_project_key(value: &str) -> Result<String, AppError> {
+pub(crate) fn normalize_project_key(value: &str) -> Result<String, AppError> {
     let key = value.trim().to_ascii_uppercase();
     let mut characters = key.chars();
     let Some(first) = characters.next() else {

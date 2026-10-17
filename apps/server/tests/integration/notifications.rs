@@ -598,3 +598,85 @@ async fn apps_connected_by_a_person_see_their_notifications() {
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 }
+
+fn text(text: &str) -> Value {
+    json!({"version": 1, "nodes": [{"type": "text", "text": text}]})
+}
+
+#[tokio::test]
+async fn everyone_reaches_the_people_who_can_see_the_conversation() {
+    let Some(setup) = setup("notify_everyone").await else {
+        return;
+    };
+    let project = create_project(&setup, "ALL", "Everyone").await;
+    let general = create_channel(&setup, &project, "general").await;
+    let space = direct_space(&setup).await;
+    let (mara, mara_browser) = add_person(&setup, &[&project, &space], "mara").await;
+    let (_ben, ben_browser) = add_person(&setup, &[&project], "ben").await;
+    let (_pat, pat_browser) = add_person(&setup, &[&space], "pat").await;
+
+    // An email address or a longer word isn't @everyone.
+    say(
+        &setup,
+        &ben_browser,
+        &general,
+        "e0",
+        text("Write to team@everyone.dev or @everyones"),
+    )
+    .await;
+    drain(&setup).await;
+    assert!(items(&inbox(&setup, &mara_browser, "").await).is_empty());
+
+    // In a channel, every member who can see it hears, but not the author.
+    say(&setup, &ben_browser, &general, "e1", text("@here standup in 5")).await;
+    drain(&setup).await;
+    for browser in [&setup.browser, &mara_browser] {
+        let page = inbox(&setup, browser, "").await;
+        assert_eq!(items(&page).len(), 1, "{page}");
+        assert_eq!(items(&page)[0]["kind"], "mention");
+    }
+    assert!(items(&inbox(&setup, &ben_browser, "").await).is_empty());
+    assert!(items(&inbox(&setup, &pat_browser, "").await).is_empty());
+
+    // In a group, only the people inside it, even though others share the
+    // Messages space; naming someone as well notifies them once.
+    let (status, group) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            "/api/v1/direct/groups",
+            Some("group-everyone"),
+            json!({ "memberIds": [mara] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{group}");
+    let group = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    say(
+        &setup,
+        &setup.browser,
+        &group,
+        "e2",
+        json!({"version": 1, "nodes": [
+            {"type": "text", "text": "@Everyone, and especially "},
+            {"type": "mention", "actorId": mara}
+        ]}),
+    )
+    .await;
+    drain(&setup).await;
+    let page = inbox(&setup, &mara_browser, "").await;
+    let in_group = items(&page)
+        .iter()
+        .filter(|item| {
+            item["href"]
+                .as_str()
+                .is_some_and(|href| href.starts_with(&format!("/messages/{group}")))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(in_group.len(), 1, "{page}");
+    assert_eq!(in_group[0]["count"], 1, "{page}");
+    assert!(items(&inbox(&setup, &pat_browser, "").await).is_empty());
+}

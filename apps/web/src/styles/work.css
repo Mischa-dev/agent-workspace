@@ -823,6 +823,8 @@
   margin-top: 4px;
   font: var(--t-body);
   color: var(--content-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .aw-activity__event {
