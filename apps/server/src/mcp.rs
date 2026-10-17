@@ -56,7 +56,9 @@ use crate::{
 
 mod admin;
 mod agents;
+mod ai_tools;
 mod approvals;
+mod batch_tools;
 mod briefing;
 mod channels;
 mod code;
@@ -79,6 +81,7 @@ mod runs;
 mod settings_tools;
 mod talk;
 mod task_batch;
+pub(crate) use task_batch::{ImportTask, create_for_import};
 mod task_drafts;
 mod task_move;
 mod tasks;
@@ -269,6 +272,42 @@ impl McpServer {
     ) -> Json<common::ToolResult<usage_tools::UsageWindowsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(usage_tools::usage_windows(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Use it before it resets: the batch of ready tasks one of your provider accounts could run before its usage window resets. Tasks come from every project the account serves whose default environment runs on its harness, ranked like task_ready_list and sized to the capacity left; projects that can't take part say what to change. Launch it with usage_batch_launch.",
+        annotations(
+            title = "Suggested batch",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn usage_batch(
+        &self,
+        Parameters(arguments): Parameters<batch_tools::UsageBatchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<batch_tools::UsageBatchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(batch_tools::usage_batch(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Launch a batch on one of your provider accounts: the suggested batch from usage_batch, or the tasks you pick from it. Each task goes through its project's launch queue in that project's default environment with its defaults, on this account, and is checked again as you when it starts. Follow them with launch_list.",
+        annotations(
+            title = "Launch batch",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn usage_batch_launch(
+        &self,
+        Parameters(arguments): Parameters<batch_tools::UsageBatchLaunchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<batch_tools::UsageBatchLaunchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(batch_tools::usage_batch_launch(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1500,6 +1539,133 @@ impl McpServer {
     ) -> Json<common::ToolResult<planning::MilestoneValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(planning::milestone_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "What to work on next in a project: open tasks ranked by priority, how many tasks each unblocks, and how close its milestone or due date is, each with readiness checks (blockers done, not marked blocked, acceptance criteria, a description, a repository). scope agents lists only tasks an agent can pick up now. taskId returns one task's checks.",
+        annotations(
+            title = "What to do next",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn task_ready_list(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::TaskReadyListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::task_ready_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's dependency graph: open tasks and what blocks them (blockers in other projects you can see included), the tasks that can start now (frontier, best first), the longest chain of open work by estimate (criticalPath), and the AI's pending blocks suggestions as edges with a suggestionId.",
+        annotations(
+            title = "Dependency graph",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn dependency_graph(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::DependencyGraphArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::dependency_graph(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "The AI's suggestions for a project's tasks, most confident first: dependencies, related tasks and duplicates, a parent, a blocked reason, labels, priority, type, and acceptance criteria, each with a one-line reason and its sources. Only suggestions whose every source you can see are listed. Accept or dismiss them with ai_suggestion_decide.",
+        annotations(
+            title = "List AI suggestions",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn ai_suggestions_list(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::AiSuggestionsListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::ai_suggestions_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Accept an AI suggestion (it's applied as you, through the same change you'd make yourself, and marked via AI in the task's history) or dismiss it (the same suggestion never comes back).",
+        annotations(
+            title = "Decide on an AI suggestion",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ai_suggestion_decide(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::AiSuggestionDecideArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::ai_suggestion_decide(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Ask the project's AI to look for dependencies, blockers and duplicates across the project now (it reads what you can see; suggestions from things only you can see are shown to you alone), or with taskId to triage one task (labels, priority, type, parent, duplicates), or with taskId and criteria: true to draft acceptance criteria. Uses the AI provider set in AI and models settings, and counts toward the workspace's budget.",
+        annotations(
+            title = "Run AI analysis",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ai_analyze(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::AiAnalyzeArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::ai_analyze(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Catch up on a task (its history and comments) or a channel or thread you can see, in up to five lines with the outcome or decision so far. Uses the project's AI provider.",
+        annotations(
+            title = "Summarize",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ai_summarize(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::AiSummarizeArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::ai_summarize(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Turn a plan into milestones, tasks and dependencies. Start with title and plan (Markdown or text, drafted by the AI; or JSON in the draft shape or a roadmap with workstreams and items, read as is) or pageId; you get a draft to review. Then call again with importId, commit: true and expectedVersion to create it all, in batches that resume where they stopped. importId alone reads an import's progress.",
+        annotations(
+            title = "Import a plan",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn plan_import(
+        &self,
+        Parameters(arguments): Parameters<ai_tools::PlanImportArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(ai_tools::plan_import(&self.state, principal, arguments).await)
     }
 
     #[tool(

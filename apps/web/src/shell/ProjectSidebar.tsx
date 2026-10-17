@@ -59,6 +59,8 @@ export function ProjectSidebar({
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
         <SidebarLink icon="work" label="Work items" onNavigate={onNavigate} to={`${base}/work-items`} />
         <SidebarLink icon="checklist" label="Milestones" onNavigate={onNavigate} to={`${base}/milestones`} />
+        <SidebarLink icon="play" label="Up next" onNavigate={onNavigate} to={`${base}/next`} />
+        <SidebarLink icon="branch" label="Graph" onNavigate={onNavigate} to={`${base}/graph`} />
         <SidebarLink icon="clock" label="Timeline" onNavigate={onNavigate} to={`${base}/timeline`} />
         <SidebarLink icon="play" label="Launches" onNavigate={onNavigate} to={`${base}/launches`} />
         <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />

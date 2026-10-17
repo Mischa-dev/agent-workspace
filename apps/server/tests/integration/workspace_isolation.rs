@@ -100,15 +100,18 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/home",
     "/api/v1/inbox",
     "/api/v1/inbox/summary",
     "/api/v1/my-work",
     "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
+    "/api/v1/organizations/{organization_id}/ai",
     "/api/v1/organizations/{organization_id}/audit-events",
     "/api/v1/organizations/{organization_id}/audit-events/facets",
     "/api/v1/organizations/{organization_id}/invitations",
     "/api/v1/organizations/{organization_id}/members",
+    "/api/v1/organizations/{organization_id}/onboarding",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/secrets",
@@ -125,6 +128,12 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{id}/mentionable-actors",
     "/api/v1/projects/{id}/navigation",
     "/api/v1/projects/{id}/pages",
+    "/api/v1/projects/{project_id}/ai",
+    "/api/v1/projects/{project_id}/ai/graph",
+    "/api/v1/projects/{project_id}/ai/plans",
+    "/api/v1/projects/{project_id}/ai/plans/{import_id}",
+    "/api/v1/projects/{project_id}/ai/ready",
+    "/api/v1/projects/{project_id}/ai/suggestions",
     "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account",
     "/api/v1/projects/{project_id}/external-agents",
     "/api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
@@ -160,6 +169,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
     "/api/v1/push/config",
@@ -170,6 +180,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage",
     "/api/v1/usage/accounts/{account_id}",
     "/api/v1/usage/accounts/{account_id}/ready-tasks",
+    "/api/v1/usage/accounts/{account_id}/batch",
+    "/api/v1/usage/accounts/{account_id}/history",
 ];
 
 /// GET routes under `/api/v1` this suite deliberately doesn't call as plain
@@ -405,6 +417,7 @@ struct World {
     run_thread: Uuid,
     run: Uuid,
     approval: Uuid,
+    plan: Uuid,
     import: String,
 }
 
@@ -1229,6 +1242,53 @@ async fn build_workspace(
         "{label} POST {uri}: {status} {written}"
     );
 
+    // AI planning: a plan draft and a pending "blocks" suggestion between the
+    // task and its subtask, citing the task.
+    let (status, imported) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/ai/plans"),
+            None,
+            json!({
+                "title": format!("Launch plan{m}"),
+                "source": {"kind": "structured", "plan": {"tasks": [
+                    {"ref": "t1", "title": format!("Launch step{m}")}
+                ]}}
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{label} plan: {status} {imported}");
+    let plan = Uuid::parse_str(&string_at(&imported, "/plan/id")).expect("plan id");
+    let (first, second) = if task < subtask {
+        (task, subtask)
+    } else {
+        (subtask, task)
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO ai_suggestions (
+            id, organization_id, project_id, work_item_id, kind,
+            other_project_id, other_work_item_id, confidence, reason, sources,
+            pair_key, origin, provider, model, prompt_id, prompt_version
+        )
+        VALUES ($1, $2, $3::uuid, $4, 'blocks', $3::uuid, $5, 0.8, $6,
+                jsonb_build_array(jsonb_build_object('kind', 'task', 'id', $4::text)),
+                $7, 'analyze', 'fake', 'fake-quick', 'dependency_judge', 1)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(organization)
+    .bind(&project)
+    .bind(task)
+    .bind(subtask)
+    .bind(format!("Launch blocks{m}"))
+    .bind(format!("link:{first}:{second}"))
+    .execute(pool)
+    .await
+    .expect("suggestion");
+
     // Usage and push (W9): a reported window, a reset schedule, a device
     // and a muted group, each carrying the marker where it has text.
     sqlx::query(
@@ -1309,6 +1369,7 @@ async fn build_workspace(
         run_thread,
         run,
         approval,
+        plan,
         import,
     }
 }
@@ -1576,6 +1637,51 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/usage/accounts/{account_id}/batch",
+            vec![
+                format!("/api/v1/usage/accounts/{}/batch", a.provider_account),
+                format!(
+                    "/api/v1/usage/accounts/{}/batch?windowKey=codex.secondary",
+                    a.provider_account
+                ),
+            ],
+            vec![format!(
+                "/api/v1/usage/accounts/{}/batch",
+                b.provider_account
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/usage/accounts/{account_id}/history",
+            vec![format!(
+                "/api/v1/usage/accounts/{}/history",
+                a.provider_account
+            )],
+            vec![format!(
+                "/api/v1/usage/accounts/{}/history",
+                b.provider_account
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/home",
+            vec!["/api/v1/home".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/onboarding",
+            vec![format!(
+                "/api/v1/organizations/{}/onboarding",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/onboarding",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
             "/api/v1/projects",
             vec![
                 "/api/v1/projects".to_owned(),
@@ -1705,6 +1811,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
                     a.organization, b.rook
                 ),
             ],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/ai",
+            vec![format!("/api/v1/organizations/{}/ai", a.organization)],
+            vec![format!("/api/v1/organizations/{}/ai", b.organization)],
+            vec![],
         ),
         case(
             "/api/v1/organizations/{organization_id}/secrets",
@@ -1845,6 +1957,35 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/environments",
         ),
         project_route("/api/v1/projects/{project_id}/milestones", "/milestones"),
+        project_route("/api/v1/projects/{project_id}/ai", "/ai"),
+        project_route("/api/v1/projects/{project_id}/ai/plans", "/ai/plans"),
+        case(
+            "/api/v1/projects/{project_id}/ai/suggestions",
+            vec![
+                format!("{}/ai/suggestions", p(a)),
+                format!("{}/ai/suggestions?workItemId={}&status=all", p(a), a.task),
+            ],
+            vec![format!("{}/ai/suggestions", p(b))],
+            vec![format!("{}/ai/suggestions?workItemId={}", p(a), b.task)],
+        ),
+        case(
+            "/api/v1/projects/{project_id}/ai/ready",
+            vec![
+                format!("{}/ai/ready", p(a)),
+                format!("{}/ai/ready?scope=all", p(a)),
+            ],
+            vec![format!("{}/ai/ready?scope=all", p(b))],
+            vec![],
+        ),
+        case(
+            "/api/v1/projects/{project_id}/ai/graph",
+            vec![
+                format!("{}/ai/graph", p(a)),
+                format!("{}/ai/graph?includeFinished=true", p(a)),
+            ],
+            vec![format!("{}/ai/graph", p(b))],
+            vec![],
+        ),
         project_route("/api/v1/projects/{project_id}/views", "/views"),
         project_route("/api/v1/projects/{project_id}/timeline", "/timeline"),
         project_route(
@@ -1914,6 +2055,10 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/claim",
         ),
         (
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
+            "/readiness",
+        ),
+        (
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
             "/launch",
         ),
@@ -1941,6 +2086,14 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         cases.push(case(route, own, foreign, vec![]));
     }
 
+    let (own, foreign) =
+        pair(&|outer, inner| format!("/api/v1/projects/{}/ai/plans/{}", outer.project, inner.plan));
+    cases.push(case(
+        "/api/v1/projects/{project_id}/ai/plans/{import_id}",
+        own,
+        foreign,
+        vec![],
+    ));
     let (own, foreign) = pair(&|outer, inner| {
         format!(
             "/api/v1/projects/{}/execution-profiles/{}/account",
@@ -2182,6 +2335,7 @@ fn mcp_case_names() -> BTreeSet<String> {
 
 const MCP_CASE_TOOLS: &[&str] = &[
     "agent_list",
+    "ai_suggestions_list",
     "approval_get",
     "approval_list",
     "briefing",
@@ -2189,6 +2343,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "conversation_open",
     "conversation_read",
     "decision_list",
+    "dependency_graph",
     "environment_list",
     "external_event_poll",
     "inbox_list",
@@ -2215,7 +2370,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "settings_get",
     "task_list",
     "task_open",
+    "task_ready_list",
     "template_list",
+    "usage_batch",
     "usage_windows",
     "view_list",
     "workflow_get",
@@ -2281,6 +2438,17 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("decision_list"),
         by_project("milestone_list"),
+        by_project("task_ready_list"),
+        by_project("dependency_graph"),
+        case(
+            "ai_suggestions_list",
+            vec![
+                json!({"projectId": "WORK"}),
+                json!({"projectId": a.project, "taskId": "WORK-1", "status": "all"}),
+            ],
+            vec![json!({"projectId": b.project})],
+            vec![json!({"projectId": a.project, "taskId": b.task.to_string()})],
+        ),
         by_project("view_list"),
         by_project("template_list"),
         by_project("project_export"),
@@ -2294,6 +2462,12 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         case(
             "usage_windows",
             vec![json!({})],
+            vec![json!({"accountId": b.provider_account})],
+            vec![],
+        ),
+        case(
+            "usage_batch",
+            vec![json!({"accountId": a.provider_account})],
             vec![json!({"accountId": b.provider_account})],
             vec![],
         ),

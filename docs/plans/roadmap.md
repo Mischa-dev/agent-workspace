@@ -536,7 +536,7 @@ page.
 including a plan with only a weekly window, and your phone shows 'Codex weekly
 limit resets in 2 h · 38% unused' with a Launch button.
 
-#### W10. AI planning
+#### W10. AI planning (#145)
 
 *7 items · Starts when W1 and W3 have merged · 3 add a migration*
 
@@ -544,13 +544,13 @@ Moment 3's brain: the model gateway on your key from settings, suggested
 dependencies and blockers in a review queue and on a graph, ready-and-next
 ranking, plan to tasks, and triage on create.
 
-- [ ] [AI1](#ai1-model-gateway) Model gateway
-- [ ] [AI2](#ai2-dependency-and-blocker-detection) Dependency and blocker detection
-- [ ] [AI3](#ai3-plan-to-tasks) Plan to tasks
-- [ ] [AI4](#ai4-triage-on-create) Triage on create
-- [ ] [AI5](#ai5-ready-and-next) Ready and next
-- [ ] [AI6](#ai6-summaries) Summaries
-- [ ] [V7](#v7-dependency-graph) Dependency graph
+- [x] [AI1](#ai1-model-gateway) Model gateway
+- [x] [AI2](#ai2-dependency-and-blocker-detection) Dependency and blocker detection
+- [x] [AI3](#ai3-plan-to-tasks) Plan to tasks
+- [x] [AI4](#ai4-triage-on-create) Triage on create
+- [x] [AI5](#ai5-ready-and-next) Ready and next
+- [x] [AI6](#ai6-summaries) Summaries
+- [x] [V7](#v7-dependency-graph) Dependency graph
 
 **Owns:** A new AI module with its prompts and fixtures, the `ai_suggestions`
 table, readiness and ranking, the AI and models settings page, and the
@@ -629,18 +629,18 @@ harness and a 100-line SDK harness both take a task to a pull request and show
 in the Launch dialog with their own models; and every run shows its log, diff,
 tokens and cost.
 
-#### W13. Payoff and finish
+#### W13. Payoff and finish (#149)
 
 *5 items · Starts when W2, W4, W6, W7, W8, W9 and W10 have merged*
 
 Moment 2 in full (one tap launches the batch the alert suggests), the usage
 page, a real Home, onboarding, and a polish pass over every area.
 
-- [ ] [U4](#u4-use-it-before-it-resets) Use it before it resets
-- [ ] [U5](#u5-usage-page) Usage page
-- [ ] [P3](#p3-home) Home
-- [ ] [P5](#p5-onboarding) Onboarding
-- [ ] [P7](#p7-finish-each-area) Finish each area
+- [x] [U4](#u4-use-it-before-it-resets) Use it before it resets
+- [x] [U5](#u5-usage-page) Usage page
+- [x] [P3](#p3-home) Home
+- [x] [P5](#p5-onboarding) Onboarding
+- [x] [P7](#p7-finish-each-area) Finish each area
 
 **Owns:** The suggested batch, the usage page, `HomePage.tsx`, the onboarding
 path, and the polish checklist in `docs/frontend/`. The polish pass touches

@@ -1,0 +1,19 @@
+{
+  "input": {
+    "tasks": [
+      {"key": "ACME-1", "title": "Add the login API", "description": "POST /login returns a session.", "status": "Todo", "milestone": "Beta", "labels": ["auth"]},
+      {"key": "ACME-2", "title": "Login page", "description": "Build the page once ACME-1 is done.", "status": "Todo", "milestone": "Beta", "labels": ["auth", "web"]},
+      {"key": "ACME-3", "title": "Add login API endpoint", "description": "", "status": "Todo", "milestone": null, "labels": []}
+    ],
+    "pairs": [
+      {"pair": 0, "a": "ACME-1", "b": "ACME-2", "signals": ["references", "milestone"]},
+      {"pair": 1, "a": "ACME-3", "b": "ACME-1", "signals": ["similar"]}
+    ]
+  },
+  "output": {
+    "verdicts": [
+      {"pair": 0, "kind": "a_blocks_b", "confidence": 0.93, "reason": "The login page is to be built once ACME-1, the login API, is done."},
+      {"pair": 1, "kind": "duplicates", "confidence": 0.8, "reason": "Both ask for the login API endpoint."}
+    ]
+  }
+}

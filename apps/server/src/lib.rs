@@ -3,6 +3,7 @@
 pub mod account;
 pub mod account_security;
 pub mod agent_sessions;
+pub mod ai;
 pub mod api;
 pub mod audit_log;
 pub mod auth;
@@ -24,6 +25,7 @@ pub mod github;
 pub mod harness_host;
 pub mod harnesses;
 pub mod health;
+pub mod home;
 pub mod idempotency;
 pub mod invitations;
 pub mod jobs;
@@ -37,6 +39,7 @@ pub mod metrics;
 pub mod migration_preflight;
 pub mod notification_settings;
 pub mod notifications;
+pub mod onboarding;
 pub mod outbox;
 pub mod policy;
 pub mod policy_inventory;
@@ -123,6 +126,7 @@ pub fn router(state: AppState) -> Router {
         .merge(reactions::router())
         .merge(notifications::router())
         .merge(usage::router())
+        .merge(home::router())
         .merge(push::router())
         .merge(notification_settings::router())
         .merge(external_agents::router())
@@ -135,8 +139,10 @@ pub fn router(state: AppState) -> Router {
         .merge(invitations::router())
         .merge(memberships::router())
         .merge(workspace::router())
+        .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(work_items::router())
+        .merge(ai::http::router())
         .merge(memory::router())
         .merge(search::router())
         .merge(connected_apps::router())

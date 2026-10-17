@@ -1,0 +1,4 @@
+{
+  "input": {"task": {"key": "ACME-7", "title": "Password reset", "description": "People can reset a forgotten password by email.", "type": "Feature"}, "existing": []},
+  "output": {"criteria": ["Asking for a reset sends one email with a link", "The link works once and expires after an hour", "A used or expired link explains what to do next"]}
+}

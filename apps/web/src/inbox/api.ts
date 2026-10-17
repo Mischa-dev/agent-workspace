@@ -40,6 +40,8 @@ export type InboxNotification = {
   href: string
   /** Capacity alerts: the ready tasks that could use the capacity. */
   launchHref: string | null
+  /** Capacity alerts: the suggested batch, which Launch starts in one tap. */
+  batch: { accountId: string; size: number; windowKey: string | null } | null
   approval: InboxApproval | null
 }
 
@@ -118,8 +120,16 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     at,
     href: safeHref(text(record.href) ?? '', projectId),
     launchHref: inAppPath(text(record.launchHref)),
+    batch: normalizeBatch(record.batch),
     approval: normalizeApproval(record.approval),
   }
+}
+
+function normalizeBatch(value: unknown): InboxNotification['batch'] {
+  const record = asRecord(value)
+  const accountId = text(record.accountId)
+  const size = typeof record.size === 'number' && record.size > 0 ? record.size : 0
+  return accountId && size ? { accountId, size, windowKey: text(record.windowKey) } : null
 }
 
 export function normalizePage(value: unknown): InboxPage {

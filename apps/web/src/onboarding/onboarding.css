@@ -1,0 +1,140 @@
+/* The first-run path (P5). Loads with /welcome only. */
+
+.aw-onboarding__layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.aw-onboarding__steps ol {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-onboarding__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--content-fg);
+  font: var(--t-small);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-onboarding__step:hover {
+  background: var(--surface-raised);
+}
+
+.aw-onboarding__step:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.aw-onboarding__step[aria-current='step'] {
+  background: var(--surface-raised);
+  font-weight: 600;
+}
+
+.aw-onboarding__step.is-skipped .aw-onboarding__steptitle {
+  color: var(--content-fg-muted);
+  text-decoration: line-through;
+}
+
+.aw-onboarding__mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--content-border);
+  border-radius: 50%;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-onboarding__step.is-done .aw-onboarding__mark {
+  border-color: transparent;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.aw-onboarding__step.is-next .aw-onboarding__mark {
+  border-color: currentColor;
+  color: var(--content-fg);
+}
+
+.aw-onboarding__steptitle {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-onboarding__optional {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-onboarding__panel {
+  min-width: 0;
+}
+
+.aw-onboarding__panelhead {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.aw-onboarding__title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.aw-onboarding__intro {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--content-fg-muted);
+}
+
+.aw-onboarding__stack,
+.aw-onboarding__embed {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.aw-onboarding__form {
+  max-width: 560px;
+}
+
+.aw-onboarding__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+@media (max-width: 760px) {
+  .aw-onboarding__layout {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+
+  .aw-onboarding__steps ol {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: var(--space-2);
+  }
+
+  .aw-onboarding__step {
+    width: auto;
+    white-space: nowrap;
+  }
+}

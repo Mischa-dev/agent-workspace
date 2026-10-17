@@ -641,6 +641,20 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/usage/accounts/{account_id}/reset-credits/spend",
         SessionAuthentication
     ),
+    // A batch is a set of launches, each authorized in its own project.
+    policy_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/batch",
+        WorkerInvoke
+    ),
+    // The first-run path's progress is the caller's own.
+    boundary_route!(
+        "onboarding",
+        Put,
+        "/api/v1/organizations/{organization_id}/onboarding",
+        SessionAuthentication
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -966,6 +980,78 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         WorkItemEdit
     ),
     policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/organizations/{organization_id}/ai/test",
+        SettingsManage
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/test",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/analyze",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/plans",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "ai/http",
+        Put,
+        "/api/v1/projects/{project_id}/ai/plans/{import_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/plans/{import_id}/commit",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
+        WorkItemView
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/conversations/{id}/ai/summary",
+        WorkItemView
+    ),
+    policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/views",
@@ -1092,11 +1178,13 @@ mod tests {
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),
         ("workspace", include_str!("workspace.rs")),
+        ("onboarding", include_str!("onboarding.rs")),
         ("audit_log", include_str!("audit_log.rs")),
         ("mcp/oauth", include_str!("mcp/oauth.rs")),
         ("projects", include_str!("projects.rs")),
         ("repositories", include_str!("repositories.rs")),
         ("work_items", include_str!("work_items.rs")),
+        ("ai/http", include_str!("ai/http.rs")),
         ("execution", include_str!("execution.rs")),
         ("external_agents", include_str!("external_agents.rs")),
         ("memory", include_str!("memory.rs")),

@@ -17,6 +17,8 @@ import {
   SettingsSkeleton,
   StatusChip,
   Switch,
+  formatDateTime,
+  formatFullDate,
 } from '../ui'
 import { getGitHubAutomationSettings, getGitHubStatus, syncGitHubInstallation, updateGitHubAutomationSettings } from './api'
 
@@ -102,7 +104,13 @@ export function GitHubIntegrationSettings({ projectId }: { projectId: string }) 
             },
             {
               label: 'Last verified',
-              value: installation.lastSuccessAt ? new Date(installation.lastSuccessAt).toLocaleString() : 'Never',
+              value: installation.lastSuccessAt ? (
+                <time dateTime={installation.lastSuccessAt} title={formatFullDate(installation.lastSuccessAt)}>
+                  {formatDateTime(installation.lastSuccessAt)}
+                </time>
+              ) : (
+                'Never'
+              ),
             },
             { label: 'GitHub API', value: <code className="aw-inline-code">{status.data.apiVersion}</code> },
           ]}
