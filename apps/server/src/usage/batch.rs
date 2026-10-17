@@ -551,6 +551,7 @@ pub(crate) async fn launch_batch(
                 start_at: None,
                 queue: true,
                 dialog: false,
+                agent_profile_id: None,
             },
             "queue",
             Ok(idempotency_key.clone()),

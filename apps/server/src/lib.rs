@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod account_security;
+pub mod agent_profiles;
 pub mod agent_sessions;
 pub mod ai;
 pub mod api;
@@ -55,6 +56,7 @@ pub mod replies;
 pub mod repositories;
 pub mod retention;
 pub mod run_log;
+pub mod run_views;
 pub mod runs;
 pub mod scheduler;
 pub mod search;
@@ -134,6 +136,8 @@ pub fn router(state: AppState) -> Router {
         .merge(environments::router())
         .merge(harnesses::router())
         .merge(launch::router())
+        .merge(run_views::router())
+        .merge(agent_profiles::router())
         .merge(agent_sessions::router())
         .merge(github::router())
         .merge(invitations::router())

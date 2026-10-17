@@ -98,6 +98,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/threads",
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/conversations/{conversation_id}/agent-sessions",
+    "/api/v1/agent-runs/{run_id}",
+    "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
     "/api/v1/home",
@@ -109,6 +111,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/ai",
     "/api/v1/organizations/{organization_id}/audit-events",
     "/api/v1/organizations/{organization_id}/audit-events/facets",
+    "/api/v1/organizations/{organization_id}/harnesses",
     "/api/v1/organizations/{organization_id}/invitations",
     "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/onboarding",
@@ -128,6 +131,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{id}/mentionable-actors",
     "/api/v1/projects/{id}/navigation",
     "/api/v1/projects/{id}/pages",
+    "/api/v1/projects/{project_id}/agent-profiles",
+    "/api/v1/projects/{project_id}/agents",
     "/api/v1/projects/{project_id}/ai",
     "/api/v1/projects/{project_id}/ai/graph",
     "/api/v1/projects/{project_id}/ai/plans",
@@ -174,6 +179,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
     "/api/v1/push/config",
     "/api/v1/push/subscriptions",
+    "/api/v1/runs",
+    "/api/v1/runs/usage",
     "/api/v1/search",
     "/api/v1/settings/effective",
     "/api/v1/settings/registry",
@@ -1162,6 +1169,82 @@ async fn build_workspace(
     .await
     .expect("approval");
 
+    // W12: what the run did and cost, an agent profile made from a
+    // template, and a harness the workspace registered (a connected runner).
+    sqlx::query(
+        r#"
+        INSERT INTO agent_run_events (id, agent_run_id, event_key, kind, summary, payload)
+        VALUES ($1, $2, 'note:isolation', 'agent_note', $3, $4)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(run)
+    .bind(format!("Looking around{m}"))
+    .bind(json!({ "text": format!("Looking around{m}") }))
+    .execute(pool)
+    .await
+    .expect("run step");
+    sqlx::query(
+        r#"
+        INSERT INTO agent_run_usage (
+            agent_run_id, model, organization_id, project_id, provider_account_id,
+            adapter_kind, usage_date, input_tokens, output_tokens, cached_input_tokens,
+            estimated_cost, currency
+        )
+        VALUES ($1, $2, $3, $4::uuid, $5, 'codex', current_date, 100, 50, 10, 0.25, 'USD')
+        "#,
+    )
+    .bind(run)
+    .bind(format!("model{m}"))
+    .bind(organization)
+    .bind(&project)
+    .bind(provider_account)
+    .execute(pool)
+    .await
+    .expect("run usage");
+    let uri = format!("/api/v1/projects/{project}/agent-profiles");
+    let (status, written) = send(
+        app,
+        browser.request(
+            "POST",
+            &uri,
+            None,
+            json!({
+                "template": "reviewer",
+                "name": format!("Reviewer{m}"),
+                "description": format!("Reviews{m}"),
+            }),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} POST {uri}: {status} {written}"
+    );
+    let uri = format!("/api/v1/organizations/{organization}/harnesses");
+    let (status, written) = send(
+        app,
+        browser.request(
+            "POST",
+            &uri,
+            None,
+            json!({
+                "name": format!("Runner{m}"),
+                "transport": "runner",
+                "runnerActorId": agent,
+                "manifest": {
+                    "description": format!("Runs elsewhere{m}"),
+                    "models": [{"id": format!("runner-model{marker}"), "displayName": "Runner model"}],
+                },
+            }),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} POST {uri}: {status} {written}"
+    );
+
     // Settings and secrets at workspace and project scope.
     let model = if marker.is_empty() {
         "launch-model".to_owned()
@@ -1825,6 +1908,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/organizations/{organization_id}/harnesses",
+            vec![format!(
+                "/api/v1/organizations/{}/harnesses",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/harnesses",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
             "/api/v1/organizations/{organization_id}/personal-secrets",
             vec![format!(
                 "/api/v1/organizations/{}/personal-secrets",
@@ -1952,6 +2047,56 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         ),
         project_route("/api/v1/projects/{project_id}/labels", "/labels"),
         project_route("/api/v1/projects/{project_id}/launches", "/launches"),
+        project_route(
+            "/api/v1/projects/{project_id}/agent-profiles",
+            "/agent-profiles",
+        ),
+        project_route("/api/v1/projects/{project_id}/agents", "/agents"),
+        case(
+            "/api/v1/runs",
+            vec![
+                "/api/v1/runs".to_owned(),
+                format!("/api/v1/runs?organizationId={}", a.organization),
+                format!("/api/v1/runs?projectId={}&status=needs_you", a.project),
+            ],
+            vec![],
+            vec![
+                format!("/api/v1/runs?organizationId={}", b.organization),
+                format!("/api/v1/runs?projectId={}", b.project),
+            ],
+        ),
+        case(
+            "/api/v1/runs/usage",
+            vec![
+                "/api/v1/runs/usage".to_owned(),
+                "/api/v1/runs/usage?groupBy=model".to_owned(),
+                "/api/v1/runs/usage?groupBy=account".to_owned(),
+                format!(
+                    "/api/v1/runs/usage?groupBy=project&organizationId={}",
+                    a.organization
+                ),
+            ],
+            vec![],
+            vec![
+                format!(
+                    "/api/v1/runs/usage?organizationId={}&groupBy=model",
+                    b.organization
+                ),
+                format!("/api/v1/runs/usage?projectId={}", b.project),
+            ],
+        ),
+        case(
+            "/api/v1/agent-runs/{run_id}",
+            vec![format!("/api/v1/agent-runs/{}", a.run)],
+            vec![format!("/api/v1/agent-runs/{}", b.run)],
+            vec![],
+        ),
+        case(
+            "/api/v1/agent-runs/{run_id}/diff",
+            vec![format!("/api/v1/agent-runs/{}/diff", a.run)],
+            vec![format!("/api/v1/agent-runs/{}/diff", b.run)],
+            vec![],
+        ),
         project_route(
             "/api/v1/projects/{project_id}/environments",
             "/environments",
@@ -2335,6 +2480,7 @@ fn mcp_case_names() -> BTreeSet<String> {
 
 const MCP_CASE_TOOLS: &[&str] = &[
     "agent_list",
+    "agent_profile_list",
     "ai_suggestions_list",
     "approval_get",
     "approval_list",
@@ -2366,6 +2512,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "repository_list",
     "run_get",
     "run_list",
+    "run_steps",
+    "run_usage",
     "search",
     "settings_get",
     "task_list",
@@ -2434,6 +2582,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("project_members"),
         by_project("label_list"),
         by_project("launch_list"),
+        by_project("agent_profile_list"),
         by_project("environment_list"),
         by_project("page_list"),
         by_project("decision_list"),
@@ -2638,6 +2787,26 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         case(
             "run_list",
             vec![json!({}), json!({"projectId": "WORK"})],
+            vec![json!({"projectId": b.project})],
+            vec![],
+        ),
+        case(
+            "run_steps",
+            vec![
+                json!({"runId": a.run.to_string()}),
+                json!({"runId": a.run.to_string(), "includeDiff": true}),
+            ],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        case(
+            "run_usage",
+            vec![
+                json!({}),
+                json!({"projectId": "WORK", "groupBy": "model"}),
+                json!({"groupBy": "account"}),
+                json!({"groupBy": "project"}),
+            ],
             vec![json!({"projectId": b.project})],
             vec![],
         ),

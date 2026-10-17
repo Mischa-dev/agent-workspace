@@ -1137,7 +1137,9 @@ echo '{"type":"done","status":"completed"}'
         std::os::unix::fs::symlink(root.path().join("outside"), allowed.join("link"))
             .expect("test step");
         let ok = allowed.join("ok").to_string_lossy().into_owned();
-        assert!(validate_command(std::slice::from_ref(&ok), std::slice::from_ref(&allowed)).is_ok());
+        assert!(
+            validate_command(std::slice::from_ref(&ok), std::slice::from_ref(&allowed)).is_ok()
+        );
         assert!(
             validate_command(std::slice::from_ref(&ok), &[]).is_err(),
             "off unless the operator allows it"

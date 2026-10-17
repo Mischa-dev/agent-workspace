@@ -771,6 +771,146 @@ pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
     Ok(!output.stdout.is_empty())
 }
 
+/// One file a run changed, against its base (H5).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    pub path: String,
+    /// added, modified, deleted or renamed.
+    pub status: String,
+    /// `None` for binary files.
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
+}
+
+/// What a run's branch changed against its base commit.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDiff {
+    pub files: Vec<ChangedFile>,
+    /// The unified diff, or empty when it's too big to show.
+    pub patch: String,
+    pub truncated: bool,
+}
+
+/// The diff of `head` (or, in a worktree, its working tree including
+/// uncommitted changes) against `base`. `repository` is a worktree or the
+/// bare mirror (`--git-dir`).
+pub fn run_diff(
+    repository: &Path,
+    bare: bool,
+    base: &str,
+    head: Option<&str>,
+    max_patch_bytes: usize,
+) -> Result<RunDiff, AppError> {
+    validate_commit(base)?;
+    if let Some(head) = head {
+        validate_commit(head)?;
+    }
+    if !repository.is_absolute() || !repository.is_dir() {
+        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+    }
+    let args = |extra: &[&str]| {
+        let mut args = vec![
+            OsString::from(if bare { "--git-dir" } else { "-C" }),
+            repository.as_os_str().to_owned(),
+            OsString::from("diff"),
+            OsString::from("--no-color"),
+            OsString::from("--no-ext-diff"),
+            OsString::from("--find-renames"),
+        ];
+        args.extend(extra.iter().map(OsString::from));
+        args.push(OsString::from(base));
+        if let Some(head) = head {
+            args.push(OsString::from(head));
+        }
+        args.push(OsString::from("--"));
+        args
+    };
+    let numstat = run_git(args(&["--numstat", "-z"]))?;
+    let statuses = run_git(args(&["--name-status", "-z"]))?;
+    let mut files = parse_numstat(&numstat.stdout);
+    let status_of = parse_name_status(&statuses.stdout);
+    for file in &mut files {
+        file.status = status_of
+            .iter()
+            .find(|(path, _)| *path == file.path)
+            .map(|(_, status)| status.clone())
+            .unwrap_or_else(|| "modified".to_owned());
+    }
+    let (patch, truncated) = match run_git(args(&[])) {
+        Ok(output) if output.stdout.len() <= max_patch_bytes => {
+            (String::from_utf8_lossy(&output.stdout).into_owned(), false)
+        }
+        // Too big for the page (or for Git's output limit): the file list
+        // still shows.
+        _ => (String::new(), true),
+    };
+    Ok(RunDiff {
+        files,
+        patch,
+        truncated,
+    })
+}
+
+fn parse_numstat(output: &[u8]) -> Vec<ChangedFile> {
+    // `added\tremoved\tpath\0`, or for a rename `added\tremoved\t\0from\0to\0`.
+    let mut files = Vec::new();
+    let mut parts = output.split(|byte| *byte == 0);
+    while let Some(record) = parts.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(record);
+        let mut fields = text.splitn(3, '\t');
+        let added = fields.next().and_then(|value| value.parse().ok());
+        let removed = fields.next().and_then(|value| value.parse().ok());
+        let mut path = fields.next().unwrap_or_default().to_owned();
+        if path.is_empty() {
+            let _from = parts.next();
+            path = parts
+                .next()
+                .map(|to| String::from_utf8_lossy(to).into_owned())
+                .unwrap_or_default();
+        }
+        if !path.is_empty() && files.len() < 2_000 {
+            files.push(ChangedFile {
+                path,
+                status: String::new(),
+                added,
+                removed,
+            });
+        }
+    }
+    files
+}
+
+fn parse_name_status(output: &[u8]) -> Vec<(String, String)> {
+    let mut statuses = Vec::new();
+    let mut parts = output.split(|byte| *byte == 0);
+    while let Some(code) = parts.next() {
+        let Some(first) = code.first() else {
+            continue;
+        };
+        let status = match first {
+            b'A' => "added",
+            b'D' => "deleted",
+            b'R' => "renamed",
+            _ => "modified",
+        };
+        if *first == b'R' || *first == b'C' {
+            let _from = parts.next();
+        }
+        if let Some(path) = parts.next() {
+            statuses.push((
+                String::from_utf8_lossy(path).into_owned(),
+                status.to_owned(),
+            ));
+        }
+    }
+    statuses
+}
+
 fn validate_mirror(mirror: &Path) -> Result<(), AppError> {
     if !mirror.is_absolute() || !mirror.is_dir() {
         return Err(AppError::Conflict("repository", "mirror is not ready"));
@@ -1517,6 +1657,64 @@ mod tests {
             .is_err(),
             "verification mode must not clone a missing private mirror"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_diff_lists_files_and_includes_uncommitted_changes() {
+        let root = tempfile::tempdir().expect("root");
+        let repository = root.path();
+        git(repository, ["init", "--quiet"]);
+        std::fs::write(repository.join("kept.txt"), "one\ntwo\n").expect("write");
+        std::fs::write(repository.join("gone.txt"), "bye\n").expect("write");
+        git(repository, ["add", "-A"]);
+        git(
+            repository,
+            [
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+        );
+        let base = String::from_utf8(
+            Command::new("/usr/bin/git")
+                .current_dir(repository)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("rev-parse")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_owned();
+        std::fs::write(repository.join("kept.txt"), "one\n2\nthree\n").expect("write");
+        std::fs::remove_file(repository.join("gone.txt")).expect("remove");
+        std::fs::write(repository.join("new.txt"), "hi\n").expect("write");
+        // New files show once they're staged, as a harness's result is.
+        git(repository, ["add", "-A"]);
+        let diff = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        let find = |path: &str| diff.files.iter().find(|file| file.path == path).cloned();
+        assert_eq!(
+            find("kept.txt").map(|file| (file.status, file.added, file.removed)),
+            Some(("modified".to_owned(), Some(2), Some(1)))
+        );
+        assert_eq!(
+            find("gone.txt").map(|file| file.status),
+            Some("deleted".to_owned())
+        );
+        assert_eq!(
+            find("new.txt").map(|file| file.status),
+            Some("added".to_owned())
+        );
+        assert!(diff.patch.contains("+three") && !diff.truncated);
+        let small = super::run_diff(repository, false, &base, None, 10).expect("diff");
+        assert!(small.truncated && small.patch.is_empty() && small.files.len() == 3);
+        assert!(super::run_diff(repository, false, "not-a-commit", None, 10).is_err());
     }
 
     #[cfg(unix)]

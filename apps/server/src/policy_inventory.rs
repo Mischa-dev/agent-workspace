@@ -103,6 +103,36 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         WorkerInvoke
     ),
     policy_route!(
+        "harnesses",
+        Post,
+        "/api/v1/organizations/{organization_id}/harnesses",
+        SettingsManage
+    ),
+    policy_route!(
+        "harnesses",
+        Patch,
+        "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "harnesses",
+        Delete,
+        "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "agent_profiles",
+        Post,
+        "/api/v1/projects/{project_id}/agent-profiles",
+        SettingsManage
+    ),
+    policy_route!(
+        "agent_profiles",
+        Patch,
+        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
+        SettingsManage
+    ),
+    policy_route!(
         "secrets",
         Put,
         "/api/v1/organizations/{organization_id}/secrets/{name}",
@@ -1191,6 +1221,9 @@ mod tests {
         ("connected_apps", include_str!("connected_apps.rs")),
         ("settings", include_str!("settings.rs")),
         ("environments", include_str!("environments.rs")),
+        ("harnesses", include_str!("harnesses.rs")),
+        ("agent_profiles", include_str!("agent_profiles.rs")),
+        ("run_views", include_str!("run_views.rs")),
         ("launch", include_str!("launch.rs")),
         ("agent_sessions", include_str!("agent_sessions.rs")),
         ("secrets", include_str!("secrets.rs")),

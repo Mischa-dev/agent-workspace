@@ -636,12 +636,13 @@ struct LaunchRow {
     prompt: Option<String>,
     provider_account_id: Option<Uuid>,
     status_reason: Option<String>,
+    agent_profile_id: Option<Uuid>,
 }
 
 const LAUNCH_ROW: &str = r#"
     id, project_id, work_item_id, conversation_id,
     requested_by_actor_id, via_oauth_grant_id, environment_id,
-    overrides, prompt, provider_account_id, status_reason
+    overrides, prompt, provider_account_id, status_reason, agent_profile_id
 "#;
 
 #[derive(Clone, Debug, Serialize)]
@@ -1227,6 +1228,10 @@ pub(crate) struct LaunchRequest {
     /// Whether the person used the dialog (for the record).
     #[serde(default)]
     pub dialog: bool,
+    /// The agent (A9) that does the work, with its harness, environment,
+    /// model settings and instructions; left out, the project's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1319,14 +1324,45 @@ pub(crate) async fn launch_tasks(
         let mut connection = state.pool.acquire().await?;
         run_defaults(&mut connection, project_id, caller.actor_id).await?
     };
-    let environment = match request.environment_id {
+    let profile = match request.agent_profile_id {
+        Some(profile_id) => Some(
+            crate::agent_profiles::profile_settings(&state.pool, profile_id)
+                .await?
+                .ok_or(AppError::NotFound("agent_profile"))?,
+        ),
+        None => None,
+    };
+    if let Some(profile) = &profile
+        && sqlx::query_scalar::<_, Uuid>("SELECT project_id FROM agent_profiles WHERE id = $1")
+            .bind(profile.id)
+            .fetch_one(&state.pool)
+            .await?
+            != project_id
+    {
+        return Err(AppError::NotFound("agent_profile"));
+    }
+    let environment = match request
+        .environment_id
+        .or_else(|| profile.as_ref().and_then(|profile| profile.environment_id))
+    {
         Some(id) => Some(
             environments::active_environment(&state.pool, project_id, id)
                 .await?
                 .ok_or(AppError::NotFound("environment"))?,
         ),
+        None if profile
+            .as_ref()
+            .is_some_and(|profile| profile.harness.is_some()) =>
+        {
+            None
+        }
         None => defaults.environment.clone(),
     };
+    if request.overrides.harness.is_none()
+        && let Some(harness) = profile.as_ref().and_then(|profile| profile.harness.clone())
+    {
+        request.overrides.harness = Some(harness);
+    }
     if let (Some(environment), Some(harness)) = (&environment, &request.overrides.harness)
         && &environment.harness != harness
     {
@@ -1425,11 +1461,13 @@ pub(crate) async fn launch_tasks(
             INSERT INTO launches (
                 id, organization_id, project_id, work_item_id, requested_by_actor_id,
                 via_oauth_grant_id, source, environment_id, overrides, prompt,
-                start_when, start_at, provider_account_id, status_reason, position
+                start_when, start_at, provider_account_id, status_reason, position,
+                agent_profile_id
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3)
+                (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
+                $15
             )
             "#,
         )
@@ -1454,6 +1492,7 @@ pub(crate) async fn launch_tasks(
         .bind(start_at)
         .bind(request.provider_account_id)
         .bind(reason)
+        .bind(request.agent_profile_id)
         .execute(&mut *transaction)
         .await?;
         audit(
@@ -1768,6 +1807,16 @@ async fn start_launch(
 ) -> Result<Uuid, AppError> {
     let overrides: LaunchOverrides =
         serde_json::from_value(launch.overrides.clone()).unwrap_or_default();
+    // An agent profile (A9) gives the launch its harness, model settings
+    // and instructions wherever the launch itself didn't pick them.
+    let profile = match launch.agent_profile_id {
+        Some(profile_id) => Some(
+            crate::agent_profiles::profile_settings(&state.pool, profile_id)
+                .await?
+                .ok_or(AppError::Invalid("that agent was turned off"))?,
+        ),
+        None => None,
+    };
     let environment = match launch.environment_id {
         Some(id) => Some(
             environments::active_environment(&state.pool, launch.project_id, id)
@@ -1776,19 +1825,24 @@ async fn start_launch(
         ),
         None => None,
     };
-    let harness = overrides.harness.clone().or_else(|| {
-        environment
-            .as_ref()
-            .map(|environment| environment.harness.clone())
-    });
+    let harness = overrides
+        .harness
+        .clone()
+        .or_else(|| profile.as_ref().and_then(|profile| profile.harness.clone()))
+        .or_else(|| {
+            environment
+                .as_ref()
+                .map(|environment| environment.harness.clone())
+        });
+    let manifest = harness
+        .as_deref()
+        .and_then(|harness| state.supervisors.manifest(harness));
     let mut options = Map::new();
-    if let (Some(environment), Some(manifest)) = (
-        &environment,
-        harness
-            .as_deref()
-            .and_then(|harness| state.supervisors.manifest(harness)),
-    ) {
-        options = environment_options(environment, &manifest);
+    if let (Some(environment), Some(manifest)) = (&environment, &manifest) {
+        options = environment_options(environment, manifest);
+    }
+    if let (Some(profile), Some(manifest)) = (&profile, &manifest) {
+        options.extend(profile.options(manifest));
     }
     let repository_id = environment
         .as_ref()
@@ -1838,6 +1892,10 @@ async fn start_launch(
     if prompt.trim().is_empty() {
         return Err(AppError::Validation("prompt"));
     }
+    let prompt = match &profile {
+        Some(profile) => profile.prompt(manifest.as_deref(), &prompt),
+        None => prompt,
+    };
     if let Some(runner) = harness
         .as_deref()
         .and_then(|harness| state.supervisors.runner_for(harness))
@@ -1849,9 +1907,15 @@ async fn start_launch(
     }
     let config = RunConfig {
         harness,
-        model: overrides.model,
-        reasoning: overrides.reasoning,
-        speed: overrides.speed,
+        model: overrides
+            .model
+            .or_else(|| profile.as_ref().and_then(|profile| profile.model())),
+        reasoning: overrides
+            .reasoning
+            .or_else(|| profile.as_ref().and_then(|profile| profile.reasoning())),
+        speed: overrides
+            .speed
+            .or_else(|| profile.as_ref().and_then(|profile| profile.speed())),
         attempts: overrides.attempts,
         options,
         ..Default::default()
@@ -1866,6 +1930,7 @@ async fn start_launch(
             repository_id,
             config: Some(config).filter(|config| *config != RunConfig::default()),
             provider_account_id: launch.provider_account_id,
+            agent_profile_id: launch.agent_profile_id,
         },
         IdempotencyKey::parse(&format!("launch-{}", launch.id)),
     )
@@ -2509,6 +2574,9 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         return Ok(());
     };
     let prompt = strip_mentions(&message.plain_text);
+    // Tagging an agent profile (A9) launches with the profile's settings.
+    let profile =
+        crate::agent_profiles::profile_for_actor(&state.pool, payload.worker_actor_id).await?;
     let defaults = {
         let mut connection = state.pool.acquire().await?;
         run_defaults(&mut connection, message.project_id, caller.actor_id).await?
@@ -2524,14 +2592,15 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         INSERT INTO launches (
             id, organization_id, project_id, conversation_id, source_message_id,
             requested_by_actor_id, source, environment_id, prompt, start_when, position,
-            work_item_id
+            work_item_id, agent_profile_id
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, 'tag', $7, $8, 'now',
             (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
             (SELECT link.work_item_id FROM work_item_conversation_links link
              WHERE link.project_id = $3 AND link.conversation_id = $4
-             ORDER BY link.created_at LIMIT 1)
+             ORDER BY link.created_at LIMIT 1),
+            $9
         )
         ON CONFLICT (source_message_id) WHERE source = 'tag' DO NOTHING
         "#,
@@ -2542,17 +2611,23 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
     .bind(thread_id)
     .bind(payload.message_id)
     .bind(caller.actor_id)
-    .bind(
-        defaults
+    .bind(match &profile {
+        // A profile with its own harness but no environment runs on that
+        // harness, not the project's default environment's.
+        Some(profile) if profile.environment_id.is_some() || profile.harness.is_some() => {
+            profile.environment_id
+        }
+        _ => defaults
             .environment
             .as_ref()
             .map(|environment| environment.id),
-    )
+    })
     .bind(if prompt.is_empty() {
         message.plain_text.trim().to_owned()
     } else {
         prompt
     })
+    .bind(profile.as_ref().map(|profile| profile.id))
     .execute(&mut *transaction)
     .await?
     .rows_affected();
