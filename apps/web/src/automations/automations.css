@@ -154,3 +154,7 @@
   background: var(--surface-sunken);
   font: var(--t-code);
 }
+
+.aw-api-params__scroll {
+  overflow-x: auto;
+}

@@ -33,6 +33,21 @@ const keyPages: KeyPage[] = [
     ready: (page) => expect(page.getByRole('region', { name: 'Work item board' })).toBeVisible(),
   },
   {
+    name: 'webhooks',
+    path: () => '/settings/account/webhooks',
+    ready: (page) => expect(page.getByRole('heading', { name: 'No webhooks yet' })).toBeVisible(),
+  },
+  {
+    name: 'api-reference',
+    path: () => '/settings/account/api-reference',
+    ready: (page) => expect(page.getByText('task_list', { exact: true })).toBeVisible(),
+  },
+  {
+    name: 'automation-rules',
+    path: () => `/settings/projects/${seededValue('E2E_PROJECT_ID')}/automations`,
+    ready: (page) => expect(page.getByRole('heading', { name: 'No rules yet' })).toBeVisible(),
+  },
+  {
     name: 'appearance',
     path: () => '/settings/appearance',
     ready: (page) => expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible(),

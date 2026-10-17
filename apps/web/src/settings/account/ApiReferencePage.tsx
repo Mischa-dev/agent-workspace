@@ -2,13 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import {
-  automationKeys,
-  getOpenApi,
-  type OpenApiDocument,
-  type OpenApiOperation,
-  type OpenApiSchema,
-} from '../../automations/api'
+import { automationKeys, getOpenApi, type OpenApiDocument, type OpenApiOperation, type OpenApiSchema } from '../../automations/api'
 import '../../automations/automations.css'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, PageHeader, Section, StatusChip, TextField, showToast } from '../../ui'
 import { accountSettingsHref } from '../paths'
@@ -80,7 +74,11 @@ function curlFor(document: OpenApiDocument, base: string, entry: Operation) {
 
 /** Account › API reference: every operation of the public API, from its OpenAPI document. */
 export default function ApiReferencePage() {
-  const openapi = useQuery({ queryKey: automationKeys.openapi, queryFn: getOpenApi, staleTime: 5 * 60_000 })
+  const openapi = useQuery({
+    queryKey: automationKeys.openapi,
+    queryFn: getOpenApi,
+    staleTime: 5 * 60_000,
+  })
   const [filter, setFilter] = useState('')
   const base = `${window.location.origin}${openapi.data?.servers?.[0]?.url ?? '/api/public/v1'}`
 
@@ -126,8 +124,8 @@ export default function ApiReferencePage() {
           <Section id="api-basics-heading" title="How it works">
             <ul className="aw-api-basics">
               <li>
-                Send <code className="aw-inline-code">Authorization: Bearer &lt;token&gt;</code>. Read-only tokens can call the operations marked
-                Read.
+                Send <code className="aw-inline-code">Authorization: Bearer &lt;token&gt;</code>. Read-only tokens can call the operations
+                marked Read.
               </li>
               <li>
                 Every reply is JSON with an <code className="aw-inline-code">outcome</code>: <code className="aw-inline-code">ok</code> or{' '}
@@ -158,7 +156,7 @@ export default function ApiReferencePage() {
               </Section>
             ))
           ) : (
-            <EmptyState icon="search" title="No operation matches">
+            <EmptyState action={<Button onClick={() => setFilter('')}>Clear the search</Button>} icon="search" title="No operation matches">
               Try another word.
             </EmptyState>
           )}
@@ -183,27 +181,29 @@ function OperationCard({ base, document, entry }: { base: string; document: Open
       <div className="aw-api-op__body">
         {entry.operation.description && <p>{entry.operation.description}</p>}
         {fields.length ? (
-          <table className="aw-api-params">
-            <thead>
-              <tr>
-                <th scope="col">Field</th>
-                <th scope="col">Type</th>
-                <th scope="col">About</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fields.map(([name, field]) => (
-                <tr key={name}>
-                  <td>
-                    <code className="aw-inline-code">{name}</code>
-                    {required.has(name) && <span className="aw-api-params__required">required</span>}
-                  </td>
-                  <td>{describeType(document, field)}</td>
-                  <td>{resolve(document, field)?.description ?? field.description ?? ''}</td>
+          <div className="aw-api-params__scroll">
+            <table className="aw-api-params">
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">About</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {fields.map(([name, field]) => (
+                  <tr key={name}>
+                    <td>
+                      <code className="aw-inline-code">{name}</code>
+                      {required.has(name) && <span className="aw-api-params__required">required</span>}
+                    </td>
+                    <td>{describeType(document, field)}</td>
+                    <td>{resolve(document, field)?.description ?? field.description ?? ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <p className="aw-quiet">No fields: send {'{}'}.</p>
         )}

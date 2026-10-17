@@ -34,6 +34,7 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  formatFullDate,
   formatRelative,
   showToast,
   type ChipTone,
@@ -57,7 +58,10 @@ const DELIVERY: Record<WebhookDelivery['state'], { label: string; tone: ChipTone
 /** Account › Webhooks: signed POSTs to your own services when tasks, runs, pull requests or messages change. */
 export default function WebhooksPage() {
   const queryClient = useQueryClient()
-  const list = useQuery({ queryKey: automationKeys.webhooks, queryFn: listWebhooks })
+  const list = useQuery({
+    queryKey: automationKeys.webhooks,
+    queryFn: listWebhooks,
+  })
   const [secret, setSecret] = useState<{ name: string; value: string } | null>(null)
   const [editing, setEditing] = useState<Webhook | 'new' | null>(null)
   const [deleting, setDeleting] = useState<Webhook | null>(null)
@@ -65,8 +69,14 @@ export default function WebhooksPage() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: automationKeys.webhooks })
 
   const toggle = useMutation({
-    mutationFn: (webhook: Webhook) => updateWebhook(webhook, { state: webhook.state === 'active' ? 'paused' : 'active' }),
-    onSuccess: (webhook) => showToast({ title: webhook.state === 'active' ? `${webhook.name} is on` : `${webhook.name} paused` }),
+    mutationFn: (webhook: Webhook) =>
+      updateWebhook(webhook, {
+        state: webhook.state === 'active' ? 'paused' : 'active',
+      }),
+    onSuccess: (webhook) =>
+      showToast({
+        title: webhook.state === 'active' ? `${webhook.name} is on` : `${webhook.name} paused`,
+      }),
     onError: (error) => toastError('The webhook didn’t change', error),
     onSettled: refresh,
   })
@@ -78,7 +88,12 @@ export default function WebhooksPage() {
   })
   const ping = useMutation({
     mutationFn: (webhook: Webhook) => testWebhook(webhook.id),
-    onSuccess: () => showToast({ tone: 'success', title: 'Test sent', description: 'Open its deliveries to see how it went.' }),
+    onSuccess: () =>
+      showToast({
+        tone: 'success',
+        title: 'Test sent',
+        description: 'Open its deliveries to see how it went.',
+      }),
     onError: (error) => toastError('The test wasn’t sent', error),
   })
   const remove = useMutation({
@@ -134,16 +149,34 @@ export default function WebhooksPage() {
                         </Button>
                         <Menu
                           items={[
-                            { label: 'Edit', icon: 'pencil', onSelect: () => setEditing(webhook) },
-                            { label: 'Send a test', icon: 'send', disabled: webhook.state !== 'active', onSelect: () => ping.mutate(webhook) },
+                            {
+                              label: 'Edit',
+                              icon: 'pencil',
+                              onSelect: () => setEditing(webhook),
+                            },
+                            {
+                              label: 'Send a test',
+                              icon: 'send',
+                              disabled: webhook.state !== 'active',
+                              onSelect: () => ping.mutate(webhook),
+                            },
                             {
                               label: webhook.state === 'active' ? 'Pause' : 'Turn on',
                               icon: webhook.state === 'active' ? 'stop' : 'play',
                               onSelect: () => toggle.mutate(webhook),
                             },
-                            { label: 'Replace the secret', icon: 'key', onSelect: () => rotate.mutate(webhook) },
+                            {
+                              label: 'Replace the secret',
+                              icon: 'key',
+                              onSelect: () => rotate.mutate(webhook),
+                            },
                             { separator: true },
-                            { label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(webhook) },
+                            {
+                              label: 'Delete',
+                              icon: 'trash',
+                              danger: true,
+                              onSelect: () => setDeleting(webhook),
+                            },
                           ]}
                           label={`${webhook.name} actions`}
                           trigger={<IconButton icon="more" label={`${webhook.name} actions`} size="sm" />}
@@ -162,7 +195,9 @@ export default function WebhooksPage() {
                         <code className="aw-inline-code">{webhook.url}</code>
                         <span>{webhook.projectName ?? 'Every project you can see'}</span>
                         <span>{webhook.eventTypes.join(', ')}</span>
-                        <span>{webhook.lastDeliveryAt ? `Last sent ${formatRelative(webhook.lastDeliveryAt)}` : 'Nothing sent yet'}</span>
+                        <span title={webhook.lastDeliveryAt ? formatFullDate(webhook.lastDeliveryAt) : undefined}>
+                          {webhook.lastDeliveryAt ? `Last sent ${formatRelative(webhook.lastDeliveryAt)}` : 'Nothing sent yet'}
+                        </span>
                         {webhook.disabledReason && <span>{webhook.disabledReason}</span>}
                       </span>
                     }
@@ -244,10 +279,19 @@ function WebhookDialog({
   const save = useMutation({
     mutationFn: async () => {
       if (webhook) {
-        const saved = await updateWebhook(webhook, { name: name.trim(), url: url.trim(), eventTypes: events })
+        const saved = await updateWebhook(webhook, {
+          name: name.trim(),
+          url: url.trim(),
+          eventTypes: events,
+        })
         return { name: saved.name, secret: null }
       }
-      const created = await createWebhook({ name: name.trim(), url: url.trim(), eventTypes: events, projectId: projectId || null })
+      const created = await createWebhook({
+        name: name.trim(),
+        url: url.trim(),
+        eventTypes: events,
+        projectId: projectId || null,
+      })
       return { name: created.webhook.name, secret: created.secret }
     },
     onSuccess: onSaved,
@@ -318,20 +362,25 @@ function WebhookDialog({
 
 function DeliveriesDialog({ onClose, webhook }: { onClose: () => void; webhook: Webhook }) {
   const queryClient = useQueryClient()
-  const deliveries = useQuery({ queryKey: automationKeys.deliveries(webhook.id), queryFn: () => listDeliveries(webhook.id) })
+  const deliveries = useQuery({
+    queryKey: automationKeys.deliveries(webhook.id),
+    queryFn: () => listDeliveries(webhook.id),
+  })
   const again = useMutation({
     mutationFn: (delivery: WebhookDelivery) => redeliver(webhook.id, delivery.id),
-    onSuccess: () => showToast({ title: 'Sending it again', description: 'It keeps its delivery id, so the receiver can tell.' }),
+    onSuccess: () =>
+      showToast({
+        title: 'Sending it again',
+        description: 'It keeps its delivery id, so the receiver can tell.',
+      }),
     onError: (error) => toastError('It wasn’t sent again', error),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: automationKeys.deliveries(webhook.id) }),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: automationKeys.deliveries(webhook.id),
+      }),
   })
   return (
-    <Dialog
-      footer={<Button onClick={onClose}>Done</Button>}
-      onClose={onClose}
-      open
-      title={`Deliveries for ${webhook.name}`}
-    >
+    <Dialog footer={<Button onClick={onClose}>Done</Button>} onClose={onClose} open title={`Deliveries for ${webhook.name}`}>
       {deliveries.isPending ? (
         <ListSkeleton label="Loading deliveries" rows={3} />
       ) : deliveries.isError ? (
@@ -352,10 +401,13 @@ function DeliveriesDialog({ onClose, webhook }: { onClose: () => void; webhook: 
               key={delivery.id}
               meta={
                 <span className="aw-row__metaline aw-wrap">
-                  <code className="aw-inline-code">{delivery.id}</code>
-                  <span>{formatRelative(delivery.createdAt)}</span>
                   <span>
-                    {delivery.attempts} attempt{delivery.attempts === 1 ? '' : 's'}
+                    Delivery <code className="aw-inline-code">{delivery.id}</code>
+                  </span>
+                  <span title={formatFullDate(delivery.createdAt)}>{formatRelative(delivery.createdAt)}</span>
+                  <span>
+                    {delivery.attempts} attempt
+                    {delivery.attempts === 1 ? '' : 's'}
                   </span>
                   {delivery.lastStatusCode !== null && <span>HTTP {delivery.lastStatusCode}</span>}
                   {delivery.lastError && <span>{delivery.lastError}</span>}

@@ -59,10 +59,19 @@ export type WebhookDelivery = {
   deliveredAt: string | null
 }
 
-export type WebhookInput = { name: string; url: string; eventTypes: string[]; projectId?: string | null }
+export type WebhookInput = {
+  name: string
+  url: string
+  eventTypes: string[]
+  projectId?: string | null
+}
 
 const json = <T>(path: string, method: string, body: unknown = {}) =>
-  requestJson<T>(path, { method, json: body, idempotencyKey: crypto.randomUUID() })
+  requestJson<T>(path, {
+    method,
+    json: body,
+    idempotencyKey: crypto.randomUUID(),
+  })
 
 export const listWebhooks = () => requestJson<WebhookList>('/api/v1/webhooks')
 
@@ -74,28 +83,32 @@ export const createWebhook = (input: WebhookInput) =>
     ...(input.projectId ? { projectId: input.projectId } : {}),
   })
 
-export const updateWebhook = (webhook: Pick<Webhook, 'id' | 'version'>, change: Partial<Pick<Webhook, 'name' | 'url' | 'eventTypes'>> & { state?: 'active' | 'paused' }) =>
-  json<Webhook>(`/api/v1/webhooks/${encodeURIComponent(webhook.id)}`, 'PATCH', { expectedVersion: webhook.version, ...change })
+export const updateWebhook = (
+  webhook: Pick<Webhook, 'id' | 'version'>,
+  change: Partial<Pick<Webhook, 'name' | 'url' | 'eventTypes'>> & {
+    state?: 'active' | 'paused'
+  },
+) =>
+  json<Webhook>(`/api/v1/webhooks/${encodeURIComponent(webhook.id)}`, 'PATCH', {
+    expectedVersion: webhook.version,
+    ...change,
+  })
 
 export const deleteWebhook = (webhookId: string) =>
-  requestJson<void>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}`, { method: 'DELETE' })
+  requestJson<void>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: 'DELETE',
+  })
 
 export const rotateWebhookSecret = (webhookId: string) =>
   json<{ webhook: Webhook; secret: string }>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/rotate-secret`, 'POST')
 
-export const testWebhook = (webhookId: string) =>
-  json<WebhookDelivery>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/test`, 'POST')
+export const testWebhook = (webhookId: string) => json<WebhookDelivery>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/test`, 'POST')
 
 export const listDeliveries = (webhookId: string) =>
-  requestJson<{ deliveries: WebhookDelivery[]; nextCursor: string | null }>(
-    `/api/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries`,
-  )
+  requestJson<{ deliveries: WebhookDelivery[]; nextCursor: string | null }>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries`)
 
 export const redeliver = (webhookId: string, deliveryId: string) =>
-  json<WebhookDelivery>(
-    `/api/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries/${encodeURIComponent(deliveryId)}/redeliver`,
-    'POST',
-  )
+  json<WebhookDelivery>(`/api/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries/${encodeURIComponent(deliveryId)}/redeliver`, 'POST')
 
 // Automation rules
 
@@ -104,7 +117,11 @@ export type Trigger =
   | { kind: 'task_matches' }
   | { kind: 'run_finished'; outcomes?: string[] }
   | { kind: 'pull_request_checks_failed' }
-  | { kind: 'message_posted'; conversationId?: string | null; contains?: string | null }
+  | {
+      kind: 'message_posted'
+      conversationId?: string | null
+      contains?: string | null
+    }
   | {
       kind: 'schedule'
       frequency: 'daily' | 'weekly' | 'monthly'
@@ -114,17 +131,28 @@ export type Trigger =
       time: string
       timezone: string
     }
-  | { kind: 'capacity_window'; providerAccountId?: string | null; maxTasks?: number | null }
+  | {
+      kind: 'capacity_window'
+      providerAccountId?: string | null
+      maxTasks?: number | null
+    }
 
 export type TriggerKind = Trigger['kind']
 
-export type Conditions = { viewId?: string | null; filters?: Record<string, string> }
+export type Conditions = {
+  viewId?: string | null
+  filters?: Record<string, string>
+}
 
 export type Recipients = 'owner' | 'assignee' | 'project_admins'
 
 export type RuleAction =
   | { kind: 'launch'; environmentId?: string | null; prompt?: string | null }
-  | { kind: 'set_field'; field: 'status' | 'priority' | 'assignee' | 'add_label' | 'remove_label'; value: string }
+  | {
+      kind: 'set_field'
+      field: 'status' | 'priority' | 'assignee' | 'add_label' | 'remove_label'
+      value: string
+    }
   | { kind: 'notify'; recipients: Recipients; message: string }
   | { kind: 'post_message'; conversationId: string; text: string }
 
@@ -172,11 +200,9 @@ export type AutomationRun = {
   finishedAt: string | null
 }
 
-const rulesPath = (projectId: string, suffix = '') =>
-  `/api/v1/projects/${encodeURIComponent(projectId)}/automations${suffix}`
+const rulesPath = (projectId: string, suffix = '') => `/api/v1/projects/${encodeURIComponent(projectId)}/automations${suffix}`
 
-export const listRules = (projectId: string) =>
-  requestJson<{ rules: AutomationRule[]; canCreate: boolean }>(rulesPath(projectId))
+export const listRules = (projectId: string) => requestJson<{ rules: AutomationRule[]; canCreate: boolean }>(rulesPath(projectId))
 
 export const createRule = (projectId: string, draft: RuleDraft) => json<AutomationRule>(rulesPath(projectId), 'POST', draft)
 
@@ -187,7 +213,9 @@ export const updateRule = (projectId: string, rule: Pick<AutomationRule, 'id' | 
   })
 
 export const deleteRule = (projectId: string, ruleId: string) =>
-  requestJson<void>(rulesPath(projectId, `/${encodeURIComponent(ruleId)}`), { method: 'DELETE' })
+  requestJson<void>(rulesPath(projectId, `/${encodeURIComponent(ruleId)}`), {
+    method: 'DELETE',
+  })
 
 export const runRule = (projectId: string, ruleId: string, workItemId?: string) =>
   json<AutomationRun>(rulesPath(projectId, `/${encodeURIComponent(ruleId)}/run`), 'POST', workItemId ? { workItemId } : {})
@@ -217,7 +245,9 @@ export type OpenApiOperation = {
   summary?: string
   description?: string
   tags?: string[]
-  requestBody?: { content?: { 'application/json'?: { schema?: OpenApiSchema } } }
+  requestBody?: {
+    content?: { 'application/json'?: { schema?: OpenApiSchema } }
+  }
   'x-read-only'?: boolean
 }
 
