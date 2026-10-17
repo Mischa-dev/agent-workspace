@@ -22,5 +22,8 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     // Playwright owns e2e/*.spec.ts; vitest would try to run them otherwise.
     exclude: [...configDefaults.exclude, 'e2e/**'],
+    // The full-App tests take 4 to 5 seconds on an idle machine, so vitest's
+    // 5 second default fails them whenever the CI host is busy.
+    testTimeout: 20_000,
   },
 })
