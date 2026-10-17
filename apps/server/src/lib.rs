@@ -7,6 +7,7 @@ pub mod ai;
 pub mod api;
 pub mod audit_log;
 pub mod auth;
+pub mod automations;
 pub mod bootstrap;
 pub mod config;
 pub mod connected_apps;
@@ -15,6 +16,7 @@ pub mod direct;
 pub mod domain;
 pub mod environments;
 pub mod error;
+pub mod events;
 pub mod execution;
 pub mod execution_setup;
 pub mod external_agents;
@@ -44,6 +46,7 @@ pub mod policy_inventory;
 pub mod profile_runtime;
 pub mod projects;
 pub mod provider;
+pub mod public_api;
 pub mod push;
 pub mod rate_limit;
 pub mod reactions;
@@ -61,6 +64,7 @@ pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
 pub mod usage;
+pub mod webhooks;
 pub mod work_item_commands;
 pub mod work_item_history;
 pub mod work_item_labels;
@@ -141,6 +145,9 @@ pub fn router(state: AppState) -> Router {
         .merge(metrics::router())
         .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
+        .merge(public_api::router())
+        .merge(webhooks::router())
+        .merge(automations::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(

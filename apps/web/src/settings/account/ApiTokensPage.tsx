@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
 import {
@@ -23,6 +24,7 @@ import {
   showToast,
   type ChipTone,
 } from '../../ui'
+import { accountSettingsHref } from '../paths'
 import { OneTimeValue } from '../OneTimeValue'
 import {
   accountKeys,
@@ -63,7 +65,8 @@ export default function ApiTokensPage() {
   return (
     <>
       <PageHeader icon="key" title="API tokens">
-        Tokens let scripts and tools reach one Project as you, through the MCP server. Treat them like passwords.
+        Tokens let scripts and tools reach one Project as you, through the MCP server or the REST API (see{' '}
+        <Link to={accountSettingsHref('api-reference')}>API reference</Link>). Treat them like passwords.
       </PageHeader>
       {created && (
         <OneTimeValue

@@ -58,6 +58,7 @@ mod admin;
 mod agents;
 mod ai_tools;
 mod approvals;
+mod automation_tools;
 mod batch_tools;
 mod briefing;
 mod channels;
@@ -1506,6 +1507,112 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Your outgoing webhooks: each one's URL, the events it hears, whether it's on, and its last delivery; plus every event type and how receivers check a delivery's signature. Secrets are never shown again after they're made.",
+        annotations(
+            title = "List webhooks",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn webhook_list(
+        &self,
+        Parameters(arguments): Parameters<automation_tools::WebhookListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(automation_tools::webhook_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Make, change or remove an outgoing webhook that POSTs signed JSON to a URL when tasks, runs, pull requests or messages change. It hears what you can see, in one project or the whole workspace, and stops if you lose access. create and rotate_secret return the signing secret once; test sends a ping; redeliver sends one delivery again with the same id.",
+        annotations(
+            title = "Change webhook",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn webhook_write(
+        &self,
+        Parameters(arguments): Parameters<automation_tools::WebhookWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(automation_tools::webhook_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A webhook's delivery log, newest first: each delivery's id (the same on every retry), event, state, attempts, last status code and error.",
+        annotations(
+            title = "Webhook deliveries",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn webhook_deliveries(
+        &self,
+        Parameters(arguments): Parameters<automation_tools::WebhookDeliveriesArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(automation_tools::webhook_deliveries(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's automation rules: each one's trigger, conditions (a saved view's filters), actions, who it acts as, whether it's on and why the server turned it off.",
+        annotations(
+            title = "List automations",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn automation_list(
+        &self,
+        Parameters(arguments): Parameters<automation_tools::AutomationListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(automation_tools::automation_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Make, change, remove or try an automation rule in a project. Triggers: task_created, task_matches (a task enters the conditions), run_finished, pull_request_checks_failed, message_posted, schedule, capacity_window. Conditions: a saved view (viewId) and/or task list filters. Actions: launch (with the project's run defaults), set_field, notify, post_message; text can use {{task.key}}, {{task.title}}, {{task.url}}, {{pr.url}} and similar. The rule acts as you and stops if you lose access. run fires it now.",
+        annotations(
+            title = "Change automation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn automation_write(
+        &self,
+        Parameters(arguments): Parameters<automation_tools::AutomationWriteArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(automation_tools::automation_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "What an automation rule did each time it fired, newest first: the cause, each action's result, and why a firing was skipped.",
+        annotations(
+            title = "Automation history",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn automation_runs(
+        &self,
+        Parameters(arguments): Parameters<automation_tools::AutomationRunsArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<serde_json::Value>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(automation_tools::automation_runs(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "A project's milestones: target dates, how many tasks are finished, and which are overdue.",
         annotations(
             title = "List milestones",
@@ -2172,6 +2279,109 @@ pub fn router(state: AppState) -> Router<AppState> {
 
 pub fn oauth_router() -> Router<AppState> {
     oauth::router()
+}
+
+/// Every tool's name, description, schemas and hints, for the public API's
+/// OpenAPI document (X3). Generated from the same Rust types the tools take.
+pub(crate) fn tool_catalog() -> Vec<rmcp::model::Tool> {
+    McpServer::tool_router().list_all()
+}
+
+/// Why a direct tool call didn't produce a result.
+#[derive(Debug)]
+pub(crate) enum DirectCallError {
+    UnknownTool,
+    /// The arguments didn't match the tool's input schema.
+    InvalidArguments(String),
+    /// A key or project in the arguments the caller can't reach, or a
+    /// lookup that failed.
+    Refused(AppError),
+}
+
+/// Runs one tool for a caller that isn't on the MCP transport: the public
+/// REST API (X3) and automations acting as their owner (X5). The arguments
+/// are rewritten and the project scoped exactly as `authenticate_mcp` does
+/// for an MCP call, and the tool then checks the caller's current access
+/// itself, as it always does. Returns the tool's structured result.
+pub(crate) async fn call_tool_direct(
+    state: &AppState,
+    mut principal: McpPrincipal,
+    tool: &str,
+    mut arguments: serde_json::Value,
+) -> Result<serde_json::Value, DirectCallError> {
+    let router = McpServer::tool_router();
+    if !router.has_route(tool) {
+        return Err(DirectCallError::UnknownTool);
+    }
+    if !arguments.is_object() {
+        return Err(DirectCallError::InvalidArguments(
+            "The body must be a JSON object of the tool's arguments.".to_owned(),
+        ));
+    }
+    keys_to_ids(state, &principal, tool, &mut arguments)
+        .await
+        .map_err(DirectCallError::Refused)?;
+    if let Some(project_id) = scoped_project(state, &principal, tool, &arguments)
+        .await
+        .map_err(DirectCallError::Refused)?
+    {
+        principal.project_id = project_id;
+        principal.project_explicit = true;
+    }
+    let serde_json::Value::Object(arguments) = arguments else {
+        return Err(DirectCallError::InvalidArguments(
+            "The body must be a JSON object of the tool's arguments.".to_owned(),
+        ));
+    };
+    let (mut parts, ()) = http::Request::builder()
+        .method(http::Method::POST)
+        .uri(MCP_PATH)
+        .body(())
+        .map_err(|_| DirectCallError::Refused(AppError::Internal("direct tool request")))?
+        .into_parts();
+    parts.extensions.insert(principal);
+    let server = McpServer {
+        state: state.clone(),
+    };
+    // A request context needs a peer; tools never write to it, so a peer on
+    // an in-memory pipe that nobody reads serves for the one call.
+    let (pipe, _other_end) = tokio::io::duplex(64);
+    let running =
+        rmcp::service::serve_directly::<RoleServer, _, _, _, _>(server.clone(), pipe, None);
+    let mut context = RequestContext::new(
+        rmcp::model::NumberOrString::Number(1),
+        running.peer().clone(),
+    );
+    context.extensions.insert(parts);
+    let params = rmcp::model::CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
+    let outcome = router
+        .call(rmcp::handler::server::tool::ToolCallContext::new(
+            &server, params, context,
+        ))
+        .await;
+    drop(running);
+    let result = match outcome {
+        Ok(rmcp::model::CallToolResponse::Complete(result)) => result,
+        Ok(_) => {
+            return Err(DirectCallError::Refused(AppError::Internal(
+                "tool asked for input",
+            )));
+        }
+        Err(error) => return Err(DirectCallError::InvalidArguments(error.message.to_string())),
+    };
+    if let Some(structured) = result.structured_content {
+        return Ok(structured);
+    }
+    let text = result
+        .content
+        .iter()
+        .filter_map(|block| block.as_text().map(|text| text.text.clone()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if result.is_error == Some(true) {
+        return Err(DirectCallError::InvalidArguments(text));
+    }
+    Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text)))
 }
 
 async fn authenticate_mcp(

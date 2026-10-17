@@ -378,6 +378,9 @@ pub fn default_registry() -> JobRegistry {
     registry.every(HEALTH_CHECK_KIND, Duration::from_secs(5 * 60));
     crate::usage::register_jobs(&mut registry);
     crate::push::register_jobs(&mut registry);
+    crate::events::register_jobs(&mut registry);
+    crate::webhooks::register_jobs(&mut registry);
+    crate::automations::register_jobs(&mut registry);
     registry
 }
 

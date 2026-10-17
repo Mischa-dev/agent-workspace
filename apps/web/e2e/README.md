@@ -15,7 +15,7 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
     an arrow, Space), Ready → In Progress by dragging, and checking it's still
     there after a reload
 - `screenshots.spec.ts`: Home, a Project channel, the work item list and
-  board, and Appearance settings, each in light and dark ("Match system" with
+  board, Appearance, Webhooks, API reference and Automation rules settings, each in light and dark ("Match system" with
   the browser's color scheme). Each page must render without uncaught errors
   and resolve to the expected theme. The PNGs land in
   `e2e-output/screenshots/` as artifacts; they're never compared against
