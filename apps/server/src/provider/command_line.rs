@@ -874,6 +874,51 @@ fn parse_line(value: &Value, turn: &mut Turn) -> Vec<HarnessEvent> {
 }
 
 /// The options a turn line carries, for tests.
+/// A connected runner registered as a harness (X2): it shows in Settings
+/// and the Launch dialog like any harness, but its work is handed to the
+/// runner agent as a tag, so it never runs a turn here.
+pub struct RunnerAdapter {
+    manifest: AdapterManifest,
+}
+
+impl RunnerAdapter {
+    pub fn new(manifest: AdapterManifest) -> Self {
+        Self { manifest }
+    }
+}
+
+impl HarnessAdapter for RunnerAdapter {
+    fn manifest(&self) -> &AdapterManifest {
+        &self.manifest
+    }
+
+    fn acquire_run(&self, _account: AccountHandle) -> HarnessFuture<'_, Box<dyn HarnessSession>> {
+        Box::pin(async { Err(HarnessError::Unsupported("runs on a connected runner")) })
+    }
+
+    fn acquire_control(
+        &self,
+        _account: AccountHandle,
+    ) -> HarnessFuture<'_, Box<dyn HarnessSession>> {
+        Box::pin(async { Err(HarnessError::Unsupported("accounts on a connected runner")) })
+    }
+
+    fn health(
+        &self,
+        _account_id: Uuid,
+    ) -> Pin<Box<dyn Future<Output = Option<ProfileHealth>> + Send + '_>> {
+        Box::pin(async { None })
+    }
+
+    fn shutdown_account(&self, _account_id: Uuid) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
+    fn shutdown_all(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+}
+
 #[cfg(test)]
 fn options(value: Value) -> serde_json::Map<String, Value> {
     value.as_object().cloned().unwrap_or_default()
@@ -957,12 +1002,13 @@ echo '{"type":"done","status":"completed"}'
     fn setup() -> (tempfile::TempDir, CommandAdapter, AccountHandle) {
         let root = tempfile::tempdir().expect("root");
         let dir = root.path().join("harnesses");
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect("test step");
         let program = dir.join("script.sh");
-        std::fs::write(&program, SCRIPT).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&program, SCRIPT).expect("test step");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("test step");
         let home = root.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&home).expect("test step");
         let manifest = build_manifest(
             "x_script",
             "Script",
@@ -977,7 +1023,7 @@ echo '{"type":"done","status":"completed"}'
             "--profile".to_owned(),
             "{option:profile}".to_owned(),
         ];
-        validate_command(&command, &[dir.clone()]).expect("allowed");
+        validate_command(&command, std::slice::from_ref(&dir)).expect("allowed");
         let cell = HostCell::default();
         let _ = cell.set(Arc::new(Host) as Arc<dyn super::super::host::HarnessHost>);
         let adapter = CommandAdapter::new(
@@ -1002,7 +1048,7 @@ echo '{"type":"done","status":"completed"}'
     async fn command_harnesses_keep_the_adapter_contract() {
         let (root, adapter, account) = setup();
         let worktree = root.path().join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(&worktree).expect("test step");
         adapter_contract(&adapter, account, &worktree).await;
     }
 
@@ -1010,23 +1056,31 @@ echo '{"type":"done","status":"completed"}'
     async fn a_script_harness_takes_a_turn_and_gets_its_secrets_only_on_fd_3() {
         let (root, adapter, account) = setup();
         let worktree = root.path().join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(&worktree).expect("test step");
         let config = RunConfig {
             model: Some("my-large".to_owned()),
             options: options(json!({"profile": "careful"})),
             ..RunConfig::default()
         };
-        let mut run = adapter.acquire_run(account.clone()).await.unwrap();
-        let thread = run.start_thread(&worktree, &config).await.unwrap();
+        let mut run = adapter
+            .acquire_run(account.clone())
+            .await
+            .expect("test step");
+        let thread = run
+            .start_thread(&worktree, &config)
+            .await
+            .expect("test step");
         run.start_turn(&thread, &worktree, "write notes", &config)
             .await
-            .unwrap();
+            .expect("test step");
         let mut events = Vec::new();
         loop {
-            let event = run.next_event().await.unwrap();
+            let event = run.next_event().await.expect("test step");
             if let HarnessEvent::Request(request) = event {
                 assert_eq!(request.summary, "Write NOTES.md?");
-                run.answer(request, HarnessAnswer::Approve).await.unwrap();
+                run.answer(request, HarnessAnswer::Approve)
+                    .await
+                    .expect("test step");
                 continue;
             }
             let done = matches!(event, HarnessEvent::TurnCompleted { .. });
@@ -1053,16 +1107,16 @@ echo '{"type":"done","status":"completed"}'
             event,
             HarnessEvent::TokensUsed(usage) if usage.input_tokens == 100
         )));
-        let args = std::fs::read_to_string(account.home.join("args.txt")).unwrap();
+        let args = std::fs::read_to_string(account.home.join("args.txt")).expect("test step");
         assert_eq!(
             args, "--model=my-large\n--profile\ncareful\n",
             "the empty {{reasoning}} is dropped"
         );
-        let env = std::fs::read_to_string(account.home.join("env.txt")).unwrap();
+        let env = std::fs::read_to_string(account.home.join("env.txt")).expect("test step");
         let secrets: Value = serde_json::from_str(
-            &std::fs::read_to_string(account.home.join("secrets.json")).unwrap(),
+            &std::fs::read_to_string(account.home.join("secrets.json")).expect("test step"),
         )
-        .unwrap();
+        .expect("test step");
         assert_eq!(secrets["deploy_token"], "value-of-deploy_token");
         assert_eq!(secrets["API_KEY"], "account-key-123456");
         assert!(
@@ -1075,16 +1129,17 @@ echo '{"type":"done","status":"completed"}'
 
     #[test]
     fn programs_outside_the_allowed_directories_are_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().expect("test step");
         let allowed = root.path().join("allowed");
-        std::fs::create_dir_all(&allowed).unwrap();
-        std::fs::write(allowed.join("ok"), "").unwrap();
-        std::fs::write(root.path().join("outside"), "").unwrap();
-        std::os::unix::fs::symlink(root.path().join("outside"), allowed.join("link")).unwrap();
+        std::fs::create_dir_all(&allowed).expect("test step");
+        std::fs::write(allowed.join("ok"), "").expect("test step");
+        std::fs::write(root.path().join("outside"), "").expect("test step");
+        std::os::unix::fs::symlink(root.path().join("outside"), allowed.join("link"))
+            .expect("test step");
         let ok = allowed.join("ok").to_string_lossy().into_owned();
-        assert!(validate_command(&[ok.clone()], &[allowed.clone()]).is_ok());
+        assert!(validate_command(std::slice::from_ref(&ok), std::slice::from_ref(&allowed)).is_ok());
         assert!(
-            validate_command(&[ok.clone()], &[]).is_err(),
+            validate_command(std::slice::from_ref(&ok), &[]).is_err(),
             "off unless the operator allows it"
         );
         for program in [
@@ -1094,7 +1149,7 @@ echo '{"type":"done","status":"completed"}'
             PathBuf::from("relative/ok"),
         ] {
             let program = program.to_string_lossy().into_owned();
-            assert!(validate_command(&[program], &[allowed.clone()]).is_err());
+            assert!(validate_command(&[program], std::slice::from_ref(&allowed)).is_err());
         }
         assert!(validate_command(&[ok, "{secret}".to_owned()], &[allowed]).is_err());
     }
@@ -1117,54 +1172,9 @@ echo '{"type":"done","status":"completed"}'
             &manifest_json(),
             RunLocation::LocalHost,
         )
-        .unwrap();
+        .expect("test step");
         assert_eq!(manifest.branch_prefix, "x-my-agent/run-");
         assert!(manifest.default_models[0].is_default);
         assert_eq!(manifest.concurrency.max_per_account, 2);
-    }
-}
-
-/// A connected runner registered as a harness (X2): it shows in Settings
-/// and the Launch dialog like any harness, but its work is handed to the
-/// runner agent as a tag, so it never runs a turn here.
-pub struct RunnerAdapter {
-    manifest: AdapterManifest,
-}
-
-impl RunnerAdapter {
-    pub fn new(manifest: AdapterManifest) -> Self {
-        Self { manifest }
-    }
-}
-
-impl HarnessAdapter for RunnerAdapter {
-    fn manifest(&self) -> &AdapterManifest {
-        &self.manifest
-    }
-
-    fn acquire_run(&self, _account: AccountHandle) -> HarnessFuture<'_, Box<dyn HarnessSession>> {
-        Box::pin(async { Err(HarnessError::Unsupported("runs on a connected runner")) })
-    }
-
-    fn acquire_control(
-        &self,
-        _account: AccountHandle,
-    ) -> HarnessFuture<'_, Box<dyn HarnessSession>> {
-        Box::pin(async { Err(HarnessError::Unsupported("accounts on a connected runner")) })
-    }
-
-    fn health(
-        &self,
-        _account_id: Uuid,
-    ) -> Pin<Box<dyn Future<Output = Option<ProfileHealth>> + Send + '_>> {
-        Box::pin(async { None })
-    }
-
-    fn shutdown_account(&self, _account_id: Uuid) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async {})
-    }
-
-    fn shutdown_all(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async {})
     }
 }

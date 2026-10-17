@@ -876,15 +876,14 @@ fn tool_results(value: &Value, pending: &mut HashMap<String, PendingTool>) -> Ve
                     .or_else(|| result_text(block));
                 detail.output = output;
             }
-            ItemKind::FileChange => {
+            ItemKind::FileChange
                 if structured
                     .and_then(|result| result.get("type"))
                     .and_then(Value::as_str)
-                    == Some("create")
-                {
-                    for file in &mut detail.files {
-                        file.1 = Some("added".to_owned());
-                    }
+                    == Some("create") =>
+            {
+                for file in &mut detail.files {
+                    file.1 = Some("added".to_owned());
                 }
             }
             _ => {}
@@ -1084,7 +1083,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
 
     impl super::super::host::HarnessHost for FakeHost {
         fn account_secret(&self, _account_id: Uuid) -> HarnessFuture<'_, Option<SecretValue>> {
-            let key = self.key.lock().unwrap().clone();
+            let key = self.key.lock().expect("test step").clone();
             Box::pin(async move { Ok(key.map(SecretValue::new)) })
         }
 
@@ -1093,12 +1092,12 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
             _account_id: Uuid,
             value: &'a SecretValue,
         ) -> HarnessFuture<'a, ()> {
-            *self.key.lock().unwrap() = Some(value.expose().to_owned());
+            *self.key.lock().expect("test step") = Some(value.expose().to_owned());
             Box::pin(async { Ok(()) })
         }
 
         fn delete_account_secret(&self, _account_id: Uuid) -> HarnessFuture<'_, ()> {
-            *self.key.lock().unwrap() = None;
+            *self.key.lock().expect("test step") = None;
             Box::pin(async { Ok(()) })
         }
 
@@ -1126,11 +1125,12 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
     ) {
         let root = tempfile::tempdir().expect("root");
         let binary = root.path().join("bin/claude");
-        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-        std::fs::write(&binary, FAKE_CLAUDE).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::create_dir_all(binary.parent().expect("test step")).expect("test step");
+        std::fs::write(&binary, FAKE_CLAUDE).expect("test step");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("test step");
         let home = root.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&home).expect("test step");
         let host = Arc::new(FakeHost {
             key: std::sync::Mutex::new(None),
         });
@@ -1150,7 +1150,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
     async fn claude_code_keeps_the_adapter_contract() {
         let (root, adapter, account, _) = setup();
         let worktree = root.path().join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(&worktree).expect("test step");
         adapter_contract(&adapter, account, &worktree).await;
     }
 
@@ -1158,15 +1158,36 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
     async fn a_turn_becomes_neutral_events_and_the_key_stays_out_of_the_environment() {
         let (root, adapter, account, host) = setup();
         let worktree = root.path().join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(&worktree).expect("test step");
         let fake_key = format!("sk-ant-api03-{}", "x".repeat(40));
-        let mut control = adapter.acquire_control(account.clone()).await.unwrap();
-        assert!(!control.read_account().await.unwrap().authenticated);
-        control.login_with_api_key(&fake_key).await.unwrap();
-        assert!(control.read_account().await.unwrap().authenticated);
+        let mut control = adapter
+            .acquire_control(account.clone())
+            .await
+            .expect("test step");
+        assert!(
+            !control
+                .read_account()
+                .await
+                .expect("test step")
+                .authenticated
+        );
+        control
+            .login_with_api_key(&fake_key)
+            .await
+            .expect("test step");
+        assert!(
+            control
+                .read_account()
+                .await
+                .expect("test step")
+                .authenticated
+        );
         assert!(control.login_with_api_key("not a key").await.is_err());
         drop(control);
-        assert_eq!(host.key.lock().unwrap().as_deref(), Some(fake_key.as_str()));
+        assert_eq!(
+            host.key.lock().expect("test step").as_deref(),
+            Some(fake_key.as_str())
+        );
 
         let config = RunConfig {
             model: Some("claude-sonnet-5-5".to_owned()),
@@ -1174,17 +1195,25 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
             approval_policy: Some("accept_edits".to_owned()),
             ..RunConfig::default()
         };
-        let mut run = adapter.acquire_run(account.clone()).await.unwrap();
-        let thread = run.start_thread(&worktree, &config).await.unwrap();
+        let mut run = adapter
+            .acquire_run(account.clone())
+            .await
+            .expect("test step");
+        let thread = run
+            .start_thread(&worktree, &config)
+            .await
+            .expect("test step");
         run.start_turn(&thread, &worktree, "write notes", &config)
             .await
-            .unwrap();
+            .expect("test step");
         let mut events = Vec::new();
         loop {
-            let event = run.next_event().await.unwrap();
+            let event = run.next_event().await.expect("test step");
             if let HarnessEvent::Request(request) = event {
                 assert!(request.summary.contains("NOTES.md"));
-                run.answer(request, HarnessAnswer::Approve).await.unwrap();
+                run.answer(request, HarnessAnswer::Approve)
+                    .await
+                    .expect("test step");
                 continue;
             }
             let done = matches!(event, HarnessEvent::TurnCompleted { .. });
@@ -1205,7 +1234,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
         });
         let command = command.expect("the Bash call completed");
         assert_eq!(command.command.as_deref(), Some("cargo test"));
-        assert!(command.output.unwrap().contains("3 passed"));
+        assert!(command.output.expect("test step").contains("3 passed"));
         assert!(events.iter().any(|event| matches!(
             event,
             HarnessEvent::ItemCompleted(item)
@@ -1228,9 +1257,9 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"Wrote NOTE
         )));
         assert!(worktree.join("NOTES.md").exists());
 
-        let args = std::fs::read_to_string(account.home.join("args.txt")).unwrap();
-        let env = std::fs::read_to_string(account.home.join("env.txt")).unwrap();
-        let fd3 = std::fs::read_to_string(account.home.join("fd3.txt")).unwrap();
+        let args = std::fs::read_to_string(account.home.join("args.txt")).expect("test step");
+        let env = std::fs::read_to_string(account.home.join("env.txt")).expect("test step");
+        let fd3 = std::fs::read_to_string(account.home.join("fd3.txt")).expect("test step");
         assert_eq!(fd3, fake_key, "the key arrives on fd 3");
         assert!(!args.contains(&fake_key) && !env.contains(&fake_key));
         assert!(!env.contains("ANTHROPIC_API_KEY"));

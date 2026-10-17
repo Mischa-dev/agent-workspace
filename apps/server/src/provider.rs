@@ -17,6 +17,7 @@ use crate::{
 
 pub mod adapter;
 pub mod catalog;
+pub(crate) mod claude_cloud;
 pub(crate) mod claude_code;
 mod codex_app_server;
 pub(crate) mod codex_cloud;

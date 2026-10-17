@@ -20,6 +20,7 @@ use super::{
         AccountHandle, HarnessAdapter, HarnessError, HarnessSession, LoginKind, LoginStart,
         ProfileHealth,
     },
+    claude_cloud::ClaudeCloudAdapter,
     claude_code::ClaudeCodeAdapter,
     codex_app_server::CodexAdapter,
     codex_cloud::CodexCloudAdapter,
@@ -179,6 +180,9 @@ impl SupervisorRegistry {
             Arc::clone(&host),
         ));
         adapters.insert(claude_code.manifest().kind.clone(), claude_code);
+        let claude_cloud: Arc<dyn HarnessAdapter> =
+            Arc::new(ClaudeCloudAdapter::new(config, Arc::clone(&host))?);
+        adapters.insert(claude_cloud.manifest().kind.clone(), claude_cloud);
         let demo = config.demo_executor.then(|| {
             Arc::new(DemoAdapter::new(
                 Arc::clone(&shutdown),

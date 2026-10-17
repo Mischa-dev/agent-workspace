@@ -395,12 +395,11 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
 
 /// The reason a registration was refused, for the settings page.
 fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
-    if row.transport == "command" {
-        if let Err(reason) =
+    if row.transport == "command"
+        && let Err(reason) =
             command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
-        {
-            return Some(reason);
-        }
+    {
+        return Some(reason);
     }
     let runs_on = if row.transport == "runner" {
         RunLocation::Cloud
