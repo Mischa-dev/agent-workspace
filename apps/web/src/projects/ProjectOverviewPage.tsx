@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -15,6 +16,11 @@ import { useProject } from './hooks'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
 import { projectSettingsHref } from '../settings/paths'
+
+// The project's boards load in the whiteboards' own small chunk.
+const LinkedWhiteboards = lazy(() =>
+  import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
+)
 
 const RECENT_WORK = { limit: 5 }
 
@@ -75,6 +81,14 @@ export function ProjectOverviewPage() {
           <Conversations base={base} project={project.data} />
           <RecentWork base={base} projectId={project.data.id} />
         </div>
+        <Suspense fallback={null}>
+          <LinkedWhiteboards
+            canEdit={project.data.role !== 'viewer' && !project.data.archivedAt}
+            projectId={project.data.id}
+            targetId={project.data.id}
+            targetKind="project"
+          />
+        </Suspense>
       </div>
     </AppShell>
   )

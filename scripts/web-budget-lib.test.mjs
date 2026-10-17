@@ -76,3 +76,26 @@ test('holds each lazy chunk to its own limit, not a total', () => {
     )
   })
 })
+
+test('holds whiteboard chunks to their own limit', () => {
+  withDist((root) => {
+    mkdirSync(join(root, 'assets', 'whiteboard'))
+    writeFileSync(join(root, 'assets', 'whiteboard', 'Canvas.js'), 'x'.repeat(200))
+    writeFileSync(join(root, 'assets', 'whiteboard', 'Canvas.css'), 'y'.repeat(200))
+    const limits = { ...roomy, chunkJavascriptRawBytes: 64, chunkCssRawBytes: 64 }
+    assert.deepEqual(
+      measureWebAssets(root, limits).violations.map(({ name }) => name),
+      ['chunkJavascriptRawBytes', 'chunkCssRawBytes'],
+    )
+    const report = measureWebAssets(root, {
+      ...limits,
+      whiteboardChunkJavascriptRawBytes: 256,
+      whiteboardChunkJavascriptGzipBytes: 256,
+      whiteboardChunkCssRawBytes: 100,
+    })
+    assert.deepEqual(
+      report.violations.map(({ name, file }) => [name, file]),
+      [['whiteboardChunkCssRawBytes', 'assets/whiteboard/Canvas.css']],
+    )
+  })
+})

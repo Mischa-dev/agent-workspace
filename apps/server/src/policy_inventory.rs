@@ -544,6 +544,60 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!("memory", Post, "/api/v1/projects/{id}/pages", WorkItemEdit),
     policy_route!("memory", Patch, "/api/v1/pages/{id}", WorkItemEdit),
     policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Patch,
+        "/api/v1/whiteboards/{id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards/{id}/duplicate",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards/{id}/scene",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards/{id}/operations",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards/{id}/files",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Post,
+        "/api/v1/whiteboards/{id}/links",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "whiteboards/http",
+        Delete,
+        "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
         "memory",
         Post,
         "/api/v1/projects/{id}/decisions",
@@ -1275,6 +1329,7 @@ mod tests {
         ("execution", include_str!("execution.rs")),
         ("external_agents", include_str!("external_agents.rs")),
         ("memory", include_str!("memory.rs")),
+        ("whiteboards/http", include_str!("whiteboards/http.rs")),
         ("connected_apps", include_str!("connected_apps.rs")),
         ("webhooks", include_str!("webhooks.rs")),
         ("settings", include_str!("settings.rs")),

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type FormEvent, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
@@ -34,6 +34,11 @@ import {
   updatePage,
   type Page,
 } from './api'
+
+// A page's boards load in the whiteboards' own small chunk.
+const LinkedWhiteboards = lazy(() =>
+  import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
+)
 
 function errorText(reason: unknown, fallback: string) {
   return isApiError(reason) || reason instanceof Error ? reason.message : fallback
@@ -224,6 +229,9 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
           source={current.body}
         />
       )}
+      <Suspense fallback={null}>
+        <LinkedWhiteboards canEdit={canEdit && !current.archived} projectId={projectId} targetId={current.id} targetKind="page" />
+      </Suspense>
       <Section description="Every save is kept. Open an old version to read it or put it back." title="History">
         <RowList label="Versions">
           {current.revisions.map((revision) => (

@@ -45,6 +45,11 @@ const keyPages: KeyPage[] = [
     ready: (page) => expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible(),
   },
   {
+    name: 'whiteboards',
+    path: () => '/whiteboards',
+    ready: (page) => expect(page.getByRole('heading', { name: 'Whiteboards', exact: true })).toBeVisible(),
+  },
+  {
     name: 'project-agents',
     path: () => `/settings/projects/${seededValue('E2E_PROJECT_ID')}/agents`,
     ready: (page) => expect(page.getByRole('heading', { name: 'Project agents' })).toBeVisible(),

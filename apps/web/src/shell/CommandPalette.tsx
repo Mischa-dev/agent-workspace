@@ -222,6 +222,7 @@ export function CommandPalette() {
       { id: 'g:home', group: 'Go to', label: 'Home', icon: 'home', shortcut: 'G H', onSelect: go('/home') },
       { id: 'g:my-work', group: 'Go to', label: 'My work', icon: 'checklist', shortcut: 'G W', keywords: ['assigned', 'tasks', 'review', 'claimed'], onSelect: go('/my-work') },
       { id: 'g:runs', group: 'Go to', label: 'Runs', icon: 'activity', keywords: ['agent runs', 'tokens', 'cost', 'usage', 'diff'], onSelect: go('/runs') },
+      { id: 'g:whiteboards', group: 'Go to', label: 'Whiteboards', icon: 'whiteboard', keywords: ['excalidraw', 'draw', 'diagram', 'sketch', 'canvas'], onSelect: go('/whiteboards') },
       { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['inbox', 'dms'], onSelect: go('/messages') },
       { id: 'g:agents', group: 'Go to', label: 'Agents', icon: 'bot', onSelect: go('/messages/agents') },
       { id: 'g:search', group: 'Go to', label: 'Search', icon: 'search', shortcut: '/', onSelect: go('/search') },

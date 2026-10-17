@@ -2741,6 +2741,8 @@ pub(super) struct TaskLinkArguments {
     /// URL. With the project's GitHub automation on, a linked pull request
     /// moves the task when it's opened or merged.
     pub pull_request_id: Option<String>,
+    /// A whiteboard: it shows on the task. One board can be on many tasks.
+    pub whiteboard_id: Option<String>,
     /// For repositoryId only: related or primary, the repository Codex runs
     /// on this task's thread use. Making one primary makes the old primary
     /// related. Left out, a new link is related and an existing link keeps
@@ -2760,7 +2762,8 @@ pub(super) struct LinkValue {
     pub task_id: String,
     /// The task's key, such as AWD-12.
     pub key: String,
-    /// conversation, message, page, decision, repository, or pull_request.
+    /// conversation, message, page, decision, repository, pull_request, or
+    /// whiteboard.
     pub kind: String,
     pub target_id: String,
     pub linked: bool,
@@ -2804,6 +2807,9 @@ pub(super) async fn task_link(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
+    if let Some(whiteboard) = arguments.whiteboard_id.as_deref() {
+        return task_whiteboard_link(state, principal, &arguments, whiteboard).await;
+    }
     let targets = [
         (
             "conversation",
@@ -2830,7 +2836,7 @@ pub(super) async fn task_link(
     let [(kind, field, target)] = targets.as_slice() else {
         return ToolResult::invalid(
             "taskId",
-            "Pass exactly one of conversationId, messageId, pageId, decisionId, repositoryId, or pullRequestId.",
+            "Pass exactly one of conversationId, messageId, pageId, decisionId, repositoryId, pullRequestId, or whiteboardId.",
         );
     };
     let remove = arguments.remove.unwrap_or(false);
@@ -2882,6 +2888,71 @@ pub(super) async fn task_link(
     task_link_inner(state, principal, &arguments.task_id, request)
         .await
         .unwrap_or_else(|error| ToolResult::from_error(error, "task_link"))
+}
+
+/// task_link with whiteboardId: the link lives on the board (see
+/// `whiteboards::set_link`), so the task's version doesn't change.
+async fn task_whiteboard_link(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: &TaskLinkArguments,
+    whiteboard: &str,
+) -> ToolResult<LinkValue> {
+    let others = [
+        &arguments.conversation_id,
+        &arguments.message_id,
+        &arguments.page_id,
+        &arguments.decision_id,
+        &arguments.repository_id,
+        &arguments.pull_request_id,
+    ];
+    if others.iter().any(|other| other.is_some()) || arguments.role.is_some() {
+        return ToolResult::invalid("whiteboardId", "Pass whiteboardId on its own.");
+    }
+    let Some(whiteboard_id) = parse_id(whiteboard.trim()) else {
+        return ToolResult::invalid("whiteboardId", "Pass a whiteboard ID or link.");
+    };
+    let result = async {
+        let Some((task_id, project_id)) =
+            resolve_task(state, principal, &arguments.task_id).await?
+        else {
+            return Ok(ToolResult::not_found("That task"));
+        };
+        let linked = !arguments.remove.unwrap_or(false);
+        let outcome = super::whiteboard_tools::set_link(
+            state,
+            principal,
+            whiteboard_id,
+            crate::whiteboards::TargetKind::WorkItem,
+            task_id,
+            linked,
+        )
+        .await?;
+        let version = sqlx::query_scalar::<_, i64>("SELECT version FROM work_items WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&state.pool)
+            .await?;
+        Ok::<_, AppError>(ToolResult::ok(LinkValue {
+            task_id: task_id.to_string(),
+            key: task_key_by_id(state, task_id).await?,
+            kind: "whiteboard".to_owned(),
+            target_id: whiteboard_id.to_string(),
+            linked,
+            changed: outcome.changed,
+            version,
+            role: None,
+            notes: Vec::new(),
+            task_url: public_url(
+                state,
+                &format!("/projects/{project_id}/work-items/{task_id}"),
+            ),
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| match error {
+        AppError::NotFound("whiteboard") => ToolResult::not_found("That whiteboard"),
+        error => ToolResult::from_error(error, "task_link"),
+    })
 }
 
 struct LinkRequest<'a> {

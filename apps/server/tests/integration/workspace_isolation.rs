@@ -79,6 +79,8 @@ use super::{
 };
 
 const MARKER: &str = "zebra";
+/// A 1x1 PNG, for a whiteboard image.
+const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const ORIGIN: &str = "http://127.0.0.1:3100";
 
 /// Every GET route under `/api/v1` this suite calls, as written in the
@@ -193,6 +195,12 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage/accounts/{account_id}/history",
     "/api/v1/webhooks",
     "/api/v1/webhooks/{webhook_id}/deliveries",
+    "/api/v1/whiteboard-links",
+    "/api/v1/whiteboards",
+    "/api/v1/whiteboards/{id}",
+    "/api/v1/whiteboards/{id}/files/{file_id}",
+    "/api/v1/whiteboards/{id}/preview.svg",
+    "/api/v1/whiteboards/{id}/scene",
 ];
 
 /// GET routes under `/api/v1` this suite deliberately doesn't call as plain
@@ -432,6 +440,8 @@ struct World {
     import: String,
     webhook: Uuid,
     rule: Uuid,
+    whiteboard: Uuid,
+    project_whiteboard: Uuid,
 }
 
 #[tokio::test]
@@ -1470,6 +1480,96 @@ async fn build_workspace(
     );
     let rule = Uuid::parse_str(&string_at(&created, "/id")).expect("rule id");
 
+    // Whiteboards: one for the whole workspace, drawn on and with an image,
+    // and one in the project, linked to the task, the project and the page.
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            "/api/v1/whiteboards",
+            None,
+            json!({"title": format!("Sketch{m}"), "organizationId": organization}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} whiteboard: {status} {created}"
+    );
+    let whiteboard =
+        Uuid::parse_str(&string_at(&created, "/whiteboard/id")).expect("whiteboard id");
+    let (status, drawn) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/whiteboards/{whiteboard}/operations"),
+            None,
+            json!({"operations": [
+                {"op": "add", "type": "rectangle", "id": "box", "text": format!("Box{m}")},
+                {"op": "add", "type": "ellipse", "id": "end", "x": 300, "text": "End"},
+                {"op": "connect", "from": "box", "to": "end", "text": format!("Flow{m}")},
+            ]}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} whiteboard drawing: {status} {drawn}"
+    );
+    let (status, stored) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/whiteboards/{whiteboard}/files"),
+            None,
+            json!({"id": "photo1", "mimeType": "image/png", "dataURL": TINY_PNG}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} whiteboard file: {status} {stored}"
+    );
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            "/api/v1/whiteboards",
+            None,
+            json!({
+                "title": format!("Plan{m}"),
+                "projectId": project,
+                "link": {"targetKind": "task", "targetId": task},
+            }),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} project whiteboard: {status} {created}"
+    );
+    let project_whiteboard =
+        Uuid::parse_str(&string_at(&created, "/whiteboard/id")).expect("whiteboard id");
+    for (board, kind, target) in [
+        (project_whiteboard, "page", page.clone()),
+        (whiteboard, "project", project.clone()),
+    ] {
+        let (status, linked) = send(
+            app,
+            browser.request(
+                "POST",
+                &format!("/api/v1/whiteboards/{board}/links"),
+                None,
+                json!({"targetKind": kind, "targetId": target}),
+            ),
+        )
+        .await;
+        assert!(
+            status.is_success(),
+            "{label} whiteboard link: {status} {linked}"
+        );
+    }
+
     World {
         marker,
         browser,
@@ -1501,6 +1601,8 @@ async fn build_workspace(
         import,
         webhook,
         rule,
+        whiteboard,
+        project_whiteboard,
     }
 }
 
@@ -2430,6 +2532,73 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         vec![format!("/api/v1/pages/{}", b.page)],
         vec![],
     ));
+    let boards = |w: &World, suffix: &str| {
+        vec![
+            format!("/api/v1/whiteboards/{}{suffix}", w.whiteboard),
+            format!("/api/v1/whiteboards/{}{suffix}", w.project_whiteboard),
+        ]
+    };
+    cases.push(case(
+        "/api/v1/whiteboards",
+        vec![
+            "/api/v1/whiteboards".to_owned(),
+            "/api/v1/whiteboards?q=Sketch".to_owned(),
+            "/api/v1/whiteboards?deleted=true".to_owned(),
+            format!("/api/v1/whiteboards?projectId={}", a.project),
+        ],
+        vec![],
+        vec![
+            format!("/api/v1/whiteboards?organizationId={}", b.organization),
+            format!("/api/v1/whiteboards?projectId={}", b.project),
+            format!("/api/v1/whiteboards?q={MARKER}"),
+        ],
+    ));
+    cases.push(case(
+        "/api/v1/whiteboards/{id}",
+        boards(a, ""),
+        boards(b, ""),
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/whiteboards/{id}/scene",
+        [boards(a, "/scene"), boards(a, "/scene?since=0")].concat(),
+        [boards(b, "/scene"), boards(b, "/scene?since=0")].concat(),
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/whiteboards/{id}/files/{file_id}",
+        vec![format!("/api/v1/whiteboards/{}/files/photo1", a.whiteboard)],
+        vec![format!("/api/v1/whiteboards/{}/files/photo1", b.whiteboard)],
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/whiteboards/{id}/preview.svg",
+        boards(a, "/preview.svg"),
+        boards(b, "/preview.svg"),
+        vec![],
+    ));
+    let linked = |w: &World| {
+        vec![
+            format!(
+                "/api/v1/whiteboard-links?targetKind=task&targetId={}",
+                w.task
+            ),
+            format!(
+                "/api/v1/whiteboard-links?targetKind=project&targetId={}",
+                w.project
+            ),
+            format!(
+                "/api/v1/whiteboard-links?targetKind=page&targetId={}",
+                w.page
+            ),
+        ]
+    };
+    cases.push(case(
+        "/api/v1/whiteboard-links",
+        linked(a),
+        linked(b),
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/pages/{id}/revisions/{version}",
         vec![
@@ -2597,6 +2766,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "view_list",
     "webhook_deliveries",
     "webhook_list",
+    "whiteboard_list",
+    "whiteboard_read",
+    "whiteboard_render",
     "workflow_get",
 ];
 
@@ -2684,6 +2856,48 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("webhook_list", vec![json!({})], vec![], vec![]),
+        case(
+            "whiteboard_list",
+            vec![
+                json!({}),
+                json!({"query": "Sketch"}),
+                json!({"projectId": a.project}),
+                json!({"linkedToKind": "task", "linkedToId": a.task}),
+            ],
+            vec![
+                json!({"projectId": b.project}),
+                json!({"linkedToKind": "task", "linkedToId": b.task}),
+                json!({"linkedToKind": "page", "linkedToId": b.page}),
+            ],
+            vec![
+                json!({"workspaceId": b.organization}),
+                json!({"query": MARKER}),
+            ],
+        ),
+        case(
+            "whiteboard_read",
+            vec![
+                json!({"whiteboardId": a.whiteboard}),
+                json!({"whiteboardId": a.project_whiteboard, "raw": true}),
+            ],
+            vec![
+                json!({"whiteboardId": b.whiteboard, "raw": true}),
+                json!({"whiteboardId": b.project_whiteboard}),
+            ],
+            vec![],
+        ),
+        case(
+            "whiteboard_render",
+            vec![
+                json!({"whiteboardId": a.whiteboard, "scale": 0.25}),
+                json!({"whiteboardId": a.project_whiteboard, "format": "svg"}),
+            ],
+            vec![
+                json!({"whiteboardId": b.whiteboard, "format": "svg"}),
+                json!({"whiteboardId": b.project_whiteboard}),
+            ],
+            vec![],
+        ),
         case(
             "webhook_deliveries",
             vec![json!({"webhookId": a.webhook.to_string()})],
@@ -3224,6 +3438,17 @@ async fn check_realtime(
     )
     .await;
     assert!(succeeded(&structured(&created)["outcome"]), "{created}");
+    let (_, drawn) = call_tool(
+        app,
+        &b.app_token,
+        &b_session,
+        "whiteboard_edit",
+        json!({"whiteboardId": b.whiteboard, "operations": [
+            {"op": "add", "type": "text", "id": "live", "text": format!("Live note {}", b.marker)},
+        ]}),
+    )
+    .await;
+    assert!(succeeded(&structured(&drawn)["outcome"]), "{drawn}");
 
     // Then A's sentinel.
     let a_setup = Setup {

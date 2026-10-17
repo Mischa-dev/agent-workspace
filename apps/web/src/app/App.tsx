@@ -48,6 +48,8 @@ const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) =
 const MyWorkPage = lazy(() => import('../views/MyWorkPage').then((module) => ({ default: module.MyWorkPage })))
 const RunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.RunsPage })))
 const RunPage = lazy(() => import('../runs/RunPage').then((module) => ({ default: module.RunPage })))
+const WhiteboardsPage = lazy(() => import('../whiteboards/WhiteboardsPage').then((module) => ({ default: module.WhiteboardsPage })))
+const WhiteboardPage = lazy(() => import('../whiteboards/WhiteboardPage').then((module) => ({ default: module.WhiteboardPage })))
 const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 // Only development builds include the kit page; production drops the import.
@@ -145,6 +147,22 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/runs/:runId"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <WhiteboardsPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/whiteboards"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <WhiteboardPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/whiteboards/:whiteboardId"
                   />
                   <Route
                     element={

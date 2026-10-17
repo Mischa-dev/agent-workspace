@@ -1003,12 +1003,13 @@ pub(crate) async fn space_for_member(
     Ok(space.enabled.then_some(space.project_id))
 }
 
-async fn ensure_space_in(
+/// The workspace's hidden direct space, created if it doesn't exist yet.
+/// Workspace-wide records that need a project row for the outbox (such as
+/// whiteboards without a project) are filed under it.
+pub(crate) async fn space_project(
     transaction: &mut Transaction<'_, Postgres>,
-    principal: &Person<'_>,
     organization_id: Uuid,
-    organization_role: &str,
-) -> Result<DirectSpace, AppError> {
+) -> Result<Uuid, AppError> {
     let project_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -1042,6 +1043,16 @@ async fn ensure_space_in(
     .bind(project_id)
     .execute(&mut **transaction)
     .await?;
+    Ok(project_id)
+}
+
+async fn ensure_space_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &Person<'_>,
+    organization_id: Uuid,
+    organization_role: &str,
+) -> Result<DirectSpace, AppError> {
+    let project_id = space_project(transaction, organization_id).await?;
 
     let role = match organization_role {
         "owner" => "owner",

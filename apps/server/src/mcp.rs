@@ -89,6 +89,7 @@ mod task_move;
 mod tasks;
 mod usage_tools;
 mod views_data;
+mod whiteboard_tools;
 mod workflow;
 mod writes;
 
@@ -1348,6 +1349,155 @@ impl McpServer {
     ) -> Json<common::ToolResult<memory_tools::PageValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(memory_tools::page_write(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "List whiteboards you can see: Excalidraw boards for the whole workspace or one project. Search by title or the words on them, or list the boards linked to a task, project or page.",
+        annotations(
+            title = "List whiteboards",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_list(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Read a whiteboard: every element (id, type, position, size, text, what arrows connect), its links, who's editing it now, and saved revisions. Pass raw: true for the full Excalidraw elements.",
+        annotations(
+            title = "Read whiteboard",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_read(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardReadArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_read(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Look at a whiteboard: returns a PNG image of the board (or of some elements), or SVG. Use it to check a drawing after editing it.",
+        annotations(title = "Render whiteboard", read_only_hint = true, open_world_hint = false),
+        output_schema = rmcp::handler::server::tool::schema_for_output::<
+            common::ToolResult<whiteboard_tools::RenderValue>,
+        >()
+    )]
+    async fn whiteboard_render(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardRenderArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> rmcp::model::CallToolResult {
+        let Some(principal) = parts.extensions.get::<McpPrincipal>() else {
+            return rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "Sign in again to use Agent Workspace.",
+            )]);
+        };
+        whiteboard_tools::whiteboard_render(&self.state, principal, arguments).await
+    }
+
+    #[tool(
+        description = "Create a whiteboard, for the whole workspace or (with projectId) one project, optionally linked to a task, project or page and drawn on straight away with operations.",
+        annotations(
+            title = "Create whiteboard",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_create(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardCreateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_create(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Draw on a whiteboard with operations: add shapes and text, connect them with arrows, update, move, delete, align, distribute, lay out, group and order. All or nothing; people with the board open see it at once. Pass expectedSceneSeq from whiteboard_read so you don't overwrite someone's change.",
+        annotations(
+            title = "Edit whiteboard",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_edit(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardEditArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<crate::whiteboards::edit::EditOutcome>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_edit(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Rename a whiteboard, change who sees it (a project, or the whole workspace), move it to or from the trash, or restore a saved revision of its drawing.",
+        annotations(
+            title = "Update whiteboard",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_update(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Copy a whiteboard's drawing and images into a new board beside it. Links stay with the original.",
+        annotations(
+            title = "Duplicate whiteboard",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_duplicate(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardDuplicateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardChangeValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_duplicate(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Link a whiteboard to a task, project or page (it shows there), or take the link off. One board can be linked to many things; unlinking never deletes it.",
+        annotations(
+            title = "Link whiteboard",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn whiteboard_link(
+        &self,
+        Parameters(arguments): Parameters<whiteboard_tools::WhiteboardLinkArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<whiteboard_tools::WhiteboardLinkValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(whiteboard_tools::whiteboard_link(&self.state, principal, arguments).await)
     }
 
     #[tool(
