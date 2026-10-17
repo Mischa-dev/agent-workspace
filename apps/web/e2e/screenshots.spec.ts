@@ -17,6 +17,13 @@ const keyPages: KeyPage[] = [
     path: () => '/home',
     ready: (page) => expect(page.getByRole('heading', { name: `Welcome back, ${seeded.displayName}` })).toBeVisible(),
   },
+  // Before the Project's own pages: opening a Project returns to the last page
+  // seen in it, and the smoke test expects that to be one with the sidebar.
+  {
+    name: 'automation-rules',
+    path: () => `/settings/projects/${seededValue('E2E_PROJECT_ID')}/automations`,
+    ready: (page) => expect(page.getByRole('heading', { name: 'No rules yet' })).toBeVisible(),
+  },
   {
     name: 'channel',
     path: () => `/projects/${seededValue('E2E_PROJECT_ID')}/channels/${seededValue('E2E_CHANNEL_ID')}`,
@@ -41,11 +48,6 @@ const keyPages: KeyPage[] = [
     name: 'api-reference',
     path: () => '/settings/account/api-reference',
     ready: (page) => expect(page.getByText('task_list', { exact: true })).toBeVisible(),
-  },
-  {
-    name: 'automation-rules',
-    path: () => `/settings/projects/${seededValue('E2E_PROJECT_ID')}/automations`,
-    ready: (page) => expect(page.getByRole('heading', { name: 'No rules yet' })).toBeVisible(),
   },
   {
     name: 'appearance',

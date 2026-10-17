@@ -500,6 +500,8 @@
   inset: 0;
   z-index: var(--layer-modal);
   display: grid;
+  /* A track no wider than the screen, so a dialog's max-width holds on phones. */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: var(--space-4);
   --r-focus: var(--focus-ring);

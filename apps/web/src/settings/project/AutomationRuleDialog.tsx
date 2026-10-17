@@ -16,6 +16,7 @@ import {
 import { getProjectConversationSidebar } from '../../conversations/api'
 import { listEnvironments } from '../../launch/api'
 import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, TextField, showToast } from '../../ui'
+import '../../automations/automations.css'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { listViews } from '../../views/api'
 
@@ -171,7 +172,7 @@ export function RuleDialog({
       title={rule ? `Edit ${rule.name}` : 'New rule'}
       width={600}
     >
-      <div className="aw-form">
+      <div className="aw-form aw-rule-form">
         <TextField id="rule-name" label="Name" maxLength={120} onChange={(event) => setName(event.target.value)} required value={name} />
         <fieldset className="aw-fieldset">
           <legend className="aw-field__label">When</legend>
