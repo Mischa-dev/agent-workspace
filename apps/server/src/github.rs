@@ -74,8 +74,10 @@ const PERMITTED_EVENTS: [&str; 6] = [
     "repository",
 ];
 
+mod connect;
+
 pub fn router() -> Router<AppState> {
-    Router::new()
+    connect::routes(Router::new())
         .route(
             "/api/v1/projects/{project_id}/integrations/github",
             get(github_status),
@@ -455,6 +457,7 @@ enum InstallationTokenScope {
     ContentsWrite,
     PullRequestsWrite,
     ChecksRead,
+    IssuesRead,
 }
 
 impl InstallationTokenScope {
@@ -478,6 +481,10 @@ impl InstallationTokenScope {
                 "metadata": "read",
                 "contents": "read",
                 "pull_requests": "write"
+            }),
+            Self::IssuesRead => json!({
+                "metadata": "read",
+                "issues": "read"
             }),
             Self::ChecksRead => json!({
                 "metadata": "read",
@@ -561,6 +568,104 @@ pub(crate) async fn repository_git_token(
         .await
         .map_err(map_github_error)?;
     Ok(token.secret)
+}
+
+/// Why issues couldn't be read, in words for the person importing.
+pub(crate) enum IssuesUnavailable {
+    NotConfigured,
+    NoAccess,
+    Failed,
+}
+
+impl IssuesUnavailable {
+    pub(crate) fn message(&self) -> &'static str {
+        match self {
+            Self::NotConfigured => "GitHub isn't set up on this server.",
+            Self::NoAccess => {
+                "The GitHub App can't read this repository's issues. Give it Issues: read permission and connect the repository again."
+            }
+            Self::Failed => "GitHub didn't answer. Try the import again in a moment.",
+        }
+    }
+}
+
+/// Reads up to `limit` issues (pull requests included, as GitHub lists
+/// them) of a repository connected to the project. Needs the GitHub App's
+/// optional Issues: read permission.
+pub(crate) async fn repository_issues(
+    state: &AppState,
+    project_id: Uuid,
+    repository_id: Uuid,
+    issue_state: &str,
+    limit: usize,
+) -> Result<Result<Vec<crate::work_items::import_parse::GitHubIssue>, IssuesUnavailable>, AppError>
+{
+    let Some(config) = state.config.github.as_ref() else {
+        return Ok(Err(IssuesUnavailable::NotConfigured));
+    };
+    let scope = sqlx::query_as::<_, (i64, i64, String, String)>(
+        r#"
+        SELECT installation.installation_id, repository.github_repository_id,
+               repository.owner, repository.name
+        FROM github_installations installation
+        JOIN github_installation_repositories access
+          ON access.project_id = installation.project_id
+         AND access.github_installation_id = installation.id
+         AND access.access_state = 'selected'
+        JOIN repositories repository
+          ON repository.project_id = access.project_id
+         AND repository.id = access.repository_id
+         AND repository.github_repository_id = access.github_repository_id
+        WHERE installation.project_id = $1
+          AND installation.enabled
+          AND installation.state = 'available'
+          AND repository.id = $2
+          AND repository.enabled
+          AND repository.archived_at IS NULL
+        "#,
+    )
+    .bind(project_id)
+    .bind(repository_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((installation_id, github_repository_id, owner, name)) = scope else {
+        return Ok(Err(IssuesUnavailable::NoAccess));
+    };
+    let (Ok(installation_id), Ok(github_repository_id)) = (
+        u64::try_from(installation_id),
+        u64::try_from(github_repository_id),
+    ) else {
+        return Err(AppError::Internal("GitHub IDs"));
+    };
+    let Ok(client) = GitHubClient::new(config) else {
+        return Ok(Err(IssuesUnavailable::Failed));
+    };
+    let Ok(token) = client
+        .installation_token(
+            installation_id,
+            &[github_repository_id],
+            InstallationTokenScope::IssuesRead,
+        )
+        .await
+    else {
+        return Ok(Err(IssuesUnavailable::NoAccess));
+    };
+    let mut issues = Vec::new();
+    for page in 1..=100 {
+        let Ok(batch) = client
+            .issues_page(&token, &owner, &name, issue_state, page)
+            .await
+        else {
+            return Ok(Err(IssuesUnavailable::Failed));
+        };
+        let last = batch.len() < 100;
+        issues.extend(batch);
+        if last || issues.len() >= limit {
+            break;
+        }
+    }
+    issues.truncate(limit);
+    Ok(Ok(issues))
 }
 
 #[derive(Debug, Deserialize)]
@@ -931,6 +1036,39 @@ impl GitHubClient {
         Ok(response.check_runs)
     }
 
+    /// One page of a repository's issues, oldest first. Issue bodies can be
+    /// long, so a page may be larger than other responses.
+    async fn issues_page(
+        &self,
+        token: &InstallationToken,
+        owner: &str,
+        repository: &str,
+        state: &str,
+        page: u32,
+    ) -> Result<Vec<crate::work_items::import_parse::GitHubIssue>, GitHubError> {
+        let mut url =
+            reqwest::Url::parse(&self.config.api_base_url).map_err(|_| GitHubError::Response)?;
+        url.path_segments_mut()
+            .map_err(|_| GitHubError::Response)?
+            .extend(["repos", owner, repository, "issues"]);
+        url.query_pairs_mut()
+            .append_pair("state", state)
+            .append_pair("sort", "created")
+            .append_pair("direction", "asc")
+            .append_pair("per_page", "100")
+            .append_pair("page", &page.to_string());
+        decode_response_within(
+            self.http
+                .get(url)
+                .headers(github_headers(token.expose())?)
+                .send()
+                .await
+                .map_err(|_| GitHubError::Http)?,
+            16 * 1024 * 1024,
+        )
+        .await
+    }
+
     async fn reviews(
         &self,
         token: &InstallationToken,
@@ -968,20 +1106,27 @@ impl GitHubClient {
 }
 
 async fn decode_response<T: DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, GitHubError> {
+    decode_response_within(response, MAX_GITHUB_RESPONSE_BYTES).await
+}
+
+async fn decode_response_within<T: DeserializeOwned>(
     mut response: reqwest::Response,
+    limit: usize,
 ) -> Result<T, GitHubError> {
     if !response.status().is_success() {
         return Err(GitHubError::Response);
     }
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_GITHUB_RESPONSE_BYTES as u64)
+        .is_some_and(|length| length > limit as u64)
     {
         return Err(GitHubError::Response);
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| GitHubError::Http)? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_GITHUB_RESPONSE_BYTES {
+        if bytes.len().saturating_add(chunk.len()) > limit {
             return Err(GitHubError::Response);
         }
         bytes.extend_from_slice(&chunk);
@@ -1227,6 +1372,20 @@ async fn sync_installation(
     let repositories =
         load_requested_repositories(&mut transaction, project_id, &requested_repository_ids)
             .await?;
+    let typed_installation_id = i64::try_from(request.installation_id)
+        .map_err(|_| AppError::Validation("installationId"))?;
+    // Where people can sign in to GitHub, only installations the workspace
+    // proved access to can be linked; knowing the number is not enough.
+    if github_config.connect.is_some()
+        && !connect::workspace_claims_installation(
+            &mut transaction,
+            project_id,
+            typed_installation_id,
+        )
+        .await?
+    {
+        return Err(AppError::NotFound("github_installation"));
+    }
     transaction.commit().await?;
     if repositories.len() != requested_repository_ids.len() {
         return Err(AppError::NotFound("repository"));
@@ -1273,6 +1432,15 @@ async fn sync_installation(
             .await?;
     if current_repositories != repositories {
         return Err(AppError::Conflict("repository", "changed_during_sync"));
+    }
+    if github_config.connect.is_none() {
+        connect::record_operator_claim(
+            &mut transaction,
+            project_id,
+            principal.actor_id,
+            &installation,
+        )
+        .await?;
     }
     let actor_id = ensure_github_actor(&mut transaction, project_id).await?;
     let installation_id = persist_installation(
@@ -4158,7 +4326,9 @@ fn validate_installation(
     }
     for (name, level) in &installation.permissions {
         let permitted = required_permissions.contains(&(name.as_str(), level.as_str()))
-            || (name == "actions" && level == "read");
+            || (name == "actions" && level == "read")
+            // Optional: lets imports read a repository's issues (W11).
+            || (name == "issues" && level == "read");
         if !permitted && level != "none" {
             return Err(GitHubError::Scope);
         }
@@ -5242,6 +5412,7 @@ mod tests {
             webhook_previous_secret_path: None,
             api_base_url: "https://api.github.com".to_owned(),
             api_version: GITHUB_API_VERSION.to_owned(),
+            connect: None,
         };
         let mut installation = GitHubInstallation {
             id: 150_232_852,

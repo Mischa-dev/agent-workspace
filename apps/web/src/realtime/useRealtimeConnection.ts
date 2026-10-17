@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
+import { currentQueryScopeGeneration } from '../api/queryScope'
 import { coalesceDeltaBatch } from '../app/streaming'
 import {
   dropRemovedConversation,
@@ -26,7 +27,7 @@ import {
   streamDelta,
   terminalAgentRunId,
 } from './realtimeModel'
-import { applyWorkItemChange, workItemChange } from './workItemPatches'
+import { workItemChange } from './workItemEvent'
 
 const MAX_RECENT_EVENT_IDS = 512
 const INVALIDATION_DELAY_MS = 40
@@ -89,6 +90,8 @@ export function useRealtimeConnection(): RealtimeContextValue {
         // DMs and groups live in a Project the client does not list, so
         // refresh the Messages overview on any change.
         void queryClient.invalidateQueries({ queryKey: ['direct'] })
+        // The inbox reads names and previews live, so any change can show there.
+        void queryClient.invalidateQueries({ queryKey: ['inbox'] })
         void queryClient.invalidateQueries({
           predicate: (query) =>
             query.queryKey[0] === 'project' &&
@@ -137,6 +140,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'project',
       })
+      void queryClient.invalidateQueries({ queryKey: ['inbox'] })
     }
 
     const queueDelta = (
@@ -273,8 +277,16 @@ export function useRealtimeConnection(): RealtimeContextValue {
           const workItem = workItemChange(envelope)
           if (workItem) {
             // One at a time, in event order: a card's neighbours may be moving too.
+            // The patch code loads with the first such event; a sign-out while
+            // it loads drops the patch rather than touching the next session.
+            const generation = currentQueryScopeGeneration()
             workItemQueue = workItemQueue
-              .then(() => applyWorkItemChange(queryClient, envelope.projectId, workItem))
+              .then(() => import('./workItemPatches'))
+              .then(({ applyWorkItemChange }) =>
+                generation === currentQueryScopeGeneration()
+                  ? applyWorkItemChange(queryClient, envelope.projectId, workItem)
+                  : undefined,
+              )
               .catch(() => undefined)
             invalidateAroundWorkItem(envelope.projectId, workItem.workItemId)
             return

@@ -86,6 +86,10 @@ const ORIGIN: &str = "http://127.0.0.1:3100";
 const HTTP_ROUTES: &[&str] = &[
     "/api/v1/account/connected-apps",
     "/api/v1/account/profile",
+    "/api/v1/account/api-tokens",
+    "/api/v1/account/appearance",
+    "/api/v1/account/security",
+    "/api/v1/account/sessions",
     "/api/v1/auth/session",
     "/api/v1/auth/workos",
     "/api/v1/conversations/{id}/messages/{message_id}",
@@ -96,7 +100,17 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/inbox",
+    "/api/v1/inbox/summary",
+    "/api/v1/my-work",
+    "/api/v1/notification-settings",
+    "/api/v1/organizations/{organization_id}",
+    "/api/v1/organizations/{organization_id}/audit-events",
+    "/api/v1/organizations/{organization_id}/audit-events/facets",
+    "/api/v1/organizations/{organization_id}/invitations",
+    "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/personal-secrets",
+    "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/secrets",
     "/api/v1/pages/{id}",
     "/api/v1/pages/{id}/revisions/{version}",
@@ -114,10 +128,15 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/execution-profiles/{profile_id}/account",
     "/api/v1/projects/{project_id}/external-agents",
     "/api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
+    "/api/v1/projects/{project_id}/export",
     "/api/v1/projects/{project_id}/external-execution-requests",
     "/api/v1/projects/{project_id}/integrations/github",
+    "/api/v1/projects/{project_id}/imports",
+    "/api/v1/projects/{project_id}/imports/{import_id}",
     "/api/v1/projects/{project_id}/integrations/github/automation",
     "/api/v1/projects/{project_id}/environments",
+    "/api/v1/projects/{project_id}/integrations/github/available-repositories",
+    "/api/v1/projects/{project_id}/integrations/github/connection",
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/labels",
     "/api/v1/projects/{project_id}/launches",
@@ -128,6 +147,9 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "/api/v1/projects/{project_id}/repositories",
     "/api/v1/projects/{project_id}/secrets",
+    "/api/v1/projects/{project_id}/task-templates",
+    "/api/v1/projects/{project_id}/timeline",
+    "/api/v1/projects/{project_id}/views",
     "/api/v1/projects/{project_id}/work-item-assignees",
     "/api/v1/projects/{project_id}/work-item-references",
     "/api/v1/projects/{project_id}/work-item-workflow",
@@ -140,9 +162,14 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
+    "/api/v1/push/config",
+    "/api/v1/push/subscriptions",
     "/api/v1/search",
     "/api/v1/settings/effective",
     "/api/v1/settings/registry",
+    "/api/v1/usage",
+    "/api/v1/usage/accounts/{account_id}",
+    "/api/v1/usage/accounts/{account_id}/ready-tasks",
 ];
 
 /// GET routes under `/api/v1` this suite deliberately doesn't call as plain
@@ -150,11 +177,18 @@ const HTTP_ROUTES: &[&str] = &[
 /// `/metrics` is a token-gated operator endpoint with process-wide counters,
 /// `/health/*`, `/auth.md`, `/connect.md`, OAuth and the WorkOS callback are
 /// sign-in plumbing, so the guard only looks under `/api/v1`.)
-const HTTP_EXCLUSIONS: &[(&str, &str)] = &[(
-    "/api/v1/realtime",
-    "WebSocket upgrade; covered by the realtime part of the fixture test, which \
-     subscribes as A and checks no B event arrives",
-)];
+const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "/api/v1/realtime",
+        "WebSocket upgrade; covered by the realtime part of the fixture test, which \
+         subscribes as A and checks no B event arrives",
+    ),
+    (
+        "/api/v1/integrations/github/callback",
+        "GitHub's redirect back after sign-in: returns a redirect, never data, and \
+         only for a state bound to the caller's browser; covered in settings_accounts",
+    ),
+];
 
 /// Read-only MCP tools this suite deliberately doesn't call, and why.
 /// (Every read-only tool currently has a case.)
@@ -371,6 +405,7 @@ struct World {
     run_thread: Uuid,
     run: Uuid,
     approval: Uuid,
+    import: String,
 }
 
 #[tokio::test]
@@ -956,6 +991,49 @@ async fn build_workspace(
         "{label} invitation: {status} {invitation}"
     );
 
+    // Views and data (W11): a personal view, a task template on a weekly
+    // schedule, a project template saved from the project, a draft import.
+    let post = |path: String, key: &'static str, body: Value| {
+        let request = browser.request("POST", &path, Some(key), body);
+        async move {
+            let (status, value) = send(app, request).await;
+            assert!(status.is_success(), "{label} {path}: {status} {value}");
+            value
+        }
+    };
+    post(
+        format!("/api/v1/projects/{project}/views"),
+        "view-1",
+        json!({"name": format!("Launch view{m}"), "query": {"q": format!("Launch{m}")}}),
+    )
+    .await;
+    let task_template = post(
+        format!("/api/v1/projects/{project}/task-templates"),
+        "template-1",
+        json!({"name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
+    )
+    .await;
+    let task_template = string_at(&task_template, "/id");
+    post(
+        format!("/api/v1/projects/{project}/recurring-tasks"),
+        "recurring-1",
+        json!({"templateId": task_template, "frequency": "weekly", "weekdays": [1]}),
+    )
+    .await;
+    post(
+        format!("/api/v1/projects/{project}/save-as-template"),
+        "project-template-1",
+        json!({"name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
+    )
+    .await;
+    let import = post(
+        format!("/api/v1/projects/{project}/imports"),
+        "import-1",
+        json!({"source": "markdown", "text": format!("# Launch{m}\n- [ ] Launch import{m}\n"), "fileName": format!("launch{tag}.md")}),
+    )
+    .await;
+    let import = string_at(&import, "/id");
+
     // Code: the same repository name in both, and a pull request on it.
     let repository = insert_repository(&setup, &project, "acme/widgets", true, true, None).await;
     let (pull_request, pull_request_url) = seed_pull_request(&setup, &project, repository, 7).await;
@@ -1151,6 +1229,59 @@ async fn build_workspace(
         "{label} POST {uri}: {status} {written}"
     );
 
+    // Usage and push (W9): a reported window, a reset schedule, a device
+    // and a muted group, each carrying the marker where it has text.
+    sqlx::query(
+        r#"
+        INSERT INTO usage_windows (
+            account_id, organization_id, window_key, limit_name, duration_minutes,
+            used_percent, resets_at
+        ) VALUES ($1, $2, 'codex.secondary', $3, 10080, 40, now() + interval '2 days')
+        "#,
+    )
+    .bind(provider_account)
+    .bind(organization)
+    .bind(format!("Codex{m}"))
+    .execute(pool)
+    .await
+    .expect("usage window");
+    let device = aws_lc_rs::agreement::PrivateKey::generate(&aws_lc_rs::agreement::ECDH_P256)
+        .expect("device key");
+    let device_public = device.compute_public_key().expect("device public key");
+    let b64 = |bytes: &[u8]| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    };
+    for (method, uri, body) in [
+        (
+            "POST",
+            format!("/api/v1/usage/accounts/{provider_account}/schedules"),
+            json!({"label": format!("Weekly{m}"), "cadence": "weekly", "weekday": 1,
+                   "minuteOfDay": 540, "timeZone": "UTC"}),
+        ),
+        (
+            "POST",
+            "/api/v1/push/subscriptions".to_owned(),
+            json!({
+                "endpoint": format!("https://fcm.googleapis.com/fcm/send/{tag}-device"),
+                "keys": {"p256dh": b64(device_public.as_ref()), "auth": b64(&[7_u8; 16])},
+                "label": format!("Phone{m}"),
+                "organizationId": organization,
+            }),
+        ),
+        (
+            "PUT",
+            "/api/v1/notification-settings/mutes".to_owned(),
+            json!({"projectId": project, "group": "runs", "muted": true}),
+        ),
+    ] {
+        let (status, written) = send(app, browser.request(method, &uri, None, body)).await;
+        assert!(
+            status.is_success(),
+            "{label} {method} {uri}: {status} {written}"
+        );
+    }
+
     World {
         marker,
         browser,
@@ -1178,6 +1309,7 @@ async fn build_workspace(
         run_thread,
         run,
         approval,
+        import,
     }
 }
 
@@ -1323,6 +1455,30 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/account/api-tokens",
+            vec!["/api/v1/account/api-tokens".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/account/appearance",
+            vec!["/api/v1/account/appearance".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/account/security",
+            vec!["/api/v1/account/security".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/account/sessions",
+            vec!["/api/v1/account/sessions".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
             "/api/v1/auth/session",
             vec!["/api/v1/auth/session".to_owned()],
             vec![],
@@ -1344,6 +1500,79 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/direct",
             vec!["/api/v1/direct".to_owned()],
             vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/inbox",
+            vec![
+                "/api/v1/inbox".to_owned(),
+                "/api/v1/inbox?view=archived&category=mentions".to_owned(),
+                format!("/api/v1/inbox?projectId={}", a.project),
+            ],
+            vec![],
+            vec![format!("/api/v1/inbox?projectId={}", b.project)],
+        ),
+        case(
+            "/api/v1/inbox/summary",
+            vec!["/api/v1/inbox/summary".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/notification-settings",
+            vec![
+                "/api/v1/notification-settings".to_owned(),
+                format!(
+                    "/api/v1/notification-settings?organizationId={}",
+                    a.organization
+                ),
+            ],
+            vec![format!(
+                "/api/v1/notification-settings?organizationId={}",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/push/config",
+            vec!["/api/v1/push/config".to_owned()],
+            vec![format!(
+                "/api/v1/push/config?organizationId={}",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/push/subscriptions",
+            vec!["/api/v1/push/subscriptions".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/usage",
+            vec![
+                "/api/v1/usage".to_owned(),
+                format!("/api/v1/usage?organizationId={}", a.organization),
+            ],
+            vec![],
+            vec![format!("/api/v1/usage?organizationId={}", b.organization)],
+        ),
+        case(
+            "/api/v1/usage/accounts/{account_id}",
+            vec![format!("/api/v1/usage/accounts/{}", a.provider_account)],
+            vec![format!("/api/v1/usage/accounts/{}", b.provider_account)],
+            vec![],
+        ),
+        case(
+            "/api/v1/usage/accounts/{account_id}/ready-tasks",
+            vec![format!(
+                "/api/v1/usage/accounts/{}/ready-tasks",
+                a.provider_account
+            )],
+            vec![format!(
+                "/api/v1/usage/accounts/{}/ready-tasks",
+                b.provider_account
+            )],
             vec![],
         ),
         case(
@@ -1398,6 +1627,14 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/projects/{project_id}/integrations/github/automation",
             "/integrations/github/automation",
         ),
+        project_route(
+            "/api/v1/projects/{project_id}/integrations/github/connection",
+            "/integrations/github/connection",
+        ),
+        project_route(
+            "/api/v1/projects/{project_id}/integrations/github/available-repositories",
+            "/integrations/github/available-repositories",
+        ),
         project_route("/api/v1/projects/{project_id}/invitations", "/invitations"),
         project_route(
             "/api/v1/projects/{project_id}/member-candidates",
@@ -1408,6 +1645,66 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         project_route(
             "/api/v1/projects/{project_id}/repositories",
             "/repositories",
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}",
+            vec![format!("/api/v1/organizations/{}", a.organization)],
+            vec![format!("/api/v1/organizations/{}", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/members",
+            vec![format!("/api/v1/organizations/{}/members", a.organization)],
+            vec![format!("/api/v1/organizations/{}/members", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/invitations",
+            vec![format!(
+                "/api/v1/organizations/{}/invitations",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/invitations",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/audit-events/facets",
+            vec![format!(
+                "/api/v1/organizations/{}/audit-events/facets",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/audit-events/facets",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/audit-events",
+            vec![
+                format!("/api/v1/organizations/{}/audit-events", a.organization),
+                format!(
+                    "/api/v1/organizations/{}/audit-events?projectId={}",
+                    a.organization, a.project
+                ),
+            ],
+            vec![format!(
+                "/api/v1/organizations/{}/audit-events",
+                b.organization
+            )],
+            vec![
+                format!(
+                    "/api/v1/organizations/{}/audit-events?projectId={}",
+                    a.organization, b.project
+                ),
+                format!(
+                    "/api/v1/organizations/{}/audit-events?actorId={}",
+                    a.organization, b.rook
+                ),
+            ],
         ),
         case(
             "/api/v1/organizations/{organization_id}/secrets",
@@ -1548,6 +1845,43 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/environments",
         ),
         project_route("/api/v1/projects/{project_id}/milestones", "/milestones"),
+        project_route("/api/v1/projects/{project_id}/views", "/views"),
+        project_route("/api/v1/projects/{project_id}/timeline", "/timeline"),
+        project_route(
+            "/api/v1/projects/{project_id}/task-templates",
+            "/task-templates",
+        ),
+        project_route("/api/v1/projects/{project_id}/imports", "/imports"),
+        case(
+            "/api/v1/projects/{project_id}/export",
+            vec![
+                format!("{}/export", p(a)),
+                format!("{}/export?format=csv&includeArchived=true", p(a)),
+            ],
+            vec![
+                format!("{}/export", p(b)),
+                format!("{}/export?format=csv", p(b)),
+            ],
+            vec![],
+        ),
+        case(
+            "/api/v1/my-work",
+            vec!["/api/v1/my-work".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/project-templates",
+            vec![format!(
+                "/api/v1/organizations/{}/project-templates?includeArchived=true",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/project-templates",
+                b.organization
+            )],
+            vec![],
+        ),
         case(
             "/api/v1/projects/{project_id}/work-items/groups",
             ["status", "assignee", "label", "milestone", "parent"]
@@ -1715,6 +2049,13 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ));
     }
+    let (own, foreign) = pair(&|outer, inner| format!("{}/imports/{}", p(outer), inner.import));
+    cases.push(case(
+        "/api/v1/projects/{project_id}/imports/{import_id}",
+        own,
+        foreign,
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/pages/{id}",
         vec![format!("/api/v1/pages/{}", a.page)],
@@ -1855,9 +2196,12 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "launch_list",
     "message_history",
     "milestone_list",
+    "my_work",
+    "notification_list",
     "page_get",
     "page_list",
     "people_search",
+    "project_export",
     "project_members",
     "project_open",
     "projects_list",
@@ -1871,6 +2215,9 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "settings_get",
     "task_list",
     "task_open",
+    "template_list",
+    "usage_windows",
+    "view_list",
     "workflow_get",
 ];
 
@@ -1934,7 +2281,22 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("page_list"),
         by_project("decision_list"),
         by_project("milestone_list"),
+        by_project("view_list"),
+        by_project("template_list"),
+        by_project("project_export"),
+        case(
+            "my_work",
+            vec![json!({}), json!({"projectId": "WORK"})],
+            vec![json!({"projectId": b.project})],
+            vec![],
+        ),
         by_project("settings_get"),
+        case(
+            "usage_windows",
+            vec![json!({})],
+            vec![json!({"accountId": b.provider_account})],
+            vec![],
+        ),
         case(
             "conversation_list",
             vec![
@@ -2016,13 +2378,26 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "notification_list",
+            vec![
+                json!({}),
+                json!({"view": "archived"}),
+                json!({"projectId": a.project}),
+            ],
+            vec![],
+            vec![json!({"projectId": b.project})],
+        ),
+        case(
             "task_list",
             vec![json!({}), json!({"projectId": "WORK"})],
             vec![
                 json!({"projectId": b.project}),
                 json!({"projectIds": [b.project]}),
             ],
-            vec![json!({"projectId": "WORK", "assignee": b.rook.to_string()})],
+            vec![
+                json!({"projectId": "WORK", "assignee": b.rook.to_string()}),
+                json!({"projectId": "WORK", "view": "My tasks"}),
+            ],
         ),
         case(
             "task_open",

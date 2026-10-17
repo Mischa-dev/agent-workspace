@@ -30,6 +30,8 @@ export type SessionUser = {
   actorKind: string
   loginName: string
   displayName: string
+  /** The workspace the person last chose; null means "the first one". */
+  defaultOrganizationId?: string | null
   capabilities: {
     createProject: boolean
   }
@@ -131,6 +133,7 @@ function normalizeUser(value: unknown): SessionUser | null {
     actorKind: 'human',
     loginName,
     displayName,
+    defaultOrganizationId: normalizedUuid(record.defaultOrganizationId),
     capabilities: {
       createProject: asRecord(record.capabilities).createProject === true,
     },
@@ -160,15 +163,6 @@ export function normalizeSessionResponse(value: unknown): SessionResponse {
 export async function getSession() {
   return normalizeSessionResponse(
     await requestJson<unknown>('/api/v1/auth/session'),
-  )
-}
-
-export async function login(loginName: string, password: string) {
-  return normalizeSessionResponse(
-    await requestJson<unknown>('/api/v1/auth/login', {
-      method: 'POST',
-      json: { loginName, password },
-    }),
   )
 }
 

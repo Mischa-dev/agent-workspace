@@ -69,6 +69,7 @@ mod labels;
 mod launch_tools;
 mod memory_tools;
 mod message_edits;
+mod notifications;
 mod oauth;
 mod planning;
 mod reactions;
@@ -81,6 +82,8 @@ mod task_batch;
 mod task_drafts;
 mod task_move;
 mod tasks;
+mod usage_tools;
+mod views_data;
 mod workflow;
 mod writes;
 
@@ -181,7 +184,7 @@ impl McpServer {
     // -- Orientation ---------------------------------------------------------
 
     #[tool(
-        description = "Start here. What needs you right now: reply requests (agents), unread @mentions, conversations with unread messages, your open tasks and claims, and threads that recently settled. Each item is a pointer you can open.",
+        description = "Start here. What needs you right now: reply requests (agents), unread notifications (mentions, assignments, approvals, runs, pull requests), unread @mentions, conversations with unread messages, your open tasks and claims, and threads that recently settled. Each item is a pointer you can open.",
         annotations(title = "Briefing", read_only_hint = true, open_world_hint = false)
     )]
     async fn briefing(
@@ -249,6 +252,23 @@ impl McpServer {
     ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(settings_tools::settings_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Your provider accounts' usage: every window (a five-hour session, a week, a month, or a reset schedule you set) with percent used, percent unused and when it resets, banked resets you could spend, and how many ready tasks each account could run. Read only; schedules, alert rules and spending a banked reset happen in the app.",
+        annotations(
+            title = "Usage windows",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn usage_windows(
+        &self,
+        Parameters(arguments): Parameters<usage_tools::UsageWindowsArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<usage_tools::UsageWindowsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(usage_tools::usage_windows(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -524,6 +544,42 @@ impl McpServer {
     ) -> Json<common::ToolResult<talk::ReadMark>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(talk::mark_read(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Your notifications, newest first: @mentions in messages and task comments, tasks assigned to you, approvals waiting on you, your runs finishing, failing or waiting, and failing checks or review requests on pull requests. Repeats collapse into one with a count. view: inbox (default), unread, snoozed or archived; category: all, mentions, tasks, runs or pull_requests. briefing lists the unread ones too.",
+        annotations(
+            title = "List notifications",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn notification_list(
+        &self,
+        Parameters(arguments): Parameters<notifications::NotificationListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<notifications::NotificationListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(notifications::notification_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change your notifications: read, unread, archive, restore (from the archive), snooze (until snoozeUntil, then back unread) or unsnooze. Pass ids from notification_list, or all: true to mark read or archive everything in the inbox (optionally one projectId). Only changes your own.",
+        annotations(
+            title = "Update notifications",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn notification_update(
+        &self,
+        Parameters(arguments): Parameters<notifications::NotificationUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<notifications::NotificationUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(notifications::notification_update(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1306,6 +1362,108 @@ impl McpServer {
     ) -> Json<common::ToolResult<planning::DependencyValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(planning::task_depend(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's saved views: the built-in My tasks, Ready for agents, Blocked and Recently changed, plus views people saved (yours and shared ones). Pass a view's name as `view` to task_list to list its tasks.",
+        annotations(
+            title = "List saved views",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn view_list(
+        &self,
+        Parameters(arguments): Parameters<views_data::ViewListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::ViewListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::view_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Your work across your projects (or one, with projectId): tasks assigned to you that aren't finished (due first), tasks you or agents you set up are working on, and tasks in review that you made or watch.",
+        annotations(title = "My work", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn my_work(
+        &self,
+        Parameters(arguments): Parameters<views_data::MyWorkArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::MyWorkValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::my_work(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's task templates (title, description, labels, acceptance criteria and subtasks a new task starts with) and the schedules that make tasks from them.",
+        annotations(
+            title = "List task templates",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn template_list(
+        &self,
+        Parameters(arguments): Parameters<views_data::TemplateListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TemplateListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::template_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Create a task, with its subtasks, labels and acceptance criteria, from a task template (by name or ID). You can give it its own title, assignee, milestone and dates.",
+        annotations(
+            title = "Task from template",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn task_from_template(
+        &self,
+        Parameters(arguments): Parameters<views_data::TaskFromTemplateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TaskFromTemplateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::task_from_template(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's GitHub issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId and commit: true to create them. Rows imported before from the same source are skipped.",
+        annotations(
+            title = "Import tasks",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn task_import(
+        &self,
+        Parameters(arguments): Parameters<views_data::TaskImportArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::TaskImportValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::task_import(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Export a project's workflow, labels, milestones and tasks as JSON (up to 500 tasks here), with links to download all of it as JSON or as CSV that imports back.",
+        annotations(
+            title = "Export project",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_export(
+        &self,
+        Parameters(arguments): Parameters<views_data::ProjectExportArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<views_data::ProjectExportValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(views_data::project_export(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -2110,9 +2268,25 @@ pub struct CredentialMetadata {
     pub replaced_by_credential_id: Option<Uuid>,
 }
 
+/// Who asked for a credential change: the host command line, or a person
+/// in the browser (their own personal API tokens).
+#[derive(Clone, Copy, Debug)]
+pub enum CredentialIssuer {
+    HostCli,
+    Browser { session_id: Uuid },
+}
+
 pub async fn issue_credential(
     pool: &sqlx::PgPool,
     command: IssueCredentialCommand,
+) -> Result<IssuedCredential, AppError> {
+    issue_credential_as(pool, command, CredentialIssuer::HostCli).await
+}
+
+pub async fn issue_credential_as(
+    pool: &sqlx::PgPool,
+    command: IssueCredentialCommand,
+    issuer: CredentialIssuer,
 ) -> Result<IssuedCredential, AppError> {
     validate_issue_command(pool, &command).await?;
     let (token, token_prefix, token_digest) = generate_token();
@@ -2145,6 +2319,7 @@ pub async fn issue_credential(
         credential_id,
         &command.client_name,
         "mcp.credential.create",
+        issuer,
     )
     .await?;
     transaction.commit().await?;
@@ -2197,6 +2372,21 @@ pub async fn revoke_credential(
     credential_id: Uuid,
     expected_version: i64,
 ) -> Result<CredentialMetadata, AppError> {
+    revoke_credential_as(
+        pool,
+        credential_id,
+        expected_version,
+        CredentialIssuer::HostCli,
+    )
+    .await
+}
+
+pub async fn revoke_credential_as(
+    pool: &sqlx::PgPool,
+    credential_id: Uuid,
+    expected_version: i64,
+    issuer: CredentialIssuer,
+) -> Result<CredentialMetadata, AppError> {
     let mut transaction = pool.begin().await?;
     let row = credential_metadata_for_update(&mut transaction, credential_id).await?;
     if row.version != expected_version || row.status != "active" {
@@ -2223,6 +2413,7 @@ pub async fn revoke_credential(
         credential_id,
         &row.client_name,
         "mcp.credential.revoke",
+        issuer,
     )
     .await?;
     transaction.commit().await?;
@@ -2298,6 +2489,7 @@ pub async fn replace_credential(
         credential_id,
         &row.client_name,
         "mcp.credential.replace",
+        CredentialIssuer::HostCli,
     )
     .await?;
     transaction.commit().await?;
@@ -2463,17 +2655,24 @@ async fn insert_credential_audit(
     credential_id: Uuid,
     client_name: &str,
     action: &str,
+    issuer: CredentialIssuer,
 ) -> Result<(), AppError> {
+    let (authentication_class, channel, session_id) = match issuer {
+        CredentialIssuer::HostCli => ("host_cli", "host_cli", None),
+        CredentialIssuer::Browser { session_id } => {
+            ("password_session", "browser", Some(session_id))
+        }
+    };
     sqlx::query(
         r#"
         INSERT INTO audit_events (
-            id, actor_id, project_id, authentication_class, action,
+            id, actor_id, project_id, session_id, authentication_class, action,
             target_kind, target_id, outcome, channel, client_name,
             mcp_credential_id, metadata
         )
         VALUES (
-            $1, $2, $3, 'host_cli', $4,
-            'mcp_credential', $5, 'succeeded', 'host_cli', $6,
+            $1, $2, $3, $7, $8, $4,
+            'mcp_credential', $5, 'succeeded', $9, $6,
             $5, '{}'::jsonb
         )
         "#,
@@ -2484,6 +2683,9 @@ async fn insert_credential_audit(
     .bind(action)
     .bind(credential_id)
     .bind(client_name)
+    .bind(session_id)
+    .bind(authentication_class)
+    .bind(channel)
     .execute(&mut **transaction)
     .await?;
     Ok(())

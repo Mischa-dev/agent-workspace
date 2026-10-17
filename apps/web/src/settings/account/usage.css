@@ -1,0 +1,215 @@
+/* Account › Usage and alerts, and Account › Notifications. Loads with those pages. */
+
+.aw-usage + .aw-usage {
+  margin-top: var(--space-6);
+}
+
+.aw-usage.is-focused > section {
+  scroll-margin-top: var(--space-6);
+}
+
+.aw-usage__windows {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-usage__window {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-usage__windowhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-usage__label {
+  font: var(--t-ui-strong);
+  color: var(--content-fg);
+}
+
+.aw-usage__amount {
+  margin-left: auto;
+  font: var(--t-ui-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-usage__meter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+
+.aw-usage__meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-slow) var(--ease-out);
+}
+
+.aw-usage__window.is-warning .aw-usage__meter > span {
+  background: var(--warning);
+}
+
+.aw-usage__window.is-danger .aw-usage__meter > span {
+  background: var(--danger);
+}
+
+.aw-usage__reset,
+.aw-usage__at,
+.aw-usage__empty {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-usage__reset {
+  font-variant-numeric: tabular-nums;
+  color: var(--content-fg);
+}
+
+.aw-usage__reset .aw-usage__at {
+  color: var(--content-fg-muted);
+}
+
+.aw-usage__credits,
+.aw-usage__block {
+  margin-top: var(--space-4);
+}
+
+.aw-usage__credits {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+
+.aw-usage__credits p {
+  margin: 0;
+}
+
+.aw-usage__block {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-usage__blockhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.aw-usage__blocktitle {
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-usage__blocktitle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.aw-usage__key {
+  font: var(--t-code);
+  color: var(--content-fg-muted);
+}
+
+.aw-usage__form {
+  margin-top: var(--space-2);
+}
+
+.aw-usage__rules {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-usage__rule {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-usage__ruleinputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-2);
+  padding-left: var(--space-6);
+}
+
+.aw-usage__ruleinputs .aw-field {
+  width: 7rem;
+}
+
+.aw-usage__muteform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.aw-notify__tablewrap {
+  overflow-x: auto;
+  padding: 0;
+}
+
+.aw-notify__table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-ui);
+}
+
+.aw-notify__table th,
+.aw-notify__table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--content-border);
+  text-align: center;
+}
+
+.aw-notify__table th[scope='row'],
+.aw-notify__table thead th:first-child {
+  text-align: left;
+  font: var(--t-ui);
+}
+
+.aw-notify__table thead th {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-notify__table tr:last-child > * {
+  border-bottom: 0;
+}
+
+.aw-notify__table input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .aw-usage__ruleinputs {
+    padding-left: 0;
+  }
+
+  .aw-usage__amount {
+    margin-left: 0;
+    width: 100%;
+  }
+}

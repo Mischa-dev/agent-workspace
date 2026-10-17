@@ -77,11 +77,12 @@ describe('authenticated realtime provider', () => {
     socket.message(event)
     socket.message(event)
 
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(4))
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ['projects', 'rail'],
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['direct'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['inbox'] })
     // Thread boards are project queries, so the project refresh reaches them.
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(true)
   })

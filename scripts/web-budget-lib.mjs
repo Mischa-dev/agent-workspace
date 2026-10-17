@@ -12,9 +12,12 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // the budget moved to per-chunk limits (October 2026). The app shell (command
   // menu, shortcuts, toasts with Undo, tab titles and badges, live task
   // patches) brings it to 423,687 / 130,474; Markdown loads with its routes.
-  // Launch (W7) adds its lazy route, sidebar link and tab title: 430,446.
-  initialJavascriptRawBytes: 421 * 1024,
-  initialJavascriptGzipBytes: 132 * 1024,
+  // Tasks at scale and the inbox's rail tile and route bring it to about
+  // 430,500 raw; the inbox page itself loads with its route. The settings
+  // area (Settings in the rail and command menu, the account's saved theme)
+  // brings it to 431,830 / 135,187; its pages and two-factor sign-in load lazily.
+  initialJavascriptRawBytes: 424 * 1024,
+  initialJavascriptGzipBytes: 133 * 1024,
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles

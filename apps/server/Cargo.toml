@@ -47,6 +47,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 uuid = { version = "1.18.1", features = ["serde", "v7"] }
 url = "2.5.7"
 zeroize = "1.8.2"
+chrono-tz = "0.10.4"
 
 [dev-dependencies]
 futures-util = "0.3.33"

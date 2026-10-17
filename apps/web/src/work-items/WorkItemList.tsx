@@ -447,7 +447,7 @@ export function WorkItemList({
         ariaMultiselectable
         bodyRef={bodyRef}
         className="aw-tasks__table"
-        columns={LIST_COLUMNS}
+        columns={state.fields ? LIST_COLUMNS.filter((column) => column.id === 'select' || column.id === 'title' || state.fields?.includes(column.id)) : LIST_COLUMNS}
         label="Work items"
         onActivate={(key) => {
           const row = rowByKey(key)

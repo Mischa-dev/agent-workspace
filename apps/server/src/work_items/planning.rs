@@ -55,14 +55,14 @@ const MAX_BULK_ITEMS: usize = 200;
 // Shared write plumbing
 
 /// A write that holds the project lock and an idempotency reservation.
-struct Write {
-    transaction: Transaction<'static, Postgres>,
-    membership: ProjectMembershipRow,
-    reservation: IdempotencyReservation,
-    actor: CommandActor,
+pub(super) struct Write {
+    pub(super) transaction: Transaction<'static, Postgres>,
+    pub(super) membership: ProjectMembershipRow,
+    pub(super) reservation: IdempotencyReservation,
+    pub(super) actor: CommandActor,
 }
 
-enum Started {
+pub(super) enum Started {
     Replay(Response),
     Write(Box<Write>),
 }
@@ -70,7 +70,7 @@ enum Started {
 /// Checks the session, locks the project, authorizes `action` and reserves
 /// the idempotency key. A retried request gets the first response back.
 #[allow(clippy::too_many_arguments)]
-async fn start_write<T: Serialize>(
+pub(super) async fn start_write<T: Serialize>(
     state: &AppState,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
@@ -128,9 +128,10 @@ macro_rules! begin {
         }
     };
 }
+pub(super) use begin;
 
 impl Write {
-    async fn finish<T: Serialize>(
+    pub(super) async fn finish<T: Serialize>(
         mut self,
         status: StatusCode,
         body: &T,
@@ -176,7 +177,7 @@ impl Write {
 }
 
 /// An error with a message written for the person, and optional details.
-fn refusal(status: StatusCode, code: &str, message: String, details: Value) -> Response {
+pub(super) fn refusal(status: StatusCode, code: &str, message: String, details: Value) -> Response {
     (
         status,
         Json(json!({ "error": { "code": code, "message": message, "details": details } })),
@@ -184,7 +185,7 @@ fn refusal(status: StatusCode, code: &str, message: String, details: Value) -> R
         .into_response()
 }
 
-fn invalid(field: &str, message: impl Into<String>) -> Response {
+pub(super) fn invalid(field: &str, message: impl Into<String>) -> Response {
     refusal(
         StatusCode::UNPROCESSABLE_ENTITY,
         "validation_failed",
@@ -193,7 +194,7 @@ fn invalid(field: &str, message: impl Into<String>) -> Response {
     )
 }
 
-fn is_manager(membership: &ProjectMembershipRow) -> Result<bool, AppError> {
+pub(super) fn is_manager(membership: &ProjectMembershipRow) -> Result<bool, AppError> {
     Ok(membership.membership_enabled
         && matches!(
             membership_role(&membership.role)?,

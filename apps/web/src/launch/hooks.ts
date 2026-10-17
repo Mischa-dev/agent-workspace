@@ -97,6 +97,7 @@ export function useSaveEnvironment(projectId: string) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: launchKeys.environments(projectId) })
       void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.projectSettings(projectId) })
     },
   })
 }
@@ -118,6 +119,7 @@ export function useEnvironmentAction(projectId: string) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: launchKeys.environments(projectId) })
       void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
+      void queryClient.invalidateQueries({ queryKey: launchKeys.projectSettings(projectId) })
     },
   })
 }

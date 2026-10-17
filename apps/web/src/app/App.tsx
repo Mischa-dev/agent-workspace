@@ -5,6 +5,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
 } from 'react-router-dom'
@@ -19,7 +20,7 @@ import { ThemeProvider } from '../theme/ThemeProvider'
 import { Button, EmptyState, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
 
-const AccountSettingsPage = lazy(() => import('../auth/AccountSettingsPage').then((module) => ({ default: module.AccountSettingsPage })))
+const SettingsArea = lazy(() => import('../settings/SettingsArea'))
 const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
 const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
 const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
@@ -30,16 +31,17 @@ const AgentsPage = lazy(() => import('../direct/MessagesPage').then((module) => 
 const DirectConversationPage = lazy(() => import('../direct/DirectConversationPage').then((module) => ({ default: module.DirectConversationPage })))
 const HomePage = lazy(() => import('../projects/HomePage').then((module) => ({ default: module.HomePage })))
 const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })))
-const ProjectSettingsPage = lazy(() => import('../projects/ProjectSettingsPage').then((module) => ({ default: module.ProjectSettingsPage })))
 const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => ({ default: module.ThreadPage })))
 const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
-const AppearancePage = lazy(() => import('../theme/AppearancePage').then((module) => ({ default: module.AppearancePage })))
 const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
+const TimelinePage = lazy(() => import('../views/TimelinePage').then((module) => ({ default: module.TimelinePage })))
 const MilestonesPage = lazy(() => import('../work-items/MilestonesPage').then((module) => ({ default: module.MilestonesPage })))
 const LaunchesPage = lazy(() => import('../launch/LaunchesPage').then((module) => ({ default: module.LaunchesPage })))
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
+const MyWorkPage = lazy(() => import('../views/MyWorkPage').then((module) => ({ default: module.MyWorkPage })))
+const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 // Only development builds include the kit page; production drops the import.
 const DevUiPage = import.meta.env.DEV
@@ -87,7 +89,7 @@ export function App() {
                   path="/join"
                 />
                 <Route element={<SessionBoundary />}>
-                  <Route path="/settings/account" element={<AuthenticatedRouteBoundary><AccountSettingsPage /></AuthenticatedRouteBoundary>} />
+                  <Route path="/settings/*" element={<AuthenticatedRouteBoundary><SettingsArea /></AuthenticatedRouteBoundary>} />
                   <Route element={<Navigate replace to="/home" />} path="/" />
                   <Route
                     element={
@@ -96,6 +98,22 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/home"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <InboxPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/inbox"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <MyWorkPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/my-work"
                   />
                   <Route
                     element={
@@ -124,14 +142,6 @@ export function App() {
                   <Route
                     element={
                       <AuthenticatedRouteBoundary>
-                        <AppearancePage />
-                      </AuthenticatedRouteBoundary>
-                    }
-                    path="/settings/appearance"
-                  />
-                  <Route
-                    element={
-                      <AuthenticatedRouteBoundary>
                         <CreateProjectPage />
                       </AuthenticatedRouteBoundary>
                     }
@@ -145,14 +155,7 @@ export function App() {
                     }
                     path="/projects/:projectId"
                   />
-                  <Route
-                    element={
-                      <AuthenticatedRouteBoundary>
-                        <ProjectSettingsPage />
-                      </AuthenticatedRouteBoundary>
-                    }
-                    path="/projects/:projectId/settings"
-                  />
+                  <Route element={<LegacyProjectSettingsRedirect />} path="/projects/:projectId/settings" />
                   <Route
                     element={
                       <AuthenticatedRouteBoundary>
@@ -176,6 +179,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/projects/:projectId/milestones"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <TimelinePage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/timeline"
                   />
                   <Route
                     element={
@@ -300,6 +311,13 @@ function AuthenticatedRouteFallback() {
       </div>
     </AppShell>
   )
+}
+
+/** Project settings moved to /settings/projects/:projectId/:section; the settings area reads the old `?tab=`. */
+function LegacyProjectSettingsRedirect() {
+  const { projectId = '' } = useParams()
+  const location = useLocation()
+  return <Navigate replace to={`/settings/projects/${encodeURIComponent(projectId)}${location.search}`} />
 }
 
 function NotFoundPage() {

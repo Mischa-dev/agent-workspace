@@ -157,8 +157,134 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/members",
         MembershipManage
     ),
+    policy_route!(
+        "workspace",
+        Patch,
+        "/api/v1/organizations/{organization_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "workspace",
+        Patch,
+        "/api/v1/organizations/{organization_id}/members/{actor_id}",
+        MembershipManage
+    ),
+    policy_route!(
+        "workspace",
+        Post,
+        "/api/v1/organizations/{organization_id}/transfer-ownership",
+        MembershipManage
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/organizations/{organization_id}/leave",
+        SessionAuthentication
+    ),
+    policy_route!(
+        "workspace",
+        Post,
+        "/api/v1/organizations/{organization_id}/invitations",
+        InvitationManage
+    ),
+    policy_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/{invitation_id}/revoke",
+        InvitationManage
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/resolve",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/accept-new",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "workspace",
+        Post,
+        "/api/v1/workspace-invitations/accept-existing",
+        InvitationCapability
+    ),
+    boundary_route!(
+        "workspace",
+        Put,
+        "/api/v1/account/default-workspace",
+        SessionAuthentication
+    ),
     boundary_route!("auth", Post, "/api/v1/auth/login", SessionAuthentication),
     boundary_route!("auth", Post, "/api/v1/auth/logout", SessionAuthentication),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/auth/login/two-factor",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/password",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/sessions/{session_id}/revoke",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/sessions/revoke-others",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/setup",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/confirm",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/recovery-codes",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/two-factor/disable",
+        SessionAuthentication
+    ),
+    policy_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/api-tokens",
+        CredentialManage
+    ),
+    policy_route!(
+        "account_security",
+        Post,
+        "/api/v1/account/api-tokens/{credential_id}/revoke",
+        CredentialManage
+    ),
+    boundary_route!(
+        "account_security",
+        Put,
+        "/api/v1/account/appearance",
+        SessionAuthentication
+    ),
     policy_route!("api", Post, "/api/v1/threads/{id}/agent-runs", WorkerInvoke),
     policy_route!(
         "api",
@@ -445,6 +571,76 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
         MessageSend
     ),
+    // A person changes only their own notifications; every row is also
+    // checked against what they can still see.
+    boundary_route!(
+        "notifications",
+        Post,
+        "/api/v1/inbox/update",
+        SessionAuthentication
+    ),
+    // Notification settings, devices and usage are the caller's own: their
+    // devices, their provider accounts (owner only), their preferences.
+    boundary_route!(
+        "notification_settings",
+        Put,
+        "/api/v1/notification-settings/channels",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "notification_settings",
+        Put,
+        "/api/v1/notification-settings/mutes",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Post,
+        "/api/v1/push/subscriptions",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Delete,
+        "/api/v1/push/subscriptions/{id}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Post,
+        "/api/v1/push/subscriptions/{id}/test",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/refresh",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/schedules",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Delete,
+        "/api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Put,
+        "/api/v1/usage/accounts/{account_id}/rules/{rule}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/reset-credits/spend",
+        SessionAuthentication
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -468,6 +664,18 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/integrations/github/sync",
         GithubIntegrationManage
+    ),
+    policy_route!(
+        "github/connect",
+        Post,
+        "/api/v1/projects/{project_id}/integrations/github/connect",
+        GithubIntegrationManage
+    ),
+    policy_route!(
+        "github/connect",
+        Post,
+        "/api/v1/projects/{project_id}/integrations/github/repositories",
+        RepositoryManage
     ),
     policy_route!(
         "github",
@@ -759,6 +967,96 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/views",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/views/{view_id}",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Delete,
+        "/api/v1/projects/{project_id}/views/{view_id}",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/views/{view_id}/pin",
+        WorkItemView
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/task-templates",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/task-templates/{template_id}",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/imports",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/imports/{import_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/imports/{import_id}/commit",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/save-as-template",
+        SettingsManage
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "work_items",
+        Post,
+        "/api/v1/projects/{project_id}/recurring-tasks",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Patch,
+        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
+        Delete,
+        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "work_items",
         Put,
         "/api/v1/projects/{project_id}/work-item-workflow",
         ProjectManage
@@ -773,6 +1071,7 @@ mod tests {
 
     const ROUTER_SOURCES: &[(&str, &str)] = &[
         ("account", include_str!("account.rs")),
+        ("account_security", include_str!("account_security.rs")),
         ("api", include_str!("api.rs")),
         ("auth", include_str!("auth/mod.rs")),
         ("auth/workos", include_str!("auth/workos.rs")),
@@ -781,9 +1080,19 @@ mod tests {
         ("replies", include_str!("replies.rs")),
         ("message_edits", include_str!("message_edits.rs")),
         ("reactions", include_str!("reactions.rs")),
+        ("notifications", include_str!("notifications.rs")),
+        (
+            "notification_settings",
+            include_str!("notification_settings.rs"),
+        ),
+        ("push", include_str!("push.rs")),
+        ("usage", include_str!("usage.rs")),
         ("github", include_str!("github.rs")),
+        ("github/connect", include_str!("github/connect.rs")),
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),
+        ("workspace", include_str!("workspace.rs")),
+        ("audit_log", include_str!("audit_log.rs")),
         ("mcp/oauth", include_str!("mcp/oauth.rs")),
         ("projects", include_str!("projects.rs")),
         ("repositories", include_str!("repositories.rs")),

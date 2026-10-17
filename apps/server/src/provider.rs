@@ -798,6 +798,9 @@ async fn drive_turn(
                     HarnessEvent::Error => {
                         return Err(AppError::Conflict("provider", "the harness reported an error"));
                     }
+                    HarnessEvent::UsageUpdated(report) => {
+                        crate::usage::record_run_report(&state, provider.account_id(), report).await;
+                    }
                     HarnessEvent::ItemStarted(_)
                     | HarnessEvent::ItemCompleted(_)
                     | HarnessEvent::Ignored => {}

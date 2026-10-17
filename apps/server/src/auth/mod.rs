@@ -136,6 +136,8 @@ struct SessionUser {
     actor_kind: String,
     login_name: String,
     display_name: String,
+    /// The workspace the person works in by default.
+    default_organization_id: Option<Uuid>,
     capabilities: SessionCapabilities,
 }
 
@@ -233,6 +235,18 @@ async fn login(
     }
 
     let mut transaction = state.pool.begin().await?;
+    if crate::account_security::two_factor_enabled(&mut transaction, credential.user_id).await? {
+        // A correct password is half of it: answer with a challenge for the
+        // code, and no session until the code is right.
+        let response = crate::account_security::start_challenge(
+            &mut transaction,
+            credential.user_id,
+            credential.authentication_epoch,
+        )
+        .await?;
+        transaction.commit().await?;
+        return Ok(response);
+    }
     let established = establish_session_in_transaction(
         &state.config,
         &headers,
@@ -263,6 +277,12 @@ async fn login(
     .bind(established.principal.actor_id)
     .bind(established.principal.session_id)
     .execute(&mut *transaction)
+    .await?;
+    crate::account_security::record_sign_in_method(
+        &mut transaction,
+        established.principal.session_id,
+        "password",
+    )
     .await?;
     transaction.commit().await?;
     respond_with_established_session(&state, established).await
@@ -299,11 +319,12 @@ pub(crate) async fn establish_session_in_transaction(
         INSERT INTO sessions (
             id, user_id, token_hash, csrf_token_hash, authentication_epoch,
             rotated_from_session_id, created_at, last_seen_at,
-            idle_expires_at, absolute_expires_at
+            idle_expires_at, absolute_expires_at, user_agent, sign_in_method
         )
         VALUES (
             $1, $2, $3, $4, $5, $6,
-            now(), now(), now() + interval '7 days', now() + interval '30 days'
+            now(), now(), now() + interval '7 days', now() + interval '30 days', $7,
+            (SELECT sign_in_method FROM sessions WHERE id = $6)
         )
         "#,
     )
@@ -313,6 +334,7 @@ pub(crate) async fn establish_session_in_transaction(
     .bind(hash_secret(&csrf_token).to_vec())
     .bind(identity.authentication_epoch)
     .bind(rotated_from_session_id)
+    .bind(crate::account_security::user_agent(headers))
     .execute(&mut **transaction)
     .await?;
     Ok(EstablishedSession {
@@ -569,6 +591,10 @@ async fn session_response(
             break;
         }
     }
+    let default_organization_id =
+        crate::workspace::default_workspace(&state.pool, principal.actor_id)
+            .await?
+            .map(|(organization_id, _)| organization_id);
     Ok(SessionResponse {
         authenticated: true,
         user: Some(SessionUser {
@@ -577,6 +603,7 @@ async fn session_response(
             actor_kind: principal.actor_kind.clone(),
             login_name: principal.login_name.clone(),
             display_name: principal.display_name.clone(),
+            default_organization_id,
             capabilities: SessionCapabilities { create_project },
         }),
         organizations,

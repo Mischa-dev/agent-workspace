@@ -17,6 +17,8 @@ export type ThemeContextValue = AppearancePreferences & {
   setDensity: (density: DensityPreference) => void
   setTextSize: (textSize: TextSizePreference) => void
   resetAppearance: () => void
+  /** Take a whole saved appearance, such as the one stored on the account. */
+  replaceAppearance: (preferences: AppearancePreferences) => void
 }
 
 export const ThemeContext = createContext<ThemeContextValue>({
@@ -27,6 +29,7 @@ export const ThemeContext = createContext<ThemeContextValue>({
   setDensity: () => undefined,
   setTextSize: () => undefined,
   resetAppearance: () => undefined,
+  replaceAppearance: () => undefined,
 })
 
 export function useTheme() {

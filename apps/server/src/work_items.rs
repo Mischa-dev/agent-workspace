@@ -84,8 +84,13 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
     ("Canceled", "Backlog"),
 ];
 
+pub(crate) mod import_parse;
+pub(crate) mod imports;
 mod list;
 mod planning;
+pub(crate) mod project_templates;
+pub(crate) mod templates;
+pub(crate) mod views;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -172,6 +177,73 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/milestones/{milestone_id}",
             axum::routing::patch(planning::update_milestone),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/views",
+            get(views::list_views).post(views::create_view),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/views/{view_id}",
+            axum::routing::patch(views::update_view).delete(views::delete_view),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/views/{view_id}/pin",
+            axum::routing::post(views::pin_view),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/task-templates",
+            get(templates::get_templates).post(templates::create_template),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/task-templates/{template_id}",
+            axum::routing::patch(templates::update_template),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
+            axum::routing::post(templates::apply_template_route),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/imports",
+            get(imports::list_imports).post(imports::create_import).layer(
+                axum::extract::DefaultBodyLimit::max(imports::MAX_IMPORT_BODY_BYTES),
+            ),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/imports/{import_id}",
+            get(imports::get_import).patch(imports::update_import),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/imports/{import_id}/commit",
+            axum::routing::post(imports::commit_import),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/export",
+            get(imports::export_project),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/save-as-template",
+            axum::routing::post(project_templates::save_as_template),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}/project-templates",
+            get(project_templates::list_project_templates),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
+            axum::routing::patch(project_templates::update_project_template),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/recurring-tasks",
+            axum::routing::post(templates::create_recurring),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
+            axum::routing::patch(templates::update_recurring).delete(templates::delete_recurring),
+        )
+        .route("/api/v1/my-work", get(views::get_my_work))
+        .route(
+            "/api/v1/projects/{project_id}/timeline",
+            get(views::get_timeline),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",

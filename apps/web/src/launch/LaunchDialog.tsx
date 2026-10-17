@@ -169,7 +169,7 @@ export function LaunchDialog({
               ))}
             </SelectField>
             <SelectField
-              hint={accounts.length === 0 ? 'Connect an account for this agent in Project settings first.' : undefined}
+              hint={accounts.length === 0 ? 'Connect an account for this agent in Settings › Provider accounts first.' : undefined}
               id="launch-account"
               label="Account"
               onChange={(event) => setAccountId(event.target.value)}
@@ -261,7 +261,7 @@ export function LaunchDialog({
 function environmentHint(plan: LaunchPlan) {
   const chosen = plan.environments.find((environment) => environment.id === plan.environmentId)
   if (chosen?.lastCheckOk === false) return chosen.lastCheckMessage ?? 'The last check of this environment failed.'
-  if (plan.environments.length === 0) return 'Add environments in Project settings, under Launch.'
+  if (plan.environments.length === 0) return 'Add environments in Settings › Project › Environments and defaults.'
   return undefined
 }
 

@@ -30,7 +30,14 @@ function RepositoryState({ repository }: { repository: Repository }) {
   )
 }
 
-export function RepositorySettings({ projectId }: { projectId: string }) {
+export function RepositorySettings({
+  projectId,
+  showRegistration = true,
+}: {
+  projectId: string
+  /** The form for entering a repository by hand; hosts with the GitHub connect flow use the picker instead. */
+  showRegistration?: boolean
+}) {
   const queryClient = useQueryClient()
   const key = queryKeys.repositories(projectId)
   const repositories = useQuery({
@@ -135,14 +142,17 @@ export function RepositorySettings({ projectId }: { projectId: string }) {
           ))}
         </RowList>
       ) : (
-        <p className="aw-quiet">No repositories yet.{canManage ? ' Register one below to start runs against it.' : ''}</p>
+        <p className="aw-quiet">
+          No repositories yet.{canManage ? (showRegistration ? ' Register one below to start runs against it.' : ' Add one from GitHub above.') : ''}
+        </p>
       )}
-      {canManage && <RepositoryRegistrationForm onCreated={update} projectId={projectId} />}
+      {canManage && showRegistration && <RepositoryRegistrationForm onCreated={update} projectId={projectId} />}
     </div>
   )
 }
 
-function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated: (repository: Repository) => void; projectId: string }) {
+/** Register a repository by typing its owner, name and GitHub ID: for hosts without the GitHub connect flow. */
+export function RepositoryRegistrationForm({ onCreated, projectId }: { onCreated: (repository: Repository) => void; projectId: string }) {
   const [githubRepositoryId, setGithubRepositoryId] = useState('')
   const [owner, setOwner] = useState('')
   const [name, setName] = useState('')

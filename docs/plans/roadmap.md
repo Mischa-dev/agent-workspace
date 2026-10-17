@@ -476,7 +476,7 @@ default environment with its defaults, and its status and pull request show in
 the task's thread; '@codex fix the flaky test' does the same; and ten queued
 tasks start as capacity frees up, blocked ones last.
 
-#### W8. Settings and accounts
+#### W8. Settings and accounts (#141)
 
 *6 items · Starts when W1 and W4 have merged · 3 add a migration*
 
@@ -484,12 +484,12 @@ One settings area for your account, the workspace and each project, showing
 what's inherited; GitHub connected in three clicks; members, roles,
 invitations, API tokens, two-factor and the audit log.
 
-- [ ] [S3](#s3-one-settings-area) One settings area
-- [ ] [S4](#s4-manage-the-workspace) Manage the workspace
-- [ ] [S5](#s5-connect-github-properly) Connect GitHub properly
-- [ ] [S7](#s7-account-security-and-api-tokens) Account security and API tokens
-- [ ] [S8](#s8-audit-log) Audit log
-- [ ] [S9](#s9-appearance-follows-you) Appearance follows you
+- [x] [S3](#s3-one-settings-area) One settings area
+- [x] [S4](#s4-manage-the-workspace) Manage the workspace
+- [x] [S5](#s5-connect-github-properly) Connect GitHub properly
+- [x] [S7](#s7-account-security-and-api-tokens) Account security and API tokens
+- [x] [S8](#s8-audit-log) Audit log
+- [x] [S9](#s9-appearance-follows-you) Appearance follows you
 
 **Owns:** A new `apps/web/src/settings/` that replaces
 `projects/ProjectSettingsPage.tsx`, the `github/` and `repositories/` screens,
@@ -507,18 +507,18 @@ repository connects in three clicks without copying an ID; a new person joins
 the workspace once; and passwords, sessions and API tokens need no command
 line.
 
-#### W9. Capacity and push
+#### W9. Capacity and push (#147)
 
 *5 items · Starts when W1, W2 and W6 have merged · 2 add a migration*
 
 The first half of moment 2: every plan window tracked in the background with a
 countdown, capacity alerts, push to your phone, and notification settings.
 
-- [ ] [U1](#u1-usage-windows) Usage windows
-- [ ] [U3](#u3-capacity-alerts) Capacity alerts
-- [ ] [U6](#u6-banked-resets) Banked resets
-- [ ] [N3](#n3-push-to-phone-and-desktop) Push to phone and desktop
-- [ ] [N4](#n4-notification-settings) Notification settings
+- [x] [U1](#u1-usage-windows) Usage windows
+- [x] [U3](#u3-capacity-alerts) Capacity alerts
+- [x] [U6](#u6-banked-resets) Banked resets
+- [x] [N3](#n3-push-to-phone-and-desktop) Push to phone and desktop
+- [x] [N4](#n4-notification-settings) Notification settings
 
 **Owns:** New usage and push modules (windows, the polling job, alert rules,
 Web Push), the push handlers in `sw.js`, and the usage section of the account
@@ -567,18 +567,18 @@ roadmap's JSON becomes tasks, milestones and dependencies through plan to
 tasks; and it all runs against a fake provider in tests and your Anthropic key
 from settings.
 
-#### W11. Views and data
+#### W11. Views and data (#143)
 
 *5 items · Starts when W1 and W3 have merged · 2 add a migration*
 
 The rest of what a whole project needs: saved views, My work, a timeline,
 import and export, and templates.
 
-- [ ] [V5](#v5-saved-views) Saved views
-- [ ] [V6](#v6-my-work) My work
-- [ ] [V8](#v8-timeline) Timeline
-- [ ] [T9](#t9-import-and-export) Import and export
-- [ ] [T10](#t10-templates-and-recurring-tasks) Templates and recurring tasks
+- [x] [V5](#v5-saved-views) Saved views
+- [x] [V6](#v6-my-work) My work
+- [x] [V8](#v8-timeline) Timeline
+- [x] [T9](#t9-import-and-export) Import and export
+- [x] [T10](#t10-templates-and-recurring-tasks) Templates and recurring tasks
 
 **Owns:** New views, import and export, and templates modules, the sidebar's
 pinned views, and the My work, timeline and import pages.

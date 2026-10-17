@@ -14,6 +14,7 @@ import { ProjectInitials } from './ProjectInitials'
 import { useProject } from './hooks'
 import type { Project } from './types'
 import { useRememberProjectLocation } from './useRememberProjectLocation'
+import { projectSettingsHref } from '../settings/paths'
 
 const RECENT_WORK = { limit: 5 }
 
@@ -51,7 +52,7 @@ export function ProjectOverviewPage() {
         <PageHeader
           actions={
             project.data.capabilities.manage && !project.data.archivedAt ? (
-              <Link className="aw-btn aw-btn--secondary aw-btn--md" to={`${base}/settings`}>
+              <Link className="aw-btn aw-btn--secondary aw-btn--md" to={projectSettingsHref(project.data.id)}>
                 <Icon name="settings" />
                 <span className="aw-btn__label">Project settings</span>
               </Link>

@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import { listHarnesses } from '../execution/api'
 import { listRepositories } from '../repositories/api'
 import {
   Banner,
@@ -18,7 +17,6 @@ import {
   IconButton,
   Row,
   RowList,
-  Section,
   SelectField,
   StatusChip,
   TextArea,
@@ -26,7 +24,7 @@ import {
   formatRelative,
   showToast,
 } from '../ui'
-import type { Environment, EnvironmentList, SettingSource } from './api'
+import type { Environment, EnvironmentList } from './api'
 import { useEnvironmentAction, useEnvironments, useProjectSettings, useSaveEnvironment, useSaveProjectSetting } from './hooks'
 import { sourceLabel } from './launchModel'
 import './launch.css'
@@ -36,36 +34,8 @@ function errorText(error: unknown, fallback: string) {
   return isApiError(error) && error.message ? error.message : fallback
 }
 
-/** Project settings, Launch tab: where launched agents run, what they run with, and the prompt they get. */
-export function LaunchSettings({ projectId }: { projectId: string }) {
-  return (
-    <>
-      <Section
-        description="Where launched agents work, such as a cloud environment set up with your repository. The default is picked when you press Launch."
-        id="environments-heading"
-        title="Environments"
-      >
-        <EnvironmentSettings projectId={projectId} />
-      </Section>
-      <Section
-        description="What runs use unless a launch picks something else. Each person can still set their own, and a workspace default applies where the project sets none."
-        id="run-defaults-heading"
-        title="Run defaults"
-      >
-        <RunDefaults projectId={projectId} />
-      </Section>
-      <Section
-        description="The prompt Launch writes from a task. Fields in double braces are filled in; a task's page shows the result before you launch."
-        id="launch-template-heading"
-        title="Launch prompt"
-      >
-        <TemplateEditor projectId={projectId} />
-      </Section>
-    </>
-  )
-}
-
-function EnvironmentSettings({ projectId }: { projectId: string }) {
+/** A project's environments: where launched agents work, with the default marked. */
+export function EnvironmentSettings({ projectId }: { projectId: string }) {
   const environments = useEnvironments(projectId)
   const action = useEnvironmentAction(projectId)
   const [editing, setEditing] = useState<Environment | 'new' | null>(null)
@@ -287,105 +257,8 @@ function EnvironmentDialog({
   )
 }
 
-const REASONING = ['minimal', 'low', 'medium', 'high', 'max']
-const SPEEDS = ['standard', 'fast']
-
-function RunDefaults({ projectId }: { projectId: string }) {
-  const settings = useProjectSettings(projectId)
-  const harnesses = useQuery({ queryKey: queryKeys.harnesses(projectId), queryFn: () => listHarnesses(projectId) })
-  const save = useSaveProjectSetting(projectId)
-
-  if (settings.isPending || harnesses.isPending) return <ListSkeleton label="Loading run defaults" rows={3} />
-  if (settings.isError || harnesses.isError) {
-    return (
-      <ErrorState
-        action={
-          <Button
-            onClick={() => {
-              void settings.refetch()
-              void harnesses.refetch()
-            }}
-            size="sm"
-          >
-            Retry
-          </Button>
-        }
-        title="Run defaults didn’t load."
-      />
-    )
-  }
-  const value = (key: string) => settings.data.settings.find((setting) => setting.key === key)
-  const canEdit = settings.data.capabilities.manageProject
-  const harness = value('run.harness')
-  const chosenHarness = harnesses.data.find((candidate) => candidate.kind === harness?.value) ?? harnesses.data[0]
-  const models = (chosenHarness?.catalog.models ?? []).filter((model) => !model.hidden)
-  const write = (key: string, next: string, parse: (raw: string) => unknown = (raw) => raw) =>
-    save.mutate(
-      { key, value: next === '' ? undefined : parse(next) },
-      { onError: (error) => showToast({ tone: 'danger', title: 'That default didn’t save.', description: errorText(error, 'Try again.') }) },
-    )
-  const own = (key: string) => (value(key)?.source === 'project' ? String(value(key)?.value ?? '') : '')
-  const inherited = (key: string, fallback = 'Agent’s default') => {
-    const setting = value(key)
-    if (!setting || setting.source === 'project') return `Not set here (${fallback})`
-    const shown = setting.value === null || setting.value === 'default' ? fallback : String(setting.value)
-    return `Not set here (${shown}, ${sourceLabel(setting.source as SettingSource)})`
-  }
-
-  return (
-    <div className="aw-form__grid">
-      <SelectField disabled={!canEdit || save.isPending} id="run-default-harness" label="Agent" onChange={(event) => write('run.harness', event.target.value)} value={own('run.harness')}>
-        <option value="">{inherited('run.harness', 'first connected')}</option>
-        {harnesses.data.map((candidate) => (
-          <option key={candidate.kind} value={candidate.kind}>
-            {candidate.displayName}
-          </option>
-        ))}
-      </SelectField>
-      <SelectField disabled={!canEdit || save.isPending} id="run-default-model" label="Model" onChange={(event) => write('run.model', event.target.value)} value={own('run.model')}>
-        <option value="">{inherited('run.model')}</option>
-        {models.map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.displayName}
-          </option>
-        ))}
-      </SelectField>
-      <SelectField disabled={!canEdit || save.isPending} id="run-default-reasoning" label="Thinking" onChange={(event) => write('run.reasoning', event.target.value)} value={own('run.reasoning')}>
-        <option value="">{inherited('run.reasoning')}</option>
-        {REASONING.map((level) => (
-          <option key={level} value={level}>
-            {level}
-          </option>
-        ))}
-      </SelectField>
-      <SelectField disabled={!canEdit || save.isPending} id="run-default-speed" label="Speed" onChange={(event) => write('run.speed', event.target.value)} value={own('run.speed')}>
-        <option value="">{inherited('run.speed')}</option>
-        {SPEEDS.map((speed) => (
-          <option key={speed} value={speed}>
-            {speed}
-          </option>
-        ))}
-      </SelectField>
-      <SelectField
-        disabled={!canEdit || save.isPending}
-        id="run-default-attempts"
-        label="Attempts"
-        onChange={(event) => write('run.attempts', event.target.value, Number)}
-        value={own('run.attempts')}
-      >
-        <option value="">{inherited('run.attempts', '1')}</option>
-        {Array.from({ length: 8 }, (_, index) => index + 1).map((count) => (
-          <option key={count} value={count}>
-            {count}
-          </option>
-        ))}
-      </SelectField>
-      {canEdit ? null : <p className="aw-launch__note">Project admins change these. Your own defaults are in your account settings.</p>}
-    </div>
-  )
-}
-
-function TemplateEditor({ projectId }: { projectId: string }) {
+/** The project's launch prompt template, with the fields it can use. */
+export function TemplateEditor({ projectId }: { projectId: string }) {
   const settings = useProjectSettings(projectId)
   const save = useSaveProjectSetting(projectId)
   const [draft, setDraft] = useState<string | null>(null)

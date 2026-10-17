@@ -25,7 +25,7 @@ export function LaunchCard({ item }: { item: { id: string; key: string; title: s
   const accounts = (data?.accounts ?? []).filter((account) => account.harness === data?.harness)
   const latest = data?.launches[0]
   const blocked = (data?.blockers.length ?? 0) > 0
-  const unavailable = !data ? null : !harness ? 'No agent is set up for this project yet.' : accounts.length === 0 ? `Connect a ${harness.displayName} account in Project settings first.` : null
+  const unavailable = !data ? null : !harness ? 'No agent is set up for this project yet.' : accounts.length === 0 ? `Connect a ${harness.displayName} account in Settings › Provider accounts first.` : null
 
   const launched = (launches: Launch[]) => {
     setDialogOpen(false)

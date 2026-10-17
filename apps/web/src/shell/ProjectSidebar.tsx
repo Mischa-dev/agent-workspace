@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { lazy, Suspense, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -9,6 +9,9 @@ import type { SidebarThread } from '../conversations/types'
 import type { Project } from '../projects/types'
 import { Button, Dialog, TextField, type MenuEntry } from '../ui'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
+import { projectSettingsHref } from '../settings/paths'
+
+const PinnedViews = lazy(() => import('./PinnedViews'))
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -46,7 +49,7 @@ export function ProjectSidebar({
   const menu: MenuEntry[] = [
     ...(canCreate ? [{ label: 'New channel', icon: 'plus' as const, onSelect: () => setCreating(true) }] : []),
     { label: 'Archived conversations', icon: 'archive', onSelect: () => go(`${base}/conversations/archived`) },
-    { label: 'Project settings', icon: 'settings', onSelect: () => go(`${base}/settings`) },
+    { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },
   ]
   const listedThread = sidebar.data?.channels.some((channel) => channel.threads.some((candidate) => candidate.id === thread?.id))
 
@@ -56,11 +59,15 @@ export function ProjectSidebar({
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
         <SidebarLink icon="work" label="Work items" onNavigate={onNavigate} to={`${base}/work-items`} />
         <SidebarLink icon="checklist" label="Milestones" onNavigate={onNavigate} to={`${base}/milestones`} />
-        <SidebarLink icon="clock" label="Launches" onNavigate={onNavigate} to={`${base}/launches`} />
+        <SidebarLink icon="clock" label="Timeline" onNavigate={onNavigate} to={`${base}/timeline`} />
+        <SidebarLink icon="play" label="Launches" onNavigate={onNavigate} to={`${base}/launches`} />
         <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
         <SidebarLink icon="check" label="Decisions" onNavigate={onNavigate} to={`${base}/decisions`} />
         <SidebarLink icon="search" label="Search" onNavigate={onNavigate} to={`/search?projectId=${encodeURIComponent(project.id)}`} />
       </ul>
+      <Suspense fallback={null}>
+        <PinnedViews onNavigate={onNavigate} projectId={project.id} />
+      </Suspense>
       <SidebarSection addLabel="New channel" label="Channels" onAdd={canCreate ? () => setCreating(true) : undefined}>
         {(sidebar.data?.channels ?? []).flatMap((channel) => {
           const selected = channel.id === selectedChannelId

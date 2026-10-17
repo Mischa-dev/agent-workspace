@@ -28,6 +28,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case "${areas}" in
+  rust,web|rust|web) ;;
+  *) echo "ci: invalid areas '${areas}' (expected rust,web, rust or web)" >&2; exit 2 ;;
+esac
+
 root="$(git rev-parse --show-toplevel)"
 cd "${root}"
 here="${root}/tools/ci"
@@ -74,9 +79,27 @@ remote() {
 # were checked out. Cargo and `tsc -b` rebuild only sources newer than their
 # last build, and jobs check out long before they get a machine, so keeping
 # checkout times let a run reuse another PR's newer build.
-sync_source() {
+sync_source() (
+  local exclude_dir path
+  exclude_dir="$(mktemp -d)"
+  trap 'rm -rf "${exclude_dir}"' EXIT
+  # Let Git handle negation and nested ignore rules. Tracked files are never
+  # ignored; keep syncing their working-tree contents, including local edits.
+  git ls-files --others --ignored --exclude-standard --directory -z > "${exclude_dir}/paths"
+  while IFS= read -r -d '' path; do
+    # These are literal, root-relative paths, not rsync glob patterns.
+    # Rsync only interprets backslash escapes in patterns containing wildcards.
+    if [[ "${path}" == *'*'* || "${path}" == *'?'* || "${path}" == *'['* ]]; then
+      path="${path//\\/\\\\}"
+    fi
+    path="${path//\*/\\*}"
+    path="${path//\?/\\?}"
+    path="${path//\[/\\[}"
+    printf '/%s\0' "${path}"
+  done < "${exclude_dir}/paths" > "${exclude_dir}/rules"
   local rsync_args=(-a --no-times --checksum --delete --exclude .git --exclude node_modules
-    --exclude target --exclude dist --exclude .claude --filter=':- .gitignore')
+    --exclude target --exclude dist --exclude .claude
+    --from0 --exclude-from="${exclude_dir}/rules")
   remote "mkdir -p ${work}/src"
   case "${transport}" in
     local) rsync "${rsync_args[@]}" ./ "${work}/src/" ;;
@@ -91,7 +114,7 @@ sync_source() {
   remote "cd ${work} && if [ ! -e synced-without-times ]; then
       find src \\( -name node_modules -o -name dist -o -name target \\) -prune -o -type f -exec touch {} + &&
       touch synced-without-times; fi"
-}
+)
 
 # One CI job per machine: mkdir is atomic. The holder touches lock/alive every
 # minute (heartbeat below); a lock with no heartbeat for 5 minutes is from a

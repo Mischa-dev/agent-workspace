@@ -44,6 +44,7 @@ function UtilityTile({
   icon,
   label,
   onClick,
+  state,
   to,
 }: {
   active?: boolean
@@ -51,6 +52,7 @@ function UtilityTile({
   icon: IconName
   label: string
   onClick?: () => void
+  state?: unknown
   to: string
 }) {
   return (
@@ -60,6 +62,7 @@ function UtilityTile({
         aria-label={badge ? `${label}, ${badge} unread` : label}
         className={`aw-tile aw-tile--utility${active ? ' is-active' : ''}${badge ? ' is-unread' : ''}`}
         onClick={onClick}
+        state={state}
         to={to}
       >
         <TileFace>
@@ -99,6 +102,8 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
+  // Every notification belongs to a project, so the inbox's unread count is the sum.
+  const inboxUnread = (projectsQuery.data?.projects ?? []).reduce((sum, project) => sum + project.attentionCount, 0)
   const pinned = projects.filter((project) => project.navigation.pinned)
   const recent = projects
     .filter((project) => !project.navigation.pinned)
@@ -145,11 +150,23 @@ export function ProjectRail({
   }
 
   const inMessages = location.pathname.startsWith('/messages')
+  // Settings open on the Project you were in.
+  const fromProjectId = /^\/projects\/([^/]+)/.exec(location.pathname)?.[1]
+  const settingsState = fromProjectId && fromProjectId !== 'new' ? { fromProjectId } : undefined
 
   return (
     <>
       <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
         <UtilityTile active={location.pathname === '/home'} icon="home" label="Home" onClick={onNavigate} to="/home" />
+        <UtilityTile
+          active={location.pathname === '/inbox'}
+          badge={inboxUnread}
+          icon="inbox"
+          label="Inbox"
+          onClick={onNavigate}
+          to="/inbox"
+        />
+        <UtilityTile active={location.pathname === '/my-work'} icon="checklist" label="My work" onClick={onNavigate} to="/my-work" />
         <UtilityTile
           active={inMessages}
           badge={unreadConversations}
@@ -206,17 +223,18 @@ export function ProjectRail({
           </button>
         </Tooltip>
         <UtilityTile
-          active={location.pathname.startsWith('/settings/appearance')}
-          icon="palette"
-          label="Appearance"
+          active={location.pathname.startsWith('/settings')}
+          icon="settings"
+          label="Settings"
           onClick={onNavigate}
-          to="/settings/appearance"
+          state={settingsState}
+          to="/settings"
         />
         <Menu
           items={[
             { heading: user.displayName },
-            { label: 'Account settings', onSelect: () => { onNavigate(); navigate('/settings/account') } },
-            { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/appearance') } },
+            { label: 'Settings', icon: 'settings', onSelect: () => { onNavigate(); navigate('/settings', { state: settingsState }) } },
+            { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/account/appearance') } },
             { separator: true },
             { label: 'Sign out', icon: 'log-out', onSelect: () => void signOut() },
           ]}

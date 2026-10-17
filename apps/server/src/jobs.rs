@@ -363,6 +363,8 @@ pub fn default_registry() -> JobRegistry {
     let mut registry = JobRegistry::new();
     crate::retention::register_jobs(&mut registry);
     crate::launch::register_jobs(&mut registry);
+    crate::work_items::templates::register_jobs(&mut registry);
+    crate::work_items::imports::register_jobs(&mut registry);
     registry.register(PRUNE_KIND, |context| async move {
         prune_finished(&context.state.pool).await?;
         Ok(())
@@ -373,6 +375,8 @@ pub fn default_registry() -> JobRegistry {
         Ok(())
     });
     registry.every(HEALTH_CHECK_KIND, Duration::from_secs(5 * 60));
+    crate::usage::register_jobs(&mut registry);
+    crate::push::register_jobs(&mut registry);
     registry
 }
 
