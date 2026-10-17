@@ -1,6 +1,6 @@
 //! Project admin: a project's workflow and members, renaming, and archiving
-//! or restoring it. Changing a project is for people with an owner or admin
-//! role; agents never manage projects (docs/plans/mcp-tools.md, decision 5).
+//! or restoring it, and creating one. Changing a project is for people with an
+//! owner or admin role; agents never create or manage projects (docs/plans/mcp-tools.md, decision 5).
 //! workflow_update sends the whole workflow through `replace_workflow`, as
 //! the web settings page does.
 
@@ -629,6 +629,155 @@ async fn project_value(state: &AppState, project_id: Uuid) -> Result<ProjectValu
     .await?;
     value.url = public_url(state, &format!("/projects/{project_id}"));
     Ok(value)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ProjectCreateArguments {
+    /// A short key for task numbers, such as "WEB": 2 to 10 letters or
+    /// digits, starting with a letter. It can't be changed later.
+    pub key: String,
+    /// The project's name.
+    pub name: String,
+}
+
+const PROJECT_CREATE_ONLY: &str = "Only people can create projects, through an app connected for their whole account, in a workspace where they may create projects.";
+
+/// Create a Project in the caller's workspace, as the web app does: the
+/// caller becomes its owner. Calling again with the same key and name
+/// returns the project the caller already made, so a retry is safe.
+pub(super) async fn project_create(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ProjectCreateArguments,
+) -> ToolResult<ProjectValue> {
+    if !principal.can_write() {
+        return ToolResult::read_only();
+    }
+    if principal.actor_kind != ActorKind::Human || !principal.account_wide {
+        return ToolResult::denied(PROJECT_CREATE_ONLY);
+    }
+    let Ok(key) = crate::projects::normalize_project_key(&arguments.key) else {
+        return ToolResult::invalid(
+            "key",
+            "Use 2 to 10 letters or digits, starting with a letter, such as \"WEB\".",
+        );
+    };
+    let Ok(name) = crate::projects::normalize_project_name(&arguments.name) else {
+        return ToolResult::invalid(
+            "name",
+            "Give the project a name of 1 to 120 bytes, on one line.",
+        );
+    };
+    let result = async {
+        let mut transaction = state.pool.begin().await?;
+        // The workspace is the one the connected app's home project is in.
+        // Lock the caller's workspace membership as the web app does, so a
+        // removal can't race the new owner membership.
+        let Some(creator) = sqlx::query_as::<_, (Uuid, String, String, String)>(
+            r#"
+            SELECT project.organization_id, organization_membership.role,
+                   user_account.display_name, user_account.login_name
+            FROM projects project
+            JOIN organization_memberships organization_membership
+              ON organization_membership.organization_id = project.organization_id
+             AND organization_membership.actor_id = $2
+             AND organization_membership.enabled
+            JOIN actors actor ON actor.id = $2 AND actor.status = 'active'
+            JOIN users user_account ON user_account.actor_id = $2 AND user_account.status = 'active'
+            WHERE project.id = $1
+            FOR UPDATE OF organization_membership
+            "#,
+        )
+        .bind(principal.project_id)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        else {
+            return Ok(ToolResult::denied(PROJECT_CREATE_ONLY));
+        };
+        let (organization_id, organization_role, display_name, login_name) = creator;
+        if crate::projects::authorize_project_create(
+            principal.actor_id,
+            principal.actor_kind,
+            organization_id,
+            &organization_role,
+        )
+        .is_err()
+        {
+            return Ok(ToolResult::denied(PROJECT_CREATE_ONLY));
+        }
+        let created = crate::projects::insert_new_project(
+            &mut transaction,
+            organization_id,
+            &key,
+            &name,
+            crate::projects::ProjectOwner {
+                actor_id: principal.actor_id,
+                display_name: &display_name,
+                login_name: &login_name,
+            },
+        )
+        .await;
+        let project_id = match created {
+            Ok(project_id) => project_id,
+            Err(AppError::ProjectKeyConflict) => {
+                drop(transaction);
+                return existing_project_with_key(state, principal, organization_id, &key, &name)
+                    .await;
+            }
+            Err(error) => return Err(error),
+        };
+        insert_audit(
+            &mut transaction,
+            principal,
+            project_id,
+            "project.mcp_created",
+            "project",
+            project_id,
+            serde_json::json!({ "organization_id": organization_id, "project_key": key }),
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>(ToolResult::ok(project_value(state, project_id).await?))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "project_create"))
+}
+
+/// The key is taken. If the caller owns an active project with that key and
+/// name, this is a retry and that project is the answer; otherwise say the
+/// key is in use without saying whose it is.
+async fn existing_project_with_key(
+    state: &AppState,
+    principal: &McpPrincipal,
+    organization_id: Uuid,
+    key: &str,
+    name: &str,
+) -> Result<ToolResult<ProjectValue>, AppError> {
+    let mine = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT project.id
+        FROM projects project
+        JOIN project_memberships membership
+          ON membership.project_id = project.id AND membership.actor_id = $3
+         AND membership.enabled AND membership.role = 'owner'
+        WHERE project.organization_id = $1 AND project.project_key = $2
+          AND project.name = $4 AND project.archived_at IS NULL
+        "#,
+    )
+    .bind(organization_id)
+    .bind(key)
+    .bind(principal.actor_id)
+    .bind(name)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(match mine {
+        Some(project_id) => ToolResult::ok(project_value(state, project_id).await?),
+        None => ToolResult::conflict(format!(
+            "The key {key} is already used by a project in this workspace. Pick another key."
+        )),
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]

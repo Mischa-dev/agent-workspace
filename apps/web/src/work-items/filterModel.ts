@@ -32,7 +32,7 @@ export const FILTER_FIELDS: Array<{ field: FilterField; label: string; keys: Arr
   { field: 'ready', label: 'Ready to start', keys: ['ready'] },
   { field: 'claimed', label: 'Claimed by an agent', keys: ['claimed'] },
   { field: 'due', label: 'Due date', keys: ['overdue', 'dueBefore', 'dueAfter'] },
-  { field: 'done', label: 'Hide done', keys: ['includeDone'] },
+  { field: 'done', label: 'Done hidden', keys: ['includeDone'] },
   { field: 'archived', label: 'Archived', keys: ['archived'] },
 ]
 
@@ -110,7 +110,7 @@ export function chipText(field: FilterField, filters: FilterValues, lookups: Fil
       return parts.length ? parts.join(', ') : null
     }
     case 'done':
-      return filters.includeDone === 'false' ? 'Hiding done' : null
+      return filters.includeDone === 'false' ? 'Done hidden' : null
     case 'archived':
       return filters.archived ? 'Archived only' : null
   }

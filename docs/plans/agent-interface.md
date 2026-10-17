@@ -219,7 +219,7 @@ phase added and why.
 | Group | Tools |
 |---|---|
 | Orientation | `briefing`, `projects_list`, `project_open`, `workflow_get` (statuses, types and transitions), `notification_list` and `notification_update` (a person's inbox) |
-| Projects and people | `project_members`, and for people with the owner or admin role (never agents) `project_member_set`, `project_update`, `project_archive` |
+| Projects and people | `project_members`, `project_create` (people only, in a workspace where they may create projects), and for people with the owner or admin role (never agents) `project_member_set`, `project_update`, `project_archive` |
 | Conversations | `conversation_list` (all projects and DMs, filter by person, kind or unread), `conversation_open`, `conversation_read`, `conversation_start` (DM or group), `conversation_update`, `channel_create`, `message_send`, `message_edit` (your own), `message_delete` (your own; owners and admins, people only, remove anyone's), `message_history`, `message_react` (12 fixed emoji, notifies nobody), `mark_read` (or mark unread from a message), `conversation_members` (a group's members; agents may only leave), `conversation_continue` (people only), `pin_set`, `people_search` |
 | Threads | `thread_start`, `thread_update` (title, status, outcome) |
 | Replies | `inbox_list`, `reply_claim`, `reply_send`, `reply_pass`, `reply_release` |

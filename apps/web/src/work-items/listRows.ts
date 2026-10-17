@@ -118,3 +118,41 @@ export function visibleTaskIds(rows: ListRow[]) {
   }
   return ids
 }
+
+/** The group key of the done section at the bottom of the list. */
+export const DONE_GROUP = '__done'
+/** The key of the done section's "loading more" row. */
+export const DONE_LOADING = '__loading:done'
+
+/**
+ * The list's rows with the done section after them: one toggle row, collapsed
+ * until opened, then the done and canceled tasks. Nothing is added when there
+ * is no done work.
+ */
+export function withDoneRows(
+  rows: ListRow[],
+  done: { count: number; open: boolean; items: WorkItemCard[]; hasMore: boolean },
+): ListRow[] {
+  if (done.count === 0 && done.items.length === 0) return rows
+  const section: ListRow[] = [
+    {
+      kind: 'group',
+      key: `group:${DONE_GROUP}`,
+      groupKey: DONE_GROUP,
+      label: 'Done',
+      count: Math.max(done.count, done.items.length),
+      collapsed: !done.open,
+      loaded: done.items.length,
+    },
+  ]
+  if (done.open) {
+    const seen = new Set<string>()
+    for (const item of done.items) {
+      if (seen.has(item.id)) continue
+      seen.add(item.id)
+      section.push({ kind: 'task', key: `${DONE_GROUP}:${item.id}`, groupKey: DONE_GROUP, item })
+    }
+    if (done.hasMore) section.push({ kind: 'loading', key: DONE_LOADING })
+  }
+  return [...rows, ...section]
+}

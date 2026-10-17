@@ -27,6 +27,8 @@ export type ListState = {
   savedView: string | null
   /** List columns to show; every column when null. */
   fields: string[] | null
+  /** Done and canceled work is open below the rest (list) or as columns (board), not tucked behind its toggle. */
+  showDone: boolean
 }
 
 export const SORTS: Array<{ value: WorkItemSort; label: string }> = [
@@ -136,6 +138,7 @@ export function readListState(parameters: URLSearchParams): ListState {
     task: task && task.length <= 100 ? task : null,
     savedView: savedView && ID.test(savedView) ? savedView : null,
     fields: fields === null ? null : fields.split(',').filter((field) => VIEW_FIELDS.includes(field)),
+    showDone: parameters.get('showDone') === 'true',
   }
 }
 
@@ -154,6 +157,7 @@ export function writeListState(state: ListState): URLSearchParams {
   if (state.lanes !== 'none') parameters.set('lanes', state.lanes)
   if (state.task) parameters.set('task', state.task)
   if (state.fields) parameters.set('fields', state.fields.join(','))
+  if (state.showDone) parameters.set('showDone', 'true')
   if (state.savedView) parameters.set('savedView', state.savedView)
   return parameters
 }

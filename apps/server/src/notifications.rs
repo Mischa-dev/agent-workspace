@@ -396,25 +396,70 @@ struct MentionRow {
     recipient_actor_id: Uuid,
 }
 
+/// A conversation with more people than this who can see it takes an owner
+/// or admin of its project to notify everyone.
+const EVERYONE_OPEN_LIMIT: i64 = 50;
+
+/// The people a message mentions: everyone it names, and for `@everyone` or
+/// `@here`, every person who can see the conversation. Agents are only ever
+/// named; the reply rules decide whether a message wakes them.
 async fn message_mentions(
     transaction: &mut Transaction<'_, Postgres>,
     message_id: Uuid,
 ) -> Result<Vec<NewNotification>, AppError> {
     let rows = sqlx::query_as::<_, MentionRow>(
         r#"
+        WITH message AS (
+            SELECT id, project_id, conversation_id, author_actor_id, content
+            FROM messages
+            WHERE id = $1 AND removed_at IS NULL
+        ),
+        named AS (
+            SELECT mention.actor_id
+            FROM message
+            JOIN message_mentions mention ON mention.message_id = message.id
+        ),
+        everyone AS (
+            SELECT membership.actor_id
+            FROM message
+            JOIN project_memberships membership
+              ON membership.project_id = message.project_id AND membership.enabled
+            JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human'
+            -- Written in the text itself, so a person whose handle happens
+            -- to be "everyone" is still only a mention of them.
+            WHERE EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(message.content -> 'nodes') node
+                    WHERE node ->> 'type' = 'text' AND node ->> 'text' ~* $2
+                  )
+              AND conversation_visible_to(message.conversation_id, membership.actor_id)
+        ),
+        everyone_allowed AS (
+            SELECT actor_id FROM everyone
+            WHERE (SELECT count(*) FROM everyone) <= $3
+               OR EXISTS (
+                   SELECT 1
+                   FROM message
+                   JOIN project_memberships author
+                     ON author.project_id = message.project_id
+                    AND author.actor_id = message.author_actor_id
+                    AND author.enabled
+                   WHERE author.role IN ('owner', 'admin')
+               )
+        )
         SELECT message.project_id, message.conversation_id, message.author_actor_id,
-               mention.actor_id AS recipient_actor_id
-        FROM message_mentions mention
-        JOIN messages message ON message.id = mention.message_id
-        WHERE mention.message_id = $1
-          AND message.removed_at IS NULL
-          AND mention.actor_id <> message.author_actor_id
-          AND actor_can_access_project(mention.actor_id, NULL, message.project_id)
-          AND conversation_visible_to(message.conversation_id, mention.actor_id)
-        ORDER BY mention.actor_id
+               recipient.actor_id AS recipient_actor_id
+        FROM message
+        JOIN (SELECT actor_id FROM named UNION SELECT actor_id FROM everyone_allowed) recipient
+          ON recipient.actor_id <> message.author_actor_id
+        WHERE actor_can_access_project(recipient.actor_id, NULL, message.project_id)
+          AND conversation_visible_to(message.conversation_id, recipient.actor_id)
+        ORDER BY recipient.actor_id
         "#,
     )
     .bind(message_id)
+    .bind(crate::message_content::EVERYONE_MENTION_PATTERN)
+    .bind(EVERYONE_OPEN_LIMIT)
     .fetch_all(&mut **transaction)
     .await?;
     Ok(rows

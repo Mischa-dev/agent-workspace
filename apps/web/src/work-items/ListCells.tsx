@@ -108,3 +108,16 @@ export function GroupHeader({
     </button>
   )
 }
+
+/** The row at the bottom of the list that opens and closes the done section. */
+export function DoneToggle({ count, onToggle, open }: { count: number; onToggle: () => void; open: boolean }) {
+  return (
+    <button aria-expanded={open} className="aw-tasks__group aw-tasks__donetoggle" onClick={onToggle} tabIndex={-1} type="button">
+      <Icon className={open ? 'aw-tasks__chevron is-open' : 'aw-tasks__chevron'} name="chevron-right" size={14} />
+      <StatusIcon category="completed" />
+      <span className="aw-tasks__grouplabel">
+        {open ? 'Hide done' : 'Show done'} ({count.toLocaleString()})
+      </span>
+    </button>
+  )
+}

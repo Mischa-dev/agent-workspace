@@ -2,6 +2,12 @@
 // Mirrors src/theme/preferences.ts and src/theme/slots.ts; keep the three in step.
 ;(function () {
   var presets = ['indigo', 'midnight', 'daylight', 'evergreen', 'graphite']
+  // Classic presets live in their own stylesheet, loaded only for people who use one.
+  var classic = [
+    'nord', 'dracula', 'gruvbox-dark', 'solarized-dark', 'catppuccin-frappe', 'catppuccin-macchiato',
+    'catppuccin-mocha', 'tokyo-night', 'one-dark', 'rose-pine', 'github-dark', 'monokai',
+    'gruvbox-light', 'solarized-light', 'catppuccin-latte', 'rose-pine-dawn', 'github-light',
+  ]
   var derived = {
     'rail-tile': 'color-mix(in oklch, var(--rail-fg) 12%, var(--rail-bg))',
     'sidebar-hover': 'color-mix(in oklch, var(--sidebar-fg-strong) 9%, var(--sidebar-bg))',
@@ -33,7 +39,11 @@
   if (theme === 'system') {
     theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'indigo'
   }
-  root.setAttribute('data-theme', presets.indexOf(theme) >= 0 ? theme : 'indigo')
+  if (classic.indexOf(theme) >= 0) {
+    // Written by the parser, so the stylesheet holds the first paint and nothing flashes in Indigo.
+    document.write('<link rel="stylesheet" href="/themes/classic.css" data-classic-themes>')
+  }
+  root.setAttribute('data-theme', presets.indexOf(theme) >= 0 || classic.indexOf(theme) >= 0 ? theme : 'indigo')
   root.setAttribute('data-density', saved.density === 'compact' ? 'compact' : 'comfortable')
   root.setAttribute('data-text-size', saved.textSize === 'small' || saved.textSize === 'large' ? saved.textSize : 'default')
   var overrides = saved.overrides && typeof saved.overrides === 'object' ? saved.overrides : {}

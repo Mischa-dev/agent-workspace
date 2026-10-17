@@ -1337,3 +1337,112 @@ async fn a_fresh_project_gets_its_worker_when_someone_connects_codex() {
         "{workers}"
     );
 }
+
+/// project_create goes through the same command as the web app: the person
+/// who asks owns the new project, retries return it, and agents and
+/// read-only apps can't create projects.
+#[tokio::test]
+async fn people_create_projects_through_their_apps() {
+    let Some(setup) = setup("mcp_project_create").await else {
+        return;
+    };
+    let app = &setup.app;
+    let space = send(
+        app,
+        setup
+            .browser
+            .request("GET", "/api/v1/direct", None, Value::Null),
+    )
+    .await
+    .1["projectId"]
+        .as_str()
+        .expect("space")
+        .to_owned();
+    let (_mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let reader = connect_app(app, &setup.browser, "Reader", "read").await;
+    let reader_session = initialize(app, &reader).await.expect("Reader MCP");
+    let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
+
+    for (token, session) in [(&mara_token, &mara_session), (&reader, &reader_session)] {
+        let refused = tool(
+            app,
+            token,
+            session,
+            "project_create",
+            json!({"key": "NOPE", "name": "Not allowed"}),
+        )
+        .await;
+        assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    }
+    let bad_key = tool(
+        app,
+        &codex,
+        &session,
+        "project_create",
+        json!({"key": "1x", "name": "Bad key"}),
+    )
+    .await;
+    assert_eq!(bad_key["outcome"], "invalid_request", "{bad_key}");
+
+    let created = tool(
+        app,
+        &codex,
+        &session,
+        "project_create",
+        json!({"key": "web", "name": "Website"}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    assert_eq!(created["value"]["key"], "WEB");
+    assert_eq!(created["value"]["name"], "Website");
+    let project_id = created["value"]["id"].as_str().expect("project").to_owned();
+
+    // A retry returns the same project; another name with that key is refused.
+    let retried = tool(
+        app,
+        &codex,
+        &session,
+        "project_create",
+        json!({"key": "WEB", "name": "Website"}),
+    )
+    .await;
+    assert_eq!(retried["value"]["id"], project_id.as_str(), "{retried}");
+    let taken = tool(
+        app,
+        &codex,
+        &session,
+        "project_create",
+        json!({"key": "WEB", "name": "Something else"}),
+    )
+    .await;
+    assert_eq!(taken["outcome"], "conflict", "{taken}");
+
+    // It lands in the caller's own workspace, the caller owns it, and it has
+    // the default workflow like a web-made one.
+    let organization: Uuid =
+        sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(Uuid::parse_str(&project_id).expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("project");
+    assert_eq!(organization, setup.organization_id);
+    let role: String = sqlx::query_scalar(
+        "SELECT membership.role FROM project_memberships membership JOIN users u ON u.actor_id = membership.actor_id WHERE membership.project_id = $1 AND u.login_name = 'owner'",
+    )
+    .bind(Uuid::parse_str(&project_id).expect("id"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("owner membership");
+    assert_eq!(role, "owner");
+    let workflow = tool(
+        app,
+        &codex,
+        &session,
+        "workflow_get",
+        json!({"projectId": "WEB"}),
+    )
+    .await;
+    assert_eq!(workflow["outcome"], "ok", "{workflow}");
+}
