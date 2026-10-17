@@ -400,6 +400,8 @@ export function ChannelPage() {
 
       {canPost ? (
         <StructuredComposer
+          autoFocus={searchParams.get('compose') === '1'}
+          draftKey={channelId}
           label={`Message #${name}`}
           onSubmit={sendMessage}
           placeholder={`Message #${name}`}

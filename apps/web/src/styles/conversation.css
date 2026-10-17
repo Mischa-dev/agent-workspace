@@ -837,6 +837,46 @@ h2.aw-card__title {
   color: var(--danger);
 }
 
+/* Messages that couldn't be sent for want of a connection (W18). */
+.aw-composer__queued {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-composer__queued-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-ui);
+}
+
+.aw-composer__queued-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--content-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-composer__queued-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-caption);
+}
+
 .aw-composer.is-disabled {
   flex-direction: row;
   align-items: center;

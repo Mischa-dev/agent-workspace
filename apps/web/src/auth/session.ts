@@ -10,6 +10,7 @@ import {
 } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { clearLocalDrafts } from '../app/localDrafts'
 import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
@@ -166,8 +167,10 @@ export async function getSession() {
   )
 }
 
-export function logout() {
-  return requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
+export async function logout() {
+  await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
+  // Drafts and unsent messages stay on this device only while signed in.
+  clearLocalDrafts()
 }
 
 export function useSession() {

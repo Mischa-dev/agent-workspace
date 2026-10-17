@@ -29,7 +29,7 @@ use super::{
 
 /// The dev seed (project AW with a worker, profile and repository) with
 /// its person signed in as "owner".
-async fn seeded(prefix: &str) -> Option<(Setup, DevSeed, tempfile::TempDir)> {
+pub(super) async fn seeded(prefix: &str) -> Option<(Setup, DevSeed, tempfile::TempDir)> {
     seeded_through(prefix, i64::MAX).await
 }
 
@@ -133,7 +133,7 @@ async fn execute(pool: &PgPool, sql: &str, binds: &[Uuid]) {
 }
 
 /// A thread under `channel` about the seed repository.
-async fn thread(pool: &PgPool, seed: &DevSeed, channel: Uuid, name: &str) -> Uuid {
+pub(super) async fn thread(pool: &PgPool, seed: &DevSeed, channel: Uuid, name: &str) -> Uuid {
     let id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO conversations (id, project_id, kind, parent_channel_id, repository_id, name) VALUES ($1, $2, 'thread', $3, $4, $5)",
@@ -151,7 +151,7 @@ async fn thread(pool: &PgPool, seed: &DevSeed, channel: Uuid, name: &str) -> Uui
 
 /// A queued run by the seed person in `thread`, with its branch. Returns
 /// the run and its workspace.
-async fn run(pool: &PgPool, seed: &DevSeed, thread: Uuid, branch: &str) -> (Uuid, Uuid) {
+pub(super) async fn run(pool: &PgPool, seed: &DevSeed, thread: Uuid, branch: &str) -> (Uuid, Uuid) {
     let workspace = Uuid::now_v7();
     sqlx::query(
         r#"

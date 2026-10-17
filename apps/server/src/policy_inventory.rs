@@ -27,6 +27,10 @@ pub enum MutationAction {
     GithubWebhook,
     /// Browser error reports: counted and logged, never stored.
     ClientTelemetry,
+    /// A button on a person's own push notification, carrying a short-lived
+    /// token from that push. The command it runs is authorized as that
+    /// person, exactly as in the app.
+    NotificationActionToken,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -725,6 +729,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/push/subscriptions/{id}/test",
         SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Post,
+        "/api/v1/notification-actions",
+        NotificationActionToken
     ),
     boundary_route!(
         "usage",

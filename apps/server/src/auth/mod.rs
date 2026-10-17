@@ -647,13 +647,13 @@ pub(crate) fn normalize_login_name(value: &str) -> Result<String, AppError> {
     Ok(value.to_ascii_lowercase())
 }
 
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut bytes = [0_u8; SESSION_TOKEN_BYTES];
     OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn hash_secret(value: &str) -> [u8; 32] {
+pub(crate) fn hash_secret(value: &str) -> [u8; 32] {
     Sha256::digest(value.as_bytes()).into()
 }
 
