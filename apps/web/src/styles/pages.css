@@ -73,8 +73,10 @@
 
 .aw-pagehead__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   flex: none;
+  max-width: 100%;
 }
 
 .aw-pagesection {

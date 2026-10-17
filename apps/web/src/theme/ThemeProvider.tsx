@@ -41,7 +41,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     syncThemeColor()
   }, [preferences, preset])
 
-  const value = useMemo<ThemeContextValue>(() => {
+  // The setters never change, so effects that depend on them (AppearanceSync
+  // applying the account's copy) don't re-run, and undo a choice, on every change.
+  const actions = useMemo(() => {
     // Functional updates, so two changes in one event (a pasted theme code
     // sets the preset and then the colors) both land.
     const update = (change: (current: AppearancePreferences) => AppearancePreferences) => {
@@ -56,17 +58,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       })
     }
     return {
-      ...preferences,
-      preset,
-      setTheme: (theme) =>
+      setTheme: (theme: AppearancePreferences['theme']) =>
         update((current) => ({ ...current, theme, overrides: theme === current.theme ? current.overrides : {} })),
-      setOverrides: (overrides) => update((current) => ({ ...current, overrides })),
-      setDensity: (density) => update((current) => ({ ...current, density })),
-      setTextSize: (textSize) => update((current) => ({ ...current, textSize })),
+      setOverrides: (overrides: AppearancePreferences['overrides']) => update((current) => ({ ...current, overrides })),
+      setDensity: (density: AppearancePreferences['density']) => update((current) => ({ ...current, density })),
+      setTextSize: (textSize: AppearancePreferences['textSize']) => update((current) => ({ ...current, textSize })),
       resetAppearance: () => update(() => DEFAULT_APPEARANCE),
-      replaceAppearance: (next) => update(() => next),
+      replaceAppearance: (next: AppearancePreferences) => update(() => next),
     }
-  }, [preferences, preset])
+  }, [])
+  const value = useMemo<ThemeContextValue>(() => ({ ...preferences, preset, ...actions }), [preferences, preset, actions])
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }

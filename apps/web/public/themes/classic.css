@@ -4,9 +4,12 @@
    stylesheet stays lean. Where a palette color misses a contrast floor in
    CONTRAST_PAIRS it is nudged toward white or black just far enough to pass;
    src/theme/presets.test.ts checks every preset. Keep the ids in step with
-   THEME_PRESETS in src/theme/slots.ts and the list in theme-boot.js. */
+   THEME_PRESETS in src/theme/slots.ts and the list in theme-boot.js.
+   html[data-theme] outranks tokens.css's :root, which loads after this file;
+   the bare [data-theme] rule colors the Appearance page's previews. */
 
 /* Nord: nordtheme.com */
+html[data-theme="nord"],
 [data-theme="nord"] {
   color-scheme: dark;
   --rail-bg: #242933;
@@ -60,6 +63,7 @@
 }
 
 /* Dracula: draculatheme.com/spec */
+html[data-theme="dracula"],
 [data-theme="dracula"] {
   color-scheme: dark;
   --rail-bg: #191a21;
@@ -113,6 +117,7 @@
 }
 
 /* Gruvbox Dark: github.com/morhetz/gruvbox */
+html[data-theme="gruvbox-dark"],
 [data-theme="gruvbox-dark"] {
   color-scheme: dark;
   --rail-bg: #1d2021;
@@ -166,6 +171,7 @@
 }
 
 /* Gruvbox Light: github.com/morhetz/gruvbox */
+html[data-theme="gruvbox-light"],
 [data-theme="gruvbox-light"] {
   color-scheme: light;
   --rail-bg: #d5c4a1;
@@ -219,6 +225,7 @@
 }
 
 /* Solarized Dark: ethanschoonover.com/solarized */
+html[data-theme="solarized-dark"],
 [data-theme="solarized-dark"] {
   color-scheme: dark;
   --rail-bg: #001e26;
@@ -272,6 +279,7 @@
 }
 
 /* Solarized Light: ethanschoonover.com/solarized */
+html[data-theme="solarized-light"],
 [data-theme="solarized-light"] {
   color-scheme: light;
   --rail-bg: #e4ddc8;
@@ -325,6 +333,7 @@
 }
 
 /* Catppuccin Latte: catppuccin.com/palette */
+html[data-theme="catppuccin-latte"],
 [data-theme="catppuccin-latte"] {
   color-scheme: light;
   --rail-bg: #dce0e8;
@@ -378,6 +387,7 @@
 }
 
 /* Catppuccin Frappé: catppuccin.com/palette */
+html[data-theme="catppuccin-frappe"],
 [data-theme="catppuccin-frappe"] {
   color-scheme: dark;
   --rail-bg: #232634;
@@ -431,6 +441,7 @@
 }
 
 /* Catppuccin Macchiato: catppuccin.com/palette */
+html[data-theme="catppuccin-macchiato"],
 [data-theme="catppuccin-macchiato"] {
   color-scheme: dark;
   --rail-bg: #181926;
@@ -484,6 +495,7 @@
 }
 
 /* Catppuccin Mocha: catppuccin.com/palette */
+html[data-theme="catppuccin-mocha"],
 [data-theme="catppuccin-mocha"] {
   color-scheme: dark;
   --rail-bg: #11111b;
@@ -537,6 +549,7 @@
 }
 
 /* Tokyo Night: github.com/folke/tokyonight.nvim */
+html[data-theme="tokyo-night"],
 [data-theme="tokyo-night"] {
   color-scheme: dark;
   --rail-bg: #101014;
@@ -590,6 +603,7 @@
 }
 
 /* One Dark: github.com/atom/atom one-dark-syntax */
+html[data-theme="one-dark"],
 [data-theme="one-dark"] {
   color-scheme: dark;
   --rail-bg: #1b1d23;
@@ -643,6 +657,7 @@
 }
 
 /* Rosé Pine: rosepinetheme.com/palette */
+html[data-theme="rose-pine"],
 [data-theme="rose-pine"] {
   color-scheme: dark;
   --rail-bg: #191724;
@@ -696,6 +711,7 @@
 }
 
 /* Rosé Pine Dawn: rosepinetheme.com/palette */
+html[data-theme="rose-pine-dawn"],
 [data-theme="rose-pine-dawn"] {
   color-scheme: light;
   --rail-bg: #f2e9e1;
@@ -749,6 +765,7 @@
 }
 
 /* GitHub Light: primer.style/primitives */
+html[data-theme="github-light"],
 [data-theme="github-light"] {
   color-scheme: light;
   --rail-bg: #eaeef2;
@@ -802,6 +819,7 @@
 }
 
 /* GitHub Dark: primer.style/primitives */
+html[data-theme="github-dark"],
 [data-theme="github-dark"] {
   color-scheme: dark;
   --rail-bg: #010409;
@@ -855,6 +873,7 @@
 }
 
 /* Monokai: monokai.pro (classic Monokai by Wimer Hazenberg) */
+html[data-theme="monokai"],
 [data-theme="monokai"] {
   color-scheme: dark;
   --rail-bg: #191a17;
