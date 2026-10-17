@@ -78,6 +78,8 @@ pub enum Category {
     Tasks,
     Runs,
     PullRequests,
+    /// Capacity alerts about your provider accounts (W9).
+    Usage,
 }
 
 impl Category {
@@ -93,6 +95,7 @@ impl Category {
                 kind::RUN_FAILED,
             ]),
             Self::PullRequests => Some(&[kind::CHECKS_FAILED, kind::REVIEW_REQUESTED]),
+            Self::Usage => Some(crate::usage::alerts::kind::ALL),
         }
     }
 }
@@ -220,13 +223,26 @@ pub async fn deliver(
     if !first {
         return Ok(false);
     }
+    // N4: a muted project or group writes nothing; in-app off but push on
+    // writes the row straight to the archive, for the push to open.
+    let decision = crate::notification_settings::decide(
+        transaction,
+        notification.recipient_actor_id,
+        notification.project_id,
+        notification.kind,
+    )
+    .await?;
+    if decision.nothing() {
+        return Ok(false);
+    }
     let notification_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO notifications (
             id, project_id, recipient_actor_id, kind, subject_kind, subject_id,
             actor_id, conversation_id, message_id, work_item_id, comment_id,
-            agent_run_id, approval_id, pull_request_id, detail, group_key
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            agent_run_id, approval_id, pull_request_id, detail, group_key, archived_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                  CASE WHEN $17 THEN NULL ELSE now() END)
         ON CONFLICT (recipient_actor_id, group_key) WHERE archived_at IS NULL
         DO UPDATE SET
             kind = EXCLUDED.kind,
@@ -259,8 +275,24 @@ pub async fn deliver(
     .bind(notification.pull_request_id)
     .bind(&notification.detail)
     .bind(&notification.group_key)
+    .bind(decision.in_app)
     .fetch_one(&mut **transaction)
     .await?;
+    if decision.push {
+        let organization_id =
+            sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+                .bind(notification.project_id)
+                .fetch_one(&mut **transaction)
+                .await?;
+        crate::push::enqueue_delivery(
+            transaction,
+            organization_id,
+            notification_id,
+            notification.recipient_actor_id,
+            &notification.dedupe_key,
+        )
+        .await?;
+    }
     sqlx::query(
         r#"
         INSERT INTO notification_occurrences (
@@ -342,7 +374,7 @@ pub async fn fan_out(
 }
 
 /// Tells the recipient's open browsers their notifications changed.
-async fn announce(
+pub(crate) async fn announce(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     actor_id: Uuid,
@@ -904,6 +936,10 @@ const VISIBLE: &str = r#"
     actor_can_access_project($1, NULL, n.project_id)
     AND (n.conversation_id IS NULL OR conversation_visible_to(n.conversation_id, $1))
     AND (n.pull_request_id IS NULL OR pull_request_visible_to(n.pull_request_id, $1))
+    AND (n.subject_kind <> 'provider_account' OR EXISTS (
+        SELECT 1 FROM provider_accounts account
+        WHERE account.id = n.subject_id AND account.owner_actor_id = $1
+    ))
 "#;
 
 #[derive(Clone, Debug, Default)]
@@ -946,6 +982,10 @@ pub struct NotificationView {
     /// Set when the notification is about an approval that can be answered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalView>,
+    /// Where its Launch action goes, for notifications that have one (a
+    /// capacity alert opens the account's ready tasks).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_href: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1361,11 +1401,29 @@ fn view(row: NotificationRow) -> NotificationView {
         }),
         _ => None,
     };
+    let launch_href = row
+        .detail
+        .get("launchHref")
+        .and_then(serde_json::Value::as_str)
+        .filter(|href| href.starts_with('/'))
+        .map(str::to_owned);
+    // Kinds that belong to no project (capacity alerts) name their place.
+    let project_name = row
+        .detail
+        .get("place")
+        .and_then(serde_json::Value::as_str)
+        .filter(|place| !place.is_empty())
+        .map_or(row.project_name, str::to_owned);
+    let subject_title = if row.subject_kind == "provider_account" {
+        project_name.clone()
+    } else {
+        subject_title
+    };
     NotificationView {
         id: row.id,
         kind: row.kind,
         project_id: row.project_id,
-        project_name: row.project_name,
+        project_name,
         subject: SubjectView {
             kind: row.subject_kind,
             id: row.subject_id,
@@ -1385,6 +1443,7 @@ fn view(row: NotificationRow) -> NotificationView {
         created_at: row.created_at,
         href,
         approval,
+        launch_href,
     }
 }
 
