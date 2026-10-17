@@ -14,7 +14,10 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
     then moving it on the board: Backlog → Ready with the keyboard (Space,
     an arrow, Space), Ready → In Progress by dragging, and checking it's still
     there after a reload
-- `screenshots.spec.ts`: Home, a Project channel, the work item list and
+- `whiteboards.spec.ts`: creating a whiteboard, drawing a rectangle on it,
+  seeing a second tab on the same board pull the change from the live stream,
+  and finding it still there after a reload
+- `screenshots.spec.ts`: Home, Whiteboards, a Project channel, the work item list and
   board, Appearance, Webhooks, API reference and Automation rules settings, each in light and dark ("Match system" with
   the browser's color scheme). Each page must render without uncaught errors
   and resolve to the expected theme. The PNGs land in

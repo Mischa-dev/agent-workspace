@@ -70,6 +70,7 @@ pub mod storage_admission;
 pub mod telemetry;
 pub mod usage;
 pub mod webhooks;
+pub mod whiteboards;
 pub mod work_item_commands;
 pub mod work_item_history;
 pub mod work_item_labels;
@@ -152,6 +153,7 @@ pub fn router(state: AppState) -> Router {
         .merge(work_items::router())
         .merge(ai::http::router())
         .merge(memory::router())
+        .merge(whiteboards::router())
         .merge(search::router())
         .merge(connected_apps::router())
         .merge(settings::router())
@@ -192,10 +194,12 @@ pub fn router(state: AppState) -> Router {
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
         // worker-src allows only the app's own service worker (/sw.js), which
         // makes it installable and caches the built app shell, never API data.
+        // img-src allows blob: for images the page makes itself: a whiteboard
+        // shrinks a dropped photo through one before saving it.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
-                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; worker-src 'self'",
+                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self'",
             ),
         ))
         // Browsers only honor this over HTTPS, so it is harmless on loopback.

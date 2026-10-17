@@ -244,3 +244,22 @@ export function terminalAgentRunId(
   if (!terminal) return null
   return uuid(field(event.payload, 'agentRunId', 'agent_run_id'))
 }
+
+/** A board that changed, from a whiteboard.updated event. */
+export function whiteboardChange(
+  event: Pick<RealtimeEnvelope, 'type' | 'payload'>,
+): { whiteboardId: string; sceneSeq: number; version: number } | null {
+  if (event.type !== 'whiteboard.updated') return null
+  const whiteboardId = uuid(field(event.payload, 'whiteboardId', 'whiteboard_id'))
+  const sceneSeq = field(event.payload, 'sceneSeq', 'scene_seq')
+  const version = event.payload.version
+  if (
+    !whiteboardId ||
+    !Number.isSafeInteger(sceneSeq) ||
+    (sceneSeq as number) < 0 ||
+    !Number.isSafeInteger(version)
+  ) {
+    return null
+  }
+  return { whiteboardId, sceneSeq: sceneSeq as number, version: version as number }
+}

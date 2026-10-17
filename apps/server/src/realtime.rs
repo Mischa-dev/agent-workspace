@@ -85,6 +85,20 @@ impl RealtimeDelivery {
         }
     }
 
+    /// The board a `whiteboard.updated` event is about. Those events are
+    /// delivered by board visibility, not by membership of the envelope's
+    /// project (see `event_is_authorized`).
+    fn whiteboard_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Durable { envelope } if envelope.event_type == "whiteboard.updated" => envelope
+                .payload
+                .get("whiteboardId")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok()),
+            _ => None,
+        }
+    }
+
     fn is_visible_to_actor(&self, actor_id: Uuid) -> bool {
         self.recipient_actor_id()
             .is_none_or(|recipient_actor_id| recipient_actor_id == actor_id)
@@ -197,10 +211,14 @@ impl OutboxPublisher for RealtimeHub {
                 | "work_item.updated"
                 | "project.membership.updated"
                 | "notifications.updated"
+                | "whiteboard.updated"
         );
         let project_scoped_event = matches!(
             envelope.event_type.as_str(),
-            "work_item.updated" | "project.membership.updated" | "notifications.updated"
+            "work_item.updated"
+                | "project.membership.updated"
+                | "notifications.updated"
+                | "whiteboard.updated"
         );
         let invalid_conversation_scope = if project_scoped_event {
             envelope.conversation_id.is_some() || envelope.payload.get("conversationId").is_some()
@@ -226,6 +244,13 @@ impl OutboxPublisher for RealtimeHub {
             || envelope.conversation_id.is_some_and(|id| id.is_nil())
             || invalid_conversation_scope
             || invalid_membership_project_scope
+            || (envelope.event_type == "whiteboard.updated"
+                && envelope
+                    .payload
+                    .get("whiteboardId")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .is_none_or(|id| id.is_nil()))
             || envelope
                 .recipient_actor_id
                 .is_some_and(|actor_id| actor_id.is_nil())
@@ -454,6 +479,12 @@ async fn event_is_authorized(
 ) -> Result<bool, AppError> {
     if !event.is_visible_to_actor(principal.actor_id) {
         return Ok(false);
+    }
+    // A workspace's boards aren't in a project people belong to, so their
+    // events go to whoever can see the board right now.
+    if let Some(whiteboard_id) = event.whiteboard_id() {
+        return crate::whiteboards::visible_to(&state.pool, whiteboard_id, principal.actor_id)
+            .await;
     }
     let membership = sqlx::query_as::<_, RealtimeMembership>(
         r#"

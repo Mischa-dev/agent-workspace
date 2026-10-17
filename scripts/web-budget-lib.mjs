@@ -32,7 +32,18 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   chunkJavascriptGzipBytes: 18 * 1024,
   // Any stylesheet a lazy chunk loads.
   chunkCssRawBytes: 32 * 1024,
+  // Whiteboards draw with Excalidraw, which apps/web/vite.config.ts puts under
+  // assets/whiteboard/ with everything only it pulls in. Nothing else loads
+  // them. Opening a board fetches its canvas (550,932 raw / 162,306 gzip) and
+  // one shared chunk (532,641 / 175,934); the rest load only when a board
+  // uses them. The largest, the font subsetter for exports, is 1,821,039 raw /
+  // 735,032 gzip; its stylesheet is 142,020. Excalidraw 0.18.1, October 2026.
+  whiteboardChunkJavascriptRawBytes: 1792 * 1024,
+  whiteboardChunkJavascriptGzipBytes: 720 * 1024,
+  whiteboardChunkCssRawBytes: 140 * 1024,
 })
+
+const WHITEBOARD_PREFIX = 'assets/whiteboard/'
 
 export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
   const files = walkRegularFiles(distRoot).map((absolutePath) => {
@@ -62,14 +73,15 @@ export function measureWebAssets(distRoot, limits = WEB_ASSET_LIMITS) {
     }
   }
   const chunkChecks = [
-    [javascript, 'bytes', 'chunkJavascriptRawBytes'],
-    [javascript, 'gzipBytes', 'chunkJavascriptGzipBytes'],
-    [css, 'bytes', 'chunkCssRawBytes'],
+    [javascript, 'bytes', 'chunkJavascriptRawBytes', 'whiteboardChunkJavascriptRawBytes'],
+    [javascript, 'gzipBytes', 'chunkJavascriptGzipBytes', 'whiteboardChunkJavascriptGzipBytes'],
+    [css, 'bytes', 'chunkCssRawBytes', 'whiteboardChunkCssRawBytes'],
   ]
-  for (const [records, key, name] of chunkChecks) {
-    const limit = limits[name]
-    if (limit === undefined) continue
+  for (const [records, key, chunkName, whiteboardName] of chunkChecks) {
     for (const record of records) {
+      const name = record.file.startsWith(WHITEBOARD_PREFIX) && limits[whiteboardName] !== undefined ? whiteboardName : chunkName
+      const limit = limits[name]
+      if (limit === undefined) continue
       if (!isInitial(record) && record[key] > limit) {
         violations.push({ name, file: record.file, observed: record[key], limit })
       }

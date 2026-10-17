@@ -24,6 +24,10 @@ export type TaskLayout = 'panel' | 'page'
 
 // Readiness, AI suggestions and summaries load in their own chunk.
 const TaskAiPanel = lazy(() => import('../ai/TaskAiPanel'))
+// The boards on this task load in the whiteboards' own small chunk.
+const LinkedWhiteboards = lazy(() =>
+  import('../whiteboards/LinkedWhiteboards').then((module) => ({ default: module.LinkedWhiteboards })),
+)
 
 /**
  * A task, loaded by id: the side panel on the list and board, and the body of
@@ -181,6 +185,9 @@ function TaskDetailBody({
         <TaskDependencies disabled={disabled} item={item} onOpen={onOpenTask} save={save} />
         <AcceptanceCriteria disabled={disabled} item={item} />
         <TaskLinks disabled={disabled} item={item} />
+        <Suspense fallback={null}>
+          <LinkedWhiteboards canEdit={!disabled} projectId={item.projectId} targetId={item.id} targetKind="task" />
+        </Suspense>
         <TaskActivity disabled={disabled} item={item} />
       </div>
       {managingLabels ? <LabelManager onClose={() => setManagingLabels(false)} projectId={item.projectId} /> : null}
