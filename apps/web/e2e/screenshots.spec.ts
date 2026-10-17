@@ -17,6 +17,11 @@ const keyPages: KeyPage[] = [
     path: () => '/home',
     ready: (page) => expect(page.getByRole('heading', { name: `Welcome back, ${seeded.displayName}` })).toBeVisible(),
   },
+  {
+    name: 'welcome',
+    path: () => '/welcome',
+    ready: (page) => expect(page.getByRole('navigation', { name: 'Setup steps' })).toBeVisible(),
+  },
   // Before the Project's own pages: opening a Project returns to the last page
   // seen in it, and the smoke test expects that to be one with the sidebar.
   {

@@ -181,6 +181,7 @@ export function SignInPage() {
       footer={
         <>
           Existing account? You can link WorkOS from Account settings after signing in.
+          {' '}Forgot your password? Whoever runs this server can reset it for you.
         </>
       }
       intro="Welcome back. Your conversations and agents are waiting."

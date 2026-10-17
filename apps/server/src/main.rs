@@ -28,6 +28,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect to PostgreSQL")?;
 
+    // Before anything that changes the database: the release script runs this
+    // with a new build to see whether it can take over.
+    if std::env::args().nth(1).as_deref() == Some("preflight") {
+        let report = agent_workspace_server::preflight::run(&config, &pool).await?;
+        report.print();
+        if report.failed() {
+            bail!("preflight found problems; the release was not switched");
+        }
+        return Ok(());
+    }
+
     let migration_preflight = migration_preflight::prepare_m3_upgrade(&pool, &config)
         .await
         .context("prepare legacy data for M3 migration")?;

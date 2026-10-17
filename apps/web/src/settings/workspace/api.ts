@@ -102,6 +102,10 @@ export const workspaceKeys = {
   audit: (organizationId: string, filters: AuditFilters) => ['organization', organizationId, 'audit', 'events', filters] as const,
 }
 
+/** Which server build is running: the release script stamps the commit. */
+export type ServerVersion = { version: string; commit: string }
+export const getServerVersion = () => requestJson<ServerVersion>('/health/version')
+
 export const getWorkspace = (organizationId: string) => requestJson<Workspace>(base(organizationId))
 
 export const renameWorkspace = (organizationId: string, name: string, expectedVersion: number) =>
