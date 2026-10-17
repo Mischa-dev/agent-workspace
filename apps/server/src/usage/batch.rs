@@ -676,9 +676,14 @@ mod tests {
             window("primary", 30, Duration::hours(2), false),
             window("full", 0, Duration::minutes(10), true),
         ];
-        assert_eq!(sizing_window(&windows, None, now).unwrap().key, "primary");
         assert_eq!(
-            sizing_window(&windows, Some("weekly"), now).unwrap().key,
+            sizing_window(&windows, None, now).expect("a window").key,
+            "primary"
+        );
+        assert_eq!(
+            sizing_window(&windows, Some("weekly"), now)
+                .expect("the named window")
+                .key,
             "weekly"
         );
     }

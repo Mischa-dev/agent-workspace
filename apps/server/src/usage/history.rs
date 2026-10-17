@@ -473,13 +473,13 @@ mod tests {
         let points = (0..1000)
             .map(|minute| Point {
                 at: start + chrono::Duration::minutes(minute),
-                used_percent: u16::try_from(minute / 10).unwrap(),
+                used_percent: u16::try_from(minute / 10).expect("small"),
             })
             .collect::<Vec<_>>();
         let thinned = thin(points);
         assert!(thinned.len() <= MAX_POINTS + 1);
-        assert_eq!(thinned.first().unwrap().used_percent, 0);
-        assert_eq!(thinned.last().unwrap().used_percent, 99);
+        assert_eq!(thinned.first().expect("first").used_percent, 0);
+        assert_eq!(thinned.last().expect("last").used_percent, 99);
     }
 
     #[test]

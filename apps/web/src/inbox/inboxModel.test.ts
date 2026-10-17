@@ -19,6 +19,7 @@ const base: InboxNotification = {
   href: '/projects/p1/channels/c1',
   launchHref: null,
   approval: null,
+  batch: null,
 }
 
 describe('inbox model', () => {
