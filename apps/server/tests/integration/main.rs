@@ -55,4 +55,5 @@ mod w10_ai_planning;
 mod w11_views_and_data;
 mod w2_harness_platform;
 mod w3_tasks_http;
+mod w9_capacity_and_push;
 mod workspace_isolation;

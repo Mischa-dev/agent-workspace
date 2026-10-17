@@ -83,6 +83,7 @@ pub(crate) use task_batch::{ImportTask, create_for_import};
 mod task_drafts;
 mod task_move;
 mod tasks;
+mod usage_tools;
 mod views_data;
 mod workflow;
 mod writes;
@@ -252,6 +253,23 @@ impl McpServer {
     ) -> Json<common::ToolResult<settings_tools::SettingsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(settings_tools::settings_get(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Your provider accounts' usage: every window (a five-hour session, a week, a month, or a reset schedule you set) with percent used, percent unused and when it resets, banked resets you could spend, and how many ready tasks each account could run. Read only; schedules, alert rules and spending a banked reset happen in the app.",
+        annotations(
+            title = "Usage windows",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn usage_windows(
+        &self,
+        Parameters(arguments): Parameters<usage_tools::UsageWindowsArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<usage_tools::UsageWindowsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(usage_tools::usage_windows(&self.state, principal, arguments).await)
     }
 
     #[tool(

@@ -507,18 +507,18 @@ repository connects in three clicks without copying an ID; a new person joins
 the workspace once; and passwords, sessions and API tokens need no command
 line.
 
-#### W9. Capacity and push
+#### W9. Capacity and push (#147)
 
 *5 items · Starts when W1, W2 and W6 have merged · 2 add a migration*
 
 The first half of moment 2: every plan window tracked in the background with a
 countdown, capacity alerts, push to your phone, and notification settings.
 
-- [ ] [U1](#u1-usage-windows) Usage windows
-- [ ] [U3](#u3-capacity-alerts) Capacity alerts
-- [ ] [U6](#u6-banked-resets) Banked resets
-- [ ] [N3](#n3-push-to-phone-and-desktop) Push to phone and desktop
-- [ ] [N4](#n4-notification-settings) Notification settings
+- [x] [U1](#u1-usage-windows) Usage windows
+- [x] [U3](#u3-capacity-alerts) Capacity alerts
+- [x] [U6](#u6-banked-resets) Banked resets
+- [x] [N3](#n3-push-to-phone-and-desktop) Push to phone and desktop
+- [x] [N4](#n4-notification-settings) Notification settings
 
 **Owns:** New usage and push modules (windows, the polling job, alert rules,
 Web Push), the push handlers in `sw.js`, and the usage section of the account

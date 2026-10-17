@@ -13,7 +13,7 @@ export function invalidateInbox(queryClient: QueryClient) {
 }
 
 export type InboxView = 'inbox' | 'unread' | 'snoozed' | 'archived'
-export type InboxCategory = 'all' | 'mentions' | 'tasks' | 'runs' | 'pull_requests'
+export type InboxCategory = 'all' | 'mentions' | 'tasks' | 'runs' | 'pull_requests' | 'usage'
 export type InboxAction = 'read' | 'unread' | 'archive' | 'restore' | 'snooze' | 'unsnooze'
 
 export type InboxApproval = {
@@ -38,6 +38,8 @@ export type InboxNotification = {
   snoozedUntil: string | null
   at: string
   href: string
+  /** Capacity alerts: the ready tasks that could use the capacity. */
+  launchHref: string | null
   approval: InboxApproval | null
 }
 
@@ -62,6 +64,10 @@ export function safeHref(href: string, projectId: string): string {
   if (href.startsWith('/') && !href.startsWith('//')) return href
   if (/^https:\/\/[^/\s]+\//.test(href)) return href
   return `/projects/${encodeURIComponent(projectId)}`
+}
+
+function inAppPath(href: string | null) {
+  return href && href.startsWith('/') && !href.startsWith('//') ? href : null
 }
 
 export function isExternalHref(href: string) {
@@ -111,6 +117,7 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     snoozedUntil: text(record.snoozedUntil),
     at,
     href: safeHref(text(record.href) ?? '', projectId),
+    launchHref: inAppPath(text(record.launchHref)),
     approval: normalizeApproval(record.approval),
   }
 }

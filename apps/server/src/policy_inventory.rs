@@ -549,6 +549,68 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/inbox/update",
         SessionAuthentication
     ),
+    // Notification settings, devices and usage are the caller's own: their
+    // devices, their provider accounts (owner only), their preferences.
+    boundary_route!(
+        "notification_settings",
+        Put,
+        "/api/v1/notification-settings/channels",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "notification_settings",
+        Put,
+        "/api/v1/notification-settings/mutes",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Post,
+        "/api/v1/push/subscriptions",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Delete,
+        "/api/v1/push/subscriptions/{id}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "push",
+        Post,
+        "/api/v1/push/subscriptions/{id}/test",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/refresh",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/schedules",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Delete,
+        "/api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Put,
+        "/api/v1/usage/accounts/{account_id}/rules/{rule}",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/reset-credits/spend",
+        SessionAuthentication
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -1049,6 +1111,12 @@ mod tests {
         ("message_edits", include_str!("message_edits.rs")),
         ("reactions", include_str!("reactions.rs")),
         ("notifications", include_str!("notifications.rs")),
+        (
+            "notification_settings",
+            include_str!("notification_settings.rs"),
+        ),
+        ("push", include_str!("push.rs")),
+        ("usage", include_str!("usage.rs")),
         ("github", include_str!("github.rs")),
         ("github/connect", include_str!("github/connect.rs")),
         ("invitations", include_str!("invitations.rs")),

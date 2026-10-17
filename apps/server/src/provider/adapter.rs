@@ -109,8 +109,13 @@ pub enum HarnessEvent {
     MessageDelta(String),
     ItemStarted(HarnessItem),
     ItemCompleted(HarnessItem),
-    TurnCompleted { completed: bool },
+    TurnCompleted {
+        completed: bool,
+    },
     Request(HarnessRequest),
+    /// The harness reported fresh usage while running (U1). Sparse: windows
+    /// it leaves out keep their last reading.
+    UsageUpdated(UsageReport),
     Error,
     Ignored,
 }
@@ -172,6 +177,89 @@ pub struct RateLimitSummary {
     pub secondary: Option<RateLimitWindow>,
 }
 
+/// One usage window of an account (U1): a five-hour session, a week, a
+/// month of credits. Plans differ, so an account has whichever windows its
+/// harness reports, possibly only a weekly one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UsageWindow {
+    /// Stable for the account across reads, such as `codex.secondary`:
+    /// letters, digits and `._-`, at most 64 characters.
+    pub key: String,
+    /// The harness's own name for the limit, when it gives one.
+    pub limit_name: Option<String>,
+    pub used_percent: u16,
+    /// Unix seconds.
+    pub resets_at: Option<i64>,
+    pub duration_minutes: Option<i64>,
+    /// The harness says this limit is reached.
+    pub limit_reached: bool,
+}
+
+/// A banked reset (U6): spending one refills the account's windows now.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResetCredit {
+    /// The harness's opaque id for it.
+    pub id: String,
+    pub title: Option<String>,
+    /// Unix seconds; `None` when it doesn't expire.
+    pub expires_at: Option<i64>,
+    pub granted_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ResetCredits {
+    pub available: u32,
+    /// Detail for some or all of the available ones.
+    pub credits: Vec<ResetCredit>,
+}
+
+/// Everything a harness says about an account's usage.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UsageReport {
+    pub windows: Vec<UsageWindow>,
+    /// `None` when the harness has no banked resets.
+    pub reset_credits: Option<ResetCredits>,
+    /// The plan's name, such as `pro`, when the harness says.
+    pub plan: Option<String>,
+}
+
+impl UsageReport {
+    /// The two-window summary older harnesses report, as windows `primary`
+    /// and `secondary`.
+    pub fn from_rate_limits(summary: RateLimitSummary) -> Self {
+        let window = |key: &str, window: RateLimitWindow| UsageWindow {
+            key: key.to_owned(),
+            limit_name: None,
+            used_percent: window.used_percent,
+            resets_at: window.resets_at,
+            duration_minutes: window.window_duration_minutes,
+            limit_reached: window.used_percent >= 100,
+        };
+        Self {
+            windows: [
+                summary.primary.map(|value| window("primary", value)),
+                summary.secondary.map(|value| window("secondary", value)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            reset_credits: None,
+            plan: None,
+        }
+    }
+}
+
+/// What spending a banked reset did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetOutcome {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    /// The same attempt already went through.
+    AlreadyRedeemed,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProfileHealth {
     pub process_running: bool,
@@ -231,6 +319,27 @@ pub trait HarnessSession: Send {
     fn logout(&mut self) -> HarnessFuture<'_, ()>;
 
     fn read_rate_limits(&mut self) -> HarnessFuture<'_, RateLimitSummary>;
+
+    /// Every usage window and banked reset the harness reports (U1). The
+    /// default turns [`read_rate_limits`](Self::read_rate_limits) into
+    /// windows.
+    fn read_usage(&mut self) -> HarnessFuture<'_, UsageReport> {
+        Box::pin(async move {
+            Ok(UsageReport::from_rate_limits(
+                self.read_rate_limits().await?,
+            ))
+        })
+    }
+
+    /// Spend one banked reset (U6); `credit_id` picks which, or the harness
+    /// chooses. `idempotency_key` is the same on every retry of one attempt.
+    fn spend_reset_credit<'a>(
+        &'a mut self,
+        _credit_id: Option<&'a str>,
+        _idempotency_key: &'a str,
+    ) -> HarnessFuture<'a, ResetOutcome> {
+        Box::pin(async { Err(HarnessError::Unsupported("banked resets")) })
+    }
 
     /// The models the harness offers right now, for adapters whose manifest
     /// says they can list them.

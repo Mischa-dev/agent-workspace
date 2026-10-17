@@ -48,6 +48,8 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('account', 'security', 'Security', 'shield-check', ['password', 'sessions', 'devices', 'sign out', 'two-factor', '2fa', 'authenticator', 'recovery codes'], () => import('./account/SecurityPage')),
   page('account', 'appearance', 'Appearance', 'palette', ['theme', 'dark', 'light', 'colors', 'density', 'text size'], () => import('../theme/AppearancePage')),
   page('account', 'provider-accounts', 'Provider accounts', 'terminal', ['codex', 'sign in', 'chatgpt', 'runs'], () => import('./account/ProviderAccountsPage'), { visible: runsSomewhere }),
+  page('account', 'usage', 'Usage and alerts', 'activity', ['limits', 'rate limits', 'windows', 'resets', 'capacity', 'quota', 'banked reset', 'alerts'], () => import('./account/UsagePage'), { visible: runsSomewhere }),
+  page('account', 'notifications', 'Notifications', 'inbox', ['push', 'phone', 'desktop', 'quiet hours', 'mute', 'email', 'digest', 'do not disturb'], () => import('./account/NotificationsPage'), { settings: ['notifications.'] }),
   page('account', 'connected-apps', 'Connected apps', 'link', ['mcp', 'claude code', 'oauth', 'apps'], () => import('./account/ConnectedAppsPage')),
   page('account', 'api-tokens', 'API tokens', 'key', ['token', 'bearer', 'mcp', 'credential', 'scripts'], () => import('./account/ApiTokensPage')),
   // Workspace
