@@ -1172,6 +1172,13 @@
   padding: 10px var(--space-4);
 }
 
+@media (max-width: 640px) {
+  .aw-dl__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}
+
 .aw-dl__row + .aw-dl__row {
   border-top: 1px solid var(--content-border);
 }
