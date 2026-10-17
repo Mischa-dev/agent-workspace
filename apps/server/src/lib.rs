@@ -22,6 +22,7 @@ pub mod external_execution;
 pub mod git_runtime;
 pub mod github;
 pub mod harness_host;
+pub mod harnesses;
 pub mod health;
 pub mod idempotency;
 pub mod invitations;
@@ -127,6 +128,7 @@ pub fn router(state: AppState) -> Router {
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(environments::router())
+        .merge(harnesses::router())
         .merge(launch::router())
         .merge(agent_sessions::router())
         .merge(github::router())

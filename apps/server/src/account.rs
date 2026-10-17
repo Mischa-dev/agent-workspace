@@ -394,6 +394,10 @@ async fn create_account(
         .supervisors
         .manifest_in(project.organization_id, &request.adapter_kind)
         .is_none()
+        || state
+            .supervisors
+            .runner_for(&request.adapter_kind)
+            .is_some()
     {
         return Err(AppError::Validation("adapterKind"));
     }

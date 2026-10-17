@@ -1006,6 +1006,8 @@ struct AccountChoice {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HarnessPlan {
+    /// A connected runner: launches go to its agent and need no account.
+    connected_runner: bool,
     kind: String,
     display_name: String,
     runs_on: crate::provider::manifest::RunLocation,
@@ -1098,6 +1100,7 @@ async fn plan_for(
             crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, &manifest)
                 .await?;
         harnesses.push(HarnessPlan {
+            connected_runner: state.supervisors.runner_for(&manifest.kind).is_some(),
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
             runs_on: manifest.runs_on,
@@ -1334,7 +1337,10 @@ pub(crate) async fn launch_tasks(
             .map(|environment| environment.harness.clone())
     });
     if let Some(harness) = &harness
-        && state.supervisors.manifest(harness).is_none()
+        && state
+            .supervisors
+            .manifest_in(defaults.organization_id, harness)
+            .is_none()
     {
         return Err(AppError::Validation("harness"));
     }
@@ -1829,6 +1835,15 @@ async fn start_launch(
     if prompt.trim().is_empty() {
         return Err(AppError::Validation("prompt"));
     }
+    if let Some(runner) = harness
+        .as_deref()
+        .and_then(|harness| state.supervisors.runner_for(harness))
+    {
+        return hand_off(
+            state, caller, launch, thread_id, runner, &prompt, &overrides,
+        )
+        .await;
+    }
     let config = RunConfig {
         harness,
         model: overrides.model,
@@ -1882,6 +1897,86 @@ async fn start_launch(
     .await?;
     transaction.commit().await?;
     Ok(run_id)
+}
+
+/// A launch to a connected runner (X2): the task goes to the runner agent
+/// as a tag from the person who launched it, with the picked settings on
+/// the last line, as docs/harness-guide.md describes. Returns the message.
+async fn hand_off(
+    state: &AppState,
+    caller: &LaunchCaller,
+    launch: &LaunchRow,
+    thread_id: Uuid,
+    runner: Uuid,
+    prompt: &str,
+    overrides: &LaunchOverrides,
+) -> Result<Uuid, AppError> {
+    let settings = [
+        ("model", overrides.model.as_deref()),
+        ("reasoning", overrides.reasoning.as_deref()),
+        ("speed", overrides.speed.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.map(|value| format!("{key}={value}")))
+    .collect::<Vec<_>>();
+    let mut text = format!(" {}", prompt.trim());
+    if !settings.is_empty() {
+        text.push_str(&format!("\n\nSettings: {}", settings.join(" ")));
+    }
+    let actor_kind = match caller.actor_kind {
+        ActorKind::Human => "human",
+        ActorKind::ExternalAgent => "external_agent",
+        ActorKind::ExecutionWorker => "execution_worker",
+        ActorKind::Integration => "integration",
+        ActorKind::System => "system",
+    };
+    let outcome = crate::conversations::append_message_command(
+        state,
+        crate::conversations::MessageCommandActor {
+            actor_id: caller.actor_id,
+            actor_kind: actor_kind.to_owned(),
+            mcp_credential: None,
+            via_grant_id: launch.via_oauth_grant_id,
+        },
+        thread_id,
+        None,
+        IdempotencyKey::parse(&format!("launch-handoff-{}", launch.id))?,
+        json!({
+            "version": 1,
+            "nodes": [
+                { "type": "mention", "actorId": runner },
+                { "type": "text", "text": text }
+            ]
+        }),
+        None,
+    )
+    .await?;
+    let message_id = outcome.body.message.id;
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE launches
+        SET state = 'handed_off', handoff_message_id = $2, conversation_id = $3,
+            status_reason = NULL, started_at = now(), updated_at = now()
+        WHERE id = $1 AND state = 'queued'
+        "#,
+    )
+    .bind(launch.id)
+    .bind(message_id)
+    .bind(thread_id)
+    .execute(&mut *transaction)
+    .await?;
+    audit(
+        &mut *transaction,
+        caller,
+        launch.project_id,
+        "launch.handed_off",
+        launch.id,
+        json!({ "runnerActorId": runner, "conversationId": thread_id }),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(message_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -2042,6 +2137,25 @@ pub async fn drain(state: &AppState) -> Result<usize, AppError> {
                 .preferred_harness()
             }
         };
+        // A connected runner needs no account here: the task goes to it.
+        if harness
+            .as_deref()
+            .and_then(|harness| state.supervisors.runner_for(harness))
+            .is_some()
+        {
+            let caller = LaunchCaller {
+                actor_id: queued.requested_by_actor_id,
+                actor_kind: kind,
+                via_grant_id: launch.via_oauth_grant_id,
+                mcp: false,
+                session_id: None,
+                request_id: None,
+            };
+            if start_or_record(state, &caller, &launch).await?.is_some() {
+                started += 1;
+            }
+            continue;
+        }
         let account = match launch_account(
             &state.pool,
             queued.project_id,

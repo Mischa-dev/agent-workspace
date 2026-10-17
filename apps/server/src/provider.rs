@@ -20,6 +20,7 @@ pub mod catalog;
 pub(crate) mod claude_code;
 mod codex_app_server;
 pub(crate) mod codex_cloud;
+pub(crate) mod command_line;
 #[cfg(test)]
 mod contract_tests;
 pub mod demo;

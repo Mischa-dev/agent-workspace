@@ -69,6 +69,8 @@ pub struct SupervisorRegistry {
 pub struct CustomAdapter {
     pub organization_id: Uuid,
     pub enabled: bool,
+    /// Set for a connected runner: launches go to this agent as a tag.
+    pub runner_actor_id: Option<Uuid>,
     pub adapter: Arc<dyn HarnessAdapter>,
 }
 
@@ -307,8 +309,16 @@ impl SupervisorRegistry {
         let _ = self.inner.host.set(host);
     }
 
-    pub(crate) fn shutdown_signal(&self) -> Arc<ShutdownSignal> {
-        Arc::clone(&self.inner.shutdown)
+    /// The host cell registered adapters share with the built-in ones.
+    pub(crate) fn host_cell(&self) -> HostCell {
+        Arc::clone(&self.inner.host)
+    }
+
+    /// The agent a connected-runner harness hands its launches to.
+    pub fn runner_for(&self, kind: &str) -> Option<Uuid> {
+        self.custom_read()
+            .get(kind)
+            .and_then(|custom| custom.runner_actor_id)
     }
 
     /// The Codex Cloud adapter, for checking environments.
