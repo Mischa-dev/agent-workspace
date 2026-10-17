@@ -1026,6 +1026,13 @@
   margin: 0;
 }
 
+.aw-boot__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
 @media (max-width: 860px) {
   .aw-auth {
     grid-template-columns: 1fr;
