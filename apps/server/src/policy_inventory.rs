@@ -774,6 +774,50 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/notification-settings/mutes",
         SessionAuthentication
     ),
+    // W21: a person's own level for one conversation they can see.
+    boundary_route!(
+        "notification_settings",
+        Put,
+        "/api/v1/conversations/{id}/notification-level",
+        SessionAuthentication
+    ),
+    // W21: Later is the caller's own list. Saving checks they can see the
+    // message or task, and every read and reminder checks again.
+    boundary_route!("later", Post, "/api/v1/later", SessionAuthentication),
+    boundary_route!("later", Patch, "/api/v1/later/{id}", SessionAuthentication),
+    boundary_route!("later", Delete, "/api/v1/later/{id}", SessionAuthentication),
+    // W21: scheduling, editing and sending run the send command's checks;
+    // canceling is the author's own.
+    policy_route!(
+        "scheduled_messages",
+        Post,
+        "/api/v1/conversations/{id}/scheduled-messages",
+        MessageSend
+    ),
+    policy_route!(
+        "scheduled_messages",
+        Patch,
+        "/api/v1/scheduled-messages/{id}",
+        MessageSend
+    ),
+    boundary_route!(
+        "scheduled_messages",
+        Delete,
+        "/api/v1/scheduled-messages/{id}",
+        SessionAuthentication
+    ),
+    policy_route!(
+        "scheduled_messages",
+        Post,
+        "/api/v1/scheduled-messages/{id}/send-now",
+        MessageSend
+    ),
+    policy_route!(
+        "forwarding",
+        Post,
+        "/api/v1/messages/{id}/forward",
+        MessageSend
+    ),
     boundary_route!(
         "push",
         Post,
@@ -1385,6 +1429,9 @@ mod tests {
             include_str!("notification_settings.rs"),
         ),
         ("push", include_str!("push.rs")),
+        ("later", include_str!("later.rs")),
+        ("scheduled_messages", include_str!("scheduled_messages.rs")),
+        ("forwarding", include_str!("forwarding.rs")),
         ("usage", include_str!("usage.rs")),
         ("github", include_str!("github.rs")),
         ("github/connect", include_str!("github/connect.rs")),

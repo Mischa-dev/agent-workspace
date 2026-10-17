@@ -41,6 +41,10 @@ pub enum NotificationAction {
     Approve,
     Deny,
     Reply,
+    /// A reminder: mark its saved item done (W21).
+    Done,
+    /// A reminder: remind again in an hour (W21).
+    Snooze,
 }
 
 impl NotificationAction {
@@ -49,6 +53,8 @@ impl NotificationAction {
             Self::Approve => "approve",
             Self::Deny => "deny",
             Self::Reply => "reply",
+            Self::Done => "done",
+            Self::Snooze => "snooze",
         }
     }
 
@@ -57,6 +63,8 @@ impl NotificationAction {
             "approve" => Some(Self::Approve),
             "deny" => Some(Self::Deny),
             "reply" => Some(Self::Reply),
+            "done" => Some(Self::Done),
+            "snooze" => Some(Self::Snooze),
             _ => None,
         }
     }
@@ -75,8 +83,13 @@ pub fn offered(notification: &NotificationView) -> Vec<NotificationAction> {
             }
             _ => Vec::new(),
         },
-        notifications::kind::MENTION if notification.reply_conversation_id.is_some() => {
+        notifications::kind::MENTION | notifications::kind::CONVERSATION_MESSAGE
+            if notification.reply_conversation_id.is_some() =>
+        {
             vec![NotificationAction::Reply]
+        }
+        notifications::kind::REMINDER if notification.saved_item_id.is_some() => {
+            vec![NotificationAction::Done, NotificationAction::Snooze]
         }
         _ => Vec::new(),
     }
@@ -161,6 +174,11 @@ pub fn payload_actions(notification: &NotificationView, minted: &MintedActions) 
         .iter()
         .map(|action| match action {
             NotificationAction::Approve => json!({"action": "approve", "title": "Approve"}),
+            NotificationAction::Done => json!({"action": "done", "title": "Done"}),
+            NotificationAction::Snooze => json!({
+                "action": "snooze",
+                "title": format!("In {} min", crate::later::SNOOZE_MINUTES),
+            }),
             NotificationAction::Deny => json!({"action": "deny", "title": "Deny"}),
             NotificationAction::Reply => json!({
                 "action": "reply",
@@ -197,7 +215,7 @@ pub(crate) struct ActRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ActResponse {
-    /// approved, denied, answered or replied
+    /// approved, denied, answered, replied, done or snoozed
     outcome: &'static str,
     /// Where to open the app to see it.
     href: String,
@@ -330,6 +348,27 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
                 "approved"
             } else {
                 "denied"
+            }
+        }
+        NotificationAction::Done | NotificationAction::Snooze => {
+            let saved_item_id = notification
+                .saved_item_id
+                .ok_or(AppError::NotFound("notification_action"))?;
+            if action == NotificationAction::Done {
+                crate::later::change(
+                    state,
+                    actor.actor_id,
+                    saved_item_id,
+                    crate::later::ChangeRequest {
+                        done: Some(true),
+                        ..crate::later::ChangeRequest::default()
+                    },
+                )
+                .await?;
+                "done"
+            } else {
+                crate::later::snooze(state, actor.actor_id, saved_item_id).await?;
+                "snoozed"
             }
         }
         NotificationAction::Reply => {
