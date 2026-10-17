@@ -18,7 +18,7 @@ use serde_json::json;
 use sqlx::{FromRow, PgExecutor, PgPool};
 use uuid::Uuid;
 
-use super::{UsageAccount, WindowSource, WindowView, load_account, ready, windows_at};
+use super::{UsageAccount, WindowSource, WindowView, load_account, windows_at};
 use crate::{
     AppState,
     error::AppError,
@@ -404,28 +404,60 @@ pub async fn evaluate(
         .bind(candidate.cycle_at)
         .execute(&mut *transaction)
         .await?;
-        let preview = if candidate.rule == Rule::ResetSoon {
-            let ready = ready::ready_tasks(
-                &mut transaction,
-                account.owner_actor_id,
-                account.id,
-                Some(100),
-            )
-            .await?;
-            match ready.tasks.len() {
-                0 => None,
-                1 => Some("1 ready task can use it.".to_owned()),
-                count => Some(format!(
-                    "{count}{} ready tasks across {} project{} can use it.",
-                    if count == 100 { "+" } else { "" },
-                    ready.project_count,
-                    if ready.project_count == 1 { "" } else { "s" },
-                )),
-            }
+        // A window about to reset with capacity left carries the batch that
+        // would use it (U4); Launch starts it, Review opens it to edit.
+        let batch = if candidate.rule == Rule::ResetSoon {
+            let window_key = candidate.window.as_ref().map(|window| window.key.as_str());
+            Some(super::batch::suggest(state, account.owner_actor_id, &account, window_key).await?)
         } else {
             None
         };
+        let preview = match &batch {
+            Some(batch) if !batch.tasks.is_empty() => {
+                let projects = batch
+                    .tasks
+                    .iter()
+                    .map(|task| task.project_id)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len();
+                Some(match batch.tasks.len() {
+                    1 => format!("Launch {} before it resets.", batch.tasks[0].key),
+                    count => format!(
+                        "Launch {count} ready tasks across {projects} project{} before it resets.",
+                        if projects == 1 { "" } else { "s" },
+                    ),
+                })
+            }
+            // Nothing can launch on this account yet, but say what's ready.
+            Some(_) => {
+                let ready = super::ready::ready_tasks(
+                    &mut transaction,
+                    account.owner_actor_id,
+                    account.id,
+                    Some(100),
+                )
+                .await?;
+                match ready.tasks.len() {
+                    0 => None,
+                    1 => Some("1 ready task can use it.".to_owned()),
+                    count => Some(format!(
+                        "{count}{} ready tasks across {} project{} can use it.",
+                        if count == 100 { "+" } else { "" },
+                        ready.project_count,
+                        if ready.project_count == 1 { "" } else { "s" },
+                    )),
+                }
+            }
+            None => None,
+        };
         let href = format!("/settings/account/usage?account={}", account.id);
+        let window_key = candidate.window.as_ref().map(|window| window.key.clone());
+        let review_href = format!(
+            "{href}&batch=1{}#batch",
+            window_key
+                .as_deref()
+                .map_or_else(String::new, |key| format!("&window={key}"))
+        );
         let detail = json!({
             "title": candidate.title,
             "preview": preview,
@@ -433,10 +465,19 @@ pub async fn evaluate(
             "place": "Usage",
             "accountId": account.id,
             "rule": candidate.rule.as_str(),
-            "windowKey": candidate.window.as_ref().map(|window| window.key.clone()),
+            "windowKey": window_key,
             "resetsAt": candidate.window.as_ref().and_then(|window| window.resets_at),
             "unusedPercent": candidate.window.as_ref().and_then(|window| window.unused_percent),
-            "launchHref": format!("{href}&ready=1#ready-tasks"),
+            "launchHref": if batch.as_ref().is_some_and(|batch| !batch.tasks.is_empty()) {
+                review_href
+            } else {
+                format!("{href}&ready=1#ready-tasks")
+            },
+            "batch": batch.as_ref().filter(|batch| !batch.tasks.is_empty()).map(|batch| json!({
+                "accountId": account.id,
+                "size": batch.tasks.len(),
+                "windowKey": window_key,
+            })),
         });
         let notification = NewNotification {
             project_id: space,

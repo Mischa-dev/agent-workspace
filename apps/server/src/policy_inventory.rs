@@ -641,6 +641,20 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/usage/accounts/{account_id}/reset-credits/spend",
         SessionAuthentication
     ),
+    // A batch is a set of launches, each authorized in its own project.
+    policy_route!(
+        "usage",
+        Post,
+        "/api/v1/usage/accounts/{account_id}/batch",
+        WorkerInvoke
+    ),
+    // The first-run path's progress is the caller's own.
+    boundary_route!(
+        "onboarding",
+        Put,
+        "/api/v1/organizations/{organization_id}/onboarding",
+        SessionAuthentication
+    ),
     policy_route!(
         "repositories",
         Post,
@@ -1164,6 +1178,7 @@ mod tests {
         ("invitations", include_str!("invitations.rs")),
         ("memberships", include_str!("memberships.rs")),
         ("workspace", include_str!("workspace.rs")),
+        ("onboarding", include_str!("onboarding.rs")),
         ("audit_log", include_str!("audit_log.rs")),
         ("mcp/oauth", include_str!("mcp/oauth.rs")),
         ("projects", include_str!("projects.rs")),

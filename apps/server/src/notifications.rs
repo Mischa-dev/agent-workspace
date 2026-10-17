@@ -986,6 +986,19 @@ pub struct NotificationView {
     /// capacity alert opens the account's ready tasks).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch_href: Option<String>,
+    /// A capacity alert's suggested batch, which Launch starts in one tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch: Option<BatchAction>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchAction {
+    pub account_id: Uuid,
+    /// How many tasks the batch held when the alert fired.
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1407,6 +1420,19 @@ fn view(row: NotificationRow) -> NotificationView {
         .and_then(serde_json::Value::as_str)
         .filter(|href| href.starts_with('/'))
         .map(str::to_owned);
+    let batch = row.detail.get("batch").and_then(|batch| {
+        Some(BatchAction {
+            account_id: batch
+                .get("accountId")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())?,
+            size: batch.get("size").and_then(serde_json::Value::as_u64)?,
+            window_key: batch
+                .get("windowKey")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        })
+    });
     // Kinds that belong to no project (capacity alerts) name their place.
     let project_name = row
         .detail
@@ -1444,6 +1470,7 @@ fn view(row: NotificationRow) -> NotificationView {
         href,
         approval,
         launch_href,
+        batch,
     }
 }
 

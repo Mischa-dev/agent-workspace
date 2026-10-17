@@ -37,13 +37,13 @@ use super::{
     notifications::{drain, inbox},
 };
 
-struct Fixture {
-    setup: Setup,
-    state: AppState,
+pub(super) struct Fixture {
+    pub(super) setup: Setup,
+    pub(super) state: AppState,
     _keys: (tempfile::TempDir, tempfile::TempDir),
 }
 
-async fn fixture(prefix: &str) -> Option<Fixture> {
+pub(super) async fn fixture(prefix: &str) -> Option<Fixture> {
     let Ok(database_url) = std::env::var("AGENT_WORKSPACE_DATABASE_URL") else {
         eprintln!("skipping PostgreSQL integration test: AGENT_WORKSPACE_DATABASE_URL is unset");
         return None;
@@ -133,7 +133,7 @@ async fn fixture(prefix: &str) -> Option<Fixture> {
     })
 }
 
-async fn call(
+pub(super) async fn call(
     setup: &Setup,
     browser: &Browser,
     method: &str,
@@ -145,7 +145,7 @@ async fn call(
 }
 
 /// A signed-in demo account of the owner's, used in `project`.
-async fn demo_account(setup: &Setup, project: &str) -> Uuid {
+pub(super) async fn demo_account(setup: &Setup, project: &str) -> Uuid {
     let accounts = format!("/api/v1/projects/{project}/provider-accounts");
     let (status, created) = call(
         setup,
@@ -180,7 +180,7 @@ async fn demo_account(setup: &Setup, project: &str) -> Uuid {
     account.parse().expect("account id")
 }
 
-fn weekly(used_percent: u16, resets_in: chrono::Duration) -> UsageWindow {
+pub(super) fn weekly(used_percent: u16, resets_in: chrono::Duration) -> UsageWindow {
     UsageWindow {
         key: "demo.weekly".to_owned(),
         limit_name: None,
