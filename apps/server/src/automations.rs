@@ -1762,7 +1762,7 @@ async fn disable(state: &AppState, rule: &RuleRow, reason: &str) -> Result<bool,
             detail: json!({
                 "title": format!("Automation \u{201c}{}\u{201d} was turned off", rule.name),
                 "preview": reason,
-                "href": format!("/projects/{}/settings/automations", rule.project_id),
+                "href": format!("/settings/projects/{}/automations", rule.project_id),
                 "place": project_name,
                 "ruleId": rule.id,
             }),
@@ -2359,7 +2359,7 @@ async fn notify(
             detail: json!({
                 "title": rendered.chars().take(200).collect::<String>(),
                 "preview": format!("From the automation \u{201c}{}\u{201d}", rule.name),
-                "href": format!("/projects/{}/settings/automations", rule.project_id),
+                "href": format!("/settings/projects/{}/automations", rule.project_id),
                 "ruleId": rule.id,
             }),
             group_key: format!("automation:{}:{run_id}:{index}", rule.id),

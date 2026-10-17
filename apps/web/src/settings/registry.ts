@@ -52,6 +52,8 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('account', 'notifications', 'Notifications', 'inbox', ['push', 'phone', 'desktop', 'quiet hours', 'mute', 'email', 'digest', 'do not disturb'], () => import('./account/NotificationsPage'), { settings: ['notifications.'] }),
   page('account', 'connected-apps', 'Connected apps', 'link', ['mcp', 'claude code', 'oauth', 'apps'], () => import('./account/ConnectedAppsPage')),
   page('account', 'api-tokens', 'API tokens', 'key', ['token', 'bearer', 'mcp', 'credential', 'scripts'], () => import('./account/ApiTokensPage')),
+  page('account', 'webhooks', 'Webhooks', 'link', ['webhook', 'events', 'http', 'callback', 'integration', 'signed'], () => import('./account/WebhooksPage')),
+  page('account', 'api-reference', 'API reference', 'terminal', ['rest', 'openapi', 'api', 'scripts', 'curl', 'docs'], () => import('./account/ApiReferencePage')),
   // Workspace
   page('workspace', 'general', 'General', 'settings', ['rename', 'workspace name', 'leave', 'transfer ownership', 'owner'], () => import('./workspace/GeneralPage')),
   page('workspace', 'members', 'Members', 'users', ['people', 'agents', 'roles', 'admin', 'invite', 'invitations', 'remove'], () => import('./workspace/MembersPage')),
@@ -71,6 +73,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('project', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions', 'dependencies', 'automatic'], () => import('./project/AiPage'), { settings: ['ai.'] }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials'], () => import('./project/AgentsPage'), { visible: manageProject }),
   page('project', 'automation', 'Automation', 'checklist', ['pull requests', 'work items', 'review', 'github'], () => import('./project/AutomationPage'), { visible: manageProject }),
+  page('project', 'automations', 'Automation rules', 'play', ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation'], () => import('./project/AutomationRulesPage'), { visible: projectMember }),
   page('project', 'workflow', 'Workflow', 'work', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
   page('project', 'templates', 'Templates', 'list', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
   page('project', 'import-export', 'Import and export', 'arrow-down', ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
