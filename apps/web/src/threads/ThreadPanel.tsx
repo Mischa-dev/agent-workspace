@@ -77,6 +77,7 @@ export function ThreadPanel({
     capabilities: valid ? page?.capabilities : null,
     searchActors: searchMembers,
     searchWorkItems,
+    taskProject: Boolean(searchWorkItems),
     onReactionsChanged: live.patchReactions,
     onChanged: (entry) => {
       live.replaceEntry(entry)

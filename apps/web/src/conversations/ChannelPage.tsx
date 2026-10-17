@@ -27,6 +27,7 @@ import { useConversationTimeline, useProjectConversationSidebar } from './hooks'
 import { ReplyStatusList } from './ReplyStatus'
 import { groupReplyRequests } from './replyStatusModel'
 import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
+import { useConversationTools } from '../later/useConversationTools'
 import { useMessageActions } from './MessageActions'
 import { StructuredComposer } from './StructuredComposer'
 import { ThreadBoard, ThreadStatusChip } from './threadBoard'
@@ -171,6 +172,7 @@ export function ChannelPage() {
     capabilities: validBoundary ? page?.capabilities : null,
     searchActors,
     searchWorkItems,
+    taskProject: true,
     onReactionsChanged: older.patchReactions,
     onChanged: (entry) => {
       older.replaceEntry(entry)
@@ -200,6 +202,14 @@ export function ChannelPage() {
         </>
       )
     },
+  })
+
+  const tools = useConversationTools({
+    canPost,
+    conversationId: channelId,
+    kind: 'channel',
+    latestMessageId: entries.at(-1)?.message?.id,
+    projectId,
   })
 
   const sendMessage = async (submission: ComposerSubmission) => {
@@ -294,6 +304,8 @@ export function ChannelPage() {
         icon="hash"
         menu={[
           ...(canPost ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => setThreadDialog({ origin: null }) }] : []),
+          ...tools.levelMenu,
+          { separator: true as const },
           {
             label: 'Archived conversations',
             icon: 'archive' as const,
@@ -303,8 +315,10 @@ export function ChannelPage() {
             ? [{ separator: true as const }, { label: 'Archive channel', icon: 'archive' as const, danger: true, onSelect: () => setArchiveOpen(true) }]
             : []),
         ]}
+        tag={tools.levelMark}
         title={name}
       />
+      {tools.banner}
       {validBoundary ? <PinnedBar canEdit={canPost} conversationId={channelId} projectId={projectId} /> : null}
       {archived ? (
         <Banner className="aw-conv__banner" icon="archive" title="This channel is archived." tone="offline">
@@ -407,6 +421,7 @@ export function ChannelPage() {
           placeholder={`Message #${name}`}
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}
+          {...tools.composer}
         />
       ) : validBoundary && archived ? (
         <StructuredComposer

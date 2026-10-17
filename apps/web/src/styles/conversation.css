@@ -1453,3 +1453,56 @@ button.aw-reaction:focus-visible {
 .aw-replies--trailing {
   padding: var(--space-1) var(--space-4) var(--space-2) calc(var(--space-4) + var(--size-avatar) + var(--space-3));
 }
+
+/* W21: a forward's quote, read live, and the saved mark */
+.aw-msg__saved {
+  color: var(--accent);
+}
+
+.aw-forward {
+  max-width: var(--size-measure);
+  margin: var(--space-1) 0 2px;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  background: var(--content-hover);
+  font: var(--t-small);
+  color: var(--content-fg);
+}
+
+.aw-forward.is-unavailable {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--content-fg-muted);
+}
+
+.aw-forward__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  color: var(--content-fg-muted);
+  text-decoration: none;
+}
+
+a.aw-forward__meta:hover .aw-forward__author {
+  text-decoration: underline;
+}
+
+.aw-forward__author {
+  font-weight: 600;
+  color: var(--content-fg);
+}
+
+.aw-forward__text,
+.aw-forward__removed {
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.aw-forward__removed {
+  color: var(--content-fg-muted);
+  font-style: italic;
+}

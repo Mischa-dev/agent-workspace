@@ -19,6 +19,7 @@ import type {
   MessageRemoval,
   MessageRevision,
   MessageRevisions,
+  SavedMark,
   ProjectConversationSidebar,
   SidebarChannel,
   SidebarThread,
@@ -165,7 +166,15 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
           )
       : [],
     reactions: normalizeReactions(message.reactions),
+    // Checked where it's shown (ForwardedQuote), off the first load.
+    forwarded: message.forwarded ?? null,
+    saved: normalizeSavedMark(message.saved),
   }
+}
+
+function normalizeSavedMark(value: unknown): SavedMark | null {
+  const saved = asRecord(value)
+  return typeof saved.id === 'string' ? { id: saved.id, remindAt: nullableString(saved.remindAt) } : null
 }
 
 const REACTION_NAME = /^[a-z0-9_]{1,32}$/

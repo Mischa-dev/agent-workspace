@@ -12,6 +12,7 @@ export type ShortcutAction =
   | 'go-messages'
   | 'go-inbox'
   | 'go-my-work'
+  | 'go-later'
   | 'go-tasks'
   | 'go-board'
   | 'go-pages'
@@ -37,6 +38,7 @@ export const SHORTCUTS: Shortcut[] = [
   { action: 'go-home', keys: ['G', 'H'], label: 'Home', group: 'Go to' },
   { action: 'go-inbox', keys: ['G', 'I'], label: 'Inbox', group: 'Go to' },
   { action: 'go-my-work', keys: ['G', 'W'], label: 'My work', group: 'Go to' },
+  { action: 'go-later', keys: ['G', 'L'], label: 'Later', group: 'Go to' },
   { action: 'go-messages', keys: ['G', 'M'], label: 'Messages', group: 'Go to' },
   { action: 'go-tasks', keys: ['G', 'T'], label: 'Tasks', group: 'Go to', inProject: true },
   { action: 'go-board', keys: ['G', 'B'], label: 'Board', group: 'Go to', inProject: true },
