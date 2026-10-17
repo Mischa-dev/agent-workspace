@@ -20,9 +20,12 @@ use super::{
         AccountHandle, HarnessAdapter, HarnessError, HarnessSession, LoginKind, LoginStart,
         ProfileHealth,
     },
+    claude_cloud::ClaudeCloudAdapter,
+    claude_code::ClaudeCodeAdapter,
     codex_app_server::CodexAdapter,
     codex_cloud::CodexCloudAdapter,
     demo::{DEMO_KIND, DemoAdapter, DemoHarness},
+    host::{HarnessHost, HostCell},
     manifest::AdapterManifest,
 };
 use crate::config::AppConfig;
@@ -63,8 +66,40 @@ pub struct SupervisorRegistry {
     inner: Arc<RegistryInner>,
 }
 
+/// A harness someone registered in a workspace (X2).
+pub struct CustomAdapter {
+    pub organization_id: Uuid,
+    pub enabled: bool,
+    /// Set for a connected runner: launches go to this agent as a tag.
+    pub runner_actor_id: Option<Uuid>,
+    pub adapter: Arc<dyn HarnessAdapter>,
+}
+
+/// A manifest that stays valid while the registry changes.
+#[derive(Clone)]
+pub struct ManifestRef(Arc<dyn HarnessAdapter>);
+
+impl std::ops::Deref for ManifestRef {
+    type Target = AdapterManifest;
+
+    fn deref(&self) -> &AdapterManifest {
+        self.0.manifest()
+    }
+}
+
+impl std::fmt::Debug for ManifestRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ManifestRef")
+            .field(&self.kind)
+            .finish()
+    }
+}
+
 struct RegistryInner {
     adapters: BTreeMap<String, Arc<dyn HarnessAdapter>>,
+    custom: std::sync::RwLock<BTreeMap<String, CustomAdapter>>,
+    host: HostCell,
     demo: Option<Arc<DemoAdapter>>,
     codex_cloud: Arc<CodexCloudAdapter>,
     /// Development only: every run goes to the demo harness whatever its
@@ -125,6 +160,7 @@ const CONTROL_SLOT_RETRY: std::time::Duration = std::time::Duration::from_millis
 impl SupervisorRegistry {
     pub fn new(config: &AppConfig) -> Result<Self, HarnessError> {
         let shutdown = Arc::new(ShutdownSignal::default());
+        let host = HostCell::default();
         let mut adapters: BTreeMap<String, Arc<dyn HarnessAdapter>> = BTreeMap::new();
         let codex: Arc<dyn HarnessAdapter> =
             Arc::new(CodexAdapter::new(config, Arc::clone(&shutdown))?);
@@ -138,6 +174,15 @@ impl SupervisorRegistry {
             codex_cloud.manifest().kind.clone(),
             Arc::clone(&codex_cloud) as Arc<dyn HarnessAdapter>,
         );
+        let claude_code: Arc<dyn HarnessAdapter> = Arc::new(ClaudeCodeAdapter::new(
+            config,
+            Arc::clone(&shutdown),
+            Arc::clone(&host),
+        ));
+        adapters.insert(claude_code.manifest().kind.clone(), claude_code);
+        let claude_cloud: Arc<dyn HarnessAdapter> =
+            Arc::new(ClaudeCloudAdapter::new(config, Arc::clone(&host))?);
+        adapters.insert(claude_cloud.manifest().kind.clone(), claude_cloud);
         let demo = config.demo_executor.then(|| {
             Arc::new(DemoAdapter::new(
                 Arc::clone(&shutdown),
@@ -153,6 +198,8 @@ impl SupervisorRegistry {
         Ok(Self {
             inner: Arc::new(RegistryInner {
                 adapters,
+                custom: std::sync::RwLock::new(BTreeMap::new()),
+                host,
                 route_all_to_demo: demo.is_some(),
                 demo,
                 codex_cloud,
@@ -169,26 +216,113 @@ impl SupervisorRegistry {
         {
             return Ok(Arc::clone(demo));
         }
-        self.inner
-            .adapters
+        if let Some(adapter) = self.inner.adapters.get(kind) {
+            return Ok(Arc::clone(adapter));
+        }
+        self.custom_read()
             .get(kind)
-            .cloned()
+            .map(|custom| Arc::clone(&custom.adapter))
             .ok_or(HarnessError::UnknownAdapter)
     }
 
     /// The manifest people see for connections of `kind` (never rerouted).
-    pub fn manifest(&self, kind: &str) -> Option<&AdapterManifest> {
-        self.inner
-            .adapters
+    /// Registered harnesses (X2) are found whichever workspace owns them;
+    /// listing and creating go through `manifests_in` and `manifest_in`.
+    pub fn manifest(&self, kind: &str) -> Option<ManifestRef> {
+        if let Some(adapter) = self.inner.adapters.get(kind) {
+            return Some(ManifestRef(Arc::clone(adapter)));
+        }
+        self.custom_read()
             .get(kind)
-            .map(|adapter| adapter.manifest())
+            .map(|custom| ManifestRef(Arc::clone(&custom.adapter)))
     }
 
-    pub fn manifests(&self) -> impl Iterator<Item = &AdapterManifest> {
-        self.inner
+    /// The built-in harnesses and every registered one, for server-wide
+    /// questions (which kinds run in the cloud). Never shown to people.
+    pub fn manifests(&self) -> Vec<ManifestRef> {
+        let mut manifests = self
+            .inner
             .adapters
             .values()
-            .map(|adapter| adapter.manifest())
+            .map(|adapter| ManifestRef(Arc::clone(adapter)))
+            .collect::<Vec<_>>();
+        manifests.extend(
+            self.custom_read()
+                .values()
+                .map(|custom| ManifestRef(Arc::clone(&custom.adapter))),
+        );
+        manifests
+    }
+
+    /// The harnesses a workspace can use: the built-in ones and its own
+    /// registered ones, never another workspace's.
+    pub fn manifests_in(&self, organization_id: Uuid) -> Vec<ManifestRef> {
+        let mut manifests = self
+            .inner
+            .adapters
+            .values()
+            .map(|adapter| ManifestRef(Arc::clone(adapter)))
+            .collect::<Vec<_>>();
+        manifests.extend(
+            self.custom_read()
+                .values()
+                .filter(|custom| custom.organization_id == organization_id && custom.enabled)
+                .map(|custom| ManifestRef(Arc::clone(&custom.adapter))),
+        );
+        manifests
+    }
+
+    /// A harness a workspace may create connections or environments of.
+    pub fn manifest_in(&self, organization_id: Uuid, kind: &str) -> Option<ManifestRef> {
+        if let Some(adapter) = self.inner.adapters.get(kind) {
+            return Some(ManifestRef(Arc::clone(adapter)));
+        }
+        self.custom_read()
+            .get(kind)
+            .filter(|custom| custom.organization_id == organization_id && custom.enabled)
+            .map(|custom| ManifestRef(Arc::clone(&custom.adapter)))
+    }
+
+    /// Replaces the registered harnesses with the ones stored now.
+    pub fn replace_custom(&self, harnesses: Vec<CustomAdapter>) {
+        let map = harnesses
+            .into_iter()
+            .map(|custom| (custom.adapter.manifest().kind.clone(), custom))
+            .collect();
+        *self
+            .inner
+            .custom
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = map;
+    }
+
+    fn custom_read(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<String, CustomAdapter>> {
+        self.inner
+            .custom
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// What adapters need from the rest of the server (secrets, repository
+    /// tokens). Set once when the server starts.
+    pub fn host(&self) -> Option<&Arc<dyn HarnessHost>> {
+        self.inner.host.get()
+    }
+
+    pub fn set_host(&self, host: Arc<dyn HarnessHost>) {
+        let _ = self.inner.host.set(host);
+    }
+
+    /// The host cell registered adapters share with the built-in ones.
+    pub(crate) fn host_cell(&self) -> HostCell {
+        Arc::clone(&self.inner.host)
+    }
+
+    /// The agent a connected-runner harness hands its launches to.
+    pub fn runner_for(&self, kind: &str) -> Option<Uuid> {
+        self.custom_read()
+            .get(kind)
+            .and_then(|custom| custom.runner_actor_id)
     }
 
     /// The Codex Cloud adapter, for checking environments.
@@ -200,6 +334,7 @@ impl SupervisorRegistry {
     /// host, so the host-wide run limit doesn't count them.
     pub fn cloud_kinds(&self) -> Vec<String> {
         self.manifests()
+            .into_iter()
             .filter(|manifest| manifest.runs_on == super::manifest::RunLocation::Cloud)
             .map(|manifest| manifest.kind.clone())
             .collect()
@@ -263,7 +398,12 @@ impl SupervisorRegistry {
 
     pub async fn shutdown_all(&self) {
         self.request_shutdown();
-        for adapter in self.inner.adapters.values() {
+        let custom = self
+            .custom_read()
+            .values()
+            .map(|custom| Arc::clone(&custom.adapter))
+            .collect::<Vec<_>>();
+        for adapter in self.inner.adapters.values().chain(custom.iter()) {
             adapter.shutdown_all().await;
         }
     }

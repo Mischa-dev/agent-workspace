@@ -5,7 +5,8 @@ export type SettingSource = 'launch' | 'project' | 'user' | 'workspace' | 'defau
 
 export type StartWhen = 'now' | 'at' | 'window_reset' | 'blockers_done'
 
-export type LaunchState = 'queued' | 'started' | 'failed' | 'cancelled'
+/** handed_off: a connected runner took it; its agent answers in the task's thread. */
+export type LaunchState = 'queued' | 'started' | 'handed_off' | 'failed' | 'cancelled'
 
 export type Environment = {
   id: string
@@ -86,6 +87,10 @@ export type ModelChoice = {
 }
 
 export type HarnessPlan = {
+  /** A connected runner: launches go to its agent and need no account. */
+  connectedRunner: boolean
+  /** The runner's agent, when the server names it. */
+  runnerName?: string | null
   kind: string
   displayName: string
   runsOn: 'local_host' | 'cloud'
@@ -134,6 +139,8 @@ export type LaunchInput = {
   environmentId?: string
   overrides?: LaunchOverrides
   providerAccountId?: string
+  /** One of the project's agents; its harness, environment and settings fill what the launch leaves out. */
+  agentProfileId?: string
   prompt?: string
   startWhen?: StartWhen
   startAt?: string

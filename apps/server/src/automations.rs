@@ -297,8 +297,8 @@ pub enum Action {
         /// The prompt, for one task; left out, the launch template's.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
-        /// An agent profile to launch instead of the run defaults. Reserved
-        /// for agent profiles (W12); refused until they exist.
+        /// An agent profile to launch instead of the run defaults: its
+        /// harness, model settings, instructions and environment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Option<String>")]
         agent_profile_id: Option<Uuid>,
@@ -437,17 +437,7 @@ fn check_shape(
     }
     for action in actions.iter_mut() {
         match action {
-            Action::Launch {
-                prompt,
-                agent_profile_id,
-                ..
-            } => {
-                if agent_profile_id.is_some() {
-                    // The seam for W12's agent profiles.
-                    return Err(AppError::Invalid(
-                        "agent profiles aren't available yet; launch with the project's run defaults",
-                    ));
-                }
+            Action::Launch { prompt, .. } => {
                 if let Some(text) = prompt {
                     *prompt = Some(clean_text(text, "actions.prompt")?);
                 }
@@ -730,12 +720,27 @@ async fn check_references(
                 conversation_id, ..
             } => conversations.push(*conversation_id),
             Action::Launch {
-                environment_id: Some(id),
+                environment_id,
+                agent_profile_id,
                 ..
             } => {
-                crate::environments::active_environment(pool, project_id, *id)
-                    .await?
-                    .ok_or(AppError::NotFound("environment"))?;
+                if let Some(id) = environment_id {
+                    crate::environments::active_environment(pool, project_id, *id)
+                        .await?
+                        .ok_or(AppError::NotFound("environment"))?;
+                }
+                if let Some(id) = agent_profile_id {
+                    let enabled = sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS (SELECT 1 FROM agent_profiles WHERE id = $1 AND project_id = $2 AND enabled)",
+                    )
+                    .bind(id)
+                    .bind(project_id)
+                    .fetch_one(pool)
+                    .await?;
+                    if !enabled {
+                        return Err(AppError::NotFound("agent profile"));
+                    }
+                }
             }
             _ => {}
         }
@@ -2132,7 +2137,7 @@ async fn run_action(
         Action::Launch {
             environment_id,
             prompt,
-            ..
+            agent_profile_id,
         } => {
             let limit = match trigger {
                 Trigger::CapacityWindow { max_tasks, .. } => i64::from(max_tasks.unwrap_or(3)),
@@ -2185,6 +2190,7 @@ async fn run_action(
                             repository_id: Some(repository_id),
                             config: None,
                             provider_account_id,
+                            agent_profile_id: *agent_profile_id,
                         },
                         idempotency,
                     )
@@ -2210,6 +2216,7 @@ async fn run_action(
                     start_at: None,
                     queue: false,
                     dialog: false,
+                    agent_profile_id: *agent_profile_id,
                 },
                 "automation",
                 idempotency,
@@ -2531,13 +2538,14 @@ mod tests {
             filters: [("status".to_owned(), "Todo".to_owned())].into(),
         };
         check_shape(&mut schedule, &conditions, &mut launch).expect("valid rule");
-        // Agent profiles wait for W12.
+        // A profile is checked against the project in check_references.
         let mut profile = vec![Action::Launch {
             environment_id: None,
             prompt: None,
             agent_profile_id: Some(uuid::Uuid::nil()),
         }];
-        assert!(check_shape(&mut Trigger::TaskCreated {}, &conditions, &mut profile).is_err());
+        check_shape(&mut Trigger::TaskCreated {}, &conditions, &mut profile)
+            .expect("a launch may name an agent profile");
         let mut bad_zone = Trigger::Schedule {
             frequency: "daily".to_owned(),
             every: 1,

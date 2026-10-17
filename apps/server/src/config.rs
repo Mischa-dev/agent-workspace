@@ -101,6 +101,14 @@ pub struct AppConfig {
     pub codex_shutdown_timeout: Duration,
     /// How often a Codex Cloud task's status is read while it runs.
     pub codex_cloud_poll_interval: Duration,
+    /// The Claude Code command line (H6).
+    pub claude_binary: PathBuf,
+    /// The Claude API, for Claude Code cloud runs (C3). Tests point it at a
+    /// fake server.
+    pub anthropic_api_url: String,
+    /// Directories a registered command-line harness's program must sit in
+    /// (H7). Empty, command-line harnesses can't run on this server.
+    pub command_harness_dirs: Vec<PathBuf>,
     pub demo_executor: bool,
     pub github: Option<GitHubConfig>,
     pub workos: Option<WorkOsConfig>,
@@ -227,6 +235,31 @@ impl AppConfig {
             Duration::from_secs(parse(values, "CODEX_SHUTDOWN_TIMEOUT_SECONDS", "5")?);
         let codex_cloud_poll_interval =
             Duration::from_millis(parse(values, "CODEX_CLOUD_POLL_MILLISECONDS", "15000")?);
+        let claude_binary = PathBuf::from(optional(values, "CLAUDE_BINARY", "claude"));
+        let anthropic_api_url = optional(values, "ANTHROPIC_API_URL", "https://api.anthropic.com")
+            .trim_end_matches('/')
+            .to_owned();
+        if !(anthropic_api_url.starts_with("https://")
+            || anthropic_api_url.starts_with("http://127.0.0.1")
+            || anthropic_api_url.starts_with("http://localhost"))
+        {
+            return Err(ConfigError::Invalid {
+                key: "AGENT_WORKSPACE_ANTHROPIC_API_URL".into(),
+                reason: "use an https URL (or a loopback http one for tests)".into(),
+            });
+        }
+        let command_harness_dirs = optional(values, "COMMAND_HARNESS_DIRS", "")
+            .split(':')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        if command_harness_dirs.iter().any(|path| !path.is_absolute()) {
+            return Err(ConfigError::Invalid {
+                key: "AGENT_WORKSPACE_COMMAND_HARNESS_DIRS".into(),
+                reason: "list absolute directories separated by colons".into(),
+            });
+        }
         let demo_executor = parse(values, "DEMO_EXECUTOR", "false")?;
         let github = github_config(values, &data_root, &web_root)?;
         let log_filter = optional(values, "LOG_FILTER", "agent_workspace=info,tower_http=info");
@@ -376,6 +409,9 @@ impl AppConfig {
             codex_request_timeout,
             codex_shutdown_timeout,
             codex_cloud_poll_interval,
+            claude_binary,
+            anthropic_api_url,
+            command_harness_dirs,
             demo_executor,
             github,
             workos,

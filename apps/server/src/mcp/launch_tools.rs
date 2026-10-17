@@ -283,6 +283,7 @@ pub(super) async fn task_launch(
                 start_at,
                 queue: false,
                 dialog: false,
+                agent_profile_id: None,
             },
             "mcp",
             Ok(key),

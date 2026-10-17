@@ -347,6 +347,10 @@ impl DemoSession {
         let item = |kind| HarnessItem {
             key: format!("demo:{}:file", turn.turn_id),
             kind,
+            detail: super::adapter::ItemDetail {
+                files: vec![("KNOWN_FILE.txt".to_owned(), Some("modified".to_owned()))],
+                ..super::adapter::ItemDetail::default()
+            },
         };
         self.queue
             .push_back(HarnessEvent::ItemStarted(item(ItemKind::FileChange)));

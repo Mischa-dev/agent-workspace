@@ -37,6 +37,7 @@ export function launchStatus(launch: Launch): { label: string; tone: ChipTone; i
   if (launch.state === 'queued') return { label: 'Queued', tone: 'muted', icon: 'clock' }
   if (launch.state === 'cancelled') return { label: 'Cancelled', tone: 'muted', icon: 'x' }
   if (launch.state === 'failed') return { label: 'Didn’t start', tone: 'danger', icon: 'circle-alert' }
+  if (launch.state === 'handed_off') return { label: 'Handed off', tone: 'agent', icon: 'send' }
   return (launch.runState && RUN_LABELS[launch.runState]) || { label: 'Started', tone: 'agent', icon: 'play' }
 }
 
@@ -55,11 +56,13 @@ export function launchSummary(launches: Launch[]) {
     const key = launch.workItem?.key ?? 'The task'
     if (launch.state === 'started') return { tone: 'success' as const, title: `${key} started on ${launch.harnessName ?? 'the agent'}.` }
     if (launch.state === 'queued') return { tone: 'info' as const, title: `${key} is queued.`, description: launch.statusReason ?? undefined }
+    if (launch.state === 'handed_off') return { tone: 'success' as const, title: `${key} was handed to ${launch.harnessName ?? 'its runner'}.`, description: 'Its agent answers in the task’s thread.' }
     if (launch.state === 'failed') return { tone: 'danger' as const, title: `${key} didn’t start.`, description: launch.statusReason ?? undefined }
     return { tone: 'info' as const, title: `${key} was cancelled.`, description: launch.statusReason ?? undefined }
   }
   const started = launches.filter((launch) => launch.state === 'started').length
+  const handedOff = launches.filter((launch) => launch.state === 'handed_off').length
   const queued = launches.filter((launch) => launch.state === 'queued').length
-  const parts = [started ? `${started} started` : '', queued ? `${queued} queued` : ''].filter(Boolean)
+  const parts = [started ? `${started} started` : '', handedOff ? `${handedOff} handed off` : '', queued ? `${queued} queued` : ''].filter(Boolean)
   return { tone: 'success' as const, title: `${launches.length} tasks launched${parts.length ? `: ${parts.join(', ')}` : ''}.` }
 }

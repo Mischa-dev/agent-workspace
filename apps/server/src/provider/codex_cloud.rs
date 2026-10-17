@@ -596,10 +596,7 @@ struct Follower {
 
 impl Follower {
     async fn run(self) {
-        let started = HarnessItem {
-            key: format!("cloud-task:{}", self.task_id),
-            kind: ItemKind::Other,
-        };
+        let started = HarnessItem::new(format!("cloud-task:{}", self.task_id), ItemKind::Other);
         if self
             .sender
             .send(HarnessEvent::ItemStarted(started))
@@ -639,10 +636,10 @@ impl Follower {
                     match bring_back(&self.cli, &self.home, &self.task_id, &self.cwd, &status).await
                     {
                         Ok(commit) => vec![
-                            HarnessEvent::ItemCompleted(HarnessItem {
-                                key: format!("cloud-result:{}", self.task_id),
-                                kind: ItemKind::FileChange,
-                            }),
+                            HarnessEvent::ItemCompleted(HarnessItem::new(
+                                format!("cloud-result:{}", self.task_id),
+                                ItemKind::FileChange,
+                            )),
                             HarnessEvent::MessageDelta(finished_message(
                                 &status,
                                 &self.url,

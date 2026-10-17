@@ -519,8 +519,18 @@ pub(crate) async fn repository_git_token(
     project_id: Uuid,
     repository_id: Uuid,
 ) -> Result<SecretString, AppError> {
-    let config = state
-        .config
+    repository_git_token_with(&state.pool, &state.config, project_id, repository_id).await
+}
+
+/// [`repository_git_token`] for code that holds only the pool and config
+/// (the harness host).
+pub(crate) async fn repository_git_token_with(
+    pool: &sqlx::PgPool,
+    app_config: &crate::config::AppConfig,
+    project_id: Uuid,
+    repository_id: Uuid,
+) -> Result<SecretString, AppError> {
+    let config = app_config
         .github
         .as_ref()
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
@@ -548,7 +558,7 @@ pub(crate) async fn repository_git_token(
     )
     .bind(project_id)
     .bind(repository_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(pool)
     .await?
     .ok_or(AppError::Conflict(
         "github_integration",

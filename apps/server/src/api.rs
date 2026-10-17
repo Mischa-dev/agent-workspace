@@ -158,6 +158,10 @@ pub(crate) struct StartRunRequest {
     /// preferred profile's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider_account_id: Option<Uuid>,
+    /// The agent profile (A9) that does the work and posts its replies;
+    /// left out, the project's default agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) agent_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
@@ -314,6 +318,17 @@ pub(crate) async fn start_run_in(
         .clone()
         .or_else(|| defaults.preferred_harness());
     let mut repository_id = request.repository_id;
+    let worker_id = match request.agent_profile_id {
+        Some(profile_id) => Some(
+            crate::agent_profiles::profile_worker(
+                &mut transaction,
+                conversation.project_id,
+                profile_id,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let setup = loop {
         match select_run_setup_for(
             &mut transaction,
@@ -323,6 +338,7 @@ pub(crate) async fn start_run_in(
             repository_id,
             harness.as_deref(),
             request.provider_account_id,
+            worker_id,
         )
         .await
         {
@@ -341,7 +357,7 @@ pub(crate) async fn start_run_in(
         }
     };
     let account_defaults = match state.supervisors.manifest(&setup.adapter_kind) {
-        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, &defaults, manifest),
+        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, &defaults, &manifest),
         None => setup.run_defaults.clone(),
     };
     let config = crate::provider::resolve_run_config(
@@ -531,21 +547,27 @@ async fn retry_agent_run(
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
-    let (repository_id, prompt, predecessor_state, prompt_message_id, predecessor_config) =
-        sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, serde_json::Value)>(
-            r#"
-            SELECT repository_id, prompt, state, prompt_message_id, config
+    let (
+        repository_id,
+        prompt,
+        predecessor_state,
+        prompt_message_id,
+        predecessor_config,
+        predecessor_worker_id,
+    ) = sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, serde_json::Value, Uuid)>(
+        r#"
+            SELECT repository_id, prompt, state, prompt_message_id, config, execution_worker_id
               FROM agent_runs
              WHERE id = $1 AND conversation_id = $2 AND project_id = $3
              FOR UPDATE
             "#,
-        )
-        .bind(predecessor_run_id)
-        .bind(conversation_id)
-        .bind(conversation.project_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or(AppError::NotFound("agent_run"))?;
+    )
+    .bind(predecessor_run_id)
+    .bind(conversation_id)
+    .bind(conversation.project_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound("agent_run"))?;
     if let Some(message_id) = prompt_message_id
         && sqlx::query_scalar::<_, bool>(
             "SELECT removed_at IS NOT NULL FROM messages WHERE id = $1",
@@ -598,6 +620,8 @@ async fn retry_agent_run(
         Some(repository_id),
         predecessor_config.harness.as_deref(),
         None,
+        // A retry stays with the agent that ran it (a profile, A9).
+        Some(predecessor_worker_id),
     )
     .await?;
     let config = crate::provider::resolve_stored_run_config(
@@ -824,12 +848,14 @@ pub(crate) async fn select_run_setup(
         explicit_repository_id,
         None,
         None,
+        None,
     )
     .await
 }
 
 /// `select_run_setup` limited to profiles on one harness when `harness` is
 /// set. Among the owner's signed-in profiles the preferred one comes first.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn select_run_setup_for(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -838,6 +864,9 @@ pub(crate) async fn select_run_setup_for(
     explicit_repository_id: Option<Uuid>,
     harness: Option<&str>,
     provider_account_id: Option<Uuid>,
+    // One execution worker (an agent profile's, A9); left out, the
+    // project's default agent, never a profile's.
+    worker_id: Option<Uuid>,
 ) -> Result<RunSetup, AppError> {
     let bound_repository_id = sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT repository_id FROM conversations WHERE id = $1 AND project_id = $2 FOR UPDATE",
@@ -921,6 +950,12 @@ pub(crate) async fn select_run_setup_for(
         FROM repositories r
         JOIN execution_workers ew
           ON ew.project_id = r.project_id AND ew.enabled
+         AND CASE WHEN $6::uuid IS NULL
+                  THEN NOT EXISTS (
+                      SELECT 1 FROM agent_profiles agent_profile
+                      WHERE agent_profile.execution_worker_id = ew.id
+                  )
+                  ELSE ew.id = $6 END
         JOIN project_memberships worker_membership
           ON worker_membership.project_id = ew.project_id
          AND worker_membership.actor_id = ew.actor_id
@@ -967,6 +1002,7 @@ pub(crate) async fn select_run_setup_for(
     .bind(profile_owner_actor_id)
     .bind(harness)
     .bind(provider_account_id)
+    .bind(worker_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::ExecutionProfileRequired)

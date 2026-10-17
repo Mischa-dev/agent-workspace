@@ -40,7 +40,9 @@ test('creates a task and moves it across the board', async ({ page }) => {
   await expect(page).toHaveURL(/\/home$/)
 
   // Into the Project and its work items, the way a person would get there.
-  await page.getByRole('navigation', { name: 'Projects' }).getByRole('link', { name: seeded.projectName }).click()
+  // The rail reopens the last place this person was in the Project, which
+  // another spec may have left on its settings, so start from the channel.
+  await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/channels/${seededValue('E2E_CHANNEL_ID')}`)
   await page.getByRole('link', { name: 'Work items' }).click()
   await expect(page.getByRole('heading', { name: 'Work items', exact: true })).toBeVisible()
 

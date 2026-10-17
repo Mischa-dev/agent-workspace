@@ -382,13 +382,25 @@ async fn create_account(
     let manifest = state
         .supervisors
         .manifest(&request.adapter_kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::Validation("adapterKind"))?;
     let name = match request.name.as_deref().map(str::trim) {
         Some(name) => valid_account_name(name)?,
         None => manifest.display_name.clone(),
     };
     let project = require_project_manager(&state, &principal, project_id).await?;
+    // Another workspace's registered harness is not one this one can use.
+    if state
+        .supervisors
+        .manifest_in(project.organization_id, &request.adapter_kind)
+        .is_none()
+        || state
+            .supervisors
+            .runner_for(&request.adapter_kind)
+            .is_some()
+    {
+        return Err(AppError::Validation("adapterKind"));
+    }
     let scope =
         idempotency::resource_bound_scope("project", project_id, "provider_account_create")?;
     let mut transaction = state.pool.begin().await?;
@@ -518,7 +530,7 @@ async fn update_account(
     let manifest = state
         .supervisors
         .manifest(&access.adapter_kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::Conflict(
             "provider_account",
             "this harness is not installed",
@@ -691,7 +703,7 @@ pub(crate) async fn use_account_in_project(
     let manifest = state
         .supervisors
         .manifest(&account.adapter_kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::Conflict(
             "provider_account",
             "this harness is not installed",

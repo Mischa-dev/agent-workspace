@@ -319,6 +319,16 @@ async fn main() -> anyhow::Result<()> {
         supervisors: supervisors.clone(),
     };
 
+    state.supervisors.set_host(Arc::new(
+        agent_workspace_server::harness_host::ServerHost::new(pool.clone(), Arc::clone(&config)),
+    ));
+    // Registered harnesses load before runs of their kinds are recovered.
+    if let Err(error) = agent_workspace_server::harnesses::reload(&state).await {
+        tracing::warn!(
+            error_category = error.log_category(),
+            "registered harnesses not loaded"
+        );
+    }
     let recovered = recovery::reconcile_non_terminal_runs(&state)
         .await
         .context("reconcile non-terminal Agent Runs")?;
@@ -367,6 +377,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    agent_workspace_server::harnesses::spawn_reloader(state.clone());
     let mut run_scheduler = tokio::spawn(agent_workspace_server::scheduler::run(
         state.clone(),
         shutdown_receiver.clone(),

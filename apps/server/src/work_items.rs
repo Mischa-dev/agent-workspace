@@ -1552,6 +1552,7 @@ async fn work_with_worker(
             repository_id: Some(repository_id),
             config: None,
             provider_account_id: None,
+            agent_profile_id: None,
         }),
     )
     .await?;

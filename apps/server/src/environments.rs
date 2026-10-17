@@ -131,6 +131,7 @@ pub(crate) fn view(
     EnvironmentView {
         is_default: default == Some(row.id),
         harness_name: manifest
+            .as_ref()
             .map(|manifest| manifest.display_name.clone())
             .unwrap_or_else(|| row.harness.clone()),
         runs_on: manifest.map(|manifest| manifest.runs_on),
@@ -150,10 +151,11 @@ pub(crate) fn view(
     }
 }
 
-pub(crate) fn harness_choices(state: &AppState) -> Vec<HarnessChoice> {
+pub(crate) fn harness_choices(state: &AppState, organization_id: Uuid) -> Vec<HarnessChoice> {
     state
         .supervisors
-        .manifests()
+        .manifests_in(organization_id)
+        .into_iter()
         .map(|manifest| HarnessChoice {
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
@@ -282,7 +284,7 @@ pub(crate) async fn list_for(
             .collect(),
         default_environment_id: default,
         default_source,
-        harnesses: harness_choices(state),
+        harnesses: harness_choices(state, organization_id),
         can_manage,
     })
 }
@@ -348,9 +350,14 @@ async fn clean(
     if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
         return Err(AppError::Validation("name"));
     }
+    let organization_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(&state.pool)
+            .await?;
     let manifest = state
         .supervisors
-        .manifest(&request.harness)
+        .manifest_in(organization_id, &request.harness)
         .ok_or(AppError::Validation("harness"))?;
     let provider_environment_id = optional_text(request.provider_environment_id);
     if provider_environment_id

@@ -4,8 +4,8 @@
 //! unless the number moves) and keeps one row per window cycle with the most
 //! it reached before resetting, so the page can say how much each plan is
 //! used and how much went unused. Runs are counted per cycle and per
-//! project; cost per project comes from the run cost records once they
-//! exist, and the view says when they don't.
+//! project; cost per project comes from the run usage records (U2), and the
+//! view says when an account has none yet.
 
 use std::collections::BTreeMap;
 
@@ -409,15 +409,34 @@ pub(crate) async fn account_history(
         });
     }
 
-    let projects = sqlx::query_as::<_, (Option<Uuid>, Option<String>, i64)>(&format!(
+    // Cost comes from W12's per-run usage records (U2), in each record's
+    // currency; mixed currencies are rare enough to report as USD.
+    let projects = sqlx::query_as::<
+        _,
+        (
+            Option<Uuid>,
+            Option<String>,
+            i64,
+            Option<f64>,
+            Option<String>,
+        ),
+    >(&format!(
         r#"
         SELECT CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.id END,
                CASE WHEN actor_can_access_project($2, NULL, project.id) THEN project.name END,
-               count(*)
+               count(*),
+               sum(usage.cost),
+               min(usage.currency)
         FROM agent_runs run
         JOIN execution_profiles profile ON profile.id = run.execution_profile_id
         JOIN conversations conversation ON conversation.id = run.conversation_id
         JOIN projects project ON project.id = conversation.project_id
+        LEFT JOIN LATERAL (
+            SELECT sum(COALESCE(estimated_cost, reported_cost_usd)) AS cost,
+                   min(COALESCE(currency, 'USD')) AS currency
+            FROM agent_run_usage
+            WHERE agent_run_id = run.id
+        ) usage ON true
         WHERE profile.provider_account_id = $1
           AND run.created_at >= now() - interval '{PROJECT_DAYS} days'
         GROUP BY 1, 2
@@ -431,18 +450,24 @@ pub(crate) async fn account_history(
     .await?;
     let mut uses = Vec::new();
     let mut hidden = 0;
-    for (project_id, name, runs) in projects {
+    for (project_id, name, runs, cost, currency) in projects {
         match (project_id, name) {
             (Some(project_id), Some(name)) => uses.push(ProjectUse {
                 project_id: Some(project_id),
                 project_name: name,
                 runs,
-                cost: None,
-                currency: None,
+                currency: cost.and(currency),
+                cost,
             }),
             _ => hidden += runs,
         }
     }
+    let cost_tracked = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM agent_run_usage WHERE provider_account_id = $1)",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
     if hidden > 0 {
         uses.push(ProjectUse {
             project_id: None,
@@ -457,7 +482,7 @@ pub(crate) async fn account_history(
         windows: histories,
         projects: uses,
         project_days: PROJECT_DAYS,
-        cost_tracked: false,
+        cost_tracked,
     })
 }
 

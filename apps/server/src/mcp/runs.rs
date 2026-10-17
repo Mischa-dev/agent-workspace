@@ -356,6 +356,7 @@ pub(super) async fn run_start(
                 })
                 .filter(|config| *config != Default::default()),
                 provider_account_id: None,
+                agent_profile_id: None,
             },
             Ok(key),
         )

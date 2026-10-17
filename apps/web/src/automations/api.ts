@@ -147,7 +147,7 @@ export type Conditions = {
 export type Recipients = 'owner' | 'assignee' | 'project_admins'
 
 export type RuleAction =
-  | { kind: 'launch'; environmentId?: string | null; prompt?: string | null }
+  | { kind: 'launch'; environmentId?: string | null; prompt?: string | null; agentProfileId?: string | null }
   | {
       kind: 'set_field'
       field: 'status' | 'priority' | 'assignee' | 'add_label' | 'remove_label'

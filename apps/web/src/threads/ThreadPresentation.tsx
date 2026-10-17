@@ -114,6 +114,10 @@ export function RunCard({ actions, notes, run }: { actions?: ReactNode; notes?: 
           {run.failureReason}
         </p>
       ) : null}
+      <div className="aw-run__row">
+        <Icon name="activity" size={14} />
+        <Link to={`/runs/${encodeURIComponent(run.id)}`}>See every step, the diff and the cost</Link>
+      </div>
       {notes}
       {actions ? <footer className="aw-card__actions">{actions}</footer> : null}
     </section>

@@ -71,7 +71,7 @@ Settings › Project › Automation rules, or the `automation_list`,
   `capacity_window` (a provider account resets soon with capacity left).
 - Conditions: a saved view (and its filters) the task must match.
 - Actions, up to five, in order: `launch` (with the project's run defaults
-  or a chosen environment; `agentProfileId` is reserved for agent profiles),
+  or a chosen environment; `agentProfileId` launches as one of the project's agents),
   `set_field`, `notify` and `post_message`. Text can use `{{task.key}}`,
   `{{task.title}}`, `{{task.url}}`, `{{task.status}}`, `{{run.state}}`,
   `{{pr.number}}`, `{{pr.title}}`, `{{pr.url}}`, `{{rule.name}}` and

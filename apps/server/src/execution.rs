@@ -342,6 +342,7 @@ async fn list_execution_workers(
         state
             .supervisors
             .manifests()
+            .into_iter()
             .map(|manifest| manifest.kind.clone())
             .collect::<Vec<_>>(),
     )
@@ -467,7 +468,7 @@ async fn register_personal_execution_profile(
     let manifest = state
         .supervisors
         .manifest(&adapter_kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::Validation("adapterKind"))?;
     let mut transaction = state.pool.begin().await?;
     let access = require_project_action(
@@ -696,8 +697,8 @@ async fn list_harnesses(
     transaction.commit().await?;
     let can_edit = may_edit_catalog(&principal, &workspace);
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests() {
-        harnesses.push(harness_view(&state, workspace.organization_id, manifest, can_edit).await?);
+    for manifest in state.supervisors.manifests_in(workspace.organization_id) {
+        harnesses.push(harness_view(&state, workspace.organization_id, &manifest, can_edit).await?);
     }
     Ok(Json(HarnessesResponse { harnesses }))
 }
@@ -717,7 +718,7 @@ async fn refresh_catalog(
     let manifest = state
         .supervisors
         .manifest(&kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::NotFound("harness"))?;
     if !manifest.features.model_listing {
         return Err(AppError::Conflict(
@@ -882,7 +883,7 @@ async fn save_model_overrides(
     let manifest = state
         .supervisors
         .manifest(&kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::NotFound("harness"))?;
     let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
     catalog::save_overrides(
@@ -911,7 +912,7 @@ async fn remove_model(
     let manifest = state
         .supervisors
         .manifest(&kind)
-        .cloned()
+        .map(|manifest| (*manifest).clone())
         .ok_or(AppError::NotFound("harness"))?;
     let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
     if !catalog::remove_model(&state.pool, organization_id, &manifest.kind, &model_id).await? {
@@ -1221,7 +1222,9 @@ fn provider_view(
     let manifest = registry.manifest(kind);
     Ok(ProviderView {
         kind: kind.to_owned(),
-        display_name: manifest.map(|manifest| manifest.display_name.clone()),
+        display_name: manifest
+            .as_ref()
+            .map(|manifest| manifest.display_name.clone()),
         enabled,
         version: positive_version(version)?,
         binary_version: binary_version.to_owned(),

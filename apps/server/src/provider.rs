@@ -17,14 +17,21 @@ use crate::{
 
 pub mod adapter;
 pub mod catalog;
+pub(crate) mod claude_cloud;
+pub(crate) mod claude_code;
 mod codex_app_server;
 pub(crate) mod codex_cloud;
+pub(crate) mod command_line;
 #[cfg(test)]
 mod contract_tests;
 pub mod demo;
+pub mod host;
+mod line_process;
 pub mod manifest;
-mod registry;
+pub(crate) mod registry;
 pub mod run_config;
+pub(crate) mod secret_fd;
+mod slots;
 
 pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
@@ -139,9 +146,13 @@ pub(crate) async fn resolve_run_config(
             "agent_run",
             "this harness is not installed",
         ))?;
-    let catalog = catalog::run_catalog(&state.pool, organization_id, manifest).await?;
+    let catalog = catalog::run_catalog(&state.pool, organization_id, &manifest).await?;
     launch
-        .resolve(&RunConfig::from_value(account_defaults), manifest, &catalog)
+        .resolve(
+            &RunConfig::from_value(account_defaults),
+            &manifest,
+            &catalog,
+        )
         .map_err(|error| AppError::Validation(error.0))
 }
 
@@ -162,11 +173,11 @@ pub(crate) async fn resolve_stored_run_config(
             "agent_run",
             "this harness is not installed",
         ))?;
-    let catalog = catalog::run_catalog(&state.pool, organization_id, manifest).await?;
+    let catalog = catalog::run_catalog(&state.pool, organization_id, &manifest).await?;
     launch
         .resolve_keeping_what_still_fits(
             &RunConfig::from_value(account_defaults),
-            manifest,
+            &manifest,
             &catalog,
         )
         .map_err(|error| AppError::Validation(error.0))
@@ -735,47 +746,18 @@ async fn drive_turn(
                     }
                     HarnessEvent::ItemStarted(event)
                         if event.kind == ItemKind::CommandExecution => {
-                        persist_event(
-                            &state,
-                            project_id,
-                            run_id,
-                            conversation_id,
-                            SignificantProviderEvent {
-                                key: &event.key,
-                                kind: "command_started",
-                                summary: "The agent started a command in the isolated worktree.",
-                                payload: json!({}),
-                            },
-                        ).await?;
+                        record_step(&state, project_id, run_id, conversation_id, &event, "command_started", true).await?;
                     }
                     HarnessEvent::ItemCompleted(event)
                         if event.kind == ItemKind::CommandExecution => {
-                        persist_event(
-                            &state,
-                            project_id,
-                            run_id,
-                            conversation_id,
-                            SignificantProviderEvent {
-                                key: &event.key,
-                                kind: "command_completed",
-                                summary: "The agent completed a command in the isolated worktree.",
-                                payload: json!({}),
-                            },
-                        ).await?;
+                        record_step(&state, project_id, run_id, conversation_id, &event, "command_completed", true).await?;
                     }
                     HarnessEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
-                        persist_event(
-                            &state,
-                            project_id,
-                            run_id,
-                            conversation_id,
-                            SignificantProviderEvent {
-                                key: &event.key,
-                                kind: "file_change",
-                                summary: "The agent completed a file change in the isolated worktree.",
-                                payload: json!({}),
-                            },
-                        ).await?;
+                        record_step(&state, project_id, run_id, conversation_id, &event, "file_change", true).await?;
+                    }
+                    HarnessEvent::ItemCompleted(event)
+                        if event.kind == ItemKind::Other && event.detail.tool.is_some() => {
+                        record_step(&state, project_id, run_id, conversation_id, &event, "tool_used", false).await?;
                     }
                     HarnessEvent::TurnCompleted { completed } => {
                         if !completed {
@@ -800,6 +782,27 @@ async fn drive_turn(
                     }
                     HarnessEvent::UsageUpdated(report) => {
                         crate::usage::record_run_report(&state, provider.account_id(), report).await;
+                    }
+                    HarnessEvent::TokensUsed(usage) => {
+                        crate::run_log::record_tokens(&state, run_id, usage).await;
+                    }
+                    HarnessEvent::Note(text) => {
+                        if !text.trim().is_empty() {
+                            let key = format!("note:{}", Uuid::now_v7());
+                            persist_event(
+                                &state,
+                                project_id,
+                                run_id,
+                                conversation_id,
+                                SignificantProviderEvent {
+                                    key: &key,
+                                    kind: "agent_note",
+                                    summary: &crate::run_log::cap(&crate::run_log::redact(text.trim()), 160),
+                                    payload: crate::run_log::note_payload(&text),
+                                    in_thread: false,
+                                },
+                            ).await?;
+                        }
                     }
                     HarnessEvent::ItemStarted(_)
                     | HarnessEvent::ItemCompleted(_)
@@ -1207,6 +1210,64 @@ struct SignificantProviderEvent<'a> {
     kind: &'a str,
     summary: &'a str,
     payload: Value,
+    /// Whether the step also shows in the thread; notes and minor tools
+    /// show only on the run page.
+    in_thread: bool,
+}
+
+/// Stores one step of a run with its redacted detail, and the tests its
+/// output reported as a step of their own.
+async fn record_step(
+    state: &AppState,
+    project_id: Uuid,
+    run_id: Uuid,
+    conversation_id: Uuid,
+    item: &crate::provider::adapter::HarnessItem,
+    kind: &str,
+    in_thread: bool,
+) -> Result<(), AppError> {
+    let payload = crate::run_log::item_payload(item);
+    let summary = crate::run_log::step_summary(kind, &item.detail);
+    let tests = payload.get("tests").cloned();
+    persist_event(
+        state,
+        project_id,
+        run_id,
+        conversation_id,
+        SignificantProviderEvent {
+            key: &item.key,
+            kind,
+            summary: &summary,
+            payload,
+            in_thread,
+        },
+    )
+    .await?;
+    if let (Some(tests), "command_completed") = (tests, kind) {
+        let passed = tests["passed"].as_u64().unwrap_or(0);
+        let failed = tests["failed"].as_u64().unwrap_or(0);
+        let summary = if failed == 0 {
+            format!("Tests passed: {passed}")
+        } else {
+            format!("Tests failed: {failed} of {}", passed + failed)
+        };
+        let key = format!("{}:tests", item.key);
+        persist_event(
+            state,
+            project_id,
+            run_id,
+            conversation_id,
+            SignificantProviderEvent {
+                key: &key,
+                kind: "test_result",
+                summary: &summary,
+                payload: json!({ "tests": tests, "command": item.detail.command.as_deref().map(|command| crate::run_log::cap(&crate::run_log::redact(command), 2_000)) }),
+                in_thread: false,
+            },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn persist_event(
@@ -1227,7 +1288,9 @@ async fn persist_event(
     )
     .await?
     {
-        insert_entry(&mut transaction, conversation_id, event_id).await?;
+        if event.in_thread {
+            insert_entry(&mut transaction, conversation_id, event_id).await?;
+        }
         outbox::enqueue_agent_run_updated(&mut transaction, project_id, conversation_id, run_id)
             .await?;
     }

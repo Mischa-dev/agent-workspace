@@ -66,6 +66,6 @@ reshapes pages in an area re-runs the list for those pages.
 | Home and onboarding | Home, first-run setup |
 | Conversations | Channels, DMs, threads, inbox |
 | Tasks | List, board, detail, milestones, views |
-| Runs and launch | Launch dialog, launches, run cards |
+| Runs and launch | Launch dialog, launches, run cards; Runs list and run page (W12) |
 | Settings | Account, workspace, project |
-| Agents | Agent settings, external agents, runners |
+| Agents | Agent settings, external agents, runners; project agents and harnesses (W12) |

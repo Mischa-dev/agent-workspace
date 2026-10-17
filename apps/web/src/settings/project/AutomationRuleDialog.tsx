@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { describeError } from '../../app/mutations'
+import { useProfiles } from '../../agents/hooks'
 import {
   createRule,
   updateRule,
@@ -120,6 +121,7 @@ export function RuleDialog({
     queryKey: ['project', projectId, 'environments'],
     queryFn: () => listEnvironments(projectId),
   })
+  const profiles = useProfiles(projectId)
   const channels = useQuery({
     queryKey: ['project', projectId, 'automations', 'channels'],
     queryFn: () => getProjectConversationSidebar(projectId),
@@ -235,6 +237,7 @@ export function RuleDialog({
                 channels={channelList}
                 environments={environments.data?.environments ?? []}
                 index={index}
+                profiles={(profiles.data?.profiles ?? []).filter((profile) => profile.enabled)}
                 onChange={(next) => setAction(index, next)}
               />
             </div>
@@ -433,18 +436,34 @@ function ActionFields({
   environments,
   index,
   onChange,
+  profiles,
 }: {
   action: RuleAction
   channels: ChannelChoice[]
   environments: { id: string; name: string; isDefault: boolean }[]
   index: number
   onChange: (action: RuleAction) => void
+  profiles: { id: string; name: string; handle: string }[]
 }) {
   const id = (name: string) => `rule-action-${index}-${name}`
   switch (action.kind) {
     case 'launch':
       return (
         <>
+          <SelectField
+            hint="A project agent brings its own harness, model settings, instructions and environment."
+            id={id('agent')}
+            label="Agent"
+            onChange={(event) => onChange({ ...action, agentProfileId: event.target.value || null })}
+            value={action.agentProfileId ?? ''}
+          >
+            <option value="">The project’s run defaults</option>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name} (@{profile.handle})
+              </option>
+            ))}
+          </SelectField>
           <SelectField
             id={id('environment')}
             label="Environment"

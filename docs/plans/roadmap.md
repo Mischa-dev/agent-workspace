@@ -595,7 +595,7 @@ schedule.
 
 ### Wave 3: Your harnesses and the payoff
 
-#### W12. Your harnesses
+#### W12. Your harnesses (#150)
 
 *9 items · Starts when W1, W2, W5 and W7 have merged · 4 add a migration*
 
@@ -603,15 +603,15 @@ Moment 4: Claude Code and your own harnesses run exactly like Codex, every run
 has a page with its log, diff and cost, and agents become profiles you create
 from templates.
 
-- [ ] [H5](#h5-see-what-a-run-did) See what a run did
-- [ ] [U2](#u2-tokens-and-cost) Tokens and cost
-- [ ] [H6](#h6-claude-code-adapter) Claude Code adapter
-- [ ] [C3](#c3-claude-code-cloud-adapter) Claude Code cloud adapter
-- [ ] [H7](#h7-command-line-harness-adapter) Command-line harness adapter
-- [ ] [X1](#x1-runner-sdks-and-the-harness-guide) Runner SDKs and the harness guide
-- [ ] [X2](#x2-register-a-harness) Register a harness
-- [ ] [A9](#a9-agent-profiles) Agent profiles
-- [ ] [A10](#a10-agent-presence) Agent presence
+- [x] [H5](#h5-see-what-a-run-did) See what a run did
+- [x] [U2](#u2-tokens-and-cost) Tokens and cost
+- [x] [H6](#h6-claude-code-adapter) Claude Code adapter
+- [x] [C3](#c3-claude-code-cloud-adapter) Claude Code cloud adapter
+- [x] [H7](#h7-command-line-harness-adapter) Command-line harness adapter
+- [x] [X1](#x1-runner-sdks-and-the-harness-guide) Runner SDKs and the harness guide
+- [x] [X2](#x2-register-a-harness) Register a harness
+- [x] [A9](#a9-agent-profiles) Agent profiles
+- [x] [A10](#a10-agent-presence) Agent presence
 
 **Owns:** New adapters in `provider/` (Claude Code, its cloud, the command
 line), run event payloads and the run page, token and cost records, the runner

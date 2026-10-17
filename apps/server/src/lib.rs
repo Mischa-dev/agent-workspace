@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod account_security;
+pub mod agent_profiles;
 pub mod agent_sessions;
 pub mod ai;
 pub mod api;
@@ -24,6 +25,8 @@ pub mod external_events;
 pub mod external_execution;
 pub mod git_runtime;
 pub mod github;
+pub mod harness_host;
+pub mod harnesses;
 pub mod health;
 pub mod home;
 pub mod idempotency;
@@ -55,6 +58,8 @@ pub mod recovery;
 pub mod replies;
 pub mod repositories;
 pub mod retention;
+pub mod run_log;
+pub mod run_views;
 pub mod runs;
 pub mod scheduler;
 pub mod search;
@@ -103,6 +108,12 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    state
+        .supervisors
+        .set_host(Arc::new(harness_host::ServerHost::new(
+            state.pool.clone(),
+            Arc::clone(&state.config),
+        )));
     let request_id = REQUEST_ID_HEADER.clone();
     let web_root = state.config.web_root.clone();
     let index = web_root.join("index.html");
@@ -127,7 +138,10 @@ pub fn router(state: AppState) -> Router {
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(environments::router())
+        .merge(harnesses::router())
         .merge(launch::router())
+        .merge(run_views::router())
+        .merge(agent_profiles::router())
         .merge(agent_sessions::router())
         .merge(github::router())
         .merge(invitations::router())

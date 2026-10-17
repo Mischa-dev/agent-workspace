@@ -78,6 +78,7 @@ mod planning;
 mod reactions;
 mod reads;
 mod replies;
+mod run_pages;
 mod runs;
 mod settings_tools;
 mod talk;
@@ -1894,6 +1895,57 @@ impl McpServer {
     ) -> Json<common::ToolResult<runs::RunListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(runs::run_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "What a run did: its steps in order (commands with exit code and the end of their output, file changes, the agent's notes, other tools, approvals and test results), test totals, the files it changed against its base, and tokens and estimated cost per model. includeDiff: true adds the unified diff. Secrets were removed before steps were stored.",
+        annotations(
+            title = "Read run steps",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn run_steps(
+        &self,
+        Parameters(arguments): Parameters<run_pages::RunStepsArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<run_pages::RunStepsValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(run_pages::run_steps(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Tokens in, out and cached, and estimated cost, of the runs you can see, totalled per day, project, account or model (groupBy) over the last days (30 by default). Cost comes from the model catalog's prices, or what the harness reported. Your own accounts are named; other people's show as one row.",
+        annotations(
+            title = "Run usage and cost",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn run_usage(
+        &self,
+        Parameters(arguments): Parameters<run_pages::RunUsageArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<run_pages::RunUsageValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(run_pages::run_usage(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's agents and what each is doing now (idle, working on a task, or waiting for an answer), the agent profiles people made there (Reviewer, Planner, Fixer or their own: @handle, harness, model settings, instructions, allowed tools, environment), the harnesses a new agent could run on and the templates. Tag an agent's @handle in a thread to give it work. Profiles are made in project settings.",
+        annotations(
+            title = "List agent profiles",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn agent_profile_list(
+        &self,
+        Parameters(arguments): Parameters<run_pages::AgentProfileListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<run_pages::AgentProfileListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(run_pages::agent_profile_list(&self.state, principal, arguments).await)
     }
 
     #[tool(
