@@ -390,14 +390,14 @@ describe('App Project creation and settings', () => {
     expect(screen.getByText('Viewer')).toBeVisible()
     expect(screen.getByRole('note')).toHaveTextContent('Viewer access is read-only')
     const sections = screen.getByRole('list', { name: 'Project settings' })
-    expect(within(sections).queryByRole('link', { name: 'Codex runs' })).not.toBeInTheDocument()
+    expect(within(sections).queryByRole('link', { name: 'Run requests' })).not.toBeInTheDocument()
     expect(within(sections).queryByRole('link', { name: 'Automation' })).not.toBeInTheDocument()
     expect(within(sections).queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument()
     expect(within(sections).queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
     fireEvent.click(within(sections).getByRole('link', { name: 'Repositories' }))
     expect(await screen.findByRole('heading', { name: 'Repositories' })).toBeVisible()
     expect(
-      screen.queryByRole('heading', { name: 'Codex account' }),
+      screen.queryByRole('heading', { name: 'Accounts for runs' }),
     ).not.toBeInTheDocument()
   })
 })

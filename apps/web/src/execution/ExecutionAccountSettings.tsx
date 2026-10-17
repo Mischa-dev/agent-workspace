@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
-import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField } from '../ui'
+import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField, formatShortDate } from '../ui'
 import {
   cancelAccountLogin,
   createProviderAccount,
@@ -463,7 +463,7 @@ function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: str
           </h3>
           <p className="aw-profile__sub">
             Everyone in this workspace picks from this list.
-            {harness.catalog.refreshedAt ? ` Updated ${new Date(harness.catalog.refreshedAt).toLocaleDateString()}.` : ''}
+            {harness.catalog.refreshedAt ? ` Updated ${formatShortDate(harness.catalog.refreshedAt)}.` : ''}
           </p>
         </div>
         {harness.features.modelListing ? (

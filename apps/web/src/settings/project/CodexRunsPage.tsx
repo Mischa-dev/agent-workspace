@@ -5,13 +5,13 @@ import { PageHeader, Section } from '../../ui'
 import { accountSettingsHref } from '../paths'
 import type { SettingsPageProps } from '../types'
 
-/** Project › Codex runs: agents asking to run Codex on your account in this Project. */
+/** Project › Run requests: agents asking to run on your provider account in this Project. */
 export default function CodexRunsPage({ project }: SettingsPageProps) {
   if (!project) return null
   return (
     <>
-      <PageHeader icon="play" title="Codex runs">
-        Agents can ask to run Codex on your account. Nothing runs until you approve it here. Your Codex sign-in is under{' '}
+      <PageHeader icon="play" title="Run requests">
+        Agents can ask to run on your provider account. Nothing runs until you approve it here. Your sign-ins are under{' '}
         <Link to={`${accountSettingsHref('provider-accounts')}?project=${encodeURIComponent(project.id)}`}>Provider accounts</Link>.
       </PageHeader>
       <Section id="sponsored-execution-heading" title="Run requests from agents">

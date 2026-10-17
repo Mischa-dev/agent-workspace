@@ -1,10 +1,9 @@
 import {
-  FormEvent,
   useCallback,
   useMemo,
   useState,
 } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Link,
   Navigate,
@@ -26,10 +25,6 @@ import {
 } from '../projects/ProjectPageStates'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
-import {
-  isSafeMessageText,
-  messageTextScalarValues,
-} from '../conversations/messageContentModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { ConversationHeader } from '../conversations/ConversationHeader'
@@ -43,21 +38,14 @@ import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useArchiveConversation } from '../conversations/useArchiveConversation'
 import { SessionLinks } from '../launch/SessionLinks'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
-import { useInstantMutation } from '../app/mutations'
 import { usePageTitle } from '../shell/documentTitleModel'
 import {
-  normalizeTimelinePage,
   retryReplyRequest,
   searchMentionableActors,
   sendConversationMessage,
   stopReplyRequest,
 } from '../conversations/api'
-import type {
-  ConversationCapabilities,
-  ConversationTimelineEntry,
-  ConversationTimelinePage,
-  ConversationWorkItemReference,
-} from '../conversations/types'
+import type { ConversationTimelineEntry } from '../conversations/types'
 import { useConversationRealtime } from '../realtime/realtimeContext'
 import { useSetWorkItemThreadLink } from '../work-items/hooks'
 import { searchWorkItemReferences } from '../work-items/api'
@@ -70,385 +58,17 @@ import {
   Dialog,
   Dots,
   ErrorState,
-  Icon,
   IconButton,
   MessageSkeleton,
   SegmentedControl,
 } from '../ui'
 import { ApprovalCard, RunBadge, RunCard, ThreadDetails } from './ThreadPresentation'
-
-export type RunState =
-  | 'created'
-  | 'queued'
-  | 'starting'
-  | 'working'
-  | 'blocked'
-  | 'recovering'
-  | 'completed'
-  | 'failed'
-  | 'canceled'
-  | 'interrupted'
-
-export type Run = {
-  id: string
-  /** The settings frozen on the run when it started (harness, model, reasoning, speed). */
-  config?: unknown
-  state: RunState
-  repositoryId: string
-  repositoryWorkspaceId: string | null
-  providerSessionId: string | null
-  providerTurnId: string | null
-  branch: string | null
-  baseCommit: string | null
-  publishedCommit: string | null
-  publishedAt: string | null
-  publishFailureCategory: string | null
-  pullRequestRequestState: string | null
-  pullRequestFailureCategory: string | null
-  pullRequestNumber: number | null
-  pullRequestId: string | null
-  pullRequestUrl: string | null
-  pullRequestTitle: string | null
-  pullRequestState: string | null
-  pullRequestDraft: boolean | null
-  pullRequestChecksState: string | null
-  pullRequestReviewState: string | null
-  pullRequestMergeabilityState: string | null
-  pullRequestSyncState: string | null
-  pullRequestSyncFailureCategory: string | null
-  pullRequestAutomationState: string | null
-  pullRequestAutomationReason: string | null
-  queuePosition: number | null
-  failureReason: string | null
-  failureAcknowledged: boolean
-  createdAt: string
-  updatedAt: string
-  capabilities: {
-    interrupt: boolean
-    retry: boolean
-    publish: boolean
-    createPullRequest: boolean
-    refreshPullRequest: boolean
-  }
-}
-export type Approval = {
-  id: string
-  agentRunId: string
-  kind: 'approval' | 'question'
-  summary: string
-  options: Array<{ id: string; label: string }>
-  status: string
-  response: { decision?: string; answer?: string } | null
-  createdAt: string
-  capabilities: {
-    respond: boolean
-  }
-}
-
-type Timeline = {
-  conversation: ConversationTimelinePage['conversation']
-  linkedWorkItems: ConversationWorkItemReference[]
-  entries: ConversationTimelineEntry[]
-  nextCursor: string | null
-  highestSequence: number
-  readState: {
-    highestSeenSequence: number
-    version: number
-  }
-  activeRun: Run | null
-  latestTerminalRun: Run | null
-  approvals: Approval[]
-  capabilities: ConversationCapabilities & { workerInvoke: boolean }
-  replyRequests: ConversationTimelinePage['replyRequests']
-}
+import { RunCardActions, RunCardNotes, RunComposer } from './ThreadRunControls'
+import { runAgent } from './runAgent'
+import { normalizeTimeline, useThread } from './threadTimeline'
+import { useThreadRunActions } from './useThreadRunActions'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
-
-// What a run action failed to do, for its error toast.
-const ACTION_ERRORS: Record<string, string> = {
-  start: 'Couldn’t start the run',
-  interrupt: 'Couldn’t stop the run',
-  retry: 'Couldn’t run it again',
-  publish: 'Couldn’t publish the branch',
-  'pull-request': 'Couldn’t open the pull request',
-  'pull-request-refresh': 'Couldn’t check GitHub',
-  'acknowledge-failure': 'Couldn’t dismiss the failure',
-}
-
-const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
-  requestJson(path, { method: 'POST', idempotencyKey, json })
-
-/** The thread's run commands, one request each. */
-const threadApi = {
-  startRun: (threadId: string, prompt: string, key: string) =>
-    post(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, key, { prompt }),
-  respond: (approvalId: string, action: string, response: { decision: 'approve' | 'deny' } | { answer: string }) =>
-    post(`/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`, `approval-${approvalId}-${action}`, response),
-  interrupt: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`, `interrupt-${runId}`),
-  retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
-  publish: (projectId: string, runId: string, key: string) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`, key),
-  createPullRequest: (projectId: string, runId: string, key: string, json: { title: string; body: string; workItemIds: string[] }) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`, key, json),
-  refreshPullRequest: (projectId: string, pullRequestId: string) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`, crypto.randomUUID()),
-  acknowledgeFailure: (runId: string, eventId: string) =>
-    post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/acknowledge-failure`, `acknowledge-failure-${runId}-${eventId}`, { eventId }),
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object'
-    ? (value as Record<string, unknown>)
-    : {}
-}
-
-function explicitCapability(value: unknown, name: string) {
-  return asRecord(value)[name] === true
-}
-
-function normalizeTimeline(value: unknown): Timeline {
-  const record = asRecord(value)
-  const durable = normalizeTimelinePage(value)
-  const activeRunRecord = asRecord(record.activeRun)
-  const activeRun =
-    typeof activeRunRecord.id === 'string'
-      ? ({
-          ...activeRunRecord,
-          providerTurnId:
-            typeof activeRunRecord.providerTurnId === 'string'
-              ? activeRunRecord.providerTurnId
-              : null,
-          branch:
-            typeof activeRunRecord.branch === 'string'
-              ? activeRunRecord.branch
-              : null,
-          baseCommit:
-            typeof activeRunRecord.baseCommit === 'string'
-              ? activeRunRecord.baseCommit
-              : null,
-          publishedCommit:
-            typeof activeRunRecord.publishedCommit === 'string'
-              ? activeRunRecord.publishedCommit
-              : null,
-          publishedAt:
-            typeof activeRunRecord.publishedAt === 'string'
-              ? activeRunRecord.publishedAt
-              : null,
-          publishFailureCategory:
-            typeof activeRunRecord.publishFailureCategory === 'string'
-              ? activeRunRecord.publishFailureCategory
-              : null,
-          pullRequestRequestState: null,
-          pullRequestFailureCategory: null,
-          pullRequestNumber: null,
-          pullRequestId: null,
-          pullRequestUrl: null,
-          pullRequestTitle: null,
-          pullRequestState: null,
-          pullRequestDraft: null,
-          pullRequestChecksState: null,
-          pullRequestReviewState: null,
-          pullRequestMergeabilityState: null,
-          pullRequestSyncState: null,
-          pullRequestSyncFailureCategory: null,
-          pullRequestAutomationState: null,
-          pullRequestAutomationReason: null,
-          queuePosition:
-            typeof activeRunRecord.queuePosition === 'number'
-              ? activeRunRecord.queuePosition
-              : null,
-          failureAcknowledged: false,
-          capabilities: {
-            interrupt: explicitCapability(
-              activeRunRecord.capabilities,
-              'interrupt',
-            ),
-            retry: explicitCapability(activeRunRecord.capabilities, 'retry'),
-            publish: false,
-            createPullRequest: false,
-            refreshPullRequest: false,
-          },
-        } as Run)
-      : null
-  const latestTerminalRunRecord = asRecord(record.latestTerminalRun)
-  const latestTerminalRun =
-    typeof latestTerminalRunRecord.id === 'string'
-      ? ({
-          ...latestTerminalRunRecord,
-          providerTurnId:
-            typeof latestTerminalRunRecord.providerTurnId === 'string'
-              ? latestTerminalRunRecord.providerTurnId
-              : null,
-          branch:
-            typeof latestTerminalRunRecord.branch === 'string'
-              ? latestTerminalRunRecord.branch
-              : null,
-          baseCommit:
-            typeof latestTerminalRunRecord.baseCommit === 'string'
-              ? latestTerminalRunRecord.baseCommit
-              : null,
-          publishedCommit:
-            typeof latestTerminalRunRecord.publishedCommit === 'string'
-              ? latestTerminalRunRecord.publishedCommit
-              : null,
-          publishedAt:
-            typeof latestTerminalRunRecord.publishedAt === 'string'
-              ? latestTerminalRunRecord.publishedAt
-              : null,
-          publishFailureCategory:
-            typeof latestTerminalRunRecord.publishFailureCategory === 'string'
-              ? latestTerminalRunRecord.publishFailureCategory
-              : null,
-          pullRequestRequestState:
-            typeof latestTerminalRunRecord.pullRequestRequestState === 'string'
-              ? latestTerminalRunRecord.pullRequestRequestState
-              : null,
-          pullRequestFailureCategory:
-            typeof latestTerminalRunRecord.pullRequestFailureCategory ===
-            'string'
-              ? latestTerminalRunRecord.pullRequestFailureCategory
-              : null,
-          pullRequestNumber:
-            typeof latestTerminalRunRecord.pullRequestNumber === 'number'
-              ? latestTerminalRunRecord.pullRequestNumber
-              : null,
-          pullRequestId:
-            typeof latestTerminalRunRecord.pullRequestId === 'string'
-              ? latestTerminalRunRecord.pullRequestId
-              : null,
-          pullRequestUrl:
-            typeof latestTerminalRunRecord.pullRequestUrl === 'string'
-              ? latestTerminalRunRecord.pullRequestUrl
-              : null,
-          pullRequestTitle:
-            typeof latestTerminalRunRecord.pullRequestTitle === 'string'
-              ? latestTerminalRunRecord.pullRequestTitle
-              : null,
-          pullRequestState:
-            typeof latestTerminalRunRecord.pullRequestState === 'string'
-              ? latestTerminalRunRecord.pullRequestState
-              : null,
-          pullRequestDraft:
-            typeof latestTerminalRunRecord.pullRequestDraft === 'boolean'
-              ? latestTerminalRunRecord.pullRequestDraft
-              : null,
-          pullRequestChecksState:
-            typeof latestTerminalRunRecord.pullRequestChecksState === 'string'
-              ? latestTerminalRunRecord.pullRequestChecksState
-              : null,
-          pullRequestReviewState:
-            typeof latestTerminalRunRecord.pullRequestReviewState === 'string'
-              ? latestTerminalRunRecord.pullRequestReviewState
-              : null,
-          pullRequestMergeabilityState:
-            typeof latestTerminalRunRecord.pullRequestMergeabilityState ===
-            'string'
-              ? latestTerminalRunRecord.pullRequestMergeabilityState
-              : null,
-          pullRequestSyncState:
-            typeof latestTerminalRunRecord.pullRequestSyncState === 'string'
-              ? latestTerminalRunRecord.pullRequestSyncState
-              : null,
-          pullRequestSyncFailureCategory:
-            typeof latestTerminalRunRecord.pullRequestSyncFailureCategory ===
-            'string'
-              ? latestTerminalRunRecord.pullRequestSyncFailureCategory
-              : null,
-          pullRequestAutomationState:
-            typeof latestTerminalRunRecord.pullRequestAutomationState ===
-            'string'
-              ? latestTerminalRunRecord.pullRequestAutomationState
-              : null,
-          pullRequestAutomationReason:
-            typeof latestTerminalRunRecord.pullRequestAutomationReason ===
-            'string'
-              ? latestTerminalRunRecord.pullRequestAutomationReason
-              : null,
-          queuePosition: null,
-          failureAcknowledged:
-            latestTerminalRunRecord.failureAcknowledged === true,
-          capabilities: {
-            interrupt: false,
-            retry: explicitCapability(
-              latestTerminalRunRecord.capabilities,
-              'retry',
-            ),
-            publish: explicitCapability(
-              latestTerminalRunRecord.capabilities,
-              'publish',
-            ),
-            createPullRequest: explicitCapability(
-              latestTerminalRunRecord.capabilities,
-              'createPullRequest',
-            ),
-            refreshPullRequest: explicitCapability(
-              latestTerminalRunRecord.capabilities,
-              'refreshPullRequest',
-            ),
-          },
-        } as Run)
-      : null
-  const approvals = Array.isArray(record.approvals)
-    ? record.approvals
-        .map((value) => asRecord(value))
-        .filter((approval) => typeof approval.id === 'string')
-        .map(
-          (approval) =>
-            ({
-              ...approval,
-              capabilities: {
-                respond: explicitCapability(
-                  approval.capabilities,
-                  'respond',
-                ),
-              },
-            }) as Approval,
-        )
-    : []
-  return {
-    ...durable,
-    activeRun,
-    latestTerminalRun,
-    approvals,
-    capabilities: {
-      ...durable.capabilities,
-      workerInvoke: explicitCapability(
-        record.capabilities,
-        'workerInvoke',
-      ),
-    },
-  }
-}
-
-function useThread(
-  projectId: string,
-  threadId: string,
-  includeArchived: boolean,
-) {
-  const timeline = useQuery({
-    queryKey: queryKeys.timeline(projectId, threadId, includeArchived),
-    queryFn: async () =>
-      normalizeTimeline(
-        await requestJson<unknown>(
-          `/api/v1/conversations/${encodeURIComponent(threadId)}/timeline${
-            includeArchived ? '?includeArchived=true' : ''
-          }`,
-        ),
-      ),
-    enabled: Boolean(threadId),
-    retry: false,
-  })
-  const routeMatches = Boolean(
-    timeline.data?.conversation.projectId === projectId &&
-      timeline.data.conversation.id === threadId &&
-      timeline.data.conversation.kind === 'thread',
-  )
-
-  return {
-    routeMatches,
-    timeline,
-  }
-}
 
 export function ThreadPage() {
   const session = useAuthenticatedSession()
@@ -466,17 +86,6 @@ export function ThreadPage() {
   usePageTitle(verifiedTimeline?.conversation.name ?? null)
   const activeRun = verifiedTimeline?.activeRun ?? null
   const latestTerminalRun = verifiedTimeline?.latestTerminalRun ?? null
-  const [prompt, setPrompt] = useState('')
-  const [startIdempotencyKey, setStartIdempotencyKey] = useState<string | null>(
-    null,
-  )
-  const [publishIdempotencyKey, setPublishIdempotencyKey] = useState<
-    string | null
-  >(null)
-  const [pullRequestIdempotencyKey, setPullRequestIdempotencyKey] = useState<
-    string | null
-  >(null)
-  const [acknowledgedRunId, setAcknowledgedRunId] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [pendingSends, setPendingSends] = useState<{ key: string; text?: string }[]>([])
   const [archiveOpen, setArchiveOpen] = useState(false)
@@ -536,19 +145,6 @@ export function ThreadPage() {
   const stopAgent = verifiedTimeline?.capabilities.sendMessage
     ? (requestId: string) => stopReplyRequest(requestId).then(() => thread.timeline.refetch())
     : undefined
-  const latestFailureEvent = useMemo(
-    () =>
-      latestTerminalRun?.state === 'failed'
-        ? [...entries]
-            .reverse()
-            .find(
-              (entry) =>
-                entry.workerEvent?.agentRunId === latestTerminalRun.id &&
-                entry.workerEvent.kind === 'run_failed',
-            )?.workerEvent ?? null
-        : null,
-    [entries, latestTerminalRun],
-  )
   const olderCursor = older.cursor
 
   const onSeen = useCallback(
@@ -572,20 +168,8 @@ export function ThreadPage() {
     onSeen,
   )
 
-  const action = useInstantMutation({
-    mutationFn: ({ request }: { key: string; request: () => Promise<unknown> }) => request(),
-    errorTitle: ({ key }) => ACTION_ERRORS[key] ?? (key.includes(':') ? 'Couldn’t send your answer' : 'That didn’t work'),
-    invalidate: () => [queryKeys.timeline(projectId, threadId, includeArchived)],
-    onSuccess: (_result, { key }) => {
-      if (key === 'start') setPrompt('')
-    },
-  })
-  const busyAction = action.isPending ? action.variables.key : null
-  const perform = (key: string, request: () => Promise<unknown>) =>
-    action.mutateAsync({ key, request }).then(
-      () => true,
-      () => false,
-    )
+  const runActions = useThreadRunActions({ entries, includeArchived, projectId, threadId, timeline: verifiedTimeline })
+  const { busyAction } = runActions
   const archiveThread = useArchiveConversation({
     conversationId: threadId,
     kind: 'thread',
@@ -595,121 +179,6 @@ export function ThreadPage() {
       : `/projects/${encodeURIComponent(projectId)}`,
     projectId,
   })
-
-  const startRun = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (verifiedTimeline?.capabilities.workerInvoke !== true || activeRun) {
-      return
-    }
-    const value = prompt.trim()
-    if (!value || !isSafeMessageText(value)) return
-    const commandKey = startIdempotencyKey ?? crypto.randomUUID()
-    if (!startIdempotencyKey) setStartIdempotencyKey(commandKey)
-    void perform('start', () => threadApi.startRun(threadId, value, commandKey)).then((succeeded) => {
-      if (succeeded) setStartIdempotencyKey(null)
-    })
-  }
-
-  const respond = (
-    approvalId: string,
-    response: { decision: 'approve' | 'deny' } | { answer: string },
-  ) => {
-    const approval = verifiedTimeline?.approvals.find(
-      (candidate) => candidate.id === approvalId,
-    )
-    if (
-      !approval ||
-      approval.status !== 'pending' ||
-      approval.capabilities.respond !== true
-    ) {
-      return
-    }
-    const kind = 'decision' in response ? response.decision : 'answer'
-    void perform(`${approvalId}:${kind}`, () => threadApi.respond(approvalId, kind, response))
-  }
-
-  const interrupt = () => {
-    const runId = activeRun?.id
-    if (!runId || activeRun.capabilities.interrupt !== true) return
-    void perform('interrupt', () => threadApi.interrupt(runId))
-  }
-
-  const retryLastRun = () => {
-    const runId = latestTerminalRun?.id
-    if (!runId || latestTerminalRun.capabilities.retry !== true || activeRun) return
-    void perform('retry', () => threadApi.retry(runId))
-  }
-
-  const publishLastRun = () => {
-    const runId = latestTerminalRun?.id
-    if (
-      !runId ||
-      !latestTerminalRun.repositoryWorkspaceId ||
-      latestTerminalRun.capabilities.publish !== true ||
-      activeRun
-    ) {
-      return
-    }
-    const commandKey = publishIdempotencyKey ?? crypto.randomUUID()
-    if (!publishIdempotencyKey) setPublishIdempotencyKey(commandKey)
-    void perform('publish', () => threadApi.publish(projectId, runId, commandKey)).then((succeeded) => {
-      if (succeeded) setPublishIdempotencyKey(null)
-    })
-  }
-
-  const createPullRequest = () => {
-    const runId = latestTerminalRun?.id
-    if (
-      !runId ||
-      latestTerminalRun.capabilities.createPullRequest !== true ||
-      activeRun
-    ) {
-      return
-    }
-    const firstWorkItem = verifiedTimeline?.linkedWorkItems[0]
-    const rawTitle = firstWorkItem
-      ? `${firstWorkItem.key}: ${firstWorkItem.title}`
-      : verifiedTimeline?.conversation.name || 'Agent Workspace change'
-    const title = Array.from(rawTitle).slice(0, 256).join('')
-    const commandKey = pullRequestIdempotencyKey ?? crypto.randomUUID()
-    if (!pullRequestIdempotencyKey) setPullRequestIdempotencyKey(commandKey)
-    void perform('pull-request', () =>
-      threadApi.createPullRequest(projectId, runId, commandKey, {
-        title,
-        body: 'Created from an explicitly published Agent Workspace run.',
-        workItemIds: verifiedTimeline?.linkedWorkItems.map((item) => item.id) ?? [],
-      }),
-    ).then((succeeded) => {
-      if (succeeded) setPullRequestIdempotencyKey(null)
-    })
-  }
-
-  const refreshPullRequest = () => {
-    const pullRequestId = latestTerminalRun?.pullRequestId
-    if (
-      !pullRequestId ||
-      latestTerminalRun.capabilities.refreshPullRequest !== true
-    ) {
-      return
-    }
-    void perform('pull-request-refresh', () => threadApi.refreshPullRequest(projectId, pullRequestId))
-  }
-
-  const acknowledgeFailure = () => {
-    if (
-      !latestTerminalRun ||
-      !latestFailureEvent ||
-      latestTerminalRun.failureAcknowledged ||
-      acknowledgedRunId === latestTerminalRun.id
-    ) {
-      return
-    }
-    const runId = latestTerminalRun.id
-    const eventId = latestFailureEvent.id
-    void perform('acknowledge-failure', () => threadApi.acknowledgeFailure(runId, eventId)).then((succeeded) => {
-      if (succeeded) setAcknowledgedRunId(runId)
-    })
-  }
 
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
@@ -789,6 +258,8 @@ export function ThreadPage() {
   )
   const mode: 'message' | 'run' = !canMessage ? 'run' : !showRunComposer ? 'message' : composerMode
   const runForCard = activeRun ?? latestTerminalRun
+  // Streamed text comes from the run that's working now.
+  const writer = runAgent(activeRun)
   const channelRoute = parentId
     ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parentId)}`
     : `/projects/${encodeURIComponent(projectId)}`
@@ -815,77 +286,12 @@ export function ThreadPage() {
       />
     ) : undefined
 
-  const busy = Boolean(busyAction)
-  const runActions = runForCard ? (
-    activeRun ? (
-      activeRun.capabilities.interrupt ? (
-        <Button busy={busyAction === 'interrupt'} icon="stop" onClick={interrupt} size="sm">
-          {busyAction === 'interrupt' ? 'Stopping…' : 'Stop run'}
-        </Button>
-      ) : null
-    ) : (
-      <>
-        {latestTerminalRun?.capabilities.createPullRequest ? (
-          <Button busy={busyAction === 'pull-request'} disabled={busy} icon="pull-request" onClick={createPullRequest} size="sm" variant="primary">
-            {busyAction === 'pull-request' ? 'Opening pull request…' : 'Create pull request'}
-          </Button>
-        ) : null}
-        {latestTerminalRun?.capabilities.publish && latestTerminalRun.repositoryWorkspaceId ? (
-          <Button busy={busyAction === 'publish'} disabled={busy} icon="branch" onClick={publishLastRun} size="sm">
-            {busyAction === 'publish' ? 'Publishing…' : 'Publish branch'}
-          </Button>
-        ) : null}
-        {latestTerminalRun?.capabilities.retry ? (
-          <Button busy={busyAction === 'retry'} disabled={busy} icon="retry" onClick={retryLastRun} size="sm">
-            {busyAction === 'retry' ? 'Starting again…' : 'Run again'}
-          </Button>
-        ) : null}
-        {latestTerminalRun?.pullRequestId && latestTerminalRun.capabilities.refreshPullRequest ? (
-          <Button busy={busyAction === 'pull-request-refresh'} disabled={busy} icon="retry" onClick={refreshPullRequest} size="sm" variant="ghost">
-            {busyAction === 'pull-request-refresh' ? 'Checking GitHub…' : 'Refresh GitHub status'}
-          </Button>
-        ) : null}
-        {latestFailureEvent && !latestTerminalRun?.failureAcknowledged && acknowledgedRunId !== latestTerminalRun?.id ? (
-          <Button busy={busyAction === 'acknowledge-failure'} disabled={busy} onClick={acknowledgeFailure} size="sm" variant="ghost">
-            {busyAction === 'acknowledge-failure' ? 'Dismissing…' : 'Dismiss failure'}
-          </Button>
-        ) : null}
-      </>
-    )
-  ) : null
-
-  const runNotes =
-    latestTerminalRun && !activeRun ? (
-      <>
-        {latestTerminalRun.publishFailureCategory ? (
-          <p className="aw-run__error" role="status">
-            <Icon name="circle-alert" size={14} />
-            Publishing needs attention: {latestTerminalRun.publishFailureCategory.replaceAll('_', ' ')}.
-          </p>
-        ) : null}
-        {latestTerminalRun.pullRequestRequestState && !latestTerminalRun.pullRequestUrl ? (
-          <p className="aw-run__detail">Pull request: {latestTerminalRun.pullRequestRequestState.replaceAll('_', ' ')}</p>
-        ) : null}
-        {latestTerminalRun.pullRequestFailureCategory ? (
-          <p className="aw-run__error" role="status">
-            <Icon name="circle-alert" size={14} />
-            The pull request needs attention: {latestTerminalRun.pullRequestFailureCategory.replaceAll('_', ' ')}.
-          </p>
-        ) : null}
-        {latestTerminalRun.pullRequestSyncState === 'failed' ? (
-          <p className="aw-run__error" role="status">
-            <Icon name="circle-alert" size={14} />
-            GitHub status needs attention: {(latestTerminalRun.pullRequestSyncFailureCategory ?? 'sync_failed').replaceAll('_', ' ')}.
-          </p>
-        ) : null}
-        {latestTerminalRun.pullRequestAutomationState && latestTerminalRun.pullRequestAutomationState !== 'not_evaluated' ? (
-          <p className="aw-run__detail">
-            Work item automation: {latestTerminalRun.pullRequestAutomationState.replaceAll('_', ' ')}
-            {latestTerminalRun.pullRequestAutomationReason ? ` · ${latestTerminalRun.pullRequestAutomationReason.replaceAll('_', ' ')}` : ''}
-          </p>
-        ) : null}
-      </>
+  // An active run without a stop button has no actions, so its card has no footer.
+  const cardActions =
+    runForCard && (!activeRun || activeRun.capabilities.interrupt) ? (
+      <RunCardActions actions={runActions} activeRun={activeRun} latestTerminalRun={latestTerminalRun} />
     ) : null
+  const cardNotes = latestTerminalRun && !activeRun ? <RunCardNotes run={latestTerminalRun} /> : null
 
   const modeSwitch =
     canMessage && showRunComposer ? (
@@ -894,7 +300,7 @@ export function ThreadPage() {
         onChange={setComposerMode}
         options={[
           { value: 'message', label: 'Message', icon: 'message' },
-          { value: 'run', label: 'Run with Codex', icon: 'terminal' },
+          { value: 'run', label: 'Run an agent', icon: 'terminal' },
         ]}
         value={mode}
       />
@@ -980,11 +386,12 @@ export function ThreadPage() {
         {verifiedTimeline && !olderCursor ? (
           <ConversationIntro icon="messages" title={threadName}>
             {verifiedTimeline.capabilities.workerInvoke
-              ? 'A focused conversation. Ask Codex to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
+              ? 'A focused conversation. Ask an agent to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
               : 'A focused conversation inside the channel. Everything said here stays with this thread.'}
           </ConversationIntro>
         ) : null}
         <TimelineEntries
+          agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
           entries={entries}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
@@ -1012,13 +419,13 @@ export function ThreadPage() {
           />
         ))}
         {Object.entries(realtime.streaming).map(([messageId, text]) => (
-          <article aria-label="Codex is writing" className="aw-msg is-streaming" key={messageId}>
+          <article aria-label={`${writer.name} is writing`} className="aw-msg is-streaming" key={messageId}>
             <div className="aw-msg__gutter">
-              <Avatar kind="worker" name="Codex" seed="codex" size={36} working />
+              <Avatar kind="worker" name={writer.name} seed={writer.seed} size={36} working />
             </div>
             <div className="aw-msg__main">
               <div className="aw-msg__meta">
-                <span className="aw-msg__author">Codex</span>
+                <span className="aw-msg__author">{writer.name}</span>
                 <ActorTag kind="worker" />
                 <Dots label="Writing" />
               </div>
@@ -1028,7 +435,7 @@ export function ThreadPage() {
         ))}
         {runForCard ? (
           <div className="aw-timeline__card">
-            <RunCard actions={runActions} notes={runNotes} run={runForCard} />
+            <RunCard actions={cardActions} notes={cardNotes} run={runForCard} />
           </div>
         ) : null}
         {pendingApproval ? (
@@ -1037,7 +444,8 @@ export function ThreadPage() {
               approval={pendingApproval}
               busyAction={busyAction}
               canRespond={pendingApproval.capabilities.respond}
-              onRespond={respond}
+              onRespond={runActions.respond}
+              run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.agentRunId) ?? activeRun}
             />
           </div>
         ) : null}
@@ -1053,50 +461,7 @@ export function ThreadPage() {
           toolbar={modeSwitch}
         />
       ) : null}
-      {mode === 'run' && showRunComposer ? (
-        <form className="aw-composer-wrap" onSubmit={startRun}>
-          {modeSwitch ? <div className="aw-composer__toolbar">{modeSwitch}</div> : null}
-          <div className="aw-composer aw-composer--run">
-            <label className="visually-hidden" htmlFor="agent-prompt">
-              Describe the change for Codex
-            </label>
-            <textarea
-              disabled={Boolean(activeRun) || busyAction === 'start'}
-              id="agent-prompt"
-              onChange={(event) => {
-                setPrompt(event.target.value)
-                setStartIdempotencyKey(null)
-              }}
-              placeholder={
-                activeRun ? 'Codex is already working in this thread. Stop the run to start a new one.' : 'Describe the change for Codex to make…'
-              }
-              rows={3}
-              value={prompt}
-            />
-            <div className="aw-composer__bar">
-              <span className="aw-composer__meta">
-                <Icon name="terminal" size={14} /> Runs in an isolated workspace on your host
-              </span>
-              <div className="aw-composer__end">
-                {messageTextScalarValues(prompt) > 18_000 ? (
-                  <span className="aw-composer__count">{(20_000 - messageTextScalarValues(prompt)).toLocaleString()}</span>
-                ) : null}
-                <Button
-                  busy={busyAction === 'start'}
-                  disabled={Boolean(activeRun) || !prompt.trim() || !isSafeMessageText(prompt.trim())}
-                  icon="terminal"
-                  size="sm"
-                  type="submit"
-                  variant="primary"
-                >
-                  {busyAction === 'start' ? 'Starting…' : 'Start run'}
-                </Button>
-              </div>
-            </div>
-          </div>
-          <p className="aw-composer__hint" aria-hidden="true" />
-        </form>
-      ) : null}
+      {mode === 'run' && showRunComposer ? <RunComposer actions={runActions} activeRun={activeRun} modeSwitch={modeSwitch} /> : null}
       {verifiedTimeline && archived ? (
         <StructuredComposer disabledReason="This thread is archived. Nobody can post here." onSubmit={async () => undefined} searchActors={async () => []} />
       ) : null}

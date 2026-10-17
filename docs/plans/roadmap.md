@@ -629,18 +629,18 @@ harness and a 100-line SDK harness both take a task to a pull request and show
 in the Launch dialog with their own models; and every run shows its log, diff,
 tokens and cost.
 
-#### W13. Payoff and finish
+#### W13. Payoff and finish (#149)
 
 *5 items · Starts when W2, W4, W6, W7, W8, W9 and W10 have merged*
 
 Moment 2 in full (one tap launches the batch the alert suggests), the usage
 page, a real Home, onboarding, and a polish pass over every area.
 
-- [ ] [U4](#u4-use-it-before-it-resets) Use it before it resets
-- [ ] [U5](#u5-usage-page) Usage page
-- [ ] [P3](#p3-home) Home
-- [ ] [P5](#p5-onboarding) Onboarding
-- [ ] [P7](#p7-finish-each-area) Finish each area
+- [x] [U4](#u4-use-it-before-it-resets) Use it before it resets
+- [x] [U5](#u5-usage-page) Usage page
+- [x] [P3](#p3-home) Home
+- [x] [P5](#p5-onboarding) Onboarding
+- [x] [P7](#p7-finish-each-area) Finish each area
 
 **Owns:** The suggested batch, the usage page, `HomePage.tsx`, the onboarding
 path, and the polish checklist in `docs/frontend/`. The polish pass touches

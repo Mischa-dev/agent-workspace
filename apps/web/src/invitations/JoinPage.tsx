@@ -17,7 +17,7 @@ import {
   type ResolvedInvitation,
 } from './api'
 import { AuthLayout } from '../auth/AuthLayout'
-import { Banner } from '../ui'
+import { Banner, Button, TextField } from '../ui'
 
 type JoinMode = 'new' | 'existing'
 
@@ -227,94 +227,83 @@ export function JoinPage() {
             )}
 
             {!signedIn && mode === 'new' && (
-              <div className="field">
-                <label htmlFor="join-display-name">Display name</label>
-                <input
-                  autoComplete="name"
-                  disabled={submitting}
-                  id="join-display-name"
-                  maxLength={128}
-                  onChange={(event) => setDisplayName(event.target.value)}
-                  required
-                  value={displayName}
-                />
-              </div>
+              <TextField
+                autoComplete="name"
+                disabled={submitting}
+                id="join-display-name"
+                label="Display name"
+                maxLength={128}
+                onChange={(event) => setDisplayName(event.target.value)}
+                required
+                value={displayName}
+              />
             )}
             {!signedIn && (
-              <div className="field">
-                <label htmlFor="join-login-name">Login name</label>
-                <input
-                  autoComplete="username"
-                  disabled={submitting}
-                  id="join-login-name"
-                  maxLength={64}
-                  onChange={(event) => setLoginName(event.target.value)}
-                  required
-                  value={loginName}
-                />
-              </div>
-            )}
-            <div className="field">
-              <label htmlFor="join-handle">{workspace ? 'Handle' : 'Project handle'}</label>
-              <input
-                autoComplete="off"
+              <TextField
+                autoComplete="username"
                 disabled={submitting}
-                id="join-handle"
+                id="join-login-name"
+                label="Login name"
                 maxLength={64}
-                onChange={(event) => setHandle(event.target.value)}
+                onChange={(event) => setLoginName(event.target.value)}
                 required
-                value={handle}
+                value={loginName}
               />
-            </div>
+            )}
+            <TextField
+              autoComplete="off"
+              disabled={submitting}
+              id="join-handle"
+              label={workspace ? 'Handle' : 'Project handle'}
+              maxLength={64}
+              onChange={(event) => setHandle(event.target.value)}
+              required
+              value={handle}
+            />
             {!signedIn && !needsCode && (
-              <div className="field">
-                <label htmlFor="join-password">Password</label>
-                <input
-                  autoComplete={mode === 'new' ? 'new-password' : 'current-password'}
-                  disabled={submitting}
-                  id="join-password"
-                  minLength={12}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                  type="password"
-                  value={password}
-                />
-              </div>
+              <TextField
+                autoComplete={mode === 'new' ? 'new-password' : 'current-password'}
+                disabled={submitting}
+                id="join-password"
+                label="Password"
+                minLength={12}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                type="password"
+                value={password}
+              />
             )}
             {needsCode && (
-              <div className="field">
-                <label htmlFor="join-two-factor-code">Two-factor code</label>
-                <input
-                  autoComplete="one-time-code"
-                  autoFocus
-                  disabled={submitting}
-                  id="join-two-factor-code"
-                  maxLength={32}
-                  onChange={(event) => setCode(event.target.value)}
-                  required
-                  spellCheck={false}
-                  value={code}
-                />
-                <p className="aw-field__note">The 6-digit code from your authenticator app, or a recovery code.</p>
-              </div>
+              <TextField
+                autoComplete="one-time-code"
+                autoFocus
+                disabled={submitting}
+                hint="The 6-digit code from your authenticator app, or a recovery code."
+                id="join-two-factor-code"
+                label="Two-factor code"
+                maxLength={32}
+                onChange={(event) => setCode(event.target.value)}
+                required
+                spellCheck={false}
+                value={code}
+              />
             )}
             {!signedIn && mode === 'new' && (
-              <div className="field">
-                <label htmlFor="join-password-confirmation">Confirm password</label>
-                <input
-                  autoComplete="new-password"
-                  disabled={submitting}
-                  id="join-password-confirmation"
-                  minLength={12}
-                  onChange={(event) => setPasswordConfirmation(event.target.value)}
-                  required
-                  type="password"
-                  value={passwordConfirmation}
-                />
-              </div>
+              <TextField
+                autoComplete="new-password"
+                disabled={submitting}
+                id="join-password-confirmation"
+                label="Confirm password"
+                minLength={12}
+                onChange={(event) => setPasswordConfirmation(event.target.value)}
+                required
+                type="password"
+                value={passwordConfirmation}
+              />
             )}
-            <button
-              className="aw-btn aw-btn--primary aw-btn--lg aw-auth__submit"
+            <Button
+              busy={submitting}
+              className="aw-auth__submit"
               disabled={
                 submitting ||
                 !handle.trim() ||
@@ -323,10 +312,12 @@ export function JoinPage() {
                   : !signedIn && (!loginName.trim() || password.length < 12)) ||
                 (!signedIn && mode === 'new' && (!displayName.trim() || password !== passwordConfirmation))
               }
+              size="lg"
               type="submit"
+              variant="primary"
             >
               {submitting ? 'Joining…' : signedIn ? 'Accept invitation' : mode === 'new' ? 'Create account and join' : 'Sign in and join'}
-            </button>
+            </Button>
           </form>
         )}
     </AuthLayout>

@@ -302,9 +302,9 @@ function eventTone(kind: string) {
   return undefined
 }
 
-export function WorkerEventRow({ createdAt, event }: { createdAt: string; event: ConversationWorkerEvent }) {
+export function WorkerEventRow({ actor = 'Agent', createdAt, event }: { actor?: string; createdAt: string; event: ConversationWorkerEvent }) {
   return (
-    <ActivityRow actor="Codex" icon={eventIcon(event.kind)} time={formatTime(createdAt)} tone={eventTone(event.kind)}>
+    <ActivityRow actor={actor} icon={eventIcon(event.kind)} time={formatTime(createdAt)} tone={eventTone(event.kind)}>
       <span className="aw-event__kind">{eventLabel(event.kind)}.</span> {event.summary}
     </ActivityRow>
   )
@@ -320,6 +320,7 @@ export function SystemRow({ createdAt }: { createdAt: string }) {
 
 /** Day dividers, the New line and Slack-style grouping for a run of timeline entries. */
 export function TimelineEntries({
+  agentName,
   entries,
   firstUnreadSequence,
   onOpenHistory,
@@ -329,6 +330,8 @@ export function TimelineEntries({
   renderToolbar,
   viewerId,
 }: {
+  /** The name of the agent behind a run's events, by run id. */
+  agentName?: (agentRunId: string) => string
   entries: ConversationTimelineEntry[]
   /** Show the New line before the first entry at or past this sequence. */
   firstUnreadSequence?: number | null
@@ -379,7 +382,7 @@ export function TimelineEntries({
         />
       )
     } else if (entry.workerEvent) {
-      row = <WorkerEventRow createdAt={entry.createdAt} event={entry.workerEvent} />
+      row = <WorkerEventRow actor={agentName?.(entry.workerEvent.agentRunId)} createdAt={entry.createdAt} event={entry.workerEvent} />
     } else {
       row = <SystemRow createdAt={entry.createdAt} />
     }

@@ -3,17 +3,11 @@ import { useState } from 'react'
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { formatFullDate } from '../conversations/timeFormat'
-import { ActorTag, Avatar, Banner, Icon, MessageSkeleton, actorKind } from '../ui'
+import { ActorTag, Avatar, Banner, Icon, MessageSkeleton, actorKind, formatDateTime, formatFullDate } from '../ui'
 import { searchWorkItemReferences } from './api'
 import { formatChanges, type FormattedChange } from './historyFormat'
 import { useCreateWorkItemComment, useWorkItemTimeline } from './hooks'
 import type { WorkItem } from './types'
-
-function shortDate(iso: string) {
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
 
 /** "Priority High → Urgent", with the old value struck through for sighted readers. */
 function ChangeLine({ change }: { change: Extract<FormattedChange, { kind: 'field' }> }) {
@@ -82,7 +76,7 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
             const kind = actorKind(actor?.kind ?? 'human')
             const when = (
               <time className="aw-activity__time" dateTime={entry.createdAt} title={formatFullDate(entry.createdAt)}>
-                {shortDate(entry.createdAt)}
+                {formatDateTime(entry.createdAt)}
               </time>
             )
             if (entry.comment) {

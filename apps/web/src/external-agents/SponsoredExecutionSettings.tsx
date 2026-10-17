@@ -93,7 +93,7 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
               }
               key={request.id}
               leading={<Avatar kind="agent" name={request.requesterDisplayName} seed={request.requestingActorId} size={32} />}
-              meta={`@${request.requesterHandle} · asks to run Codex on your account · expires ${formatWhen(request.expiresAt)}`}
+              meta={`@${request.requesterHandle} · asks to run on your account · expires ${formatWhen(request.expiresAt)}`}
               title={
                 <span className="aw-row__titleline">
                   {request.requesterDisplayName}

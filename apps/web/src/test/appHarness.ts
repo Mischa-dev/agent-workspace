@@ -134,6 +134,7 @@ export const timeline = {
     repositoryId: 'repo-1',
     repositoryWorkspaceId: 'workspace-1',
     providerSessionId: null,
+    config: { harness: 'codex' },
     failureReason: null,
     createdAt: '2026-07-31T04:00:00Z',
     updatedAt: '2026-07-31T04:01:00Z',
@@ -234,6 +235,31 @@ export function installStandardApi(
       }
       if (path.includes('/agent-approvals/approval-1/respond')) {
         return jsonResponse({ ...timeline.approvals[0], status: 'resolved' })
+      }
+      // Home's sections, quiet by default.
+      if (path === '/api/v1/home') {
+        return jsonResponse({ working: [], workingTotal: 0, queuedLaunches: 0 })
+      }
+      if (path.startsWith('/api/v1/inbox?')) {
+        return jsonResponse({ notifications: [], nextCursor: null, unreadCount: 0 })
+      }
+      if (path === '/api/v1/usage') return jsonResponse({ accounts: [] })
+      if (path === '/api/v1/my-work') {
+        const empty = { items: [], total: 0 }
+        return jsonResponse({ assigned: empty, claimed: empty, review: empty })
+      }
+      if (path.endsWith('/onboarding') && method === 'GET') {
+        return jsonResponse({
+          organizationId: organization.id,
+          organizationName: organization.name,
+          projectId: projectAId,
+          projectName: 'Project A',
+          steps: [],
+          nextStep: null,
+          complete: true,
+          dismissed: false,
+          canManageWorkspace: true,
+        })
       }
       throw new Error(`Unexpected request: ${method} ${path}`)
     },

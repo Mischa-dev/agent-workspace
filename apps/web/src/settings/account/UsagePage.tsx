@@ -3,14 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
-import { QuickLaunch } from '../../launch/QuickLaunch'
 import {
   Banner,
   Button,
   Dialog,
   EmptyState,
   ErrorState,
-  ListSkeleton,
   PageHeader,
   Row,
   RowList,
@@ -27,7 +25,6 @@ import {
 import {
   addSchedule,
   listUsage,
-  readyTasks,
   refreshUsage,
   removeSchedule,
   setRule,
@@ -48,6 +45,8 @@ import {
   weekdays,
   windowTone,
 } from './usageModel'
+import { UsageBatch } from './UsageBatch'
+import { UsageHistory } from './UsageHistory'
 import './usage.css'
 
 const RULE_LABELS: Record<AlertRule['rule'], string> = {
@@ -64,12 +63,18 @@ const FAILURES: Record<string, string> = {
   unavailable: 'The harness couldn’t be reached the last time we checked.',
 }
 
-/** Account › Usage and alerts: every usage window with a live countdown (U1), alert rules (U3) and banked resets (U6). */
+/**
+ * Account › Usage and alerts: every usage window with a live countdown (U1),
+ * the batch to run before a reset (U4), history and waste (U5), alert rules
+ * (U3) and banked resets (U6).
+ */
 export default function UsagePage() {
   const usage = useQuery({ queryKey: usageKeys.list, queryFn: listUsage, refetchInterval: 60_000 })
   const [params] = useSearchParams()
   const focused = params.get('account')
-  const showReady = params.get('ready') === '1'
+  // A capacity alert's Review opens the batch (`batch=1`); older alerts said `ready=1`.
+  const showBatch = params.get('batch') === '1' || params.get('ready') === '1'
+  const windowKey = params.get('window')
   const accounts = [...(usage.data?.accounts ?? [])].sort(
     (left, right) => Number(right.accountId === focused) - Number(left.accountId === focused),
   )
@@ -103,7 +108,8 @@ export default function UsagePage() {
             account={account}
             focused={account.accountId === focused}
             key={account.accountId}
-            openReady={showReady && account.accountId === focused}
+            openBatch={showBatch && account.accountId === focused}
+            windowKey={account.accountId === focused ? windowKey : null}
           />
         ))
       )}
@@ -122,7 +128,17 @@ function useAccountUpdate() {
   }
 }
 
-function AccountUsageSection({ account, focused, openReady }: { account: AccountUsage; focused: boolean; openReady: boolean }) {
+function AccountUsageSection({
+  account,
+  focused,
+  openBatch,
+  windowKey,
+}: {
+  account: AccountUsage
+  focused: boolean
+  openBatch: boolean
+  windowKey: string | null
+}) {
   const update = useAccountUpdate()
   const refresh = useMutation({
     mutationFn: () => refreshUsage(account.accountId),
@@ -158,7 +174,8 @@ function AccountUsageSection({ account, focused, openReady }: { account: Account
         ) : null}
         <Windows windows={account.windows} />
         <BankedResets account={account} />
-        <ReadyTasks accountId={account.accountId} initiallyOpen={openReady} />
+        <UsageBatch accountId={account.accountId} initiallyOpen={openBatch} windowKey={windowKey} />
+        <UsageHistory accountId={account.accountId} />
         <Schedules account={account} />
         <Rules account={account} />
       </Section>
@@ -264,60 +281,6 @@ function BankedResets({ account }: { account: AccountUsage }) {
         {spend.isError ? <Banner tone="danger">{describeError(spend.error).message}</Banner> : null}
         {next?.title ? <p>{next.title}</p> : null}
       </Dialog>
-    </div>
-  )
-}
-
-function ReadyTasks({ accountId, initiallyOpen }: { accountId: string; initiallyOpen: boolean }) {
-  const [open, setOpen] = useState(initiallyOpen)
-  const ready = useQuery({ queryKey: usageKeys.ready(accountId), queryFn: () => readyTasks(accountId), enabled: open })
-  const heading = useRef<HTMLHeadingElement>(null)
-  useEffect(() => {
-    if (initiallyOpen) heading.current?.focus({ preventScroll: false })
-  }, [initiallyOpen])
-  return (
-    <div className="aw-usage__block" id={initiallyOpen ? 'ready-tasks' : undefined}>
-      <div className="aw-usage__blockhead">
-        <h3 className="aw-usage__blocktitle" ref={heading} tabIndex={-1}>
-          Ready to run
-        </h3>
-        <Button aria-expanded={open} onClick={() => setOpen((value) => !value)} size="sm" variant="ghost">
-          {open ? 'Hide' : 'Show tasks'}
-        </Button>
-      </div>
-      {!open ? (
-        <p className="aw-usage__at">Open, unblocked tasks with a repository, in the projects this account runs for.</p>
-      ) : ready.isPending ? (
-        <ListSkeleton label="Loading ready tasks" rows={3} />
-      ) : ready.isError ? (
-        <Banner tone="danger">The ready tasks didn’t load.</Banner>
-      ) : ready.data.tasks.length === 0 ? (
-        <p className="aw-usage__at">Nothing is ready right now.</p>
-      ) : (
-        <RowList label="Ready tasks">
-          {ready.data.tasks.map((task) => (
-            <Row
-              actions={
-                <>
-                  <Link className="aw-btn aw-btn--secondary aw-btn--sm" to={task.href}>
-                    <span className="aw-btn__label">Open</span>
-                  </Link>
-                  <QuickLaunch providerAccountId={accountId} task={task} />
-                </>
-              }
-              key={task.id}
-              meta={[task.projectName, task.priority !== 'none' ? task.priority : null, task.unblocks > 0 ? `unblocks ${task.unblocks}` : null]
-                .filter(Boolean)
-                .join(' · ')}
-              title={
-                <>
-                  <span className="aw-usage__key">{task.key}</span> {task.title}
-                </>
-              }
-            />
-          ))}
-        </RowList>
-      )}
     </div>
   )
 }

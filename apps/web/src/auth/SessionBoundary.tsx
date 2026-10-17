@@ -13,6 +13,7 @@ import {
 import { RealtimeProvider } from '../realtime/RealtimeProvider'
 import { CommandCenter } from '../shell/CommandCenter'
 import { DocumentTitle } from '../shell/DocumentTitle'
+import { Button } from '../ui'
 
 // Loads after the page: it only keeps the account's saved theme in step.
 const AppearanceSync = lazy(() => import('../theme/AppearanceSync'))
@@ -65,9 +66,9 @@ export function SessionBoundary() {
         <BrandMark />
         <h1>Workspace unavailable</h1>
         <p>We couldn’t confirm your session. Check your connection and try again.</p>
-        <button className="aw-btn aw-btn--primary aw-btn--md" onClick={() => void session.refetch()} type="button">
+        <Button onClick={() => void session.refetch()} variant="primary">
           Try again
-        </button>
+        </Button>
       </main>
     )
   }

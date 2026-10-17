@@ -137,30 +137,32 @@ function WorkspaceStatus({ organizationId, status }: { organizationId: string; s
           {budgetMicros > 0 ? <progress aria-label="Budget used" className="aw-progress__bar" max={1} value={share} /> : null}
         </div>
         {data.usageByModel.length ? (
-          <table className="aw-ai-usage">
-            <thead>
-              <tr>
-                <th scope="col">Model</th>
-                <th scope="col">Calls</th>
-                <th scope="col">Tokens in / out</th>
-                <th scope="col">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.usageByModel.map((row) => (
-                <tr key={`${row.provider}:${row.model}`}>
-                  <td>
-                    <code className="aw-inline-code">{row.model}</code>
-                  </td>
-                  <td>{row.calls}</td>
-                  <td>
-                    {row.inputTokens.toLocaleString()} / {row.outputTokens.toLocaleString()}
-                  </td>
-                  <td>{dollars(row.costMicros)}</td>
+          <div aria-label="AI use by model" className="aw-ai-usage__scroll" role="region" tabIndex={0}>
+            <table className="aw-ai-usage">
+              <thead>
+                <tr>
+                  <th scope="col">Model</th>
+                  <th scope="col">Calls</th>
+                  <th scope="col">Tokens in / out</th>
+                  <th scope="col">Cost</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.usageByModel.map((row) => (
+                  <tr key={`${row.provider}:${row.model}`}>
+                    <td>
+                      <code className="aw-inline-code">{row.model}</code>
+                    </td>
+                    <td>{row.calls}</td>
+                    <td>
+                      {row.inputTokens.toLocaleString()} / {row.outputTokens.toLocaleString()}
+                    </td>
+                    <td>{dollars(row.costMicros)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <p className="aw-quiet">No AI calls this month yet.</p>
         )}

@@ -14,6 +14,14 @@ vi.mock('../shell/AppShell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+vi.mock('./HomeSections', () => ({
+  Capacity: () => null,
+  NeedsYou: () => null,
+  SetupCard: () => null,
+  WorkingNow: () => null,
+  YourTasks: () => null,
+}))
+
 vi.mock('./hooks', () => ({
   useProjects: vi.fn(),
   useSwitchProject: vi.fn(),

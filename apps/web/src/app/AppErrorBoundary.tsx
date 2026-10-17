@@ -1,5 +1,9 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
+import { reportError } from '../telemetry/reportErrors'
+import { Button } from '../ui'
+import { failingComponent } from './failingComponent'
+
 type Props = { children: ReactNode }
 type State = { failed: boolean }
 
@@ -11,10 +15,14 @@ export class AppErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Runtime diagnostics remain in the browser console; no error payload or
-    // server data is persisted by this recovery boundary.
-    void error
-    void info
+    // Only what reportError allows leaves the browser: the message, the
+    // component that threw and the route path. No props, state or bodies.
+    const component = failingComponent(info.componentStack)
+    reportError(error.message || error.name, component ? `react:${component}` : 'react')
+  }
+
+  private readonly retry = () => {
+    this.setState({ failed: false })
   }
 
   render() {
@@ -23,10 +31,13 @@ export class AppErrorBoundary extends Component<Props, State> {
         <main className="aw-boot">
           <div role="alert">
             <h1>Something went wrong on this page</h1>
-            <p>Reload to get back to work. Your messages and running work are safe on the server.</p>
-            <button className="aw-btn aw-btn--primary aw-btn--md" onClick={() => window.location.reload()} type="button">
-              Reload workspace
-            </button>
+            <p>Try again, or reload the workspace if it keeps happening. Your messages and running work are safe on the server.</p>
+          </div>
+          <div className="aw-boot__actions">
+            <Button onClick={this.retry} variant="primary">
+              Try again
+            </Button>
+            <Button onClick={() => window.location.reload()}>Reload workspace</Button>
           </div>
         </main>
       )

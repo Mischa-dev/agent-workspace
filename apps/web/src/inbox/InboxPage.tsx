@@ -36,6 +36,7 @@ import {
 } from './api'
 import { relativeTime } from './time'
 import './inbox.css'
+import { BatchLaunch } from './BatchLaunch'
 
 const VIEWS: { value: InboxView; label: string }[] = [
   { value: 'inbox', label: 'Inbox' },
@@ -514,7 +515,9 @@ function NotificationDetail({
             <span className="aw-btn__label">{pendingQuestion ? 'Answer in the thread' : 'Open'}</span>
           </Link>
         )}
-        {item.launchHref ? (
+        {item.batch ? (
+          <BatchLaunch batch={item.batch} reviewHref={item.launchHref} />
+        ) : item.launchHref ? (
           <Link className="aw-btn aw-btn--secondary aw-btn--md" to={item.launchHref}>
             <Icon name="play" size={16} />
             <span className="aw-btn__label">Launch</span>
