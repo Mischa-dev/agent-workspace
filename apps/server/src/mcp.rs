@@ -346,6 +346,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Create a project in your workspace, with a key for its task numbers and a name. You become its owner; it starts with the default workflow. People only, through an app connected for their whole account. Calling again with the same key and name returns the project you already made.",
+        annotations(
+            title = "Create project",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn project_create(
+        &self,
+        Parameters(arguments): Parameters<admin::ProjectCreateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<admin::ProjectValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(admin::project_create(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "Rename a project. Its key stays the same, so task keys and links keep working. Owners and admins only, as themselves.",
         annotations(
             title = "Rename project",

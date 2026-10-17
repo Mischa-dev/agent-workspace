@@ -15,6 +15,20 @@ const actor = {
 }
 
 describe('MessageContent', () => {
+  it('marks @everyone and @here but not email addresses', () => {
+    const { container } = render(
+      <MessageContent
+        actors={[]}
+        content={{ version: 1, nodes: [{ type: 'text', text: '@Everyone ship it, @here too, not me@everyone.dev' }] }}
+        fallbackPlainText="fallback"
+      />,
+    )
+
+    const marked = [...container.querySelectorAll('.aw-mention.is-everyone')].map((node) => node.textContent)
+    expect(marked).toEqual(['@Everyone', '@here'])
+    expect(container).toHaveTextContent('@Everyone ship it, @here too, not me@everyone.dev')
+  })
+
   it('renders hostile text as text and structured mentions semantically', () => {
     const { container } = render(
       <MessageContent

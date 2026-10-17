@@ -7,16 +7,18 @@ import { Button, EmptyState, ErrorState, Icon, MessageSkeleton } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
 import { BulkBar } from './BulkBar'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
-import { AssigneeMark, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
+import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
 import { LIST_COLUMNS } from './taskDisplay'
 import { workItemHref } from './links'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 import { useCoarsePointer } from './useCoarsePointer'
+import { tucksDone, withoutDone } from './doneModel'
 import { listQuery, type ListState } from './listModel'
-import { buildListRows, visibleTaskIds, type ListRow } from './listRows'
+import { buildListRows, DONE_GROUP, DONE_LOADING, visibleTaskIds, withDoneRows, type ListRow } from './listRows'
 import type { Notice } from './notice'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems, useWorkItemGroups, useWorkItemPages } from './planningHooks'
+import { useDoneCount, useDoneItems } from './useDoneWork'
 import { emptySelection, keepLoaded, MAX_BULK, pick, selectAll, toggleOne, type Selection } from './selectionModel'
 import { useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
@@ -111,6 +113,7 @@ export function WorkItemList({
   onClosePanel,
   onManageLabels,
   onOpenTask,
+  onToggleDone,
   openTaskId,
   projectId,
   state,
@@ -124,15 +127,20 @@ export function WorkItemList({
   onClosePanel: () => void
   onManageLabels: () => void
   onOpenTask: (id: string) => void
+  onToggleDone: () => void
   openTaskId: string | null
   projectId: string
   state: ListState
   workflow: WorkItemWorkflow
 }) {
-  const query = useMemo(() => listQuery(state), [state])
+  // Done and canceled tasks sit in their own section at the bottom, behind the Show done toggle.
+  const tucked = tucksDone(state.filters)
+  const query = useMemo(() => (tucked ? withoutDone(listQuery(state)) : listQuery(state)), [state, tucked])
   const queryKey = JSON.stringify(query)
   const pages = useWorkItemPages(projectId, query)
   const groups = useWorkItemGroups(projectId, query, Boolean(state.groupBy))
+  const doneCount = useDoneCount(projectId, state.filters, workflow, tucked)
+  const done = useDoneItems(projectId, query, tucked && state.showDone)
   const [collapsedState, setCollapsedState] = useState<{ groupBy: string | null; keys: Set<string> }>({ groupBy: null, keys: new Set() })
   const collapsed = useMemo(
     () => (collapsedState.groupBy === state.groupBy ? collapsedState.keys : new Set<string>()),
@@ -150,18 +158,22 @@ export function WorkItemList({
   const [bulkBusy, setBulkBusy] = useState(false)
   const coarse = useCoarsePointer()
 
-  const items = useMemo(() => pages.data?.pages.flatMap((page) => page.items) ?? [], [pages.data])
+  const openItems = useMemo(() => pages.data?.pages.flatMap((page) => page.items) ?? [], [pages.data])
+  const items = useMemo(() => (done.items.length ? [...openItems, ...done.items] : openItems), [done.items, openItems])
   const total = pages.data?.pages[0]?.total ?? 0
   const rows = useMemo(
     () =>
-      buildListRows({
-        items,
-        grouped: Boolean(state.groupBy),
-        groups: groups.data,
-        collapsed,
-        hasMore: Boolean(pages.hasNextPage),
-      }),
-    [collapsed, groups.data, items, pages.hasNextPage, state.groupBy],
+      withDoneRows(
+        buildListRows({
+          items: openItems,
+          grouped: Boolean(state.groupBy),
+          groups: groups.data,
+          collapsed,
+          hasMore: Boolean(pages.hasNextPage),
+        }),
+        { count: tucked ? doneCount : 0, open: state.showDone, items: done.items, hasMore: done.hasMore },
+      ),
+    [collapsed, done.hasMore, done.items, doneCount, groups.data, openItems, pages.hasNextPage, state.groupBy, state.showDone, tucked],
   )
   const cardsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const order = useMemo(() => visibleTaskIds(rows), [rows])
@@ -180,12 +192,17 @@ export function WorkItemList({
   }
 
   // Load the next page when its placeholder row scrolls into view.
-  const loadingIndex = rows.findIndex((row) => row.kind === 'loading')
-  const loadingVisible = loadingIndex >= windowed.start && loadingIndex < windowed.end && loadingIndex >= 0
+  const shownLoading = rows.slice(windowed.start, windowed.end).filter((row) => row.kind === 'loading').map((row) => row.key)
+  const loadingVisible = shownLoading.some((key) => key !== DONE_LOADING)
+  const doneLoadingVisible = shownLoading.includes(DONE_LOADING)
   const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = pages
   useEffect(() => {
     if (loadingVisible && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchNextPageError, isFetchingNextPage, loadingVisible])
+  const fetchMoreDone = done.fetchMore
+  useEffect(() => {
+    if (doneLoadingVisible) fetchMoreDone()
+  }, [doneLoadingVisible, fetchMoreDone])
 
   const focusable = useMemo(() => rows.filter((row) => row.kind !== 'loading'), [rows])
   const currentKey = activeKey && rows.some((row) => row.key === activeKey) ? activeKey : null
@@ -207,6 +224,7 @@ export function WorkItemList({
   )
 
   const toggleGroup = (groupKey: string) => {
+    if (groupKey === DONE_GROUP) return onToggleDone()
     const keys = new Set(collapsed)
     if (keys.has(groupKey)) keys.delete(groupKey)
     else keys.add(groupKey)
@@ -349,7 +367,7 @@ export function WorkItemList({
       </ErrorState>
     )
   }
-  if (items.length === 0 && !pages.hasNextPage) {
+  if (items.length === 0 && !pages.hasNextPage && !(tucked && doneCount > 0)) {
     return (
       <EmptyState
         action={hasFilters ? <Button onClick={onClearFilters}>Clear filters</Button> : emptyAction}
@@ -365,15 +383,16 @@ export function WorkItemList({
 
   function toTableRow(row: ListRow, index: number): TableRow {
     if (row.kind === 'loading') {
+      const doneRow = row.key === DONE_LOADING
       return {
         key: row.key,
         index,
         inert: true,
         height: rowHeight,
-        full: isFetchNextPageError ? (
+        full: (doneRow ? done.failed : isFetchNextPageError) ? (
           <span className="aw-tasks__loading">
             More work items didn’t load.
-            <Button onClick={() => void fetchNextPage()} size="sm">
+            <Button onClick={doneRow ? done.retry : () => void fetchNextPage()} size="sm">
               Try again
             </Button>
           </span>
@@ -382,6 +401,16 @@ export function WorkItemList({
             <Icon className="aw-spin" name="loader" size={14} /> Loading more…
           </span>
         ),
+      }
+    }
+    if (row.kind === 'group' && row.groupKey === DONE_GROUP) {
+      return {
+        key: row.key,
+        index,
+        height: rowHeight,
+        className: 'aw-tasks__grouprow',
+        label: `${row.collapsed ? 'Show' : 'Hide'} done and canceled, ${row.count ?? row.loaded} work items`,
+        full: <DoneToggle count={row.count ?? row.loaded} onToggle={() => toggleGroup(row.groupKey)} open={!row.collapsed} />,
       }
     }
     if (row.kind === 'group') {

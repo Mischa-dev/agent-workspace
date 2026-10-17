@@ -18,6 +18,36 @@ function workItemState(statusCategory: string) {
   return 'todo'
 }
 
+/** `@everyone` or `@here` as a word, which notify everyone who can see the conversation. */
+const EVERYONE_MENTION = /(?<![\p{L}\p{N}_@])@(?:everyone|here)(?![\p{L}\p{N}_])/giu
+
+/** Text with `@everyone` and `@here` marked like mentions. */
+function TextWithEveryone({ text }: { text: string }) {
+  const parts: Array<string | { mention: string }> = []
+  let last = 0
+  for (const match of text.matchAll(EVERYONE_MENTION)) {
+    const start = match.index
+    if (start > last) parts.push(text.slice(last, start))
+    parts.push({ mention: match[0] })
+    last = start + match[0].length
+  }
+  if (parts.length === 0) return <>{text}</>
+  if (last < text.length) parts.push(text.slice(last))
+  return (
+    <>
+      {parts.map((part, index) =>
+        typeof part === 'string' ? (
+          part
+        ) : (
+          <span className="aw-mention is-everyone" key={index} title="Notifies everyone who can see this conversation">
+            {part.mention}
+          </span>
+        ),
+      )}
+    </>
+  )
+}
+
 /** Message text with people, agents and work items as chips. Text is always rendered as text. */
 export function MessageContent({ actors, content, fallbackPlainText, workItems = [], viewerId }: MessageContentProps) {
   const parsed = parseMessageContent(content)
@@ -31,7 +61,11 @@ export function MessageContent({ actors, content, fallbackPlainText, workItems =
     <span className="aw-content">
       {parsed.nodes.map((node, index) => {
         if (node.type === 'text') {
-          return <span key={`text-${index}`}>{node.text}</span>
+          return (
+            <span key={`text-${index}`}>
+              <TextWithEveryone text={node.text} />
+            </span>
+          )
         }
 
         if (node.type === 'work_item_ref') {

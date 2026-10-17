@@ -65,7 +65,7 @@ limited by their role in the project.
 
 | Tool | | What it does | Who |
 |---|---|---|---|
-| `project_create` | + | Name, key, description, optional guide page. | People with the org role to create projects |
+| `project_create` | ✓ | Key and name; the caller owns it and it starts with the default workflow. A retry with the same key and name returns it. | People with the org role to create projects, never agents |
 | `project_update` | + | Rename, change the description, change the key (old keys keep working; see decision 2). | Owner or admin |
 | `project_archive` | + | Archive or restore (`archived: false`). Refused while Codex runs are active. Destructive. | Owner or admin |
 | `project_members` | + | Members with roles, kind (person or agent), and last active. | Anyone who can see members |

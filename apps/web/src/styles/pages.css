@@ -73,8 +73,10 @@
 
 .aw-pagehead__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   flex: none;
+  max-width: 100%;
 }
 
 .aw-pagesection {
@@ -471,6 +473,22 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+}
+
+.aw-preset-groups,
+.aw-preset-group {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.aw-preset-group {
+  gap: var(--space-2);
+}
+
+.aw-preset-group__title {
+  margin: 0;
+  font: 600 13px/18px var(--font-sans);
+  color: var(--content-fg-muted);
 }
 
 .aw-presets {

@@ -10,6 +10,11 @@ pub const MAX_MESSAGE_TEXT_CHARACTERS: usize = 20_000;
 pub const MAX_MESSAGE_MENTIONS: usize = 32;
 pub const MAX_MESSAGE_WORK_ITEM_REFERENCES: usize = 32;
 
+/// `@everyone` or `@here` written as a word in a message's text, as a
+/// PostgreSQL case-insensitive regular expression. Either notifies every
+/// person who can see the conversation (notifications.rs).
+pub const EVERYONE_MENTION_PATTERN: &str = r"(^|[^[:alnum:]_@])@(everyone|here)($|[^[:alnum:]_])";
+
 /// Incrementally validates provider-authored plain text against the same
 /// boundary used for durable Message content. A fragment is checked before it
 /// is appended, so rejected output is never exposed through realtime or later

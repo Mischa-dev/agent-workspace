@@ -26,6 +26,10 @@ import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 
 type Open = { field: FilterField | null; anchor: HTMLElement }
 
+// Done work has its own Show done toggle on the list and board. A saved view
+// that hides it outright still shows its chip, so it can be removed.
+const MENU_FIELDS = FILTER_FIELDS.filter((entry) => entry.field !== 'done')
+
 /** Clears every key of a filter field, then sets `values`. */
 function setField(state: ListState, field: FilterField, values: Partial<FilterValues>): ListState {
   const filters: Record<string, unknown> = { ...state.filters }
@@ -37,8 +41,9 @@ function setField(state: ListState, field: FilterField, values: Partial<FilterVa
 }
 
 /**
- * Search, filters as chips, sort and grouping (or the board's columns and
- * lanes), and the view switch. Everything here lives in the URL.
+ * Search, filters as chips, and sort and grouping (or the board's columns and
+ * lanes). Everything here lives in the URL; the list/board switch is in the
+ * page header.
  */
 export function FilterBar({
   projectId,
@@ -149,15 +154,6 @@ export function FilterBar({
             </SelectField>
           </>
         )}
-        <SegmentedControl
-          label="View"
-          onChange={(next) => update((current) => ({ ...current, view: next }))}
-          options={[
-            { value: 'list', label: 'List', icon: 'list' },
-            { value: 'board', label: 'Board', icon: 'board' },
-          ]}
-          value={state.view}
-        />
         <ShortcutHelp shortcuts={state.view === 'list' ? LIST_SHORTCUTS : BOARD_SHORTCUTS} />
       </div>
       {chips.length ? (
@@ -198,7 +194,7 @@ export function FilterBar({
                   setOpen(null)
                 } else setOpen({ field, anchor: open.anchor })
               }}
-              options={FILTER_FIELDS.map((entry) => ({ value: entry.field, label: entry.label }))}
+              options={MENU_FIELDS.map((entry) => ({ value: entry.field, label: entry.label }))}
               placeholder="Filter by…"
               selected={chips.map((chip) => chip.field)}
             />

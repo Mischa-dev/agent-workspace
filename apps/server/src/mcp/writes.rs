@@ -83,7 +83,7 @@ pub struct SetStatusArguments {
 pub struct PostUpdateArguments {
     #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
-    /// The comment or update, in plain text.
+    /// The comment or update. It may span several lines and use Markdown.
     #[serde(rename = "text", alias = "update")]
     pub update: String,
     pub client_request_id: String,
@@ -1177,12 +1177,12 @@ async fn post_update_inner(
     principal: &McpPrincipal,
     arguments: PostUpdateArguments,
 ) -> Result<WriteResult, AppError> {
-    const UPDATE_MESSAGE: &str = "Write the comment as plain text, 1 to 20,000 characters.";
+    const UPDATE_MESSAGE: &str =
+        "Write the comment as text, 1 to 20,000 characters. Line breaks and Markdown are kept.";
     let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
         return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
     };
-    let Some(update) = normalize_text(arguments.update.clone(), MAX_UPDATE_CHARACTERS, false)
-    else {
+    let Some(update) = normalize_comment(arguments.update.clone()) else {
         return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
     };
     let validated = match MessageContent::from_plain_text(update.clone()) {
@@ -2746,6 +2746,20 @@ fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Op
     crate::work_item_commands::normalize_single_line(&value, max_characters, allow_empty).ok()
 }
 
+/// Comments may span lines and carry Markdown, as they can in the web app.
+fn normalize_comment(value: String) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > MAX_UPDATE_CHARACTERS
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return None;
+    }
+    Some(value.replace("\r\n", "\n"))
+}
+
 /// Descriptions are Markdown and may span lines, as they can in the web app.
 fn normalize_description(value: String) -> Option<String> {
     crate::work_item_commands::normalize_description(&value).ok()
@@ -2785,9 +2799,20 @@ mod tests {
 
     use super::{
         BoardPlacement, BoardPosition, CreateSubtaskArguments, CreateWorkItemArguments,
-        NewTaskDetails, UpdateWorkItemArguments, WriteResult, normalize_text, parse_id,
-        parse_position, parse_request_id, requested_placement,
+        NewTaskDetails, UpdateWorkItemArguments, WriteResult, normalize_comment, normalize_text,
+        parse_id, parse_position, parse_request_id, requested_placement,
     };
+
+    #[test]
+    fn comments_keep_line_breaks_and_markdown() {
+        assert_eq!(
+            normalize_comment("  Done:\r\n- one\n- **two**\n\n\tnext  ".to_owned()),
+            Some("Done:\n- one\n- **two**\n\n\tnext".to_owned())
+        );
+        assert_eq!(normalize_comment("a\u{0000}b".to_owned()), None);
+        assert_eq!(normalize_comment(" \n ".to_owned()), None);
+        assert_eq!(normalize_comment("x".repeat(20_001)), None);
+    }
 
     #[test]
     fn immutable_ids_and_text_bounds_are_fail_closed() {

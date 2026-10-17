@@ -7,7 +7,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
-import { Banner, Button, ErrorState, MessageSkeleton, PageHeader } from '../ui'
+import { Banner, Button, ErrorState, MessageSkeleton, PageHeader, SegmentedControl } from '../ui'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
@@ -17,11 +17,12 @@ import { NoticeBar } from './notice'
 import { TaskDetail } from './TaskDetail'
 import { useListState } from './useListState'
 import { useNotice } from './useNotice'
-import { WorkItemBoard } from './WorkItemBoard'
 import { WorkItemList } from './WorkItemList'
 import './work.css'
 
 const ViewsMenu = lazy(() => import('./ViewsMenu'))
+// The board is its own chunk: most visits open the list.
+const WorkItemBoard = lazy(() => import('./WorkItemBoard').then((module) => ({ default: module.WorkItemBoard })))
 
 /**
  * Every work item in a Project as a list or a board, with filters, sorting,
@@ -111,8 +112,18 @@ export function WorkItemsPage() {
       New work item
     </Button>
   )
+  const toggleDone = () => update((current) => ({ ...current, showDone: !current.showDone }), { replace: true })
   const headerActions = (
     <>
+      <SegmentedControl
+        label="View"
+        onChange={(view) => update((current) => ({ ...current, view }))}
+        options={[
+          { value: 'list', label: 'List', icon: 'list' },
+          { value: 'board', label: 'Board', icon: 'board' },
+        ]}
+        value={state.view}
+      />
       <Suspense fallback={null}>
         <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={state} update={update} />
       </Suspense>
@@ -171,6 +182,7 @@ export function WorkItemsPage() {
             onClosePanel={closeTask}
             onManageLabels={() => setManagingLabels(true)}
             onOpenTask={openTask}
+            onToggleDone={toggleDone}
             openTaskId={state.task}
             projectId={projectId}
             state={state}
@@ -178,17 +190,20 @@ export function WorkItemsPage() {
           />
         ) : null}
         {workflow.data && state.view === 'board' ? (
-          <WorkItemBoard
-            disabled={readOnly}
-            notify={notify}
-            onClosePanel={closeTask}
-            onManageLabels={() => setManagingLabels(true)}
-            onOpenTask={openTask}
-            openTaskId={state.task}
-            projectId={projectId}
-            state={state}
-            workflow={workflow.data}
-          />
+          <Suspense fallback={<MessageSkeleton label="Loading the board" rows={3} />}>
+            <WorkItemBoard
+              disabled={readOnly}
+              notify={notify}
+              onClosePanel={closeTask}
+              onManageLabels={() => setManagingLabels(true)}
+              onOpenTask={openTask}
+              onToggleDone={toggleDone}
+              openTaskId={state.task}
+              projectId={projectId}
+              state={state}
+              workflow={workflow.data}
+            />
+          </Suspense>
         ) : null}
       </div>
       {createOpen && workflow.data ? (
