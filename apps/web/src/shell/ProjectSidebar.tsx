@@ -12,6 +12,7 @@ import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from
 import { projectSettingsHref } from '../settings/paths'
 
 const PinnedViews = lazy(() => import('./PinnedViews'))
+const SidebarAgents = lazy(() => import('../agents/SidebarAgents'))
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -69,6 +70,9 @@ export function ProjectSidebar({
       </ul>
       <Suspense fallback={null}>
         <PinnedViews onNavigate={onNavigate} projectId={project.id} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <SidebarAgents onNavigate={onNavigate} projectId={project.id} />
       </Suspense>
       <SidebarSection addLabel="New channel" label="Channels" onAdd={canCreate ? () => setCreating(true) : undefined}>
         {(sidebar.data?.channels ?? []).flatMap((channel) => {

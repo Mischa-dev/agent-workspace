@@ -855,6 +855,7 @@ pub(crate) async fn select_run_setup(
 
 /// `select_run_setup` limited to profiles on one harness when `harness` is
 /// set. Among the owner's signed-in profiles the preferred one comes first.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn select_run_setup_for(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,

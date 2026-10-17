@@ -1012,6 +1012,8 @@ struct AccountChoice {
 struct HarnessPlan {
     /// A connected runner: launches go to its agent and need no account.
     connected_runner: bool,
+    /// The runner agent's name in this project, for a connected runner.
+    runner_name: Option<String>,
     kind: String,
     display_name: String,
     runs_on: crate::provider::manifest::RunLocation,
@@ -1103,8 +1105,22 @@ async fn plan_for(
         let catalog =
             crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, &manifest)
                 .await?;
+        let runner = state.supervisors.runner_for(&manifest.kind);
+        let runner_name = match runner {
+            Some(actor_id) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT display_name FROM project_memberships WHERE project_id = $1 AND actor_id = $2 AND enabled",
+                )
+                .bind(project_id)
+                .bind(actor_id)
+                .fetch_optional(&state.pool)
+                .await?
+            }
+            None => None,
+        };
         harnesses.push(HarnessPlan {
-            connected_runner: state.supervisors.runner_for(&manifest.kind).is_some(),
+            connected_runner: runner.is_some(),
+            runner_name,
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
             runs_on: manifest.runs_on,

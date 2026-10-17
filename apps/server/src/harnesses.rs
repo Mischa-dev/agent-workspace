@@ -412,7 +412,13 @@ fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Refusal {
-    error: &'static str,
+    error: RefusalBody,
+}
+
+/// The same shape as every other API error, with the reason in words.
+#[derive(Debug, Serialize)]
+struct RefusalBody {
+    code: &'static str,
     message: String,
 }
 
@@ -530,8 +536,10 @@ fn refused(message: String) -> axum::response::Response {
     (
         StatusCode::UNPROCESSABLE_ENTITY,
         Json(Refusal {
-            error: "invalid_harness",
-            message,
+            error: RefusalBody {
+                code: "invalid_harness",
+                message,
+            },
         }),
     )
         .into_response()

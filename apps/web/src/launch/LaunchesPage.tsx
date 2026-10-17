@@ -60,6 +60,11 @@ export function LaunchesPage() {
                 Thread
               </Link>
             ) : null}
+            {launch.agentRunId ? (
+              <Link className="aw-btn aw-btn--ghost aw-btn--sm" to={`/runs/${encodeURIComponent(launch.agentRunId)}`}>
+                Run
+              </Link>
+            ) : null}
             {launch.canCancel ? (
               <Button
                 busy={cancel.isPending && cancel.variables === launch.id}
@@ -96,6 +101,9 @@ export function LaunchesPage() {
         }
       >
         {launch.statusReason ? <p className="aw-launches__reason">{launch.statusReason}</p> : null}
+        {launch.state === 'handed_off' && !launch.statusReason ? (
+          <p className="aw-launches__reason">Handed to its runner. The runner’s agent answers in the task’s thread.</p>
+        ) : null}
       </Row>
     )
   }

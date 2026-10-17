@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type RefObject } from 'react'
 
+import { useProfiles } from '../agents/hooks'
 import { isApiError } from '../api/errors'
 import { Banner, Button, Dialog, MessageSkeleton, SelectField, TextArea, TextField } from '../ui'
-import type { Launch, LaunchInput, LaunchPlan, LaunchTask, SettingSource, StartWhen } from './api'
+import type { HarnessPlan, Launch, LaunchInput, LaunchPlan, LaunchTask, SettingSource, StartWhen } from './api'
 import { useCreateLaunches, useLaunchPlan } from './hooks'
 import { MAX_TASKS_PER_LAUNCH, sourceLabel } from './launchModel'
 
@@ -29,6 +30,8 @@ export function LaunchDialog({
   const first = tasks[0]
   const plan = useLaunchPlan(projectId, first?.id ?? '', choice)
   const create = useCreateLaunches(projectId)
+  const profiles = useProfiles(projectId)
+  const [profileId, setProfileId] = useState('')
   const [idempotencyKey] = useState(() => crypto.randomUUID())
   const [accountId, setAccountId] = useState('')
   const [model, setModel] = useState('')
@@ -46,17 +49,21 @@ export function LaunchDialog({
     event.preventDefault()
     if (!data || create.isPending || tooMany) return
     const harness = data.harness ?? undefined
+    // An environment only applies when it runs the harness the dialog shows; otherwise the harness is the choice.
+    const environment = data.environments.find((candidate) => candidate.id === data.environmentId)
+    const environmentFits = Boolean(environment && environment.harness === data.harness)
     const input: LaunchInput = {
       workItemIds: tasks.map((task) => task.id),
-      environmentId: data.environmentId ?? undefined,
+      environmentId: environmentFits ? environment?.id : undefined,
+      agentProfileId: profileId || undefined,
       overrides: {
-        ...(choice.harness && !data.environmentId ? { harness: choice.harness } : {}),
+        ...(harness && !environmentFits ? { harness } : {}),
         ...(model ? { model } : {}),
         ...(reasoning ? { reasoning } : {}),
         ...(speed ? { speed } : {}),
         ...(attempts ? { attempts: Number(attempts) } : {}),
       },
-      providerAccountId: accountId || undefined,
+      providerAccountId: runner ? undefined : accountId || undefined,
       prompt: single && prompt !== null && prompt.trim() !== data.prompt.trim() ? prompt : undefined,
       startWhen,
       startAt: startWhen === 'at' && startAt ? new Date(startAt).toISOString() : undefined,
@@ -71,6 +78,17 @@ export function LaunchDialog({
   const chosenModel = models.find((candidate) => candidate.id === (model || String(data?.settings['run.model']?.value ?? '')))
     ?? models.find((candidate) => candidate.isDefault)
   const accounts = (data?.accounts ?? []).filter((account) => account.harness === data?.harness)
+  const runner = harnessPlan?.connectedRunner === true
+  const agents = (profiles.data?.profiles ?? []).filter((profile) => profile.enabled)
+  const pickAgent = (id: string) => {
+    setProfileId(id)
+    setModel('')
+    setReasoning('')
+    setSpeed('')
+    setAccountId('')
+    const profile = agents.find((candidate) => candidate.id === id)
+    setChoice(profile ? { environmentId: profile.environmentId ?? undefined, harness: profile.harness ?? undefined } : {})
+  }
   const blocked = (data?.blockers.length ?? 0) > 0
   const scheduledWithoutTime = startWhen === 'at' && !startAt
   const queueing = !single || startWhen !== 'now'
@@ -90,7 +108,7 @@ export function LaunchDialog({
           </Button>
           <Button
             busy={create.isPending}
-            disabled={!data || !data.harness || accounts.length === 0 || scheduledWithoutTime || tooMany}
+            disabled={!data || !data.harness || (!runner && accounts.length === 0) || scheduledWithoutTime || tooMany}
             icon={queueing ? 'clock' : 'play'}
             type="submit"
             variant="primary"
@@ -131,6 +149,22 @@ export function LaunchDialog({
             </Banner>
           ) : null}
           <div className="aw-form__grid">
+            {agents.length > 0 ? (
+              <SelectField
+                hint={agents.find((profile) => profile.id === profileId)?.description ?? undefined}
+                id="launch-agent"
+                label="Agent"
+                onChange={(event) => pickAgent(event.target.value)}
+                value={profileId}
+              >
+                <option value="">The project’s default agent</option>
+                {agents.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name} (@{profile.handle})
+                  </option>
+                ))}
+              </SelectField>
+            ) : null}
             <SelectField
               data-autofocus
               hint={environmentHint(data)}
@@ -149,9 +183,9 @@ export function LaunchDialog({
             </SelectField>
             <SelectField
               disabled={Boolean(data.environmentId)}
-              hint={data.environmentId ? 'Set by the environment.' : undefined}
+              hint={data.environmentId ? 'Set by the environment.' : runner ? runnerHint(harnessPlan) : undefined}
               id="launch-harness"
-              label="Agent"
+              label="Harness"
               onChange={(event) => {
                 setModel('')
                 setReasoning('')
@@ -161,27 +195,30 @@ export function LaunchDialog({
               }}
               value={data.harness ?? ''}
             >
-              {data.harness ? null : <option value="">Choose an agent</option>}
+              {data.harness ? null : <option value="">Choose a harness</option>}
               {data.harnesses.map((harness) => (
                 <option key={harness.kind} value={harness.kind}>
                   {harness.displayName}
+                  {harness.connectedRunner ? ` (hands off to ${harness.runnerName ?? 'its runner'})` : ''}
                 </option>
               ))}
             </SelectField>
-            <SelectField
-              hint={accounts.length === 0 ? 'Connect an account for this agent in Settings › Provider accounts first.' : undefined}
-              id="launch-account"
-              label="Account"
-              onChange={(event) => setAccountId(event.target.value)}
-              value={accountId}
-            >
-              <option value="">{accounts.length ? 'The one with room' : 'No account'}</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name} · {account.running} of {account.maxConcurrentRuns} busy
-                </option>
-              ))}
-            </SelectField>
+            {runner ? null : (
+              <SelectField
+                hint={accounts.length === 0 ? 'Connect an account for this harness in Settings › Provider accounts first.' : undefined}
+                id="launch-account"
+                label="Account"
+                onChange={(event) => setAccountId(event.target.value)}
+                value={accountId}
+              >
+                <option value="">{accounts.length ? 'The one with room' : 'No account'}</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · {account.running} of {account.maxConcurrentRuns} busy
+                  </option>
+                ))}
+              </SelectField>
+            )}
             <SelectField id="launch-model" label="Model" onChange={(event) => setModel(event.target.value)} value={model}>
               <option value="">{defaultLabel(data.settings['run.model']?.value, data.settings['run.model']?.source, models)}</option>
               {models.map((candidate) => (
@@ -256,6 +293,10 @@ export function LaunchDialog({
       ) : null}
     </Dialog>
   )
+}
+
+function runnerHint(harness: HarnessPlan | undefined) {
+  return `Hands off to ${harness?.runnerName ?? 'its runner'}, which works with its own access. No account needed.`
 }
 
 function environmentHint(plan: LaunchPlan) {

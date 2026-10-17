@@ -46,6 +46,8 @@ const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
 const MyWorkPage = lazy(() => import('../views/MyWorkPage').then((module) => ({ default: module.MyWorkPage })))
+const RunsPage = lazy(() => import('../runs/RunsPage').then((module) => ({ default: module.RunsPage })))
+const RunPage = lazy(() => import('../runs/RunPage').then((module) => ({ default: module.RunPage })))
 const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 // Only development builds include the kit page; production drops the import.
@@ -127,6 +129,22 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/my-work"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <RunsPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/runs"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <RunPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/runs/:runId"
                   />
                   <Route
                     element={

@@ -1,0 +1,146 @@
+.aw-agentdot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--content-fg-muted);
+  opacity: 0.6;
+}
+
+.aw-agentdot--working {
+  background: var(--agent-working);
+  opacity: 1;
+}
+
+.aw-agentdot--waiting {
+  background: var(--warning);
+  opacity: 1;
+}
+
+/* Sidebar rows */
+
+.aw-sideagent {
+  min-height: 44px;
+}
+
+.aw-sideagent__lead {
+  position: relative;
+}
+
+.aw-sideagent__dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
+}
+
+.aw-sideagent__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aw-sideagent__name,
+.aw-sideagent__state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-sideagent__state {
+  font: var(--t-caption);
+  color: var(--sidebar-fg-muted);
+}
+
+/* Settings cards */
+
+.aw-agentprofiles__templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.aw-agentprofiles__quiet {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-agentprofiles__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: var(--space-3);
+}
+
+.aw-agentcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  min-width: 0;
+}
+
+.aw-agentcard.is-off {
+  background: var(--surface-sunken);
+}
+
+.aw-agentcard.is-off .aw-avatar {
+  opacity: 0.5;
+}
+
+.aw-agentcard__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.aw-agentcard__name {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.aw-agentcard__meta {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.aw-agentcard__text {
+  margin: 0;
+  font: var(--t-small);
+}
+
+.aw-agentcard__presence {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font: var(--t-small);
+}
+
+/* Profile form */
+
+.aw-agentform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.aw-agentform__pair,
+.aw-agentform__triple {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+}

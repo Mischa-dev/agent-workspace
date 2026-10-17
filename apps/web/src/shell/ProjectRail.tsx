@@ -9,6 +9,7 @@ import { projectLocationHref } from '../projects/locations'
 import { useProjects, useSwitchProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
+import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { openCommandMenu, useCommandState } from './commandStore'
 
 function projectRecency(project: Project) {
@@ -99,6 +100,9 @@ export function ProjectRail({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
+  // Your dot shows whether live updates reach you, not a status you set.
+  const connection = useOptionalRealtime()?.connection
+  const presence = connection === 'live' ? 'online' : connection ? 'away' : undefined
   const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
@@ -167,6 +171,7 @@ export function ProjectRail({
           to="/inbox"
         />
         <UtilityTile active={location.pathname === '/my-work'} icon="checklist" label="My work" onClick={onNavigate} to="/my-work" />
+        <UtilityTile active={location.pathname.startsWith('/runs')} icon="activity" label="Runs" onClick={onNavigate} to="/runs" />
         <UtilityTile
           active={inMessages}
           badge={unreadConversations}
@@ -242,7 +247,7 @@ export function ProjectRail({
           placement="right-start"
           trigger={
             <button aria-label={`Account: ${user.displayName}`} className="aw-rail__me" type="button">
-              <Avatar name={user.displayName} presence="online" seed={user.actorId} size={36} />
+              <Avatar name={user.displayName} presence={presence} seed={user.actorId} size={36} />
             </button>
           }
         />
