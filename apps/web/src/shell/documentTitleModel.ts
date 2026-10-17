@@ -54,6 +54,7 @@ const PROJECT_TITLES: [RegExp, string][] = [
   [/^\/work-items\/?$/, 'Tasks'],
   [/^\/work-items\/.+$/, 'Task'],
   [/^\/settings\/?$/, 'Settings'],
+  [/^\/launches\/?$/, 'Launches'],
   [/^\/pages(\/.*)?$/, 'Pages'],
   [/^\/decisions\/?$/, 'Decisions'],
   [/^\/conversations\/archived\/?$/, 'Archived conversations'],

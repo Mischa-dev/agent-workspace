@@ -203,6 +203,12 @@ pub async fn transition_run(
     .bind(terminal)
     .execute(&mut **transaction)
     .await?;
+    if terminal {
+        // The run's session can be resumed by the next run, and its account
+        // slot may let a queued launch start.
+        crate::agent_sessions::idle_run_session(&mut **transaction, run_id).await?;
+        crate::launch::kick(&mut **transaction).await?;
+    }
 
     let event_id = Uuid::now_v7();
     sqlx::query(

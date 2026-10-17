@@ -107,6 +107,15 @@ pub(crate) async fn ask_for_replies(
         }
         if !message.mentioned_actor_ids.is_empty() {
             ask(transaction, &message, true).await?;
+            // Tagging an agent backed by a harness launches a run (A8).
+            crate::launch::queue_tag_launches(
+                transaction,
+                message.project_id,
+                message.conversation_id,
+                message.message_id,
+                message.mentioned_actor_ids,
+            )
+            .await?;
         }
         if message.conversation_kind == "thread" {
             let followers = thread_followers(transaction, &message).await?;
@@ -1162,6 +1171,8 @@ pub(crate) async fn stop_request_in(
             "only a waiting or working request can be stopped",
         ));
     }
+    // The agent's session in that conversation stops too (A5 with A3).
+    crate::agent_sessions::cancel_for_request(transaction, request_id).await?;
     let mut conversations = BTreeSet::new();
     for (id, request_conversation_id, thread_id) in &stopped {
         wake(
@@ -1250,6 +1261,9 @@ struct DueDelivery {
     /// for the agent (or, for a stop, was stopped), and the agent can still
     /// reach it.
     still_true: bool,
+    /// The agent's session in the conversation (A3), to resume.
+    session_ref: Option<String>,
+    session_harness: Option<String>,
     wakeup_format: String,
     webhook_url: Option<String>,
     /// Plaintext from before the secrets store; moved into it at startup.
@@ -1275,11 +1289,16 @@ async fn deliver_webhooks(state: &AppState) -> Result<(), AppError> {
                    AND agent_connection_can_access(connection.id, request.project_id)
                    AND conversation_visible_to(request.conversation_id, request.agent_actor_id)
                ) AS still_true,
+               session.external_ref AS session_ref, session.harness AS session_harness,
                connection.wakeup_format,
                connection.webhook_url, connection.webhook_secret, connection.webhook_secret_id
         FROM agent_webhook_deliveries delivery
         JOIN reply_requests request ON request.id = delivery.reply_request_id
         JOIN external_agent_connections connection ON connection.id = delivery.connection_id
+        LEFT JOIN agent_sessions session
+          ON session.agent_actor_id = request.agent_actor_id
+         AND session.conversation_id = COALESCE(request.thread_id, request.conversation_id)
+         AND session.state IN ('active', 'idle')
         WHERE delivery.delivered_at IS NULL
           AND delivery.next_attempt_at <= now()
           AND delivery.attempts < $1
@@ -1400,8 +1419,10 @@ fn wakeup_body(delivery: &DueDelivery) -> serde_json::Value {
         "messageId": delivery.message_id,
         "generation": delivery.generation,
         "followsRequestId": delivery.follows_request_id,
-        // Filled in once agent sessions exist (roadmap A3).
-        "sessionRef": serde_json::Value::Null,
+        // The agent's own session in this conversation (A3), so it resumes
+        // rather than starting cold; null until it binds one.
+        "sessionRef": delivery.session_ref,
+        "sessionHarness": delivery.session_harness,
     })
 }
 

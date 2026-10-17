@@ -36,6 +36,7 @@ const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage')
 const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
 const TimelinePage = lazy(() => import('../views/TimelinePage').then((module) => ({ default: module.TimelinePage })))
 const MilestonesPage = lazy(() => import('../work-items/MilestonesPage').then((module) => ({ default: module.MilestonesPage })))
+const LaunchesPage = lazy(() => import('../launch/LaunchesPage').then((module) => ({ default: module.LaunchesPage })))
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
 const DecisionsPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.DecisionsPage })))
@@ -186,6 +187,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/projects/:projectId/timeline"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <LaunchesPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/projects/:projectId/launches"
                   />
                   <Route
                     element={

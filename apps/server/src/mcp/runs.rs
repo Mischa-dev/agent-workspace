@@ -355,6 +355,7 @@ pub(super) async fn run_start(
                     ..Default::default()
                 })
                 .filter(|config| *config != Default::default()),
+                provider_account_id: None,
             },
             Ok(key),
         )

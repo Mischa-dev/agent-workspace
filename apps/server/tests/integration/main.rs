@@ -54,5 +54,6 @@ mod settings_accounts;
 mod w11_views_and_data;
 mod w2_harness_platform;
 mod w3_tasks_http;
+mod w7_launch;
 mod w9_capacity_and_push;
 mod workspace_isolation;

@@ -33,7 +33,7 @@ use crate::m3_scheduler_http::{
 
 const ORIGIN: &str = "http://127.0.0.1:3100";
 const OWNER_LOGIN: &str = "w2-harness-owner";
-const MEMBER_LOGIN: &str = "w2-harness-member";
+pub(super) const MEMBER_LOGIN: &str = "w2-harness-member";
 const PASSWORD: &str = "correct horse battery staple";
 
 #[tokio::test]
@@ -626,7 +626,7 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         .expect("drop harness schema");
 }
 
-async fn insert_member(pool: &PgPool, organization_id: Uuid, project_id: Uuid) {
+pub(super) async fn insert_member(pool: &PgPool, organization_id: Uuid, project_id: Uuid) {
     let actor_id = Uuid::now_v7();
     let user_id = Uuid::now_v7();
     let password_phc = password::hash_password(PASSWORD.to_owned())
@@ -737,7 +737,7 @@ async fn run_config(pool: &PgPool, run_id: Uuid) -> Value {
         .expect("read run config")
 }
 
-async fn send(
+pub(super) async fn send(
     application: &axum::Router,
     (cookie, csrf): (&str, &str),
     method: &str,
@@ -769,7 +769,7 @@ async fn send(
     .await
 }
 
-async fn send_get(
+pub(super) async fn send_get(
     application: &axum::Router,
     (cookie, _): (&str, &str),
     path: &str,
@@ -791,7 +791,7 @@ async fn send_get(
     .await
 }
 
-async fn login(application: &axum::Router, login_name: &str) -> (String, String) {
+pub(super) async fn login(application: &axum::Router, login_name: &str) -> (String, String) {
     let response = application
         .clone()
         .oneshot(

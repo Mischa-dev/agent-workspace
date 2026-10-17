@@ -658,6 +658,104 @@ pub fn absolute_runtime_path(path: &Path) -> Result<PathBuf, AppError> {
         .map_err(|_| AppError::Internal("resolve runtime path"))
 }
 
+/// The trailer that marks a commit as carrying a harness's remote result,
+/// so applying the same result twice (after a restart) is a no-op.
+const RESULT_TRAILER: &str = "Harness-Result:";
+
+/// Apply a harness's unified diff (from a cloud task) to a run's worktree and
+/// commit it on the run branch, so the run can be published like any other.
+/// Returns the new commit, the existing one when `result_ref` was applied
+/// already, or `None` for an empty diff.
+pub fn apply_result_and_commit(
+    worktree: &Path,
+    patch: &[u8],
+    result_ref: &str,
+    subject: &str,
+) -> Result<Option<String>, AppError> {
+    if !worktree.is_absolute() || !worktree.is_dir() {
+        return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
+    }
+    if result_ref.is_empty()
+        || result_ref.len() > 200
+        || !result_ref
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(AppError::Invalid("harness result reference"));
+    }
+    let worktree_arg = worktree.as_os_str().to_owned();
+    let trailer = format!("{RESULT_TRAILER} {result_ref}");
+    let last = run_git([
+        OsString::from("-C"),
+        worktree_arg.clone(),
+        OsString::from("log"),
+        OsString::from("-1"),
+        OsString::from("--format=%H%n%B"),
+    ])
+    .ok()
+    .and_then(|output| String::from_utf8(output.stdout).ok())
+    .unwrap_or_default();
+    if last.lines().any(|line| line.trim() == trailer) {
+        return Ok(last.lines().next().map(str::to_owned));
+    }
+    if patch.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+    run_git_with_input(
+        [
+            OsString::from("-C"),
+            worktree_arg.clone(),
+            OsString::from("apply"),
+            OsString::from("--index"),
+            OsString::from("--3way"),
+            OsString::from("--whitespace=nowarn"),
+            OsString::from("-"),
+        ],
+        Some(patch),
+    )?;
+    let subject = subject
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(72)
+        .collect::<String>();
+    let subject = if subject.trim().is_empty() {
+        "Apply the harness's changes".to_owned()
+    } else {
+        subject
+    };
+    run_git([
+        OsString::from("-C"),
+        worktree_arg.clone(),
+        OsString::from("-c"),
+        OsString::from("user.name=Agent Workspace"),
+        OsString::from("-c"),
+        OsString::from("user.email=agent-workspace@users.noreply.invalid"),
+        OsString::from("commit"),
+        OsString::from("--no-verify"),
+        OsString::from("--quiet"),
+        OsString::from("-m"),
+        OsString::from(subject),
+        OsString::from("-m"),
+        OsString::from(trailer),
+    ])?;
+    let head = run_git([
+        OsString::from("-C"),
+        worktree_arg,
+        OsString::from("rev-parse"),
+        OsString::from("--verify"),
+        OsString::from("HEAD^{commit}"),
+    ])?;
+    let head = String::from_utf8(head.stdout)
+        .map_err(|_| AppError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .trim()
+        .to_owned();
+    validate_commit(&head)?;
+    Ok(Some(head))
+}
+
 pub fn worktree_is_dirty(worktree: &Path) -> Result<bool, AppError> {
     if !worktree.is_absolute() || !worktree.is_dir() {
         return Err(AppError::Conflict("git_worktree", "worktree is not ready"));
@@ -780,6 +878,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_git_with_input(arguments, None)
+}
+
+/// `run_git` with `input` written to Git's standard input.
+fn run_git_with_input<I, S>(arguments: I, input: Option<&[u8]>) -> Result<Output, AppError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let _process_permit = GitProcessPermit::try_acquire()?;
     let mut command = Command::new("/usr/bin/git");
     command
@@ -799,12 +906,27 @@ where
         .env("GIT_ASKPASS", "/bin/false")
         .env("GIT_SSH_COMMAND", "/bin/false")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .map_err(|_| AppError::Internal("start Git"))?;
+    let stdin_writer = match (input, child.stdin.take()) {
+        (Some(input), Some(mut stdin)) => {
+            let input = input.to_vec();
+            Some(thread::spawn(move || {
+                // A Git that stops reading early fails on its own; its exit
+                // status is what counts.
+                let _ = stdin.write_all(&input);
+            }))
+        }
+        _ => None,
+    };
     let stdout = child
         .stdout
         .take()
@@ -818,6 +940,11 @@ where
     let status = child
         .wait()
         .map_err(|_| AppError::Internal("wait for Git"))?;
+    if let Some(writer) = stdin_writer {
+        writer
+            .join()
+            .map_err(|_| AppError::Internal("join Git stdin writer"))?;
+    }
     let stdout = stdout_reader
         .join()
         .map_err(|_| AppError::Internal("join Git stdout reader"))??;

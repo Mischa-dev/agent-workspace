@@ -1,8 +1,9 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { formatFullDate } from '../conversations/timeFormat'
+import { LaunchCard } from '../launch/LaunchCard'
 import { Banner, Button, ErrorState, IconButton, MessageSkeleton, StatusChip } from '../ui'
 import { useSetWorkItemArchived, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { LabelManager } from './LabelManager'
@@ -14,7 +15,7 @@ import { AcceptanceCriteria } from './TaskCriteria'
 import { DescriptionField, TitleField } from './TaskFields'
 import { TaskLinks } from './TaskLinks'
 import { TaskProperties } from './TaskProperties'
-import { OpenInCodex, StartRunDialog } from './TaskRunActions'
+import { OpenInCodex } from './TaskRunActions'
 import { editErrorMessage } from './taskEdits'
 import type { WorkItem, WorkItemWorkflow } from './types'
 import { useTaskSave } from './useTaskSave'
@@ -104,8 +105,6 @@ function TaskDetailBody({
   const save = useTaskSave(item)
   const disabled = projectArchived || Boolean(item.archivedAt) || !item.capabilities.edit
   const [managingLabels, setManagingLabels] = useState(false)
-  const [runOpen, setRunOpen] = useState(false)
-  const runButton = useRef<HTMLButtonElement>(null)
 
   const head = (
     <div className="aw-workitem__head">
@@ -162,15 +161,7 @@ function TaskDetailBody({
         workflow={workflow}
       />
       <OpenInCodex item={item} projectArchived={projectArchived} />
-      {!disabled ? (
-        <div className="aw-sidecard">
-          <h2 className="aw-sidecard__title">Run with Codex</h2>
-          <p className="aw-sidecard__text">Start a thread where Codex works on this on the server, with this work item as context.</p>
-          <Button icon="play" onClick={() => setRunOpen(true)} ref={runButton}>
-            Start a run
-          </Button>
-        </div>
-      ) : null}
+      {!disabled ? <LaunchCard item={item} /> : null}
       <ArchiveControl item={item} projectArchived={projectArchived} />
     </aside>
   )
@@ -186,7 +177,6 @@ function TaskDetailBody({
         <TaskLinks disabled={disabled} item={item} />
         <TaskActivity disabled={disabled} item={item} />
       </div>
-      {runOpen ? <StartRunDialog item={item} onClose={() => setRunOpen(false)} returnFocus={runButton} /> : null}
       {managingLabels ? <LabelManager onClose={() => setManagingLabels(false)} projectId={item.projectId} /> : null}
     </div>
   )

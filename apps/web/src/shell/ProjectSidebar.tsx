@@ -60,6 +60,7 @@ export function ProjectSidebar({
         <SidebarLink icon="work" label="Work items" onNavigate={onNavigate} to={`${base}/work-items`} />
         <SidebarLink icon="checklist" label="Milestones" onNavigate={onNavigate} to={`${base}/milestones`} />
         <SidebarLink icon="clock" label="Timeline" onNavigate={onNavigate} to={`${base}/timeline`} />
+        <SidebarLink icon="play" label="Launches" onNavigate={onNavigate} to={`${base}/launches`} />
         <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
         <SidebarLink icon="check" label="Decisions" onNavigate={onNavigate} to={`${base}/decisions`} />
         <SidebarLink icon="search" label="Search" onNavigate={onNavigate} to={`/search?projectId=${encodeURIComponent(project.id)}`} />

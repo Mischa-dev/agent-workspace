@@ -308,6 +308,40 @@ pub trait HarnessSession: Send {
 
     fn read_latest_turn<'a>(&'a mut self, thread_id: &'a str) -> HarnessFuture<'a, RecoveredTurn>;
 
+    /// One known turn, for recovery. Harnesses whose threads hold one turn
+    /// at a time read the latest; ones that track turns on their own (a
+    /// cloud task) read that turn.
+    fn read_turn<'a>(
+        &'a mut self,
+        thread_id: &'a str,
+        _turn_id: &'a str,
+    ) -> HarnessFuture<'a, RecoveredTurn> {
+        self.read_latest_turn(thread_id)
+    }
+
+    /// Follow a turn that was started before a restart and is still running
+    /// elsewhere, so `next_event` reports it again. Only harnesses whose
+    /// turns outlive this server (cloud tasks) can.
+    fn follow_turn<'a>(
+        &'a mut self,
+        _thread_id: &'a str,
+        _turn_id: &'a str,
+        _cwd: &'a Path,
+        _config: &'a RunConfig,
+    ) -> HarnessFuture<'a, ()> {
+        Box::pin(async {
+            Err(HarnessError::Unsupported(
+                "following a turn after a restart",
+            ))
+        })
+    }
+
+    /// A link people can open to watch the turn where it runs, such as a
+    /// cloud task's page.
+    fn turn_link(&self, _turn_id: &str) -> Option<String> {
+        None
+    }
+
     fn read_account(&mut self) -> HarnessFuture<'_, AccountSummary>;
 
     fn start_login(&mut self, kind: LoginKind) -> HarnessFuture<'_, LoginStart>;

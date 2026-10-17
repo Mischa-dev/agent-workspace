@@ -1551,6 +1551,7 @@ async fn work_with_worker(
             prompt: provider_prompt,
             repository_id: Some(repository_id),
             config: None,
+            provider_account_id: None,
         }),
     )
     .await?;
@@ -1598,7 +1599,7 @@ fn normalize_worker_prompt(value: &str) -> Result<String, AppError> {
     Ok(value.to_owned())
 }
 
-fn worker_thread_name(key: &str, title: &str, thread_id: Uuid) -> String {
+pub(crate) fn worker_thread_name(key: &str, title: &str, thread_id: Uuid) -> String {
     let suffix = &thread_id.simple().to_string()[24..];
     let prefix = format!("{key}: ");
     let suffix = format!(" [{suffix}]");

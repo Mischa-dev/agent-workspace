@@ -21,6 +21,7 @@ use super::{
         ProfileHealth,
     },
     codex_app_server::CodexAdapter,
+    codex_cloud::CodexCloudAdapter,
     demo::{DEMO_KIND, DemoAdapter, DemoHarness},
     manifest::AdapterManifest,
 };
@@ -65,6 +66,7 @@ pub struct SupervisorRegistry {
 struct RegistryInner {
     adapters: BTreeMap<String, Arc<dyn HarnessAdapter>>,
     demo: Option<Arc<DemoAdapter>>,
+    codex_cloud: Arc<CodexCloudAdapter>,
     /// Development only: every run goes to the demo harness whatever its
     /// connection's kind.
     route_all_to_demo: bool,
@@ -124,8 +126,18 @@ impl SupervisorRegistry {
     pub fn new(config: &AppConfig) -> Result<Self, HarnessError> {
         let shutdown = Arc::new(ShutdownSignal::default());
         let mut adapters: BTreeMap<String, Arc<dyn HarnessAdapter>> = BTreeMap::new();
-        let codex = CodexAdapter::new(config, Arc::clone(&shutdown))?;
-        adapters.insert(codex.manifest().kind.clone(), Arc::new(codex));
+        let codex: Arc<dyn HarnessAdapter> =
+            Arc::new(CodexAdapter::new(config, Arc::clone(&shutdown))?);
+        adapters.insert(codex.manifest().kind.clone(), Arc::clone(&codex));
+        let codex_cloud = Arc::new(CodexCloudAdapter::new(
+            config,
+            Arc::clone(&shutdown),
+            codex,
+        )?);
+        adapters.insert(
+            codex_cloud.manifest().kind.clone(),
+            Arc::clone(&codex_cloud) as Arc<dyn HarnessAdapter>,
+        );
         let demo = config.demo_executor.then(|| {
             Arc::new(DemoAdapter::new(
                 Arc::clone(&shutdown),
@@ -143,6 +155,7 @@ impl SupervisorRegistry {
                 adapters,
                 route_all_to_demo: demo.is_some(),
                 demo,
+                codex_cloud,
                 shutdown,
                 ceremonies: Mutex::new(HashMap::new()),
             }),
@@ -176,6 +189,20 @@ impl SupervisorRegistry {
             .adapters
             .values()
             .map(|adapter| adapter.manifest())
+    }
+
+    /// The Codex Cloud adapter, for checking environments.
+    pub(crate) fn codex_cloud(&self) -> &Arc<CodexCloudAdapter> {
+        &self.inner.codex_cloud
+    }
+
+    /// The kinds of harness whose runs execute somewhere other than this
+    /// host, so the host-wide run limit doesn't count them.
+    pub fn cloud_kinds(&self) -> Vec<String> {
+        self.manifests()
+            .filter(|manifest| manifest.runs_on == super::manifest::RunLocation::Cloud)
+            .map(|manifest| manifest.kind.clone())
+            .collect()
     }
 
     /// The demo harness, when this server runs it.
