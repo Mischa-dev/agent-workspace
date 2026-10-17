@@ -369,6 +369,7 @@ pub async fn evaluate(
         return Ok(0);
     };
     let mut fired = 0;
+    let mut reset_soon = Vec::new();
     for candidate in found {
         let already = sqlx::query_scalar::<_, bool>(
             r#"
@@ -404,6 +405,9 @@ pub async fn evaluate(
         .bind(candidate.cycle_at)
         .execute(&mut *transaction)
         .await?;
+        if candidate.rule == Rule::ResetSoon {
+            reset_soon.push(fire_id);
+        }
         let preview = if candidate.rule == Rule::ResetSoon {
             let ready = ready::ready_tasks(
                 &mut transaction,
@@ -469,6 +473,22 @@ pub async fn evaluate(
         notifications::announce(&mut transaction, space, account.owner_actor_id).await?;
     }
     transaction.commit().await?;
+    // W14: the owner's capacity-window automation rules, once per cycle.
+    for fire_id in reset_soon {
+        if let Err(error) = crate::automations::on_capacity_window(
+            state,
+            account.owner_actor_id,
+            account.id,
+            &fire_id.to_string(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error_category = error.log_category(),
+                "capacity-window automations could not be queued"
+            );
+        }
+    }
     Ok(fired)
 }
 

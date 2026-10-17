@@ -394,6 +394,9 @@ pub(crate) fn normalize_fields(
     Ok(Some(kept))
 }
 
+/// The tasks a view's query matches, for automation conditions (X5).
+pub(crate) use super::list::matching_tasks;
+
 /// Checks a query the way the list will read it, and that every ID in it
 /// belongs to the project.
 pub(crate) async fn check_view_query(

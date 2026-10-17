@@ -957,6 +957,31 @@ fn push_after(builder: &mut QueryBuilder<'_, Postgres>, keys: &[Key], after: Vec
     builder.push(")");
 }
 
+/// Which of `work_item_ids` a saved view's query (or the same query inline)
+/// matches, read as `reader` would read it. Automations (X5) use a view's
+/// filters as their conditions.
+pub(crate) async fn matching_tasks(
+    pool: &PgPool,
+    project_id: Uuid,
+    params: &BTreeMap<String, String>,
+    reader: Uuid,
+    work_item_ids: Option<&[Uuid]>,
+    limit: i64,
+) -> Result<Vec<Uuid>, AppError> {
+    let spec = saved_query_spec(params, reader)?;
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT item.id {BASE_FROM} WHERE item.project_id = "
+    ));
+    builder.push_bind(project_id);
+    if let Some(ids) = work_item_ids {
+        builder.push(" AND item.id = ANY(").push_bind(ids.to_vec()).push(")");
+    }
+    spec.filters.push_where(&mut builder);
+    builder.push(" ORDER BY item.created_at, item.id LIMIT ");
+    builder.push_bind(limit.clamp(1, 500));
+    Ok(builder.build_query_scalar::<Uuid>().fetch_all(pool).await?)
+}
+
 pub(super) async fn total(
     pool: &PgPool,
     project_id: Uuid,
