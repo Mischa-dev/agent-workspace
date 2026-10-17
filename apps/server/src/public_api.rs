@@ -263,7 +263,15 @@ pub(crate) fn document() -> Value {
         let output = tool
             .output_schema
             .as_ref()
-            .map(|schema| hoist(&format!("{name}_result"), schema, &mut components))
+            .map(|schema| {
+                // Six responses share it, so it's referenced rather than
+                // repeated: inline, the document passes a megabyte.
+                let root = format!("{name}_result");
+                let hoisted = hoist(&root, schema, &mut components);
+                let key = pascal(&root);
+                components.insert(key.clone(), hoisted);
+                json!({ "$ref": format!("#/components/schemas/{key}") })
+            })
             .unwrap_or_else(|| json!({ "type": "object" }));
         let mut responses = Map::new();
         responses.insert(
@@ -368,6 +376,9 @@ mod tests {
         let schemas = document["components"]["schemas"]
             .as_object()
             .expect("schemas");
+        // The reference page fetches it whole, so keep it well under a megabyte.
+        let size = serde_json::to_vec(&document).expect("serialize").len();
+        assert!(size < 768 * 1024, "the document is {size} bytes");
         let mut references = Vec::new();
         collect_refs(&document, &mut references);
         assert!(!references.is_empty());
