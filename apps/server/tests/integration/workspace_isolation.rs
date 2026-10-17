@@ -164,6 +164,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/task-templates",
     "/api/v1/projects/{project_id}/timeline",
     "/api/v1/projects/{project_id}/views",
+    "/api/v1/projects/{project_id}/automations",
+    "/api/v1/projects/{project_id}/automations/{rule_id}/runs",
     "/api/v1/projects/{project_id}/work-item-assignees",
     "/api/v1/projects/{project_id}/work-item-references",
     "/api/v1/projects/{project_id}/work-item-workflow",
@@ -189,6 +191,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage/accounts/{account_id}/ready-tasks",
     "/api/v1/usage/accounts/{account_id}/batch",
     "/api/v1/usage/accounts/{account_id}/history",
+    "/api/v1/webhooks",
+    "/api/v1/webhooks/{webhook_id}/deliveries",
 ];
 
 /// GET routes under `/api/v1` this suite deliberately doesn't call as plain
@@ -426,6 +430,8 @@ struct World {
     approval: Uuid,
     plan: Uuid,
     import: String,
+    webhook: Uuid,
+    rule: Uuid,
 }
 
 #[tokio::test]
@@ -1425,6 +1431,45 @@ async fn build_workspace(
         );
     }
 
+    // Webhooks and automations (W14): a subscription on the whole
+    // workspace and a rule that notifies its maker.
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            "/api/v1/webhooks",
+            None,
+            json!({
+                "name": format!("Hook{m}"),
+                "url": format!("https://hooks.example.com/{tag}"),
+                "eventTypes": ["run.finished", "message.created"],
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{label} webhook: {status} {created}");
+    let webhook = Uuid::parse_str(&string_at(&created, "/webhook/id")).expect("webhook id");
+    let (status, created) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/automations"),
+            None,
+            json!({
+                "name": format!("Rule{m}"),
+                "trigger": {"kind": "task_created"},
+                "actions": [{"kind": "notify", "recipients": "owner",
+                             "message": format!("New task{m}")}],
+            }),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} automation: {status} {created}"
+    );
+    let rule = Uuid::parse_str(&string_at(&created, "/id")).expect("rule id");
+
     World {
         marker,
         browser,
@@ -1454,6 +1499,8 @@ async fn build_workspace(
         approval,
         plan,
         import,
+        webhook,
+        rule,
     }
 }
 
@@ -2132,6 +2179,29 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         project_route("/api/v1/projects/{project_id}/views", "/views"),
+        project_route("/api/v1/projects/{project_id}/automations", "/automations"),
+        {
+            let (own, foreign) =
+                pair(&|outer, inner| format!("{}/automations/{}/runs", p(outer), inner.rule));
+            case(
+                "/api/v1/projects/{project_id}/automations/{rule_id}/runs",
+                own,
+                foreign,
+                vec![],
+            )
+        },
+        case(
+            "/api/v1/webhooks",
+            vec!["/api/v1/webhooks".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/webhooks/{webhook_id}/deliveries",
+            vec![format!("/api/v1/webhooks/{}/deliveries", a.webhook)],
+            vec![format!("/api/v1/webhooks/{}/deliveries", b.webhook)],
+            vec![],
+        ),
         project_route("/api/v1/projects/{project_id}/timeline", "/timeline"),
         project_route(
             "/api/v1/projects/{project_id}/task-templates",
@@ -2484,6 +2554,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "ai_suggestions_list",
     "approval_get",
     "approval_list",
+    "automation_list",
+    "automation_runs",
     "briefing",
     "conversation_list",
     "conversation_open",
@@ -2523,6 +2595,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "usage_batch",
     "usage_windows",
     "view_list",
+    "webhook_deliveries",
+    "webhook_list",
     "workflow_get",
 ];
 
@@ -2599,6 +2673,23 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"projectId": a.project, "taskId": b.task.to_string()})],
         ),
         by_project("view_list"),
+        by_project("automation_list"),
+        case(
+            "automation_runs",
+            vec![json!({"projectId": a.project, "ruleId": a.rule.to_string()})],
+            vec![
+                json!({"projectId": b.project, "ruleId": b.rule.to_string()}),
+                json!({"projectId": a.project, "ruleId": b.rule.to_string()}),
+            ],
+            vec![],
+        ),
+        case("webhook_list", vec![json!({})], vec![], vec![]),
+        case(
+            "webhook_deliveries",
+            vec![json!({"webhookId": a.webhook.to_string()})],
+            vec![json!({"webhookId": b.webhook.to_string()})],
+            vec![],
+        ),
         by_project("template_list"),
         by_project("project_export"),
         case(

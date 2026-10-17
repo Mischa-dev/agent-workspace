@@ -1497,7 +1497,7 @@ fn is_trusted_origin(url: &reqwest::Url, trusted_origins: &[String]) -> bool {
         && trusted_origins.contains(&url.origin().ascii_serialization())
 }
 
-async fn webhook_client(
+pub(crate) async fn webhook_client(
     value: &str,
     trusted_origins: &[String],
 ) -> Result<(reqwest::Url, reqwest::Client), &'static str> {
@@ -1566,7 +1566,7 @@ fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
 }
 
 /// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
-fn sign(secret: &str, timestamp: &str, body: &str) -> Option<String> {
+pub(crate) fn sign(secret: &str, timestamp: &str, body: &str) -> Option<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(timestamp.as_bytes());
     mac.update(b".");

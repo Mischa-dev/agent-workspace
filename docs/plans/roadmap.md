@@ -656,16 +656,16 @@ task in its own project's environment; Home answers 'what's going on?' in one
 look; a new workspace reaches its first launched run without leaving the
 onboarding path; and each area passes the polish checklist.
 
-#### W14. Automations and API
+#### W14. Automations and API (#148)
 
 *3 items · Starts when W1, W6, W7, W8 and W11 have merged · 2 add a migration*
 
 Everything scriptable: a versioned public API with tokens, outgoing webhooks,
 and automations that launch agents on events and schedules.
 
-- [ ] [X3](#x3-public-api) Public API
-- [ ] [X4](#x4-outgoing-webhooks) Outgoing webhooks
-- [ ] [X5](#x5-automations) Automations
+- [x] [X3](#x3-public-api) Public API
+- [x] [X4](#x4-outgoing-webhooks) Outgoing webhooks
+- [x] [X5](#x5-automations) Automations
 
 **Owns:** The public API and its OpenAPI document, outgoing webhooks and their
 delivery log, and the automation rules and builder.

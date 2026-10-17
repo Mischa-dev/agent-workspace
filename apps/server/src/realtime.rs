@@ -658,6 +658,7 @@ pub async fn publish_ready_outbox_batch(
             }
         };
         notify_people(&mut transaction, &claim).await;
+        queue_event_route(&mut transaction, &claim).await;
         match outbox::mark_published(&mut transaction, claim.event_id(), worker_id).await {
             Ok(()) => {
                 if let Err(error) = transaction.commit().await {
@@ -740,6 +741,40 @@ async fn notify_people(
             event_cursor = claim.event_cursor(),
             error_category = error.log_category(),
             "notification fan-out failed"
+        );
+    }
+}
+
+/// Queues the job that hands an event to outgoing webhooks and automation
+/// rules. Like notifications, it rides a savepoint so it can't undo the
+/// acknowledgement.
+async fn queue_event_route(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    claim: &outbox::ClaimedOutboxEvent,
+) {
+    let mut savepoint = match sqlx::Connection::begin(&mut **transaction).await {
+        Ok(savepoint) => savepoint,
+        Err(error) => {
+            tracing::error!(
+                event_id = %claim.event_id(),
+                error_category = AppError::from(error).log_category(),
+                "event routing could not start"
+            );
+            return;
+        }
+    };
+    let finished = match crate::events::queue_route(&mut savepoint, claim).await {
+        Ok(_) => savepoint.commit().await.map_err(AppError::from),
+        Err(error) => {
+            let _ = savepoint.rollback().await;
+            Err(error)
+        }
+    };
+    if let Err(error) = finished {
+        tracing::error!(
+            event_id = %claim.event_id(),
+            error_category = error.log_category(),
+            "event routing failed"
         );
     }
 }

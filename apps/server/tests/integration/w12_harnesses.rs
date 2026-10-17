@@ -15,7 +15,7 @@ use agent_workspace_server::{
     jobs::{self, WorkerOptions},
     provider::{SupervisorRegistry, host::HarnessHost},
     rate_limit::RateLimiters,
-    realtime::RealtimeHub,
+    realtime::{RealtimeHub, publish_ready_outbox_batch},
     router,
     secrets::{self, FileKeyring, SecretValue},
     seed::dev_seed,
@@ -306,6 +306,78 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "{}",
         runs.1
     );
+
+    // An automation launches as the agent; another project's agent, or one
+    // that doesn't exist, is refused when the rule is saved.
+    let automations = format!("{project}/automations");
+    let unknown = send(
+        &application,
+        owner,
+        "POST",
+        &automations,
+        "rule-unknown-agent",
+        json!({
+            "name": "Review new tasks",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "launch", "agentProfileId": Uuid::now_v7()}],
+        }),
+    )
+    .await;
+    assert_eq!(unknown.0, StatusCode::NOT_FOUND, "{}", unknown.1);
+    let rule = send(
+        &application,
+        owner,
+        "POST",
+        &automations,
+        "rule-reviewer",
+        json!({
+            "name": "Review new tasks",
+            "trigger": {"kind": "task_created"},
+            "actions": [{"kind": "launch", "agentProfileId": profile_id}],
+        }),
+    )
+    .await;
+    assert_eq!(rule.0, StatusCode::CREATED, "{}", rule.1);
+    let task = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{project}/work-items"),
+        "rule-task",
+        json!({"title": "Review the parser"}),
+    )
+    .await;
+    assert_eq!(task.0, StatusCode::CREATED, "{}", task.1);
+    for _ in 0..10 {
+        let published = publish_ready_outbox_batch(&state.pool, &state.realtime, "w12-test")
+            .await
+            .expect("publish outbox");
+        let ran = jobs::run_due(&state, &jobs::default_registry(), &options())
+            .await
+            .expect("run jobs");
+        if published == 0 && ran == 0 {
+            break;
+        }
+    }
+    let (rule_profile, rule_source) = sqlx::query_as::<_, (Option<Uuid>, String)>(
+        "SELECT agent_profile_id, source FROM launches WHERE work_item_id = $1",
+    )
+    .bind(uuid_field(&task.2, "id"))
+    .fetch_one(&pool)
+    .await
+    .expect("the rule launched the task");
+    assert_eq!(rule_source, "automation");
+    assert_eq!(rule_profile, Some(profile_id));
+    let rule_off = send(
+        &application,
+        owner,
+        "PATCH",
+        &format!("{automations}/{}", uuid_field(&rule.2, "id")),
+        "rule-off",
+        json!({"expectedVersion": rule.2["version"], "enabled": false}),
+    )
+    .await;
+    assert_eq!(rule_off.0, StatusCode::OK, "{}", rule_off.1);
 
     // Turning it off frees the handle and stops tags.
     let off = send(

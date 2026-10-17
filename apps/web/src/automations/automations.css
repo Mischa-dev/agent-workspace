@@ -1,0 +1,167 @@
+/* W14: webhooks, automation rules and the API reference (lazy settings pages). */
+
+.aw-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-fieldset > legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+}
+
+/* Rule builder */
+.aw-rule-action {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-rule-action__head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.aw-rule-action__head > .aw-field {
+  flex: 1;
+}
+
+.aw-rule-inline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-2);
+}
+
+.aw-rule-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.aw-rule-choices--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* API reference */
+.aw-api-basics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-4);
+  font: var(--t-ui);
+  color: var(--content-fg);
+}
+
+.aw-api-ops {
+  /* A grid item in its section: without this, a long curl line widens the page on phones. */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.aw-api-op {
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-api-op > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-api-op > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-api-op__name {
+  font: var(--t-code);
+  color: var(--content-fg);
+}
+
+.aw-api-op__summary {
+  flex: 1;
+  min-width: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-api-op__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+  font: var(--t-ui);
+}
+
+.aw-api-op__body p {
+  margin: 0;
+}
+
+.aw-api-params {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-small);
+}
+
+.aw-api-params th,
+.aw-api-params td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--content-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.aw-api-params th {
+  color: var(--content-fg-muted);
+  font-weight: 500;
+}
+
+.aw-api-params__required {
+  margin-left: var(--space-1);
+  color: var(--content-fg-muted);
+}
+
+.aw-api-op__curl {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.aw-api-op__curl pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font: var(--t-code);
+}
+
+.aw-api-params__scroll {
+  overflow-x: auto;
+}
+
+/* Long option labels mustn't widen the dialog past a phone screen. */
+.aw-rule-form .aw-field {
+  grid-template-columns: minmax(0, 1fr);
+}
