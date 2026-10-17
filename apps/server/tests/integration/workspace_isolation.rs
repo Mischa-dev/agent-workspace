@@ -87,11 +87,13 @@ const ORIGIN: &str = "http://127.0.0.1:3100";
 /// server's `.route(...)` calls.
 const HTTP_ROUTES: &[&str] = &[
     "/api/v1/account/connected-apps",
+    "/api/v1/account/email",
     "/api/v1/account/profile",
     "/api/v1/account/api-tokens",
     "/api/v1/account/appearance",
     "/api/v1/account/security",
     "/api/v1/account/sessions",
+    "/api/v1/auth/password-reset",
     "/api/v1/auth/session",
     "/api/v1/auth/workos",
     "/api/v1/conversations/{id}/messages/{message_id}",
@@ -115,11 +117,13 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/audit-events/facets",
     "/api/v1/organizations/{organization_id}/harnesses",
     "/api/v1/organizations/{organization_id}/invitations",
+    "/api/v1/organizations/{organization_id}/mail",
     "/api/v1/organizations/{organization_id}/members",
     "/api/v1/organizations/{organization_id}/onboarding",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/secrets",
+    "/api/v1/organizations/{organization_id}/server",
     "/api/v1/pages/{id}",
     "/api/v1/pages/{id}/revisions/{version}",
     "/api/v1/projects",
@@ -1748,6 +1752,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/account/email",
+            vec!["/api/v1/account/email".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
             "/api/v1/account/api-tokens",
             vec!["/api/v1/account/api-tokens".to_owned()],
             vec![],
@@ -1774,6 +1784,12 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         case(
             "/api/v1/auth/session",
             vec!["/api/v1/auth/session".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/auth/password-reset",
+            vec!["/api/v1/auth/password-reset".to_owned()],
             vec![],
             vec![],
         ),
@@ -2054,6 +2070,18 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/organizations/{organization_id}/secrets",
             vec![format!("/api/v1/organizations/{}/secrets", a.organization)],
             vec![format!("/api/v1/organizations/{}/secrets", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/mail",
+            vec![format!("/api/v1/organizations/{}/mail", a.organization)],
+            vec![format!("/api/v1/organizations/{}/mail", b.organization)],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/server",
+            vec![format!("/api/v1/organizations/{}/server", a.organization)],
+            vec![format!("/api/v1/organizations/{}/server", b.organization)],
             vec![],
         ),
         case(

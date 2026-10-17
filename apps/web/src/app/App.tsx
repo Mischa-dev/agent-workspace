@@ -22,6 +22,9 @@ import { AppErrorBoundary } from './AppErrorBoundary'
 
 const SettingsArea = lazy(() => import('../settings/SettingsArea'))
 const SignInPage = lazy(() => import('../auth/SignInPage').then((module) => ({ default: module.SignInPage })))
+const ForgotPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.ForgotPasswordPage })))
+const ResetPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.ResetPasswordPage })))
+const VerifyEmailPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.VerifyEmailPage })))
 const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
 const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
 const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
@@ -89,6 +92,30 @@ export function App() {
                     </PublicRouteBoundary>
                   }
                   path="/sign-in"
+                />
+                <Route
+                  element={
+                    <PublicRouteBoundary>
+                      <ForgotPasswordPage />
+                    </PublicRouteBoundary>
+                  }
+                  path="/forgot-password"
+                />
+                <Route
+                  element={
+                    <PublicRouteBoundary>
+                      <ResetPasswordPage />
+                    </PublicRouteBoundary>
+                  }
+                  path="/reset-password"
+                />
+                <Route
+                  element={
+                    <PublicRouteBoundary>
+                      <VerifyEmailPage />
+                    </PublicRouteBoundary>
+                  }
+                  path="/verify-email"
                 />
                 <Route
                   element={

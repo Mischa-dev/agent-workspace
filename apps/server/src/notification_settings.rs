@@ -7,8 +7,8 @@
 //! Notifications are decided when written: a muted project's group writes
 //! nothing; with in-app off but push on, the row is written straight to the
 //! archive so the push has something to open. Push also checks quiet hours
-//! when it sends. Email is a channel people can choose now; it sends once
-//! this server has an email transport.
+//! when it sends. Email sends once the workspace can send mail and the
+//! person has confirmed an address (`notification_email`).
 
 use std::collections::BTreeMap;
 
@@ -305,8 +305,13 @@ pub struct NotificationSettingsView {
     pub quiet_hours: QuietHours,
     /// off, daily or weekly; for email.
     pub digest: String,
-    /// Whether this server can send email yet.
+    /// Whether email reaches this person here: the workspace sends mail
+    /// and they confirmed an address.
     pub email_available: bool,
+    /// Whether the workspace sends mail, so the page can say what's missing.
+    pub mail_configured: bool,
+    /// The person's confirmed address, if any.
+    pub email_address: Option<String>,
 }
 
 /// The workspace notification settings apply to: `wanted` if the person is
@@ -388,13 +393,17 @@ pub async fn read(
     .await?;
     let mut connection = pool.acquire().await?;
     let (quiet_hours, digest) = quiet_hours(&mut connection, organization_id, actor_id).await?;
+    let mail_configured = crate::mail::configured(&mut *connection, organization_id).await?;
+    let email_address = crate::mail::verified_address_for_actor(&mut *connection, actor_id).await?;
     Ok(NotificationSettingsView {
         organization_id,
         groups,
         mutes,
         quiet_hours,
         digest,
-        email_available: false,
+        email_available: mail_configured && email_address.is_some(),
+        mail_configured,
+        email_address,
     })
 }
 

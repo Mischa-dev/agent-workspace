@@ -3,8 +3,9 @@
 //!
 //! It only reads. It loads the configuration (which already refuses a keyring
 //! inside a Git checkout), opens the secrets keyring, looks for the harness
-//! CLIs, checks free disk, and compares the build's migrations with the ones
-//! the database has run. It never prints a configuration value or secret.
+//! CLIs, says whether email is set up and how the last nightly backup went,
+//! checks free disk, and compares the build's migrations with the ones the
+//! database has run. Settings > Workspace > Server shows the same report. It never prints a configuration value or secret.
 
 use std::{path::Path, process::Stdio, time::Duration};
 
@@ -102,6 +103,31 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
             config.webhook_trusted_origins.len()
         ),
     );
+
+    let mail_workspaces = if migrations_table_exists(pool).await?
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT to_regclass('workspace_mail_settings') IS NOT NULL",
+        )
+        .fetch_one(pool)
+        .await?
+    {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspace_mail_settings WHERE enabled")
+            .fetch_one(pool)
+            .await?
+    } else {
+        0
+    };
+    report.push(
+        Level::Ok,
+        match mail_workspaces {
+            0 => "email isn't set up (no password reset emails or email notifications); an owner \
+                  sets it in Settings > Workspace > Email"
+                .to_owned(),
+            count => format!("{count} workspace(s) send email"),
+        },
+    );
+    let (level, line) = crate::server_status::backup_line(&config.data_root);
+    report.push(level, line);
 
     match storage_admission::inspect(
         &config.data_root,

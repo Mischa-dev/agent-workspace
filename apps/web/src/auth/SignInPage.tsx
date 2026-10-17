@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
+import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { Banner, Button, TextField } from '../ui'
 import { startWorkOs, workOsStatus } from './workos'
@@ -30,6 +31,11 @@ function safeReturnTo(search: string) {
 
 export function SignInPage() {
   const workos = useQuery({ queryKey: ['workos-status'], queryFn: workOsStatus })
+  // Whether this server can email a reset link; without email the operator resets it.
+  const resetByEmail = useQuery({
+    queryKey: ['password-reset-available'],
+    queryFn: () => requestJson<{ available: boolean }>('/api/v1/auth/password-reset'),
+  })
   const session = useSession()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -181,7 +187,12 @@ export function SignInPage() {
       footer={
         <>
           Existing account? You can link WorkOS from Account settings after signing in.
-          {' '}Forgot your password? Whoever runs this server can reset it for you.
+          {' '}
+          {resetByEmail.data?.available ? (
+            <Link to="/forgot-password">Forgot your password?</Link>
+          ) : (
+            'Forgot your password? Whoever runs this server can reset it for you.'
+          )}
         </>
       }
       intro="Welcome back. Your conversations and agents are waiting."

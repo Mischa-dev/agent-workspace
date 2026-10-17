@@ -7,12 +7,55 @@
 # that pass uploads it (it does nothing when the key didn't change). Exits
 # nonzero if any step failed.
 #
+# Afterwards it records when it ran and how each step went in
+# ${BACKUP_STATUS_FILE} (default ${BACKUP_DATA_ROOT}/backup-status.json), which
+# the app reads for Settings > Workspace > Server and `preflight`. The file
+# holds times and ok/failed only, never where backups go.
+#
 # usage: agent-workspace-daily-backup [--config FILE]
 set -uo pipefail
 
 script_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+# shellcheck source=agent-workspace-backup-lib.sh
+source "${script_dir}/agent-workspace-backup-lib.sh"
+
+config="${BACKUP_DEFAULT_CONFIG}"
+if [[ "${1:-}" == "--config" && -n "${2:-}" ]]; then
+  config="$2"
+fi
+if [[ -f "${config}" ]]; then
+  load_config "${config}"
+fi
+: "${BACKUP_DATA_ROOT:=/var/lib/agent-workspace}"
+: "${BACKUP_STATUS_FILE:=${BACKUP_DATA_ROOT}/backup-status.json}"
+
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 status=0
-"${script_dir}/agent-workspace-backup-key" "$@" || status=1
-"${script_dir}/agent-workspace-backup" "$@" || status=1
-"${script_dir}/agent-workspace-backup-key" "$@" || status=1
+# Prints ok or failed; the step's own output goes to the journal (stderr).
+step() {
+  if "$@" >&2; then printf ok; else printf failed; fi
+}
+key="$(step "${script_dir}/agent-workspace-backup-key" "$@")"
+database="$(step "${script_dir}/agent-workspace-backup" "$@")"
+key_again="$(step "${script_dir}/agent-workspace-backup-key" "$@")"
+[[ "${key}" == ok && "${database}" == ok && "${key_again}" == ok ]] || status=1
+finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+record_status() {
+  local directory temporary ok=true
+  directory="$(dirname -- "${BACKUP_STATUS_FILE}")"
+  [[ -d "${directory}" ]] || return 0
+  [[ "${status}" -eq 0 ]] || ok=false
+  # The folder belongs to the app's user: write a new file and rename it into
+  # place, so a link planted at the status path is replaced, never followed.
+  temporary="$(mktemp "${directory}/.backup-status.XXXXXX")" || return 1
+  printf '{"startedAt":"%s","finishedAt":"%s","ok":%s,"steps":{"key":"%s","database":"%s","keyAgain":"%s"}}\n' \
+    "${started_at}" "${finished_at}" "${ok}" "${key}" "${database}" "${key_again}" >"${temporary}" &&
+    chmod 0644 "${temporary}" &&
+    mv -f -T -- "${temporary}" "${BACKUP_STATUS_FILE}" || {
+    rm -f -- "${temporary}"
+    return 1
+  }
+}
+record_status || log "warning: couldn't record the backup status in ${BACKUP_STATUS_FILE}"
 exit "${status}"

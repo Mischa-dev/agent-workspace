@@ -470,13 +470,13 @@ fn otpauth_uri(secret_base32: &str, account_name: &str) -> String {
 }
 
 #[derive(FromRow)]
-struct StoredFactor {
+pub(crate) struct StoredFactor {
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
     wrapped_key: Vec<u8>,
     wrap_nonce: Option<Vec<u8>>,
     master_key_id: String,
-    confirmed_at: Option<DateTime<Utc>>,
+    pub(crate) confirmed_at: Option<DateTime<Utc>>,
     last_used_step: Option<i64>,
 }
 
@@ -503,7 +503,7 @@ impl StoredFactor {
     }
 }
 
-async fn load_factor(
+pub(crate) async fn load_factor(
     connection: &mut PgConnection,
     user_id: Uuid,
 ) -> Result<Option<StoredFactor>, AppError> {
@@ -523,7 +523,7 @@ async fn load_factor(
 /// Check a TOTP code against the person's factor and, when it matches,
 /// remember its step so it can't be used again. Call inside a transaction
 /// (the factor row is locked).
-async fn accept_totp(
+pub(crate) async fn accept_totp(
     connection: &mut PgConnection,
     state: &AppState,
     user_id: Uuid,
@@ -607,7 +607,7 @@ async fn replace_recovery_codes(
 }
 
 /// Use a recovery code once. Returns whether it was one of the person's.
-async fn accept_recovery_code(
+pub(crate) async fn accept_recovery_code(
     connection: &mut PgConnection,
     user_id: Uuid,
     code: &str,

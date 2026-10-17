@@ -278,20 +278,32 @@ pub async fn deliver(
     .bind(decision.in_app)
     .fetch_one(&mut **transaction)
     .await?;
-    if decision.push {
+    if decision.push || decision.email {
         let organization_id =
             sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM projects WHERE id = $1")
                 .bind(notification.project_id)
                 .fetch_one(&mut **transaction)
                 .await?;
-        crate::push::enqueue_delivery(
-            transaction,
-            organization_id,
-            notification_id,
-            notification.recipient_actor_id,
-            &notification.dedupe_key,
-        )
-        .await?;
+        if decision.push {
+            crate::push::enqueue_delivery(
+                transaction,
+                organization_id,
+                notification_id,
+                notification.recipient_actor_id,
+                &notification.dedupe_key,
+            )
+            .await?;
+        }
+        if decision.email {
+            crate::notification_email::enqueue(
+                transaction,
+                organization_id,
+                notification_id,
+                notification.recipient_actor_id,
+                &notification.dedupe_key,
+            )
+            .await?;
+        }
     }
     sqlx::query(
         r#"

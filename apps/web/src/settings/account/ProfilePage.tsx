@@ -7,8 +7,9 @@ import { isApiError } from '../../api/errors'
 import { startWorkOs, workOsStatus } from '../../auth/workos'
 import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField } from '../../ui'
 import type { SettingsPageProps } from '../types'
+import { EmailSection } from './EmailSection'
 
-/** Account › Profile: your name, your GitHub username and how you sign in. */
+/** Account › Profile: your name, your email address, your GitHub username and how you sign in. */
 export default function ProfilePage({ session }: SettingsPageProps) {
   const client = useQueryClient()
   const [name, setName] = useState(session.user.displayName)
@@ -71,6 +72,7 @@ export default function ProfilePage({ session }: SettingsPageProps) {
         </form>
         {save.isSuccess && <p className="aw-quiet" role="status">Profile saved.</p>}
       </Section>
+      <EmailSection />
       <Section
         description="Used only to find pull requests that ask for your review."
         id="github-username-heading"

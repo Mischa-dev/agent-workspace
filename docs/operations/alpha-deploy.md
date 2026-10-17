@@ -79,6 +79,11 @@ Restart the service after editing.
   command harnesses.
 - **GitHub (W8, W11).** Optional GitHub App settings. To import GitHub issues,
   give the App the Issues: read permission.
+- **Email (W19).** Nothing goes in this file: an owner sets SMTP in the app
+  (below). The SMTP password is kept in the keyring, so the keyring must exist,
+  and the host needs outbound access to the mail server's port (587 for
+  STARTTLS or 465 for TLS). Links in emails use the public origin, so
+  `AGENT_WORKSPACE_PUBLIC_ORIGIN` must be the address people open.
 
 ## After: in the app
 
@@ -91,6 +96,13 @@ Restart the service after editing.
 5. On the phone: open the site, add it to the home screen, then turn on push in
    Settings › Notifications from the installed app.
 6. Launch one task from its page and watch it on Runs.
+7. Settings › Workspace › Email: enter the SMTP server, sender address and
+   password, save, and press Send test email. Then confirm your own address in
+   Settings › Profile; password resets and email notifications only go to
+   confirmed addresses, and "Forgot your password?" appears on sign-in once
+   email works.
+8. Settings › Workspace › Server: check that the checks are green and the last
+   backup shows up after the first nightly run.
 
 ## Nightly backups
 
@@ -99,3 +111,8 @@ Fill in `/etc/agent-workspace/backup.env` from
 path), as `docs/operations/backups.md` describes. The next deploy enables the
 timer; to start it now, run that guide's install step. Then run the restore
 drill once.
+
+Each run writes its outcome (start, finish, which steps worked; no paths or
+remotes) to `/var/lib/agent-workspace/backup-status.json`, which the Server
+page reads. Set `BACKUP_STATUS_FILE` in `backup.env` to put it elsewhere, but
+it must stay in the app's data root for the page to see it.
