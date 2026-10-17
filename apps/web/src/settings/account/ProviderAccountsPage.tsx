@@ -4,7 +4,7 @@ import { ExecutionAccountSettings } from '../../execution/ExecutionAccountSettin
 import { PageHeader, Section, SelectField } from '../../ui'
 import type { SettingsPageProps } from '../types'
 
-/** Account › Provider accounts: the Codex sign-in your runs use, per Project for now. */
+/** Account › Provider accounts: the sign-ins your runs use, per Project for now. */
 export default function ProviderAccountsPage({ projects, session }: SettingsPageProps) {
   const [parameters, setParameters] = useSearchParams()
   const usable = projects.filter((project) => project.role !== 'viewer')
@@ -17,9 +17,9 @@ export default function ProviderAccountsPage({ projects, session }: SettingsPage
       </PageHeader>
       {chosen ? (
         <Section
-          description="Today each Project has its own Codex sign-in. Pick the Project to see or change it."
+          description="Today each Project has its own sign-ins. Pick the Project to see or change them."
           id="codex-account-heading"
-          title="Codex account"
+          title="Accounts for runs"
         >
           {usable.length > 1 && (
             <SelectField

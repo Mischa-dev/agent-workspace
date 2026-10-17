@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import { runSettingsFrom } from '../execution/api'
 import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatDateTime, type ChipTone, type IconName } from '../ui'
+import { runAgent } from './runAgent'
 import type { Approval, Run, RunState } from './threadTypes'
 
 const RUN_STATES: Record<RunState, { label: string; tone: ChipTone; icon?: IconName; dots?: boolean; spin?: boolean }> = {
@@ -26,10 +27,6 @@ function shortId(value: string | null | undefined) {
 function ordinal(position: number) {
   const suffix = position % 10 === 1 && position % 100 !== 11 ? 'st' : position % 10 === 2 && position % 100 !== 12 ? 'nd' : position % 10 === 3 && position % 100 !== 13 ? 'rd' : 'th'
   return `${position}${suffix}`
-}
-
-function capitalize(value: string) {
-  return value.charAt(0).toLocaleUpperCase() + value.slice(1)
 }
 
 function words(value: string) {
@@ -60,16 +57,16 @@ export function RunCard({ actions, notes, run }: { actions?: ReactNode; notes?: 
   const state = RUN_STATES[run.state]
   const checks = checksSummary(run)
   const settings = runSettingsFrom(run.config)
-  const harness = settings?.harness ? capitalize(words(settings.harness)) : null
+  const agent = runAgent(run)
   const settingsLine = [settings?.model, settings?.reasoning && `${settings.reasoning} reasoning`, settings?.speed]
     .filter(Boolean)
     .join(' · ')
   return (
     <section aria-label={`Run ${state.label.toLocaleLowerCase()}`} className="aw-card aw-run">
       <header className="aw-card__head">
-        <Avatar kind="worker" name="Codex" seed="codex" size={24} />
+        <Avatar kind="worker" name={agent.name} seed={agent.seed} size={24} />
         <div className="aw-card__titles">
-          <span className="aw-card__title">{harness ? `${harness} run` : 'Agent run'}</span>
+          <span className="aw-card__title">{settings?.harness ? `${agent.name} run` : 'Agent run'}</span>
           <span className="aw-card__sub">Updated {formatDateTime(run.updatedAt)}</span>
         </div>
         <StatusChip dots={state.dots} icon={state.icon} spin={state.spin} tone={state.tone}>
@@ -129,21 +126,25 @@ export function ApprovalCard({
   busyAction,
   canRespond,
   onRespond,
+  run,
 }: {
   approval: Approval
+  /** The run asking, for its name. */
+  run: Run | null
   busyAction: string | null
   canRespond: boolean
   onRespond: (approvalId: string, response: { decision: 'approve' | 'deny' } | { answer: string }) => void
 }) {
   const [answer, setAnswer] = useState('')
   const question = approval.kind === 'question'
+  const agent = runAgent(run)
   return (
     <section aria-labelledby={`approval-${approval.id}`} className="aw-card aw-approval is-open">
       <header className="aw-card__head">
-        <Avatar kind="worker" name="Codex" seed="codex" size={24} />
+        <Avatar kind="worker" name={agent.name} seed={agent.seed} size={24} />
         <div className="aw-card__titles">
           <h2 className="aw-card__title" id={`approval-${approval.id}`}>
-            {question ? 'Codex has a question' : 'Codex needs your approval'}
+            {question ? `${agent.name} has a question` : `${agent.name} needs your approval`}
           </h2>
         </div>
         <StatusChip icon={question ? 'circle-help' : 'shield-check'} tone="warning">
@@ -230,7 +231,7 @@ export function ThreadDetails({
 }) {
   const rows: [string, ReactNode][] = [
     ['Project', projectName],
-    ['Runs on', 'Codex, in an isolated workspace'],
+    ['Runs on', run ? `${runAgent(run).name}, in an isolated workspace` : 'An isolated workspace'],
     ['Branch', run?.branch ? <code>{run.branch}</code> : 'Assigned when a run starts'],
     ['Base commit', shortId(run?.baseCommit) ? <code>{shortId(run?.baseCommit)}</code> : '—'],
     ['Run', shortId(run?.id) ? <code>{shortId(run?.id)}</code> : 'No run yet'],

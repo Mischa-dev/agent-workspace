@@ -64,6 +64,7 @@ import {
 } from '../ui'
 import { ApprovalCard, RunBadge, RunCard, ThreadDetails } from './ThreadPresentation'
 import { RunCardActions, RunCardNotes, RunComposer } from './ThreadRunControls'
+import { runAgent } from './runAgent'
 import { normalizeTimeline, useThread } from './threadTimeline'
 import { useThreadRunActions } from './useThreadRunActions'
 
@@ -257,6 +258,8 @@ export function ThreadPage() {
   )
   const mode: 'message' | 'run' = !canMessage ? 'run' : !showRunComposer ? 'message' : composerMode
   const runForCard = activeRun ?? latestTerminalRun
+  // Streamed text comes from the run that's working now.
+  const writer = runAgent(activeRun)
   const channelRoute = parentId
     ? `/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(parentId)}`
     : `/projects/${encodeURIComponent(projectId)}`
@@ -297,7 +300,7 @@ export function ThreadPage() {
         onChange={setComposerMode}
         options={[
           { value: 'message', label: 'Message', icon: 'message' },
-          { value: 'run', label: 'Run with Codex', icon: 'terminal' },
+          { value: 'run', label: 'Run an agent', icon: 'terminal' },
         ]}
         value={mode}
       />
@@ -383,11 +386,12 @@ export function ThreadPage() {
         {verifiedTimeline && !olderCursor ? (
           <ConversationIntro icon="messages" title={threadName}>
             {verifiedTimeline.capabilities.workerInvoke
-              ? 'A focused conversation. Ask Codex to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
+              ? 'A focused conversation. Ask an agent to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
               : 'A focused conversation inside the channel. Everything said here stays with this thread.'}
           </ConversationIntro>
         ) : null}
         <TimelineEntries
+          agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
           entries={entries}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
@@ -415,13 +419,13 @@ export function ThreadPage() {
           />
         ))}
         {Object.entries(realtime.streaming).map(([messageId, text]) => (
-          <article aria-label="Codex is writing" className="aw-msg is-streaming" key={messageId}>
+          <article aria-label={`${writer.name} is writing`} className="aw-msg is-streaming" key={messageId}>
             <div className="aw-msg__gutter">
-              <Avatar kind="worker" name="Codex" seed="codex" size={36} working />
+              <Avatar kind="worker" name={writer.name} seed={writer.seed} size={36} working />
             </div>
             <div className="aw-msg__main">
               <div className="aw-msg__meta">
-                <span className="aw-msg__author">Codex</span>
+                <span className="aw-msg__author">{writer.name}</span>
                 <ActorTag kind="worker" />
                 <Dots label="Writing" />
               </div>
@@ -441,6 +445,7 @@ export function ThreadPage() {
               busyAction={busyAction}
               canRespond={pendingApproval.capabilities.respond}
               onRespond={runActions.respond}
+              run={[activeRun, latestTerminalRun].find((run) => run?.id === pendingApproval.agentRunId) ?? activeRun}
             />
           </div>
         ) : null}

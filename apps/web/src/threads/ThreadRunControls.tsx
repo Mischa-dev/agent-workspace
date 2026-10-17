@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 
 import { isSafeMessageText, messageTextScalarValues } from '../conversations/messageContentModel'
 import { Button, Icon } from '../ui'
+import { runAgent } from './runAgent'
 import type { Run } from './threadTypes'
 import type { ThreadRunActions } from './useThreadRunActions'
 
@@ -101,19 +102,20 @@ export function RunComposer({
   modeSwitch: ReactNode
 }) {
   const { busyAction, prompt } = actions
+  const working = activeRun ? runAgent(activeRun).name : null
   return (
     <form className="aw-composer-wrap" onSubmit={actions.startRun}>
       {modeSwitch ? <div className="aw-composer__toolbar">{modeSwitch}</div> : null}
       <div className="aw-composer aw-composer--run">
         <label className="visually-hidden" htmlFor="agent-prompt">
-          Describe the change for Codex
+          Describe the change for the agent
         </label>
         <textarea
           disabled={Boolean(activeRun) || busyAction === 'start'}
           id="agent-prompt"
           onChange={(event) => actions.editPrompt(event.target.value)}
           placeholder={
-            activeRun ? 'Codex is already working in this thread. Stop the run to start a new one.' : 'Describe the change for Codex to make…'
+            working ? `${working} is already working in this thread. Stop the run to start a new one.` : 'Describe the change for an agent to make…'
           }
           rows={3}
           value={prompt}
