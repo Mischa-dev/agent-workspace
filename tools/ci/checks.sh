@@ -4,7 +4,8 @@
 #   tools/ci/checks.sh [rust,web|rust|web]
 #
 # Quick checks run first so a typo fails in seconds; the web checks then run
-# alongside clippy and the Rust tests. Expects from run.sh: CI_RUN_ID,
+# alongside clippy and the Rust tests, or after them on a small or
+# memory-capped machine. Expects from run.sh: CI_RUN_ID,
 # CI_DATABASE_BASE (a PostgreSQL URL without a database) and optionally
 # CI_TARGET_DIR, CI_LOCK_DIR, CI_MEMORY_MAX, CI_CPU_WEIGHT.
 set -euo pipefail
@@ -39,6 +40,9 @@ export CARGO_TERM_COLOR=always
 # Incremental caches only help repeat local edits; on CI hosts they grew to
 # 12 GB and filled the Red Hat disk.
 export CARGO_INCREMENTAL=0
+# Line tables keep file:line in backtraces and drop the rest of the debug info,
+# which costs the server's test build memory and most of the build cache.
+export CARGO_PROFILE_DEV_DEBUG=line-tables-only
 # Keep the build cache from filling a shared disk: start fresh past 16 GB.
 if [ -d "${CARGO_TARGET_DIR}" ] &&
   [ "$(du -s --block-size=1G "${CARGO_TARGET_DIR}" | cut -f1)" -gt 16 ]; then
@@ -119,7 +123,8 @@ if has web; then
 fi
 
 # 2. Web tests and build: in the background next to the Rust checks on a big
-# machine; on a small one they'd starve each other, so they wait their turn.
+# machine; on a small one they'd starve each other, and under a memory cap the
+# server's test build alone comes close to it, so there they wait their turn.
 run_web_checks() {
   step "web tests" pnpm test &&
     step "web build" pnpm build &&
@@ -156,7 +161,7 @@ run_browser_smoke() {
     E2E_DATABASE_NAME="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')" \
     pnpm test:e2e
 }
-if has web && [ "$(nproc)" -lt 8 ] && has rust; then
+if has web && has rust && { [ "$(nproc)" -lt 8 ] || [ -n "${CI_MEMORY_MAX:-}" ]; }; then
   web_later=1
 elif has web; then
   (
