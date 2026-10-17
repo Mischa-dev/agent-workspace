@@ -36,6 +36,10 @@ const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage')
 const WorkItemsPage = lazy(() => import('../work-items/WorkItemsPage').then((module) => ({ default: module.WorkItemsPage })))
 const TimelinePage = lazy(() => import('../views/TimelinePage').then((module) => ({ default: module.TimelinePage })))
 const MilestonesPage = lazy(() => import('../work-items/MilestonesPage').then((module) => ({ default: module.MilestonesPage })))
+const NextPage = lazy(() => import('../ai/PlanningPages').then((module) => ({ default: module.NextPage })))
+const SuggestionsPage = lazy(() => import('../ai/PlanningPages').then((module) => ({ default: module.SuggestionsPage })))
+const GraphPage = lazy(() => import('../ai/GraphPage').then((module) => ({ default: module.GraphPage })))
+const PlanImportPage = lazy(() => import('../ai/PlanImportPage').then((module) => ({ default: module.PlanImportPage })))
 const LaunchesPage = lazy(() => import('../launch/LaunchesPage').then((module) => ({ default: module.LaunchesPage })))
 const PagesPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PagesPage })))
 const PageDetailPage = lazy(() => import('../memory/MemoryPages').then((module) => ({ default: module.PageDetailPage })))
@@ -180,6 +184,10 @@ export function App() {
                     }
                     path="/projects/:projectId/milestones"
                   />
+                  <Route element={<AuthenticatedRouteBoundary><NextPage /></AuthenticatedRouteBoundary>} path="/projects/:projectId/next" />
+                  <Route element={<AuthenticatedRouteBoundary><SuggestionsPage /></AuthenticatedRouteBoundary>} path="/projects/:projectId/suggestions" />
+                  <Route element={<AuthenticatedRouteBoundary><GraphPage /></AuthenticatedRouteBoundary>} path="/projects/:projectId/graph" />
+                  <Route element={<AuthenticatedRouteBoundary><PlanImportPage /></AuthenticatedRouteBoundary>} path="/projects/:projectId/plan-import" />
                   <Route
                     element={
                       <AuthenticatedRouteBoundary>

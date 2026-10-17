@@ -1,0 +1,16 @@
+{
+  "input": {
+    "newTasks": [
+      {"key": "ACME-9", "title": "Crash when saving a draft", "description": "The app crashes with an error when I save.", "type": "Task", "priority": "no_priority"}
+    ],
+    "labels": ["auth", "editor", "web"],
+    "types": ["Task", "Bug", "Feature"],
+    "priorities": ["no_priority", "low", "medium", "high", "urgent"],
+    "similar": [{"key": "ACME-5", "title": "Saving a draft crashes the editor", "forTask": "ACME-9"}]
+  },
+  "output": {
+    "tasks": [
+      {"task": "ACME-9", "labels": ["editor"], "priority": "high", "type": "Bug", "parent": null, "duplicateOf": "ACME-5", "confidence": 0.82, "reason": "A crash on save in the editor, reported before as ACME-5."}
+    ]
+  }
+}

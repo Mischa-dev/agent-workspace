@@ -1048,7 +1048,7 @@ pub(super) struct TimelineResponse {
     /// Blocks between the tasks shown: the blocking task must finish first.
     dependencies: Vec<TimelineLink>,
     /// Dependencies AI planning suggests and nobody has accepted yet, drawn
-    /// dashed. Empty until the suggestion graph is on main (W10).
+    /// dashed. Only those the reader may see (W10).
     suggested_dependencies: Vec<TimelineLink>,
     /// Tasks in range beyond the most one request draws.
     truncated: bool,
@@ -1135,6 +1135,23 @@ pub(super) async fn get_timeline(
     .bind(&ids)
     .fetch_all(&mut *connection)
     .await?;
+    // Suggestions are checked against what this person may see, as on the graph.
+    let suggested_dependencies = crate::ai::ready::suggested_blocks(
+        &mut *connection,
+        crate::work_item_planning::Reader {
+            actor_id: principal.actor_id,
+            connection_id: None,
+        },
+        project_id,
+        &ids,
+    )
+    .await?
+    .into_iter()
+    .map(|(blocking_id, blocked_id)| TimelineLink {
+        blocking_id,
+        blocked_id,
+    })
+    .collect();
     let undated = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM work_items item
@@ -1163,7 +1180,7 @@ pub(super) async fn get_timeline(
         milestones,
         tasks,
         dependencies,
-        suggested_dependencies: Vec::new(),
+        suggested_dependencies,
         truncated,
         undated,
         can_edit: capabilities(&membership)?.edit && membership.project_archived_at.is_none(),
