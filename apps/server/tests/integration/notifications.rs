@@ -628,7 +628,14 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
     assert!(items(&inbox(&setup, &mara_browser, "").await).is_empty());
 
     // In a channel, every member who can see it hears, but not the author.
-    say(&setup, &ben_browser, &general, "e1", text("@here standup in 5")).await;
+    say(
+        &setup,
+        &ben_browser,
+        &general,
+        "e1",
+        text("@here standup in 5"),
+    )
+    .await;
     drain(&setup).await;
     for browser in [&setup.browser, &mara_browser] {
         let page = inbox(&setup, browser, "").await;

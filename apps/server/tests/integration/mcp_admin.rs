@@ -1421,11 +1421,12 @@ async fn people_create_projects_through_their_apps() {
 
     // It lands in the caller's own workspace, the caller owns it, and it has
     // the default workflow like a web-made one.
-    let organization: Uuid = sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
-        .bind(Uuid::parse_str(&project_id).expect("id"))
-        .fetch_one(&setup.pool)
-        .await
-        .expect("project");
+    let organization: Uuid =
+        sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+            .bind(Uuid::parse_str(&project_id).expect("id"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("project");
     assert_eq!(organization, setup.organization_id);
     let role: String = sqlx::query_scalar(
         "SELECT membership.role FROM project_memberships membership JOIN users u ON u.actor_id = membership.actor_id WHERE membership.project_id = $1 AND u.login_name = 'owner'",
