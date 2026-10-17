@@ -57,6 +57,7 @@ mod w12_harnesses;
 mod w13_payoff;
 mod w14_automations_and_api;
 mod w16_whiteboards;
+mod w19_self_hosting;
 mod w2_harness_platform;
 mod w3_tasks_http;
 mod w7_launch;

@@ -144,6 +144,25 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/organizations/{organization_id}/secrets/{name}",
         SettingsManage
     ),
+    // Mail settings: owners only, checked in the handler.
+    policy_route!(
+        "mail/http",
+        Put,
+        "/api/v1/organizations/{organization_id}/mail",
+        SettingsManage
+    ),
+    policy_route!(
+        "mail/http",
+        Delete,
+        "/api/v1/organizations/{organization_id}/mail",
+        SettingsManage
+    ),
+    policy_route!(
+        "mail/http",
+        Post,
+        "/api/v1/organizations/{organization_id}/mail/test",
+        SettingsManage
+    ),
     policy_route!(
         "secrets",
         Put,
@@ -259,6 +278,49 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "account_security",
         Post,
         "/api/v1/account/password",
+        SessionAuthentication
+    ),
+    // The caller's own address, and emailed links that are their own proof.
+    boundary_route!(
+        "password_reset",
+        Put,
+        "/api/v1/account/email",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "password_reset",
+        Delete,
+        "/api/v1/account/email",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "password_reset",
+        Post,
+        "/api/v1/account/email/resend",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "password_reset",
+        Post,
+        "/api/v1/auth/verify-email",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "password_reset",
+        Post,
+        "/api/v1/auth/password-reset",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "password_reset",
+        Post,
+        "/api/v1/auth/password-reset/inspect",
+        SessionAuthentication
+    ),
+    boundary_route!(
+        "password_reset",
+        Post,
+        "/api/v1/auth/password-reset/complete",
         SessionAuthentication
     ),
     boundary_route!(
@@ -1298,6 +1360,7 @@ mod tests {
     const ROUTER_SOURCES: &[(&str, &str)] = &[
         ("account", include_str!("account.rs")),
         ("account_security", include_str!("account_security.rs")),
+        ("password_reset", include_str!("password_reset.rs")),
         ("api", include_str!("api.rs")),
         ("auth", include_str!("auth/mod.rs")),
         ("auth/workos", include_str!("auth/workos.rs")),
@@ -1341,6 +1404,7 @@ mod tests {
         ("automations", include_str!("automations.rs")),
         ("agent_sessions", include_str!("agent_sessions.rs")),
         ("secrets", include_str!("secrets.rs")),
+        ("mail/http", include_str!("mail/http.rs")),
         ("metrics", include_str!("metrics.rs")),
     ];
 

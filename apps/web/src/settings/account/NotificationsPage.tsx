@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
 import {
@@ -18,6 +19,7 @@ import {
   formatRelative,
   showToast,
 } from '../../ui'
+import { accountSettingsHref } from '../paths'
 import type { SettingsPageProps } from '../types'
 import {
   PushPermissionDenied,
@@ -127,8 +129,23 @@ function ChannelsSection({ settings }: { settings: NotificationSettings }) {
           </tbody>
         </table>
       </div>
-      {!settings.emailAvailable ? <p className="aw-usage__at">Email isn’t set up on this server yet; your choices are kept for when it is.</p> : null}
+      <EmailNote settings={settings} />
     </Section>
+  )
+}
+
+/** Why email can't be chosen yet, or where it goes. */
+function EmailNote({ settings }: { settings: NotificationSettings }) {
+  if (settings.emailAvailable) {
+    return settings.emailAddress ? <p className="aw-usage__at">Email goes to {settings.emailAddress}.</p> : null
+  }
+  if (!settings.mailConfigured) {
+    return <p className="aw-usage__at">This workspace doesn’t send email yet; an owner sets it up in Workspace › Email. Your choices are kept for when it does.</p>
+  }
+  return (
+    <p className="aw-usage__at">
+      To get email, add and confirm your address in <Link to={accountSettingsHref('profile')}>Profile</Link>.
+    </p>
   )
 }
 
@@ -365,15 +382,19 @@ function DigestSection({ settings }: { settings: NotificationSettings }) {
     onError: (reason) => toastError('That wasn’t saved', reason),
   })
   return (
-    <Section description="A summary of what you missed, by email." id="digest-heading" title="Digest">
+    <Section
+      description="Instead of an email for each notification you chose email for, one email a day or week with the ones you haven’t read."
+      id="digest-heading"
+      title="Digest"
+    >
       <SelectField
         disabled={save.isPending}
-        hint={settings.emailAvailable ? undefined : 'Email isn’t set up on this server yet; this takes effect once it is.'}
+        hint={settings.emailAvailable ? undefined : 'Email doesn’t reach you yet; this takes effect once it does.'}
         label="Send a digest"
         onChange={(event) => save.mutate(event.target.value)}
         value={settings.digest}
       >
-        <option value="off">Never</option>
+        <option value="off">Never (email each one)</option>
         <option value="daily">Daily</option>
         <option value="weekly">Weekly</option>
       </SelectField>

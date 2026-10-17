@@ -235,6 +235,10 @@ export type NotificationSettings = {
   quietHours: QuietHours
   digest: 'off' | 'daily' | 'weekly'
   emailAvailable: boolean
+  /** Whether this workspace sends mail at all. */
+  mailConfigured?: boolean
+  /** Your confirmed address, if any. */
+  emailAddress?: string | null
 }
 
 export const notificationKeys = {

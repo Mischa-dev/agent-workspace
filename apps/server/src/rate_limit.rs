@@ -31,6 +31,10 @@ const GLOBAL_OAUTH_CEREMONIES_PER_WINDOW: u32 = 240;
 const WORKOS_STARTS_PER_WINDOW: u32 = 20;
 const GLOBAL_WORKOS_STARTS_PER_WINDOW: u32 = 600;
 const WEBHOOK_ATTEMPTS_PER_WINDOW: u32 = 300;
+/// Emailed password resets: a few per account an hour, and a ceiling for
+/// the whole server, so the form can't be used to flood anyone's inbox.
+const PASSWORD_RESETS_PER_HOUR: u32 = 5;
+const GLOBAL_PASSWORD_RESETS_PER_WINDOW: u32 = 30;
 const MAX_LOGIN_KEYS: usize = 4_096;
 const MAX_INVITATION_KEYS: usize = 4_096;
 const MAX_SESSION_KEYS: usize = 4_096;
@@ -53,6 +57,8 @@ pub struct RateLimiters {
     workos_starts: FixedWindowLimiter<[u8; 32]>,
     global_workos_starts: FixedWindowLimiter<()>,
     webhook_attempts: FixedWindowLimiter<()>,
+    password_resets: FixedWindowLimiter<[u8; 32]>,
+    global_password_resets: FixedWindowLimiter<()>,
     password_kdfs: Arc<Semaphore>,
 }
 
@@ -135,6 +141,18 @@ impl RateLimiters {
             .map_err(AppError::rate_limited)
     }
 
+    /// A password reset request for `normalized_key` (a login name or an
+    /// email address, lower case).
+    pub fn check_password_reset(&self, normalized_key: &str) -> Result<(), AppError> {
+        self.global_password_resets
+            .check(())
+            .map_err(AppError::rate_limited)?;
+        let key: [u8; 32] = Sha256::digest(normalized_key.as_bytes()).into();
+        self.password_resets
+            .check(key)
+            .map_err(AppError::rate_limited)
+    }
+
     pub fn check_webhook_attempt(&self) -> Result<(), AppError> {
         self.webhook_attempts
             .check(())
@@ -204,6 +222,16 @@ impl Default for RateLimiters {
                 1,
             ),
             webhook_attempts: FixedWindowLimiter::new(WEBHOOK_ATTEMPTS_PER_WINDOW, WINDOW, 1),
+            password_resets: FixedWindowLimiter::new(
+                PASSWORD_RESETS_PER_HOUR,
+                HOUR,
+                MAX_LOGIN_KEYS,
+            ),
+            global_password_resets: FixedWindowLimiter::new(
+                GLOBAL_PASSWORD_RESETS_PER_WINDOW,
+                WINDOW,
+                1,
+            ),
             password_kdfs: Arc::new(Semaphore::new(CONCURRENT_PASSWORD_KDFS)),
         }
     }

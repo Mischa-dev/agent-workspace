@@ -33,6 +33,7 @@ pub mod idempotency;
 pub mod invitations;
 pub mod jobs;
 pub mod launch;
+pub mod mail;
 pub mod mcp;
 pub mod memberships;
 pub mod memory;
@@ -40,10 +41,12 @@ pub mod message_content;
 pub mod message_edits;
 pub mod metrics;
 pub mod migration_preflight;
+pub mod notification_email;
 pub mod notification_settings;
 pub mod notifications;
 pub mod onboarding;
 pub mod outbox;
+pub mod password_reset;
 pub mod policy;
 pub mod policy_inventory;
 pub mod preflight;
@@ -66,6 +69,7 @@ pub mod scheduler;
 pub mod search;
 pub mod secrets;
 pub mod seed;
+pub mod server_status;
 pub mod settings;
 pub mod storage_admission;
 pub mod telemetry;
@@ -127,6 +131,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api::router())
         .merge(account::router())
         .merge(account_security::router())
+        .merge(password_reset::router())
         .merge(conversations::router())
         .merge(direct::router())
         .merge(replies::router())
@@ -137,6 +142,7 @@ pub fn router(state: AppState) -> Router {
         .merge(home::router())
         .merge(push::router())
         .merge(notification_settings::router())
+        .merge(mail::http::router())
         .merge(external_agents::router())
         .merge(repositories::router())
         .merge(environments::router())
@@ -149,6 +155,7 @@ pub fn router(state: AppState) -> Router {
         .merge(invitations::router())
         .merge(memberships::router())
         .merge(workspace::router())
+        .merge(server_status::router())
         .merge(onboarding::router())
         .merge(audit_log::router())
         .merge(work_items::router())

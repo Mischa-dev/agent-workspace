@@ -1659,7 +1659,7 @@ pub(crate) async fn default_workspace<'e, E: sqlx::PgExecutor<'e>>(
 // Audit
 
 #[allow(clippy::too_many_arguments)]
-async fn audit(
+pub(crate) async fn audit(
     transaction: &mut Transaction<'_, Postgres>,
     headers: &HeaderMap,
     principal: &AuthenticatedActor,
