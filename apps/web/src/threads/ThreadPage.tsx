@@ -453,6 +453,8 @@ export function ThreadPage() {
 
       {mode === 'message' && canMessage ? (
         <StructuredComposer
+          autoFocus={searchParams.get('compose') === '1'}
+          draftKey={threadId}
           label={`Message ${threadName}`}
           onSubmit={sendMessage}
           placeholder={`Reply in ${threadName}`}

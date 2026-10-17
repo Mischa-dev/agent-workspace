@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 
+import { isConnectionError, onReconnect, readLocal, writeLocal } from '../app/localDrafts'
 import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, actorKind, type IconName } from '../ui'
 import {
   activeTrigger,
@@ -45,14 +46,28 @@ type StructuredComposerProps = {
   autoFocus?: boolean
   className?: string
   submitIcon?: IconName
+  /**
+   * Keep the draft in this browser under this key (a conversation's id), so a
+   * reload or a dropped connection doesn't lose it, and keep sends that fail
+   * for want of a connection to send again when it's back.
+   */
+  draftKey?: string
 }
+
+/** A send that couldn't reach the server, kept to send again with the same key. */
+type QueuedSend = ComposerSubmission & { text: string }
 
 type Suggestion =
   | { kind: 'mention'; actor: ConversationActor }
   | { kind: 'work'; item: ConversationWorkItemReference }
 
 /** One rounded box: type, @mention people and agents inline, reference work items with #, Enter to send. */
-export function StructuredComposer({
+export function StructuredComposer(props: StructuredComposerProps) {
+  // A new conversation is a new draft.
+  return <ComposerBox key={props.draftKey ?? ''} {...props} />
+}
+
+function ComposerBox({
   disabled = false,
   disabledReason,
   label = 'Message',
@@ -69,14 +84,18 @@ export function StructuredComposer({
   autoFocus = false,
   className,
   submitIcon = 'send',
+  draftKey,
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const idempotencyKeyRef = useRef(createIdempotencyKey())
   const searchGeneration = useRef(0)
   const id = useId()
-  const [text, setText] = useState(initialDraft?.text ?? '')
-  const [mentions, setMentions] = useState<ConversationActor[]>(initialDraft?.mentions ?? [])
-  const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>(initialDraft?.workItems ?? [])
+  const [saved] = useState(() => (draftKey && !initialDraft ? readLocal<ComposerDraft>(`draft:${draftKey}`) : null))
+  const [text, setText] = useState(initialDraft?.text ?? saved?.text ?? '')
+  const [mentions, setMentions] = useState<ConversationActor[]>(initialDraft?.mentions ?? saved?.mentions ?? [])
+  const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>(initialDraft?.workItems ?? saved?.workItems ?? [])
+  const [queued, setQueued] = useState<QueuedSend[]>(() => (draftKey ? (readLocal<QueuedSend[]>(`unsent:${draftKey}`) ?? []) : []))
+  const flushing = useRef(false)
   const [trigger, setTrigger] = useState<Trigger | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [active, setActive] = useState(0)
@@ -89,6 +108,59 @@ export function StructuredComposer({
   useEffect(() => {
     searchers.current = { searchActors, searchWorkItems }
   })
+
+  // The draft is saved as it's typed and forgotten once it's sent.
+  useEffect(() => {
+    if (!draftKey) return
+    writeLocal<ComposerDraft>(`draft:${draftKey}`, text.trim() ? { text, mentions, workItems } : null)
+  }, [draftKey, text, mentions, workItems])
+
+  const queuedRef = useRef(queued)
+  const queue = (update: (current: QueuedSend[]) => QueuedSend[]) => {
+    const next = update(queuedRef.current)
+    queuedRef.current = next
+    if (draftKey) writeLocal<QueuedSend[]>(`unsent:${draftKey}`, next.length ? next : null)
+    setQueued(next)
+  }
+
+  // Send what's waiting, oldest first, each with the key it was first sent
+  // with, so a send that did reach the server isn't posted twice.
+  const flush = async () => {
+    if (flushing.current) return
+    flushing.current = true
+    try {
+      for (const item of [...queuedRef.current]) {
+        try {
+          await onSubmit({ content: item.content, idempotencyKey: item.idempotencyKey, text: item.text })
+          queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
+        } catch (reason) {
+          if (isConnectionError(reason)) break
+          // Refused for good: back into the box to change or copy.
+          queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
+          setText((current) => (current.trim() ? `${item.text}\n${current}` : item.text))
+          setError(reason instanceof Error ? reason.message : 'Your message wasn’t sent.')
+        }
+      }
+    } finally {
+      flushing.current = false
+    }
+  }
+  const flushRef = useRef(flush)
+  useEffect(() => {
+    flushRef.current = flush
+  })
+  const hasQueued = queued.length > 0
+  useEffect(() => {
+    if (!hasQueued) return undefined
+    void flushRef.current()
+    return onReconnect(() => void flushRef.current())
+  }, [hasQueued])
+
+  const editQueued = (item: QueuedSend) => {
+    queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
+    setText((current) => (current.trim() ? `${item.text}\n${current}` : item.text))
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }
 
   const scalarValues = composerScalarValues(text)
   const overLimit = scalarValues > MAX_MESSAGE_SCALAR_VALUES
@@ -217,6 +289,11 @@ export function StructuredComposer({
     }
     void onSubmit({ content, idempotencyKey: key, text: draft.text.trim() })
       .catch((reason: unknown) => {
+        if (draftKey && !keepDraftWhileSaving && isConnectionError(reason)) {
+          // Kept and sent again when the connection is back; never dropped.
+          queue((current) => [...current, { content, idempotencyKey: key, text: draft.text.trim() }])
+          return
+        }
         idempotencyKeyRef.current = key
         setText((current) => (current.trim() ? current : draft.text))
         setMentions((current) => [...draft.mentions, ...current.filter((actor) => !draft.mentions.some((m) => m.id === actor.id))])
@@ -281,6 +358,25 @@ export function StructuredComposer({
 
   return (
     <form className={className ? `aw-composer-wrap ${className}` : 'aw-composer-wrap'} onSubmit={submit}>
+      {queued.length ? (
+        <div aria-label="Waiting to send" className="aw-composer__queued" role="list">
+          {queued.map((item) => (
+            <div className="aw-composer__queued-item" key={item.idempotencyKey} role="listitem">
+              <Icon name="clock" size={14} />
+              <span className="aw-composer__queued-text">{item.text}</span>
+              <Button onClick={() => editQueued(item)} size="sm" variant="ghost">
+                Edit
+              </Button>
+            </div>
+          ))}
+          <p aria-live="polite" className="aw-composer__queued-note">
+            {queued.length === 1 ? 'Not sent yet.' : `${queued.length} messages not sent yet.`} No connection; this sends by itself when you’re back online.{' '}
+            <Button onClick={() => void flush()} size="sm" variant="ghost">
+              Try now
+            </Button>
+          </p>
+        </div>
+      ) : null}
       {toolbar ? <div className="aw-composer__toolbar">{toolbar}</div> : null}
       <div className={`aw-composer${busy ? ' is-busy' : ''}`}>
         {trigger ? (

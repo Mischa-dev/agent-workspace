@@ -52,6 +52,25 @@ describe('StructuredComposer', () => {
     await waitFor(() => expect(screen.getByLabelText('Message')).toHaveValue(''))
   })
 
+  it('keeps the draft through a reload and sends what failed offline once the connection is back', async () => {
+    const onSubmit = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue(undefined)
+    const first = render(<StructuredComposer draftKey="channel-1" onSubmit={onSubmit} searchActors={vi.fn()} />)
+    type('Half written')
+    first.unmount()
+
+    render(<StructuredComposer draftKey="channel-1" onSubmit={onSubmit} searchActors={vi.fn()} />)
+    expect(screen.getByLabelText('Message')).toHaveValue('Half written')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(await screen.findByText('Half written', { selector: '.aw-composer__queued-text' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Message')).toHaveValue('')
+
+    window.dispatchEvent(new Event('online'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2))
+    expect(onSubmit.mock.calls[1][0].idempotencyKey).toBe(onSubmit.mock.calls[0][0].idempotencyKey)
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Waiting to send' })).not.toBeInTheDocument())
+    expect(window.localStorage.length).toBe(0)
+  })
+
   it('picks a mention inline with the keyboard and submits an Actor ID node where it was typed', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     const searchActors = vi.fn().mockResolvedValue([human, worker])

@@ -369,6 +369,8 @@ export function DirectConversationPage() {
       ) : null}
       {valid && page?.capabilities.sendMessage ? (
         <StructuredComposer
+          autoFocus={searchParams.get('compose') === '1'}
+          draftKey={conversationId}
           label={`Message ${title}`}
           onSubmit={send}
           placeholder={`Message ${title}`}

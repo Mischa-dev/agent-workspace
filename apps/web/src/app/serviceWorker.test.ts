@@ -59,7 +59,7 @@ type ShownOptions = { actions: { title: string }[]; data: { url: string; launch:
 describe('service worker push', () => {
   const origin = 'https://workspace.example'
 
-  function loadPushWorker() {
+  function loadPushWorker(fetch: (input: string, init?: RequestInit) => Promise<Response> = async () => new Response('')) {
     const listeners: Record<string, (event: unknown) => void> = {}
     const showNotification = vi.fn(async () => undefined)
     const openWindow = vi.fn(async () => null)
@@ -71,7 +71,7 @@ describe('service worker push', () => {
       registration: { showNotification },
       clients: { matchAll: async () => [], openWindow },
     }
-    new Function('self', 'caches', 'fetch', workerSource)(self, {}, async () => new Response(''))
+    new Function('self', 'caches', 'fetch', workerSource)(self, {}, fetch)
     const dispatch = async (type: string, event: Record<string, unknown>) => {
       const waits: Promise<unknown>[] = []
       listeners[type]?.({ ...event, waitUntil: (promise: Promise<unknown>) => waits.push(promise) })
@@ -117,5 +117,73 @@ describe('service worker push', () => {
     expect(options.actions).toHaveLength(1)
     await worker.dispatch('push', { data: { json: () => { throw new Error('bad') } } })
     expect(worker.showNotification).toHaveBeenLastCalledWith('Agent Workspace', expect.any(Object))
+  })
+
+  const approval = {
+    id: 'n2',
+    kind: 'approval_requested',
+    title: 'A run in #general needs your approval',
+    body: 'Run npm install',
+    url: '/projects/p1/threads/t1',
+    tag: 'r1',
+    actionToken: 'tok_123',
+    actions: [
+      { action: 'approve', title: 'Approve' },
+      { action: 'deny', title: 'Deny' },
+      { action: 'open', title: 'Open' },
+    ],
+  }
+
+  it('approves from the notification with the push token, not the session', async () => {
+    const fetch = vi.fn(async () => Response.json({ outcome: 'approved', href: '/projects/p1/threads/t1' }))
+    const worker = loadPushWorker(fetch)
+    await worker.dispatch('push', { data: { json: () => approval } })
+    const [, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions]
+    expect(options.actions.map((action) => action.title)).toEqual(['Approve', 'Deny'])
+
+    await worker.dispatch('notificationclick', { action: 'approve', notification: { close: vi.fn(), data: options.data } })
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/v1/notification-actions')
+    expect(init.credentials).toBe('omit')
+    expect(JSON.parse(String(init.body))).toEqual({ token: 'tok_123', action: 'approve' })
+    expect(worker.showNotification).toHaveBeenLastCalledWith('Approved', expect.objectContaining({ tag: 'r1' }))
+    expect(worker.openWindow).not.toHaveBeenCalled()
+  })
+
+  it('says when an action fails and opens the app on tap', async () => {
+    const fetch = vi.fn(async () => Response.json({ error: { message: 'Not found.' } }, { status: 404 }))
+    const worker = loadPushWorker(fetch)
+    await worker.dispatch('push', { data: { json: () => approval } })
+    const [, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions]
+    await worker.dispatch('notificationclick', { action: 'deny', notification: { close: vi.fn(), data: options.data } })
+    const [title, failed] = worker.showNotification.mock.calls.at(-1) as unknown as [string, ShownOptions & { body: string }]
+    expect(title).toBe('Not denied')
+    expect(failed.body).toContain('answered already')
+    expect(failed.data.url).toBe('/projects/p1/threads/t1')
+  })
+
+  it('opens the composer for Reply where there is no inline text field', async () => {
+    const fetch = vi.fn(async () => Response.json({ outcome: 'replied', href: '/x' }))
+    const worker = loadPushWorker(fetch)
+    const mention = { ...approval, kind: 'mention', url: '/projects/p1/channels/c1#message-m1', actions: [{ action: 'reply', title: 'Reply', type: 'text' }] }
+    await worker.dispatch('push', { data: { json: () => mention } })
+    const [, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions & { actions: { type?: string }[] }]
+    expect(options.actions.map((action) => action.title)).toEqual(['Reply', 'Open'])
+    expect(options.actions[0].type).toBe('text')
+
+    await worker.dispatch('notificationclick', { action: 'reply', notification: { close: vi.fn(), data: options.data } })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(worker.openWindow).toHaveBeenCalledWith(`${origin}/projects/p1/channels/c1?compose=1#message-m1`)
+
+    await worker.dispatch('notificationclick', { action: 'reply', reply: ' On it ', notification: { close: vi.fn(), data: options.data } })
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ token: 'tok_123', action: 'reply', text: 'On it' })
+  })
+
+  it('shows no token buttons without a token', async () => {
+    const worker = loadPushWorker()
+    await worker.dispatch('push', { data: { json: () => ({ ...approval, actionToken: undefined }) } })
+    const [, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions]
+    expect(options.actions.map((action) => action.title)).toEqual(['Open'])
   })
 })

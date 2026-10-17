@@ -1,8 +1,11 @@
-import { useRef, useState, type FormEvent, type RefObject } from 'react'
+import { useState, type FormEvent, type RefObject } from 'react'
 
+import { isConnectionError } from '../app/localDrafts'
+import { useRetryWhenOnline } from '../app/useRetryWhenOnline'
 import { Banner, Button, Dialog, SelectField, TextArea, TextField } from '../ui'
 import { workItemPriorities } from './constants'
 import { useCreateWorkItem } from './hooks'
+import { useTaskDraft } from './taskDraft'
 import type { WorkItemPriority, WorkItemWorkflow } from './types'
 import { PriorityIcon } from './WorkItemIcons'
 
@@ -20,14 +23,14 @@ export function CreateWorkItemDialog({
   workflow: WorkItemWorkflow
 }) {
   const mutation = useCreateWorkItem()
-  const idempotencyKey = useRef(crypto.randomUUID())
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
+  // The title and description are kept in this browser until the task is made.
+  const { draft, update, clear } = useTaskDraft(projectId)
+  const { title, description } = draft
+  const [offline, setOffline] = useState(false)
   const [typeId, setTypeId] = useState(workflow.types.find((item) => item.isDefault)?.id ?? workflow.types[0]?.id ?? '')
   const [priority, setPriority] = useState<WorkItemPriority>('no_priority')
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const create = () => {
     if (!title.trim() || mutation.isPending) return
     mutation.mutate(
       {
@@ -36,15 +39,24 @@ export function CreateWorkItemDialog({
         description,
         typeId: typeId || undefined,
         priority,
-        idempotencyKey: idempotencyKey.current,
+        idempotencyKey: draft.idempotencyKey,
       },
       {
         onSuccess: (item) => {
-          idempotencyKey.current = crypto.randomUUID()
+          setOffline(false)
+          clear()
           onCreated(item.id)
         },
+        onError: (reason) => setOffline(isConnectionError(reason)),
       },
     )
+  }
+  // Made with the same key once the connection is back, so it can't be made twice.
+  useRetryWhenOnline(offline, create)
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    create()
   }
 
   return (
@@ -71,7 +83,7 @@ export function CreateWorkItemDialog({
         id="new-work-item-title"
         label="Title"
         maxLength={240}
-        onChange={(event) => setTitle(event.target.value)}
+        onChange={(event) => update({ title: event.target.value })}
         placeholder="What needs doing?"
         required
         value={title}
@@ -80,7 +92,7 @@ export function CreateWorkItemDialog({
         id="new-work-item-description"
         label="Description"
         maxLength={100000}
-        onChange={(event) => setDescription(event.target.value)}
+        onChange={(event) => update({ description: event.target.value })}
         placeholder="Add the outcome you want, any limits, and useful links."
         rows={5}
         value={description}
@@ -107,7 +119,11 @@ export function CreateWorkItemDialog({
           ))}
         </SelectField>
       </div>
-      {mutation.isError ? <Banner tone="danger">{mutation.error.message}</Banner> : null}
+      {offline ? (
+        <Banner tone="offline">No connection. This task is saved here and will be created when you’re back online.</Banner>
+      ) : mutation.isError ? (
+        <Banner tone="danger">{mutation.error.message}</Banner>
+      ) : null}
     </Dialog>
   )
 }
