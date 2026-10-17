@@ -32,9 +32,10 @@ use uuid::Uuid;
 use super::{
     adapter::{
         AccountHandle, AccountSummary, HarnessAdapter, HarnessAnswer, HarnessError, HarnessEvent,
-        HarnessFuture, HarnessItem, HarnessRequest, HarnessSession, ItemKind, LoginKind,
-        LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, RecoveredTurn, RequestKind,
-        RequestOption, ResetCredit, ResetCredits, ResetOutcome, UsageReport, UsageWindow,
+        HarnessFuture, HarnessItem, HarnessRequest, HarnessSession, ItemDetail, ItemKind,
+        LoginKind, LoginStart, ProfileHealth, RateLimitSummary, RateLimitWindow, RecoveredTurn,
+        RequestKind, RequestOption, ResetCredit, ResetCredits, ResetOutcome, TokenUsage,
+        UsageReport, UsageWindow,
     },
     manifest::{
         AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
@@ -1061,11 +1062,27 @@ fn parse_event(raw: Value) -> Result<HarnessEvent, HarnessError> {
         "item/started" => HarnessEvent::ItemStarted(HarnessItem {
             key: provider_event_key(method, &raw),
             kind: item_kind(&raw),
+            detail: item_detail(&raw),
         }),
         "item/completed" => HarnessEvent::ItemCompleted(HarnessItem {
             key: provider_event_key(method, &raw),
             kind: item_kind(&raw),
+            detail: item_detail(&raw),
         }),
+        // Each model call's usage (`last`); the run adds them up.
+        "thread/tokenUsage/updated" => raw
+            .pointer("/params/tokenUsage/last")
+            .map(|last| {
+                let count = |name: &str| last.get(name).and_then(Value::as_u64).unwrap_or(0);
+                HarnessEvent::TokensUsed(TokenUsage {
+                    model: None,
+                    input_tokens: count("inputTokens").saturating_sub(count("cachedInputTokens")),
+                    output_tokens: count("outputTokens"),
+                    cached_input_tokens: count("cachedInputTokens"),
+                    reported_cost_usd: None,
+                })
+            })
+            .unwrap_or(HarnessEvent::Ignored),
         "turn/completed" => HarnessEvent::TurnCompleted {
             completed: raw.pointer("/params/turn/status").and_then(Value::as_str)
                 == Some("completed"),
@@ -1592,6 +1609,69 @@ fn validated_provider_url(value: &str) -> Result<String, HarnessError> {
         return Err(HarnessError::InvalidResponse);
     }
     Ok(value)
+}
+
+/// What a command or file change did, as Codex reports it on the item.
+fn item_detail(raw: &Value) -> ItemDetail {
+    let Some(item) = raw.pointer("/params/item") else {
+        return ItemDetail::default();
+    };
+    let text = |value: Option<&Value>| match value {
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Array(parts)) => Some(
+            parts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    };
+    match item.get("type").and_then(Value::as_str) {
+        Some("commandExecution") => ItemDetail {
+            command: text(item.get("command")),
+            exit_code: item.get("exitCode").and_then(Value::as_i64),
+            output: text(item.get("aggregatedOutput")),
+            failed: item.get("status").and_then(Value::as_str) == Some("failed"),
+            ..ItemDetail::default()
+        },
+        Some("fileChange") => ItemDetail {
+            files: item
+                .get("changes")
+                .and_then(Value::as_array)
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .filter_map(|change| {
+                            let path = change.get("path")?.as_str()?.to_owned();
+                            let kind = change
+                                .get("kind")
+                                .and_then(|kind| {
+                                    kind.as_str().or_else(|| kind.get("type")?.as_str())
+                                })
+                                .map(|kind| match kind {
+                                    "add" => "added".to_owned(),
+                                    "delete" => "deleted".to_owned(),
+                                    _ => "modified".to_owned(),
+                                });
+                            Some((path, kind))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            failed: item.get("status").and_then(Value::as_str) == Some("failed"),
+            ..ItemDetail::default()
+        },
+        Some("mcpToolCall" | "dynamicToolCall") => ItemDetail {
+            tool: item.get("tool").and_then(Value::as_str).map(str::to_owned),
+            ..ItemDetail::default()
+        },
+        Some("webSearch") => ItemDetail {
+            tool: Some("web search".to_owned()),
+            ..ItemDetail::default()
+        },
+        _ => ItemDetail::default(),
+    }
 }
 
 fn item_kind(raw: &Value) -> ItemKind {

@@ -1,0 +1,26 @@
+{
+  "name": "@agent-workspace/runner",
+  "version": "0.1.0",
+  "description": "The runner side of Agent Workspace's agent runner contract: verify wakeups, claim, bind sessions, report progress, reply, and stop.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test 'test/*.test.ts'"
+  }
+}

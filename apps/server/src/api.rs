@@ -341,7 +341,7 @@ pub(crate) async fn start_run_in(
         }
     };
     let account_defaults = match state.supervisors.manifest(&setup.adapter_kind) {
-        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, &defaults, manifest),
+        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, &defaults, &manifest),
         None => setup.run_defaults.clone(),
     };
     let config = crate::provider::resolve_run_config(

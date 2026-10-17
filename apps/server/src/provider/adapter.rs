@@ -59,10 +59,11 @@ pub struct AccountHandle {
     pub max_concurrent_runs: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ItemKind {
     CommandExecution,
     FileChange,
+    #[default]
     Other,
 }
 
@@ -97,10 +98,59 @@ impl HarnessRequest {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub struct HarnessItem {
     pub key: String,
     pub kind: ItemKind,
+    /// What the item did, for the run page (H5). The run redacts and caps
+    /// it before storing; adapters fill in what their harness reports.
+    pub detail: ItemDetail,
+}
+
+impl HarnessItem {
+    pub fn new(key: impl Into<String>, kind: ItemKind) -> Self {
+        Self {
+            key: key.into(),
+            kind,
+            detail: ItemDetail::default(),
+        }
+    }
+}
+
+/// The neutral detail of one step.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ItemDetail {
+    /// A tool's name, for steps that are neither commands nor file changes.
+    pub tool: Option<String>,
+    pub command: Option<String>,
+    pub exit_code: Option<i64>,
+    /// The step's output, as the harness reported it (capped when stored).
+    pub output: Option<String>,
+    /// Files a change touched, with `added`, `modified` or `deleted`.
+    pub files: Vec<(String, Option<String>)>,
+    /// Tests a step ran, when the harness counts them.
+    pub tests: Option<TestCounts>,
+    pub failed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TestCounts {
+    pub passed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+}
+
+/// Tokens a turn used (U2). Adapters report each model call's usage, or a
+/// running total split into increments; the run adds them up per model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TokenUsage {
+    /// `None` when the harness doesn't say; the run's model is used.
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: u64,
+    /// What the harness itself says this usage cost, in US dollars.
+    pub reported_cost_usd: Option<f64>,
 }
 
 /// The neutral events a turn produces.
@@ -116,6 +166,11 @@ pub enum HarnessEvent {
     /// The harness reported fresh usage while running (U1). Sparse: windows
     /// it leaves out keep their last reading.
     UsageUpdated(UsageReport),
+    /// Tokens used since the last report (U2).
+    TokensUsed(TokenUsage),
+    /// The agent's own words between steps, for the run's log (H5). Not
+    /// part of its final message.
+    Note(String),
     Error,
     Ignored,
 }

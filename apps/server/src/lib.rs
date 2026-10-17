@@ -21,6 +21,7 @@ pub mod external_events;
 pub mod external_execution;
 pub mod git_runtime;
 pub mod github;
+pub mod harness_host;
 pub mod health;
 pub mod idempotency;
 pub mod invitations;
@@ -49,6 +50,7 @@ pub mod recovery;
 pub mod replies;
 pub mod repositories;
 pub mod retention;
+pub mod run_log;
 pub mod runs;
 pub mod scheduler;
 pub mod search;
@@ -96,6 +98,12 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    state
+        .supervisors
+        .set_host(Arc::new(harness_host::ServerHost::new(
+            state.pool.clone(),
+            Arc::clone(&state.config),
+        )));
     let request_id = REQUEST_ID_HEADER.clone();
     let web_root = state.config.web_root.clone();
     let index = web_root.join("index.html");

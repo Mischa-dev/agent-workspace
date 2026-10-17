@@ -1093,9 +1093,9 @@ async fn plan_for(
         .or_else(|| environment.map(|environment| environment.harness.clone()))
         .or_else(|| defaults.harness.clone());
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests() {
+    for manifest in state.supervisors.manifests_in(defaults.organization_id) {
         let catalog =
-            crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, manifest)
+            crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, &manifest)
                 .await?;
         harnesses.push(HarnessPlan {
             kind: manifest.kind.clone(),
@@ -1779,7 +1779,7 @@ async fn start_launch(
             .as_deref()
             .and_then(|harness| state.supervisors.manifest(harness)),
     ) {
-        options = environment_options(environment, manifest);
+        options = environment_options(environment, &manifest);
     }
     let repository_id = environment
         .as_ref()
