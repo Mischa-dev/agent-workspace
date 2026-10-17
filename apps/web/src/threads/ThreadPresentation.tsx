@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import type { ConversationWorkItemReference } from '../conversations/types'
 import { runSettingsFrom } from '../execution/api'
 import { Avatar, Button, Icon, IconButton, StatusChip, TextArea, formatDateTime, type ChipTone, type IconName } from '../ui'
-import type { Approval, Run, RunState } from './ThreadPage'
+import type { Approval, Run, RunState } from './threadTypes'
 
 const RUN_STATES: Record<RunState, { label: string; tone: ChipTone; icon?: IconName; dots?: boolean; spin?: boolean }> = {
   created: { label: 'Created', tone: 'muted', icon: 'clock' },
