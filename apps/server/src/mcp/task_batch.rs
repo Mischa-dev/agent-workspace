@@ -47,9 +47,9 @@ use crate::{
     error::AppError,
     idempotency::{IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope},
     work_item_commands::{
-        ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, LockedWorkItem, TaskFieldChanges,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_items, set_archived,
-        update_locked_work_item,
+        ArchiveCommand, ArchiveOutcome, AuditVersionMetadata, CommandActor, LockedWorkItem,
+        TaskFieldChanges, UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_items,
+        set_archived, update_locked_work_item,
     },
     work_item_labels::{self, LabelDelta, MAX_LABELS_PER_TASK, echo},
 };
@@ -681,6 +681,101 @@ async fn create_many(
     }
     transaction.commit().await?;
     Ok(BatchResult::Ok { value })
+}
+
+/// One task a plan import creates (roadmap W10, AI3).
+#[derive(Clone, Debug)]
+pub(crate) struct ImportTask {
+    pub reference: String,
+    pub title: String,
+    pub description: String,
+    pub priority: Option<String>,
+    pub labels: Vec<String>,
+    pub criteria: Vec<String>,
+    /// An earlier task in the same call, by its reference.
+    pub parent_in_batch: Option<String>,
+    /// A task an earlier call created.
+    pub parent_existing: Option<Uuid>,
+}
+
+/// Creates up to 100 tasks for a plan import as `actor`, in the caller's
+/// transaction, through the same checks and commands as task_create_many,
+/// creating missing labels. The caller has locked the actor's membership
+/// and checked they may edit tasks. Returns the new tasks' ids in order, or
+/// the first problems as one sentence; on a problem the caller rolls back.
+pub(crate) async fn create_for_import(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    tasks: &[ImportTask],
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    if !(1..=MAX_CREATE).contains(&tasks.len()) {
+        return Ok(Err("A batch holds 1 to 100 tasks.".to_owned()));
+    }
+    let principal = McpPrincipal {
+        credential_id: Uuid::nil(),
+        mcp_credential_id: None,
+        oauth_grant_id: None,
+        actor_id: actor.actor_id,
+        actor_kind: actor.actor_kind,
+        project_id: actor.project_id,
+        external_agent_connection_id: None,
+        client_name: "Agent Workspace AI".to_owned(),
+        scopes: Vec::new(),
+        authentication_class: "ai_background",
+        account_wide: false,
+        project_explicit: true,
+    };
+    let new_tasks = tasks
+        .iter()
+        .map(|task| NewTask {
+            reference: Some(task.reference.clone()),
+            title: task.title.clone(),
+            description: Some(task.description.clone()),
+            priority: task.priority.clone(),
+            status: None,
+            task_type: None,
+            assignee: None,
+            labels: task.labels.clone(),
+            acceptance_criteria: task.criteria.clone(),
+            parent_ref: task.parent_in_batch.clone(),
+            parent_id: None,
+        })
+        .collect::<Vec<_>>();
+    let (mut drafts, mut problems) = task_drafts::check_shapes(&new_tasks);
+    for (draft, task) in drafts.iter_mut().zip(tasks) {
+        if let Some(parent) = task.parent_existing {
+            draft.parent = ParentChoice::Existing(parent);
+        }
+    }
+    if problems.is_empty() {
+        let workflow = Workflow::load(transaction, actor.project_id).await?;
+        let prepared = task_drafts::prepare(
+            transaction,
+            &principal,
+            &workflow,
+            &drafts,
+            true,
+            &mut problems,
+        )
+        .await?;
+        if problems.is_empty() {
+            return Ok(
+                match task_drafts::create(transaction, actor, &prepared.tasks).await? {
+                    Ok(created) => Ok(created.into_iter().map(|row| row.work_item_id).collect()),
+                    Err(problem) => Err(problem.message),
+                },
+            );
+        }
+    }
+    Ok(Err(problems
+        .iter()
+        .take(3)
+        .map(|problem| match &problem.reference {
+            Some(reference) => format!("{reference}: {}", problem.message),
+            None => problem.message.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")))
 }
 
 /// Notes on titles: tasks in the list with the same title, and open tasks

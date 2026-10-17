@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tasks"],
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task", "labels", "priority", "type", "parent", "duplicateOf", "confidence", "reason"],
+        "properties": {
+          "task": {"type": "string", "maxLength": 60},
+          "labels": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 50}},
+          "priority": {"type": ["string", "null"], "enum": ["no_priority", "low", "medium", "high", "urgent", null]},
+          "type": {"type": ["string", "null"], "maxLength": 80},
+          "parent": {"type": ["string", "null"], "maxLength": 60},
+          "duplicateOf": {"type": ["string", "null"], "maxLength": 60},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "reason": {"type": "string", "maxLength": 300}
+        }
+      }
+    }
+  }
+}

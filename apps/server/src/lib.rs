@@ -3,6 +3,7 @@
 pub mod account;
 pub mod account_security;
 pub mod agent_sessions;
+pub mod ai;
 pub mod api;
 pub mod audit_log;
 pub mod auth;
@@ -131,6 +132,7 @@ pub fn router(state: AppState) -> Router {
         .merge(workspace::router())
         .merge(audit_log::router())
         .merge(work_items::router())
+        .merge(ai::http::router())
         .merge(memory::router())
         .merge(search::router())
         .merge(connected_apps::router())

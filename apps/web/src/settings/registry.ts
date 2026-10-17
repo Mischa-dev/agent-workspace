@@ -55,7 +55,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   // Workspace
   page('workspace', 'general', 'General', 'settings', ['rename', 'workspace name', 'leave', 'transfer ownership', 'owner'], () => import('./workspace/GeneralPage')),
   page('workspace', 'members', 'Members', 'users', ['people', 'agents', 'roles', 'admin', 'invite', 'invitations', 'remove'], () => import('./workspace/MembersPage')),
-  page('workspace', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
+  page('workspace', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions', 'api key', 'budget', 'usage', 'anthropic', 'openai', 'gemini'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
   page('workspace', 'keys', 'Keys', 'key', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
   page('workspace', 'run-defaults', 'Environments and run defaults', 'settings', ['harness', 'model', 'reasoning', 'speed', 'environment'], () => import('./workspace/RunDefaultsPage'), { settings: ['run.'] }),
   page('workspace', 'project-templates', 'Project templates', 'list', ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
@@ -68,6 +68,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   }),
   page('project', 'repositories', 'Repositories', 'repo', ['github', 'connect', 'mirror', 'code'], () => import('./project/RepositoriesPage')),
   page('project', 'environments', 'Environments and defaults', 'settings', ['harness', 'model', 'reasoning', 'speed', 'repository'], () => import('./project/EnvironmentsPage'), { settings: ['run.'] }),
+  page('project', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions', 'dependencies', 'automatic'], () => import('./project/AiPage'), { settings: ['ai.'] }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials'], () => import('./project/AgentsPage'), { visible: manageProject }),
   page('project', 'automation', 'Automation', 'checklist', ['pull requests', 'work items', 'review', 'github'], () => import('./project/AutomationPage'), { visible: manageProject }),
   page('project', 'workflow', 'Workflow', 'work', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),

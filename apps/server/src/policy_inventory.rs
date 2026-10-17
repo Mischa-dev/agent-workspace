@@ -966,6 +966,78 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         WorkItemEdit
     ),
     policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/organizations/{organization_id}/ai/test",
+        SettingsManage
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/test",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/analyze",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/plans",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "ai/http",
+        Put,
+        "/api/v1/projects/{project_id}/ai/plans/{import_id}",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/ai/plans/{import_id}/commit",
+        WorkItemCreate
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
+        WorkItemEdit
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
+        WorkItemView
+    ),
+    policy_route!(
+        "ai/http",
+        Post,
+        "/api/v1/conversations/{id}/ai/summary",
+        WorkItemView
+    ),
+    policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/views",
@@ -1097,6 +1169,7 @@ mod tests {
         ("projects", include_str!("projects.rs")),
         ("repositories", include_str!("repositories.rs")),
         ("work_items", include_str!("work_items.rs")),
+        ("ai/http", include_str!("ai/http.rs")),
         ("execution", include_str!("execution.rs")),
         ("external_agents", include_str!("external_agents.rs")),
         ("memory", include_str!("memory.rs")),

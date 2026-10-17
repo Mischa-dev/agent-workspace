@@ -350,6 +350,57 @@ pub const REGISTRY: &[SettingDef] = &[
         launch_override: false,
         default: "null",
     },
+    SettingDef {
+        key: "ai.deep_model",
+        label: "AI model for deep jobs",
+        description: "The model longer AI jobs (like turning a plan into tasks) use. Unset, the provider's default.",
+        kind: SettingType::Identifier { optional: true },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "null",
+    },
+    SettingDef {
+        key: "ai.base_url",
+        label: "AI provider address",
+        description: "The address of an OpenAI-compatible server (OpenRouter, Ollama, vLLM), or another address for a provider's API.",
+        kind: SettingType::Text {
+            max_chars: 300,
+            optional: true,
+        },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "null",
+    },
+    SettingDef {
+        key: "ai.monthly_budget_usd",
+        label: "Monthly AI budget (USD)",
+        description: "AI jobs stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
+        kind: SettingType::Integer {
+            min: 0,
+            max: 100_000,
+        },
+        scopes: &[Scope::Workspace],
+        launch_override: false,
+        default: "25",
+    },
+    SettingDef {
+        key: "ai.auto_apply_min_confidence",
+        label: "Confidence to apply automatically (%)",
+        description: "With automatic apply on, only suggestions at least this confident are applied without review.",
+        kind: SettingType::Integer { min: 50, max: 100 },
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "90",
+    },
+    SettingDef {
+        key: "ai.background_detection",
+        label: "Look for dependencies in the background",
+        description: "Check new and edited tasks, and the project's conversations, for dependencies and blockers, and every night.",
+        kind: SettingType::Bool,
+        scopes: TEAM_SCOPES,
+        launch_override: false,
+        default: "true",
+    },
 ];
 
 pub fn definition(key: &str) -> Option<&'static SettingDef> {

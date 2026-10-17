@@ -1,0 +1,10 @@
+{
+  "input": {"title": "Launch plan", "plan": "# Beta (by 2026-12-01)\n- Add the login API\n- Build the login page after the API\n", "part": 1, "parts": 1},
+  "output": {
+    "milestones": [{"ref": "beta", "name": "Beta", "description": "", "targetDate": "2026-12-01"}],
+    "tasks": [
+      {"ref": "t1", "title": "Add the login API", "description": "", "criteria": ["POST /login returns a session"], "labels": [], "priority": "no_priority", "milestone": "beta", "parent": null, "blockedBy": []},
+      {"ref": "t2", "title": "Build the login page", "description": "After the API.", "criteria": [], "labels": [], "priority": "no_priority", "milestone": "beta", "parent": null, "blockedBy": ["t1"]}
+    ]
+  }
+}
