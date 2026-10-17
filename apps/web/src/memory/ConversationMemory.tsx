@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import type { ConversationMessage } from '../conversations/types'
-import { Banner, Button, Dialog, Icon, IconButton, TextArea, TextField } from '../ui'
+import { Banner, Button, Checkbox, Dialog, Icon, IconButton, TextArea, TextField } from '../ui'
 import { memoryKeys, pin, recordDecision, unpin, type Pin } from './api'
 import { usePins } from './hooks'
 
@@ -169,10 +169,7 @@ function DecisionDialog({
       {error ? <Banner tone="danger">{error}</Banner> : null}
       <TextField label="What was decided" maxLength={300} onChange={(event) => setTitle(event.target.value)} value={title} />
       <TextArea label="Why (optional)" maxLength={20000} onChange={(event) => setDetail(event.target.value)} rows={4} value={detail} />
-      <label className="aw-check">
-        <input checked={pinIt} onChange={(event) => setPinIt(event.target.checked)} type="checkbox" />
-        Pin it to this conversation
-      </label>
+      <Checkbox checked={pinIt} label="Pin it to this conversation" onChange={setPinIt} />
     </Dialog>
   )
 }
