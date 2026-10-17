@@ -923,7 +923,10 @@ async fn launch_accounts(
 }
 
 /// Runs holding or waiting for one of the account's slots.
-async fn account_load(executor: impl PgExecutor<'_>, account_id: Uuid) -> Result<i64, AppError> {
+pub(crate) async fn account_load(
+    executor: impl PgExecutor<'_>,
+    account_id: Uuid,
+) -> Result<i64, AppError> {
     Ok(sqlx::query_scalar::<_, i64>(&format!(
         r#"
         SELECT count(*)
@@ -1656,7 +1659,7 @@ async fn task_thread(
 }
 
 /// What a person reads about a launch that couldn't start.
-fn failure_reason(error: &AppError) -> String {
+pub(crate) fn failure_reason(error: &AppError) -> String {
     match error {
         AppError::ExecutionProfileRequired => {
             "No signed-in provider account for this harness; sign in under your accounts and launch again.".to_owned()

@@ -30,6 +30,7 @@ const MessagesPage = lazy(() => import('../direct/MessagesPage').then((module) =
 const AgentsPage = lazy(() => import('../direct/MessagesPage').then((module) => ({ default: module.AgentsPage })))
 const DirectConversationPage = lazy(() => import('../direct/DirectConversationPage').then((module) => ({ default: module.DirectConversationPage })))
 const HomePage = lazy(() => import('../projects/HomePage').then((module) => ({ default: module.HomePage })))
+const OnboardingPage = lazy(() => import('../onboarding/OnboardingPage').then((module) => ({ default: module.OnboardingPage })))
 const ProjectOverviewPage = lazy(() => import('../projects/ProjectOverviewPage').then((module) => ({ default: module.ProjectOverviewPage })))
 const ThreadPage = lazy(() => import('../threads/ThreadPage').then((module) => ({ default: module.ThreadPage })))
 const WorkItemDetailPage = lazy(() => import('../work-items/WorkItemDetailPage').then((module) => ({ default: module.WorkItemDetailPage })))
@@ -102,6 +103,14 @@ export function App() {
                       </AuthenticatedRouteBoundary>
                     }
                     path="/home"
+                  />
+                  <Route
+                    element={
+                      <AuthenticatedRouteBoundary>
+                        <OnboardingPage />
+                      </AuthenticatedRouteBoundary>
+                    }
+                    path="/welcome"
                   />
                   <Route
                     element={

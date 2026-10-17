@@ -59,6 +59,7 @@ mod agents;
 mod ai_tools;
 mod approvals;
 mod automation_tools;
+mod batch_tools;
 mod briefing;
 mod channels;
 mod code;
@@ -272,6 +273,42 @@ impl McpServer {
     ) -> Json<common::ToolResult<usage_tools::UsageWindowsValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(usage_tools::usage_windows(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Use it before it resets: the batch of ready tasks one of your provider accounts could run before its usage window resets. Tasks come from every project the account serves whose default environment runs on its harness, ranked like task_ready_list and sized to the capacity left; projects that can't take part say what to change. Launch it with usage_batch_launch.",
+        annotations(
+            title = "Suggested batch",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn usage_batch(
+        &self,
+        Parameters(arguments): Parameters<batch_tools::UsageBatchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<batch_tools::UsageBatchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(batch_tools::usage_batch(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Launch a batch on one of your provider accounts: the suggested batch from usage_batch, or the tasks you pick from it. Each task goes through its project's launch queue in that project's default environment with its defaults, on this account, and is checked again as you when it starts. Follow them with launch_list.",
+        annotations(
+            title = "Launch batch",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn usage_batch_launch(
+        &self,
+        Parameters(arguments): Parameters<batch_tools::UsageBatchLaunchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<batch_tools::UsageBatchLaunchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(batch_tools::usage_batch_launch(&self.state, principal, arguments).await)
     }
 
     #[tool(

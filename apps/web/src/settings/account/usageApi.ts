@@ -80,6 +80,8 @@ export const usageKeys = {
   root: ['usage'] as const,
   list: ['usage', 'accounts'] as const,
   ready: (accountId: string) => ['usage', 'ready', accountId] as const,
+  batch: (accountId: string, windowKey: string | null) => ['usage', 'batch', accountId, windowKey ?? 'soonest'] as const,
+  history: (accountId: string) => ['usage', 'history', accountId] as const,
 }
 
 const account = (accountId: string) => `/api/v1/usage/accounts/${encodeURIComponent(accountId)}`
@@ -90,6 +92,107 @@ export const refreshUsage = (accountId: string) =>
   requestJson<AccountUsage>(`${account(accountId)}/refresh`, { method: 'POST', json: {} })
 
 export const readyTasks = (accountId: string) => requestJson<ReadyTasks>(`${account(accountId)}/ready-tasks`)
+
+// ---------------------------------------------------------------------------
+// Use it before it resets (U4): the batch a window's capacity could run
+
+export type BatchTask = {
+  id: string
+  projectId: string
+  projectName: string
+  key: string
+  title: string
+  priority: string
+  score: number
+  unblocks: number
+  reasons: string[]
+  environmentName: string
+  href: string
+}
+
+export type SkippedProject = { projectId: string; projectName: string; reason: string; href: string }
+
+export type Batch = {
+  accountId: string
+  accountName: string
+  harness: string
+  harnessName: string
+  capacity: {
+    slots: number
+    busy: number
+    windowKey: string | null
+    windowLabel: string | null
+    unusedPercent: number | null
+    resetsAt: string | null
+    percentPerRun: number | null
+    size: number
+    summary: string
+  }
+  tasks: BatchTask[]
+  more: BatchTask[]
+  skipped: SkippedProject[]
+}
+
+export type BatchResult = {
+  launched: number
+  projects: { projectId: string; projectName: string; environmentName: string; launches: { id: string }[] }[]
+  failed: { projectId: string; projectName: string | null; tasks: number; reason: string }[]
+}
+
+export const getBatch = (accountId: string, windowKey: string | null) =>
+  requestJson<Batch>(`${account(accountId)}/batch${windowKey ? `?windowKey=${encodeURIComponent(windowKey)}` : ''}`)
+
+/** Leave `tasks` out to launch the suggested batch as it stands. The key makes a repeated tap launch once. */
+export const launchBatch = (
+  accountId: string,
+  request: { tasks?: { projectId: string; workItemId: string }[]; windowKey?: string | null },
+  idempotencyKey: string,
+) =>
+  requestJson<BatchResult>(`${account(accountId)}/batch`, {
+    method: 'POST',
+    json: { tasks: request.tasks, windowKey: request.windowKey ?? undefined },
+    idempotencyKey,
+  })
+
+// ---------------------------------------------------------------------------
+// Usage over time (U5)
+
+export type UsageCycle = {
+  startedAt: string | null
+  resetsAt: string
+  current: boolean
+  peakUsedPercent: number | null
+  unusedPercent: number | null
+  runs: number | null
+}
+
+export type WindowHistory = {
+  key: string
+  label: string
+  source: WindowSource
+  points: { at: string; usedPercent: number }[]
+  cycles: UsageCycle[]
+  lastCycleUnusedPercent: number | null
+  averageUnusedPercent: number | null
+}
+
+export type ProjectUse = {
+  projectId: string | null
+  projectName: string
+  runs: number
+  cost: number | null
+  currency: string | null
+}
+
+export type AccountHistory = {
+  accountId: string
+  windows: WindowHistory[]
+  projects: ProjectUse[]
+  projectDays: number
+  costTracked: boolean
+}
+
+export const getHistory = (accountId: string) => requestJson<AccountHistory>(`${account(accountId)}/history`)
 
 export type NewSchedule = Omit<UsageSchedule, 'id'>
 

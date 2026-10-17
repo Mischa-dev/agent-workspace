@@ -100,6 +100,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/home",
     "/api/v1/inbox",
     "/api/v1/inbox/summary",
     "/api/v1/my-work",
@@ -110,6 +111,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/organizations/{organization_id}/audit-events/facets",
     "/api/v1/organizations/{organization_id}/invitations",
     "/api/v1/organizations/{organization_id}/members",
+    "/api/v1/organizations/{organization_id}/onboarding",
     "/api/v1/organizations/{organization_id}/personal-secrets",
     "/api/v1/organizations/{organization_id}/project-templates",
     "/api/v1/organizations/{organization_id}/secrets",
@@ -180,6 +182,8 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/usage",
     "/api/v1/usage/accounts/{account_id}",
     "/api/v1/usage/accounts/{account_id}/ready-tasks",
+    "/api/v1/usage/accounts/{account_id}/batch",
+    "/api/v1/usage/accounts/{account_id}/history",
     "/api/v1/webhooks",
     "/api/v1/webhooks/{webhook_id}/deliveries",
 ];
@@ -1680,6 +1684,51 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             vec![],
         ),
         case(
+            "/api/v1/usage/accounts/{account_id}/batch",
+            vec![
+                format!("/api/v1/usage/accounts/{}/batch", a.provider_account),
+                format!(
+                    "/api/v1/usage/accounts/{}/batch?windowKey=codex.secondary",
+                    a.provider_account
+                ),
+            ],
+            vec![format!(
+                "/api/v1/usage/accounts/{}/batch",
+                b.provider_account
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/usage/accounts/{account_id}/history",
+            vec![format!(
+                "/api/v1/usage/accounts/{}/history",
+                a.provider_account
+            )],
+            vec![format!(
+                "/api/v1/usage/accounts/{}/history",
+                b.provider_account
+            )],
+            vec![],
+        ),
+        case(
+            "/api/v1/home",
+            vec!["/api/v1/home".to_owned()],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/organizations/{organization_id}/onboarding",
+            vec![format!(
+                "/api/v1/organizations/{}/onboarding",
+                a.organization
+            )],
+            vec![format!(
+                "/api/v1/organizations/{}/onboarding",
+                b.organization
+            )],
+            vec![],
+        ),
+        case(
             "/api/v1/projects",
             vec![
                 "/api/v1/projects".to_owned(),
@@ -2395,6 +2444,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "task_open",
     "task_ready_list",
     "template_list",
+    "usage_batch",
     "usage_windows",
     "view_list",
     "webhook_deliveries",
@@ -2503,6 +2553,12 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         case(
             "usage_windows",
             vec![json!({})],
+            vec![json!({"accountId": b.provider_account})],
+            vec![],
+        ),
+        case(
+            "usage_batch",
+            vec![json!({"accountId": a.provider_account})],
             vec![json!({"accountId": b.provider_account})],
             vec![],
         ),

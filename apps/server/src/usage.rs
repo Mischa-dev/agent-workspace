@@ -15,6 +15,8 @@
 //! account serves, never see its usage.
 
 pub mod alerts;
+pub mod batch;
+pub mod history;
 pub mod ready;
 pub mod schedule;
 
@@ -69,6 +71,7 @@ pub fn register_jobs(registry: &mut JobRegistry) {
     });
     registry.register(POLL_DUE_KIND, |context| async move {
         enqueue_due(&context.state.pool).await?;
+        history::prune(&context.state.pool).await?;
         Ok(())
     });
     registry.every(POLL_DUE_KIND, StdDuration::from_secs(5 * 60));
@@ -278,6 +281,18 @@ pub(crate) async fn store_report(
         .bind(timestamp(window.resets_at))
         .bind(window.limit_reached || window.used_percent >= 100)
         .execute(&mut **transaction)
+        .await?;
+        history::record(
+            transaction,
+            account,
+            &window.key,
+            window
+                .duration_minutes
+                .filter(|minutes| (1..=525_600).contains(minutes))
+                .and_then(|minutes| i32::try_from(minutes).ok()),
+            i16::try_from(window.used_percent.min(100)).unwrap_or(100),
+            timestamp(window.resets_at),
+        )
         .await?;
     }
     if !full {
@@ -814,6 +829,14 @@ pub fn router() -> Router<AppState> {
             get(ready_tasks_http),
         )
         .route(
+            "/api/v1/usage/accounts/{account_id}/history",
+            get(history_http),
+        )
+        .route(
+            "/api/v1/usage/accounts/{account_id}/batch",
+            get(batch::suggest_http).post(batch::launch_http),
+        )
+        .route(
             "/api/v1/usage/accounts/{account_id}/schedules",
             post(create_schedule_http),
         )
@@ -894,6 +917,20 @@ async fn ready_tasks_http(
     let mut connection = state.pool.acquire().await?;
     Ok(Json(
         ready::ready_tasks(&mut connection, principal.actor_id, account.id, None).await?,
+    ))
+}
+
+async fn history_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(account_id): ApiPath<Uuid>,
+) -> Result<Json<history::AccountHistory>, AppError> {
+    let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
+    let now = Utc::now();
+    let windows = windows_at(&state.pool, account.id, now).await?;
+    Ok(Json(
+        history::account_history(&state.pool, principal.actor_id, account.id, &windows, now)
+            .await?,
     ))
 }
 

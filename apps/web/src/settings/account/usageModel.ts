@@ -85,7 +85,25 @@ export function browserTimeZone() {
 }
 
 /** A fresh key for one spend attempt; a retried click reuses it. */
-export function newAttemptKey() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return `spend-${crypto.randomUUID()}`
-  return `spend-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+export function newAttemptKey(prefix = 'spend') {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return `${prefix}-${crypto.randomUUID()}`
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+/** "Launch 3 tasks", "Launch 1 task". */
+export function launchLabel(count: number) {
+  return count === 1 ? 'Launch 1 task' : `Launch ${count} tasks`
+}
+
+/** A batch result in words, for a toast. */
+export function batchOutcome(result: { launched: number; failed: { tasks: number; projectName: string | null; reason: string }[] }) {
+  const queued = result.launched === 1 ? '1 task queued' : `${result.launched} tasks queued`
+  if (result.failed.length === 0) return { tone: 'success' as const, title: queued, description: 'Each starts in its own project’s environment as a slot frees up.' }
+  const first = result.failed[0]
+  const where = first.projectName ?? 'One project'
+  return {
+    tone: result.launched > 0 ? ('info' as const) : ('danger' as const),
+    title: result.launched > 0 ? queued : 'Nothing was launched',
+    description: `${where}: ${first.reason}${result.failed.length > 1 ? ` (and ${result.failed.length - 1} more)` : ''}`,
+  }
 }

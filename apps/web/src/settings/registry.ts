@@ -77,7 +77,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('project', 'workflow', 'Workflow', 'work', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
   page('project', 'templates', 'Templates', 'list', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
   page('project', 'import-export', 'Import and export', 'arrow-down', ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
-  page('project', 'codex-runs', 'Codex runs', 'play', ['run requests', 'sponsored', 'approve'], () => import('./project/CodexRunsPage'), { visible: projectMember }),
+  page('project', 'codex-runs', 'Run requests', 'play', ['codex', 'run requests', 'sponsored', 'approve'], () => import('./project/CodexRunsPage'), { visible: projectMember }),
 ]
 
 export const GROUP_LABELS: Record<SettingsGroup, string> = {

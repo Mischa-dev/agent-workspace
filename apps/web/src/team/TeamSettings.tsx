@@ -40,10 +40,11 @@ function formatDate(iso: string | null | undefined) {
   return formatDateTime(iso) || null
 }
 
-function codexReadiness(readiness: string) {
-  if (readiness === 'ready') return 'Codex connected'
-  if (readiness === 'not_configured') return 'Codex not connected'
-  return `Codex ${humanize(readiness).toLocaleLowerCase()}`
+/** Whether a member's provider account can take runs, whichever harness it signs in to. */
+function runReadiness(readiness: string) {
+  if (readiness === 'ready') return 'Ready for runs'
+  if (readiness === 'not_configured') return 'No account for runs'
+  return `Run account ${humanize(readiness).toLocaleLowerCase()}`
 }
 
 export function TeamSettings({ projectId, organizationRole }: { projectId: string; organizationRole: string }) {
@@ -332,7 +333,7 @@ function MemberRow({
       }
       className={member.enabled ? undefined : 'is-disabled'}
       leading={<Avatar name={member.displayName} seed={member.actorId} size={32} />}
-      meta={`@${member.handle} · ${member.enabled ? (member.actorKind === 'external_agent' ? 'Agent' : codexReadiness(member.executionProfileReadiness)) : 'Disabled'}`}
+      meta={`@${member.handle} · ${member.enabled ? (member.actorKind === 'external_agent' ? 'Agent' : runReadiness(member.executionProfileReadiness)) : 'Disabled'}`}
       title={member.displayName}
     />
   )

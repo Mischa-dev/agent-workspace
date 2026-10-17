@@ -133,7 +133,17 @@ export function LaunchesPage() {
               {launches.data.recent.length ? (
                 <RowList label="Recent launches">{launches.data.recent.map(row)}</RowList>
               ) : (
-                <EmptyState icon="play" title="No launches yet" />
+                <EmptyState
+                  action={
+                    <Link className="aw-btn aw-btn--secondary aw-btn--md" to={`/projects/${encodeURIComponent(projectId)}/work-items`}>
+                      <span className="aw-btn__label">Open tasks</span>
+                    </Link>
+                  }
+                  icon="play"
+                  title="No launches yet"
+                >
+                  Pick tasks in the task list and launch them to an agent.
+                </EmptyState>
               )}
             </Section>
           </>
