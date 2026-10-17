@@ -1046,6 +1046,9 @@ pub struct NotificationView {
     /// A capacity alert's suggested batch, which Launch starts in one tap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch: Option<BatchAction>,
+    /// The conversation a Reply from the notification posts in (mentions).
+    #[serde(skip)]
+    pub reply_conversation_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1490,6 +1493,9 @@ fn view(row: NotificationRow) -> NotificationView {
                 .map(str::to_owned),
         })
     });
+    let reply_conversation_id = row
+        .conversation_id
+        .filter(|_| row.kind == kind::MENTION && row.message_id.is_some());
     // Kinds that belong to no project (capacity alerts) name their place.
     let project_name = row
         .detail
@@ -1528,6 +1534,7 @@ fn view(row: NotificationRow) -> NotificationView {
         approval,
         launch_href,
         batch,
+        reply_conversation_id,
     }
 }
 

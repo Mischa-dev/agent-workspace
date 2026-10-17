@@ -1550,14 +1550,7 @@ async fn respond_to_approval(
     ApiJson(response): ApiJson<ApprovalResponse>,
 ) -> Result<Json<ApprovalView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
-    let external_request_id = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT external_execution_request_id FROM agent_approvals WHERE id = $1",
-    )
-    .bind(approval_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
-    if let Some(external_request_id) = external_request_id {
+    if let Some(external_request_id) = sponsored_execution_request(&state, approval_id).await? {
         return crate::external_execution::respond_to_sponsored_execution(
             &state,
             &headers,
@@ -1569,6 +1562,38 @@ async fn respond_to_approval(
         .await
         .map(Json);
     }
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    answer_approval(&state, &principal, approval_id, response, idempotency_key)
+        .await
+        .map(Json)
+}
+
+/// The external execution request an approval belongs to, if it is a
+/// sponsored execution (those are answered only in the app).
+pub(crate) async fn sponsored_execution_request(
+    state: &AppState,
+    approval_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT external_execution_request_id FROM agent_approvals WHERE id = $1",
+    )
+    .bind(approval_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten())
+}
+
+/// Approve, deny or answer a run's approval as `actor`: the browser's
+/// command, also used by a notification's Approve, Deny and Reply buttons.
+/// Checks the actor's current membership, the thread's visibility and the
+/// approval's policy every time.
+pub(crate) async fn answer_approval(
+    state: &AppState,
+    principal: &impl RunActor,
+    approval_id: Uuid,
+    response: ApprovalResponse,
+    idempotency_key: IdempotencyKey,
+) -> Result<ApprovalView, AppError> {
     let request_hash = RequestHash::for_value(&response)?;
 
     #[derive(FromRow)]
@@ -1623,7 +1648,7 @@ async fn respond_to_approval(
         "#,
     )
     .bind(approval_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::NotFound("agent_approval"))?;
@@ -1633,7 +1658,7 @@ async fn respond_to_approval(
         ApprovalEligibility::Role(parse_membership_role(&context.eligible_role)?)
     };
     authorize_project_action(
-        &principal,
+        principal,
         context.project_id,
         &context.membership_role,
         context.membership_enabled,
@@ -1693,11 +1718,10 @@ async fn respond_to_approval(
         _ => return Err(AppError::Internal("unknown approval kind")),
     };
 
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let scope = idempotency::resource_bound_scope("approval", approval_id, "respond")?;
     let reservation = match idempotency::reserve(
         &mut transaction,
-        principal.actor_id,
+        principal.actor_id(),
         &scope,
         &idempotency_key,
         request_hash,
@@ -1712,15 +1736,13 @@ async fn respond_to_approval(
                 ));
             }
             transaction.commit().await?;
-            return fetch_approval(&state, approval_id, context.project_id)
-                .await
-                .map(Json);
+            return fetch_approval(state, approval_id, context.project_id).await;
         }
         IdempotencyOutcome::Reserved(reservation) => reservation,
     };
 
     if context.status == "resolved" {
-        if context.responded_by_actor_id == Some(principal.actor_id)
+        if context.responded_by_actor_id == Some(principal.actor_id())
             && context.current_response == Some(response_json)
         {
             idempotency::complete(
@@ -1733,9 +1755,7 @@ async fn respond_to_approval(
             )
             .await?;
             transaction.commit().await?;
-            return fetch_approval(&state, approval_id, context.project_id)
-                .await
-                .map(Json);
+            return fetch_approval(state, approval_id, context.project_id).await;
         }
         return Err(AppError::Conflict(
             "agent_approval",
@@ -1754,7 +1774,7 @@ async fn respond_to_approval(
         "#,
     )
     .bind(approval_id)
-    .bind(principal.actor_id)
+    .bind(principal.actor_id())
     .bind(&response_json)
     .execute(&mut *transaction)
     .await?;
@@ -1774,7 +1794,7 @@ async fn respond_to_approval(
         serde_json::json!({
             "approval_id": approval_id,
             "resolution": if context.kind == "question" { "answered" } else if approved { "approved" } else { "denied" },
-            "responded_by_actor_id": principal.actor_id
+            "responded_by_actor_id": principal.actor_id()
         }),
     )
     .await?;
@@ -1822,9 +1842,7 @@ async fn respond_to_approval(
     )
     .await?;
     transaction.commit().await?;
-    fetch_approval(&state, approval_id, context.project_id)
-        .await
-        .map(Json)
+    fetch_approval(state, approval_id, context.project_id).await
 }
 
 async fn interrupt_agent_run(

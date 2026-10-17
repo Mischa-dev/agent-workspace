@@ -1,0 +1,83 @@
+/* Quick add and Share to Workspace (W18): one short form, its button within a thumb's reach. */
+
+.aw-quick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.aw-quick .aw-pagehead {
+  margin-bottom: 0;
+}
+
+.aw-quick__shared {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-quick__shared p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.aw-quick__shared-title {
+  font: var(--t-ui-strong, var(--t-ui));
+  color: var(--content-fg);
+}
+
+.aw-quick__shared-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  font: var(--t-small);
+  color: var(--content-fg);
+  white-space: pre-line;
+}
+
+.aw-quick__shared-url {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-quick__shared-url span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-quick__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .aw-quick__form {
+    padding-bottom: 0;
+  }
+
+  /* On a phone the button sits at the bottom, full width, under the thumb. */
+  .aw-quick__actions {
+    position: sticky;
+    bottom: 0;
+    margin: 0 calc(-1 * var(--space-5));
+    padding: var(--space-3) var(--space-5) calc(var(--space-3) + env(safe-area-inset-bottom));
+    background: inherit;
+    border-top: 1px solid var(--content-border);
+  }
+
+  .aw-quick__actions .aw-btn {
+    flex: 1;
+    min-height: 48px;
+  }
+}

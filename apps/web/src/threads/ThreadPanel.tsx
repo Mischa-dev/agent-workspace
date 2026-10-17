@@ -176,6 +176,7 @@ export function ThreadPanel({
       </div>
       {valid && page?.capabilities.sendMessage ? (
         <StructuredComposer
+          draftKey={threadId}
           label="Reply in thread"
           onSubmit={send}
           placeholder="Reply in thread"

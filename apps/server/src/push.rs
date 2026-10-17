@@ -12,6 +12,7 @@
 //! The job recheck what the person can see when it sends (principle 9):
 //! it reads the notification as them, so a lost membership sends nothing.
 
+pub mod actions;
 pub mod web_push;
 
 use std::time::Duration as StdDuration;
@@ -64,6 +65,7 @@ const PRUNE_KIND: &str = "push.prune_deliveries";
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(PRUNE_KIND, |context| async move {
         prune_deliveries(&context.state.pool).await?;
+        actions::prune(&context.state.pool).await?;
         Ok(())
     });
     registry.every(PRUNE_KIND, StdDuration::from_secs(6 * 60 * 60));
@@ -450,6 +452,24 @@ pub fn payload_for(notification: &NotificationView) -> Value {
     })
 }
 
+/// The push payload with the notification's own actions (Approve and Deny,
+/// or Reply) and the token that lets the service worker use them.
+pub fn payload_with_actions(
+    notification: &NotificationView,
+    minted: Option<&actions::MintedActions>,
+) -> Value {
+    let mut payload = payload_for(notification);
+    if let Some(minted) = minted {
+        let mut listed = actions::payload_actions(notification, minted);
+        if let Some(existing) = payload["actions"].as_array() {
+            listed.extend(existing.iter().cloned());
+        }
+        payload["actions"] = Value::Array(listed);
+        payload["actionToken"] = Value::String(minted.token.clone());
+    }
+    payload
+}
+
 async fn send_one(
     state: &AppState,
     client: &reqwest::Client,
@@ -613,7 +633,10 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
             return Ok(());
         }
     }
-    let payload = serde_json::to_vec(&payload_for(&notification))
+    // Approve, Deny and Reply buttons carry a token made after the checks
+    // above, for this recipient only.
+    let minted = actions::mint(&state.pool, organization_id, job.recipient, &notification).await?;
+    let payload = serde_json::to_vec(&payload_with_actions(&notification, minted.as_ref()))
         .map_err(|_| JobError::permanent("push payload"))?;
     let topic = notification.id.simple().to_string();
     let urgency = if Group::of(&notification.kind) == Group::Usage
@@ -677,6 +700,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/push/subscriptions/{id}", delete(remove_http))
         .route("/api/v1/push/subscriptions/{id}/test", post(test_http))
+        .route("/api/v1/notification-actions", post(actions::act_http))
 }
 
 #[derive(Debug, Deserialize)]

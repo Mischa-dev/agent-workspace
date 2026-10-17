@@ -136,6 +136,7 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
       {!disabled ? (
         <StructuredComposer
           disabled={createComment.isPending}
+          draftKey={`comment:${item.id}`}
           label="Add a comment"
           onSubmit={async ({ content, idempotencyKey }) => {
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content, idempotencyKey })
