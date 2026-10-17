@@ -1,10 +1,12 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import { Banner, Button, ErrorState, PageHeader, SelectField, TextField } from '../ui'
+import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
 
 const projectKeyPattern = /^[A-Z][A-Z0-9]{1,9}$/
@@ -42,6 +44,13 @@ export function CreateProjectPage() {
   const [organizationId, setOrganizationId] = useState(creatableOrganizations[0]?.id ?? '')
   const [idempotencyKey] = useState(newIdempotencyKey)
   const [error, setError] = useState<string | null>(null)
+  const [templateId, setTemplateId] = useState('')
+  const templates = useQuery({
+    queryKey: viewKeys.projectTemplates(organizationId),
+    queryFn: () => listProjectTemplates(organizationId),
+    enabled: Boolean(organizationId),
+  })
+  const template = templates.data?.templates.find((candidate) => candidate.id === templateId)
   const key = typedKey ?? suggestKey(name)
   const normalizedKey = key.trim().toLocaleUpperCase()
   const keyValid = projectKeyPattern.test(normalizedKey)
@@ -91,6 +100,7 @@ export function CreateProjectPage() {
         organizationId,
         key: normalizedKey,
         name: name.trim(),
+        ...(template ? { templateId: template.id } : {}),
         idempotencyKey,
       })
       try {
@@ -164,6 +174,35 @@ export function CreateProjectPage() {
             spellCheck={false}
             value={key}
           />
+          {templates.data?.templates.length ? (
+            <SelectField
+              hint={
+                template
+                  ? `Starts with its ${[
+                      template.contains.statuses.length ? 'workflow' : '',
+                      template.contains.labels ? 'labels' : '',
+                      template.contains.channels.length ? 'channels' : '',
+                      template.contains.settings ? 'defaults' : '',
+                      template.contains.taskTemplates ? 'task templates' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(', ')
+                      .replace(/, ([^,]*)$/, ' and $1')}.`
+                  : 'Start from the default workflow, or from a setup saved from another Project.'
+              }
+              id="project-template"
+              label="Template"
+              onChange={(event) => setTemplateId(event.target.value)}
+              value={templateId}
+            >
+              <option value="">No template</option>
+              {templates.data.templates.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
           <div className="aw-form__actions">
             <Button onClick={() => navigate('/home')} variant="ghost">
               Cancel

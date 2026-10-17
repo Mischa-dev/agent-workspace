@@ -23,6 +23,10 @@ export type ListState = {
   lanes: LaneBy
   /** The task open in the side panel: its id or key. */
   task: string | null
+  /** The saved view this started from, kept while you change it so it can be saved back. */
+  savedView: string | null
+  /** List columns to show; every column when null. */
+  fields: string[] | null
 }
 
 export const SORTS: Array<{ value: WorkItemSort; label: string }> = [
@@ -61,6 +65,9 @@ export const LANE_FIELDS: Array<{ value: LaneBy; label: string }> = [
   { value: 'milestone', label: 'Milestone' },
   { value: 'type', label: 'Type' },
 ]
+
+/** List columns a view can hide; select and title always show. */
+export const VIEW_FIELDS = ['priority', 'key', 'status', 'details', 'due', 'assignee']
 
 export const SEMANTIC_CATEGORIES = ['backlog', 'unstarted', 'started', 'review', 'verification', 'completed', 'canceled']
 
@@ -114,6 +121,8 @@ export function readListState(parameters: URLSearchParams): ListState {
   if (filters.assigneeActorId) delete filters.unassigned
   const groupBy = parameters.get('groupBy')
   const task = parameters.get('task')
+  const savedView = parameters.get('savedView')
+  const fields = parameters.get('fields')
   const columnsBy = oneOf(parameters.get('columnsBy'), COLUMN_FIELDS, 'status')
   const lanes = oneOf(parameters.get('lanes'), LANE_FIELDS, 'none')
   return {
@@ -125,6 +134,8 @@ export function readListState(parameters: URLSearchParams): ListState {
     // Lanes by the column field would leave only the diagonal cells.
     lanes: lanes === columnsBy ? 'none' : lanes,
     task: task && task.length <= 100 ? task : null,
+    savedView: savedView && ID.test(savedView) ? savedView : null,
+    fields: fields === null ? null : fields.split(',').filter((field) => VIEW_FIELDS.includes(field)),
   }
 }
 
@@ -142,6 +153,8 @@ export function writeListState(state: ListState): URLSearchParams {
   if (state.columnsBy !== 'status') parameters.set('columnsBy', state.columnsBy)
   if (state.lanes !== 'none') parameters.set('lanes', state.lanes)
   if (state.task) parameters.set('task', state.task)
+  if (state.fields) parameters.set('fields', state.fields.join(','))
+  if (state.savedView) parameters.set('savedView', state.savedView)
   return parameters
 }
 
@@ -178,7 +191,7 @@ export function boardQuery(state: ListState): WorkItemFilters & { columnsBy: Boa
 
 /** What the Project remembers so the page reopens the same way: everything but the open task. */
 export function rememberedState(state: ListState): Record<string, string> {
-  const parameters = writeListState({ ...state, task: null })
+  const parameters = writeListState({ ...state, task: null, savedView: null })
   return Object.fromEntries(parameters.entries())
 }
 
@@ -189,5 +202,5 @@ export function parametersFromRemembered(saved: Record<string, unknown>): URLSea
     if (typeof value === 'string') raw.set(key, value)
     else if (value === true) raw.set(key, 'true')
   }
-  return writeListState({ ...readListState(raw), task: null })
+  return writeListState({ ...readListState(raw), task: null, savedView: null })
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -20,6 +20,8 @@ import { useNotice } from './useNotice'
 import { WorkItemBoard } from './WorkItemBoard'
 import { WorkItemList } from './WorkItemList'
 import './work.css'
+
+const ViewsMenu = lazy(() => import('./ViewsMenu'))
 
 /**
  * Every work item in a Project as a list or a board, with filters, sorting,
@@ -109,6 +111,14 @@ export function WorkItemsPage() {
       New work item
     </Button>
   )
+  const headerActions = (
+    <>
+      <Suspense fallback={null}>
+        <ViewsMenu actorId={session.user.actorId} projectId={projectId} readOnly={archived} state={state} update={update} />
+      </Suspense>
+      {newButton}
+    </>
+  )
   const panel = state.task ? (
     <div
       className="aw-taskpanel"
@@ -135,7 +145,7 @@ export function WorkItemsPage() {
     <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-workpage">
         <NavigationSyncAlert {...navigationSync} />
-        <PageHeader actions={newButton} icon="work" title="Work items">
+        <PageHeader actions={headerActions} icon="work" title="Work items">
           Everything that needs doing in {project.data.name}.
         </PageHeader>
         <FilterBar projectId={projectId} state={state} update={update} workflow={workflow.data} />

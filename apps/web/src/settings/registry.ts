@@ -58,6 +58,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('workspace', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
   page('workspace', 'keys', 'Keys', 'key', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
   page('workspace', 'run-defaults', 'Environments and run defaults', 'settings', ['harness', 'model', 'reasoning', 'speed', 'environment'], () => import('./workspace/RunDefaultsPage'), { settings: ['run.'] }),
+  page('workspace', 'project-templates', 'Project templates', 'list', ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
   page('workspace', 'audit-log', 'Audit log', 'activity', ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
   // Project
@@ -70,6 +71,8 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials'], () => import('./project/AgentsPage'), { visible: manageProject }),
   page('project', 'automation', 'Automation', 'checklist', ['pull requests', 'work items', 'review', 'github'], () => import('./project/AutomationPage'), { visible: manageProject }),
   page('project', 'workflow', 'Workflow', 'work', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
+  page('project', 'templates', 'Templates', 'list', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
+  page('project', 'import-export', 'Import and export', 'arrow-down', ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
   page('project', 'codex-runs', 'Codex runs', 'play', ['run requests', 'sponsored', 'approve'], () => import('./project/CodexRunsPage'), { visible: projectMember }),
 ]
 

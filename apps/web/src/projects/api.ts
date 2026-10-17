@@ -114,6 +114,7 @@ export async function createProject(input: {
   organizationId: string
   key: string
   name: string
+  templateId?: string
   idempotencyKey: string
 }): Promise<Project> {
   const payload = await requestJson<unknown>('/api/v1/projects', {
@@ -123,6 +124,7 @@ export async function createProject(input: {
       organizationId: input.organizationId,
       key: input.key,
       name: input.name,
+      ...(input.templateId ? { templateId: input.templateId } : {}),
     },
   })
   const record = asRecord(payload)

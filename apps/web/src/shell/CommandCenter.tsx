@@ -58,6 +58,7 @@ export function CommandCenter() {
       search: () => go('/search'),
       'go-home': () => go('/home'),
       'go-inbox': () => go('/inbox'),
+      'go-my-work': () => go('/my-work'),
       'go-messages': () => go('/messages'),
       'go-tasks': () => inProject('/work-items'),
       'go-board': () => inProject('/work-items?view=board'),

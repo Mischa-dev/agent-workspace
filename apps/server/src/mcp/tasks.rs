@@ -120,6 +120,9 @@ pub(super) struct TaskListArguments {
     /// How many (default 50, at most 200).
     pub limit: Option<u16>,
     pub cursor: Option<String>,
+    /// A saved view by name or ID (see view_list), such as "Ready for
+    /// agents". Needs projectId. Its filters apply; ones you pass win.
+    pub view: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
@@ -475,6 +478,10 @@ async fn task_list_inner(
     principal: &McpPrincipal,
     arguments: TaskListArguments,
 ) -> Result<ToolResult<TaskListValue>, AppError> {
+    let arguments = match super::views_data::apply_view(state, principal, arguments).await? {
+        Ok(arguments) => arguments,
+        Err((field, message)) => return Ok(ToolResult::invalid(field, message)),
+    };
     let limit = i64::from(arguments.limit.unwrap_or(50));
     if !(1..=200).contains(&limit) {
         return Ok(ToolResult::invalid("limit", "Use a limit from 1 to 200."));
