@@ -647,6 +647,7 @@ pub(crate) async fn apply_removal(
         .bind(locked.id)
         .execute(&mut **transaction)
         .await?;
+    crate::files::forget_message_files(transaction, locked.id, actor.actor_id).await?;
     let updated = sqlx::query(
         r#"
         UPDATE messages

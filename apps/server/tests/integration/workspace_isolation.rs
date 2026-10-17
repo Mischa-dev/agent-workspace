@@ -106,9 +106,12 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
+    "/api/v1/files/{id}/content",
+    "/api/v1/files/{id}/thumbnail",
     "/api/v1/home",
     "/api/v1/inbox",
     "/api/v1/inbox/summary",
+    "/api/v1/link-previews/{id}/image",
     "/api/v1/my-work",
     "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
@@ -182,6 +185,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
+    "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/readiness",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/launch",
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
@@ -446,6 +450,12 @@ struct World {
     rule: Uuid,
     whiteboard: Uuid,
     project_whiteboard: Uuid,
+    /// A file sent with `file_message` in the channel, and a task's image.
+    file: Uuid,
+    file_message: String,
+    task_file: Uuid,
+    /// The link preview `file_message` shows, made ready by the test.
+    link_preview: Uuid,
 }
 
 #[tokio::test]
@@ -557,6 +567,18 @@ async fn one_workspace_never_sees_another() {
 
     let a = build_workspace(&app, &pool, "A", "", a_owner.organization_id, a_browser).await;
     let b = build_workspace(&app, &pool, "B", MARKER, b_organization, b_browser).await;
+    // The link previews' images, as the fetch job would have stored them.
+    for world in [&a, &b] {
+        let folder = data_root
+            .join("files")
+            .join(world.organization.simple().to_string());
+        std::fs::create_dir_all(&folder).expect("preview folder");
+        std::fs::write(
+            folder.join(format!("{}.preview", world.link_preview.simple())),
+            tiny_png(),
+        )
+        .expect("preview image");
+    }
     let b_ids = sweep_ids(&pool, b.organization).await;
     let a_ids = sweep_ids(&pool, a.organization).await;
     assert!(
@@ -803,6 +825,35 @@ async fn add_person(
     .await
     .expect("bootstrap person");
     actor_id
+}
+
+fn tiny_png() -> Vec<u8> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(TINY_PNG.trim_start_matches("data:image/png;base64,"))
+        .expect("png")
+}
+
+/// Uploads raw bytes to a file route; returns the file's ID.
+async fn upload(
+    app: &axum::Router,
+    browser: &Browser,
+    uri: &str,
+    content_type: &str,
+    bytes: Vec<u8>,
+) -> Uuid {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("origin", ORIGIN)
+        .header("cookie", &browser.cookie)
+        .header("x-csrf-token", &browser.csrf)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(bytes))
+        .expect("upload request");
+    let (status, uploaded) = send(app, request).await;
+    assert_eq!(status, StatusCode::CREATED, "upload {uri}: {uploaded}");
+    Uuid::parse_str(&string_at(&uploaded, "/id")).expect("file id")
 }
 
 fn string_at(value: &Value, pointer: &str) -> String {
@@ -1574,6 +1625,66 @@ async fn build_workspace(
         );
     }
 
+    // Files (W20): a file sent with a message that links to a page, and an
+    // image kept on the task.
+    let file = upload(
+        app,
+        &browser,
+        &format!("/api/v1/conversations/{channel}/files?name=report-{tag}.txt"),
+        "text/plain",
+        format!("Notes{m}").into_bytes(),
+    )
+    .await;
+    let (status, sent) = send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some(&format!("files-{tag}")),
+            json!({
+                "content": text(&format!("Report{m} https://example.com/{tag}-page")),
+                "attachments": [file],
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{label} file message: {status} {sent}");
+    let file_message = string_at(&sent, "/message/id");
+    let task_file = upload(
+        app,
+        &browser,
+        &format!("/api/v1/projects/{project}/work-items/{task}/files?name=spec-{tag}.png"),
+        "image/png",
+        tiny_png(),
+    )
+    .await;
+    let link_preview = sqlx::query_scalar::<_, Uuid>(
+        "SELECT link_preview_id FROM message_link_previews WHERE message_id = $1",
+    )
+    .bind(Uuid::parse_str(&file_message).expect("message id"))
+    .fetch_one(pool)
+    .await
+    .expect("link preview");
+    sqlx::query(
+        r#"
+        UPDATE link_previews
+        SET status = 'ready', title = $2, image_key = $3, image_bytes = $4,
+            image_type = 'image/png', image_width = 1, image_height = 1, fetched_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(link_preview)
+    .bind(format!("Page{m}"))
+    .bind(format!(
+        "{}/{}.preview",
+        organization.simple(),
+        link_preview.simple()
+    ))
+    .bind(tiny_png().len() as i64)
+    .execute(pool)
+    .await
+    .expect("ready preview");
+
     World {
         marker,
         browser,
@@ -1607,6 +1718,10 @@ async fn build_workspace(
         rule,
         whiteboard,
         project_whiteboard,
+        file,
+        file_message,
+        task_file,
+        link_preview,
     }
 }
 
@@ -2411,6 +2526,10 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
             "/timeline",
         ),
+        (
+            "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
+            "/files",
+        ),
     ] {
         let (mut own, mut foreign) = pair(&|outer, inner| {
             format!(
@@ -2599,6 +2718,31 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
         vec![format!("/api/v1/whiteboards/{}/files/photo1", b.whiteboard)],
         vec![],
     ));
+    let files = |w: &World, suffix: &str| {
+        vec![
+            format!("/api/v1/files/{}{suffix}", w.file),
+            format!("/api/v1/files/{}{suffix}", w.task_file),
+        ]
+    };
+    cases.push(case(
+        "/api/v1/files/{id}/content",
+        [files(a, "/content"), files(a, "/content?download=1")].concat(),
+        files(b, "/content"),
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/files/{id}/thumbnail",
+        // Only images have one.
+        vec![format!("/api/v1/files/{}/thumbnail", a.task_file)],
+        files(b, "/thumbnail"),
+        vec![],
+    ));
+    cases.push(case(
+        "/api/v1/link-previews/{id}/image",
+        vec![format!("/api/v1/link-previews/{}/image", a.link_preview)],
+        vec![format!("/api/v1/link-previews/{}/image", b.link_preview)],
+        vec![],
+    ));
     cases.push(case(
         "/api/v1/whiteboards/{id}/preview.svg",
         boards(a, "/preview.svg"),
@@ -2761,6 +2905,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "dependency_graph",
     "environment_list",
     "external_event_poll",
+    "file_list",
+    "file_read",
     "inbox_list",
     "label_list",
     "launch_list",
@@ -3189,6 +3335,30 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case("external_event_poll", vec![json!({})], vec![], vec![]),
+        case(
+            "file_list",
+            vec![
+                json!({"messageId": a.file_message}),
+                json!({"taskId": a.task.to_string()}),
+            ],
+            vec![
+                json!({"messageId": b.file_message}),
+                json!({"taskId": b.task.to_string()}),
+            ],
+            vec![],
+        ),
+        case(
+            "file_read",
+            vec![
+                json!({"fileId": a.file.to_string()}),
+                json!({"fileId": a.task_file.to_string()}),
+            ],
+            vec![
+                json!({"fileId": b.file.to_string()}),
+                json!({"fileId": b.task_file.to_string()}),
+            ],
+            vec![],
+        ),
     ]
 }
 

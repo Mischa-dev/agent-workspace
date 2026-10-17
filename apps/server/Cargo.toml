@@ -52,6 +52,9 @@ uuid = { version = "1.18.1", features = ["serde", "v7"] }
 url = "2.5.7"
 zeroize = "1.8.2"
 chrono-tz = "0.10.4"
+jpeg-encoder = "0.7.0"
+imagesize = "0.15.0"
+mime_guess = "2.0.5"
 
 [dev-dependencies]
 futures-util = "0.3.33"

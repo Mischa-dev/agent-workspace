@@ -241,8 +241,35 @@ impl MessageContent {
 
     pub fn validate_with_resources<F, W>(
         self,
+        resolve_handle: F,
+        resolve_work_item_label: W,
+    ) -> Result<ValidatedMessageContent, MessageContentError>
+    where
+        F: FnMut(Uuid) -> Option<String>,
+        W: FnMut(Uuid) -> Option<String>,
+    {
+        self.validate_resources(resolve_handle, resolve_work_item_label, false)
+    }
+
+    /// Like `validate_with_resources`, but blank text is allowed: a message
+    /// that carries files needs no words.
+    pub fn validate_with_resources_allowing_blank<F, W>(
+        self,
+        resolve_handle: F,
+        resolve_work_item_label: W,
+    ) -> Result<ValidatedMessageContent, MessageContentError>
+    where
+        F: FnMut(Uuid) -> Option<String>,
+        W: FnMut(Uuid) -> Option<String>,
+    {
+        self.validate_resources(resolve_handle, resolve_work_item_label, true)
+    }
+
+    fn validate_resources<F, W>(
+        self,
         mut resolve_handle: F,
         mut resolve_work_item_label: W,
+        allow_blank: bool,
     ) -> Result<ValidatedMessageContent, MessageContentError>
     where
         F: FnMut(Uuid) -> Option<String>,
@@ -297,7 +324,7 @@ impl MessageContent {
             }
         }
 
-        if plain_text.trim().is_empty() {
+        if plain_text.trim().is_empty() && !allow_blank {
             return Err(MessageContentError::Empty);
         }
 

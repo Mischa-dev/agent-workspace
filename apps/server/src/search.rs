@@ -1,7 +1,8 @@
-//! Full-text search across messages, thread outcomes, tasks, pages and
-//! decisions. Results only ever include what the viewer can see: messages and
-//! threads go through `conversation_visible_to`, and a decision from a private
-//! conversation stays as private as it.
+//! Full-text search across messages, thread outcomes, tasks, pages,
+//! decisions and file names. Results only ever include what the viewer can
+//! see: messages, threads and message files go through
+//! `conversation_visible_to`, and a decision from a private conversation
+//! stays as private as it.
 //!
 //! Settled knowledge ranks first: decisions, then pages, thread outcomes and
 //! tasks, then raw messages.
@@ -31,15 +32,17 @@ pub enum SearchKind {
     Tasks,
     Pages,
     Decisions,
+    Files,
 }
 
 impl SearchKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Decisions,
         Self::Pages,
         Self::Threads,
         Self::Tasks,
         Self::Messages,
+        Self::Files,
     ];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -49,6 +52,7 @@ impl SearchKind {
             "task" | "tasks" => Some(Self::Tasks),
             "page" | "pages" => Some(Self::Pages),
             "decision" | "decisions" => Some(Self::Decisions),
+            "file" | "files" => Some(Self::Files),
             _ => None,
         }
     }
@@ -108,6 +112,7 @@ pub async fn search(
             SearchKind::Tasks => TASKS_SQL,
             SearchKind::Pages => PAGES_SQL,
             SearchKind::Decisions => DECISIONS_SQL,
+            SearchKind::Files => FILES_SQL,
         };
         let rows = sqlx::query_as::<_, SearchHit>(sql)
             .bind(viewer)
@@ -286,6 +291,60 @@ const DECISIONS_SQL: &str = r#"
       AND ($6::timestamptz IS NULL OR decision.created_at >= $6)
       AND ($7::timestamptz IS NULL OR decision.created_at <= $7)
     ORDER BY rank DESC
+    LIMIT $8
+"#;
+
+/// Files by name, on messages the viewer can see and on tasks.
+const FILES_SQL: &str = r#"
+    WITH query AS (
+        SELECT websearch_to_tsquery('simple', $3) AS q,
+               '%' || replace(replace(replace($3, '\', '\\'), '%', '\%'), '_', '\_') || '%'
+                   AS pattern
+    )
+    SELECT 'file' AS kind, file.id, file.name AS title,
+           CASE WHEN file.message_id IS NOT NULL THEN
+                    'In ' || CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END
+                ELSE 'On ' || project.project_key || '-' || item.number::text || ' ' || item.title
+           END AS snippet,
+           file.project_id,
+           CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
+           conversation.id AS conversation_id, conversation.name AS conversation_name,
+           uploader.display_name AS author, file.created_at::text AS at,
+           CASE
+               WHEN file.message_id IS NULL THEN
+                    '/projects/' || file.project_id::text || '/work-items/' || file.work_item_id::text
+               WHEN project.kind = 'direct' THEN
+                    '/messages/' || COALESCE(conversation.parent_channel_id, conversation.id)::text
+                    || '#message-' || file.message_id::text
+               ELSE '/projects/' || file.project_id::text ||
+                    CASE WHEN conversation.kind = 'thread' THEN '/threads/' ELSE '/channels/' END ||
+                    conversation.id::text || '#message-' || file.message_id::text
+           END AS path,
+           (CASE WHEN file.search_vector @@ query.q
+                 THEN ts_rank(file.search_vector, query.q) * 1.2 ELSE 0.05 END)::real AS rank
+    FROM query, files file
+    JOIN projects project ON project.id = file.project_id
+    LEFT JOIN conversations conversation ON conversation.id = file.conversation_id
+    LEFT JOIN messages message ON message.id = file.message_id
+    LEFT JOIN work_items item
+      ON item.project_id = file.project_id AND item.id = file.work_item_id
+    LEFT JOIN project_memberships uploader
+      ON uploader.project_id = file.project_id AND uploader.actor_id = file.uploaded_by_actor_id
+    WHERE (file.search_vector @@ query.q OR file.name ILIKE query.pattern)
+      AND file.project_id = ANY($2)
+      AND file.attached_at IS NOT NULL
+      AND file.removed_at IS NULL
+      AND (file.conversation_id IS NULL OR (
+          message.removed_at IS NULL
+          AND conversation.archived_at IS NULL
+          AND conversation_visible_to(conversation.id, $1)
+      ))
+      AND (file.work_item_id IS NULL OR item.archived_at IS NULL)
+      AND ($4::uuid IS NULL OR conversation.id = $4 OR conversation.parent_channel_id = $4)
+      AND ($5::uuid IS NULL OR file.uploaded_by_actor_id = $5)
+      AND ($6::timestamptz IS NULL OR file.created_at >= $6)
+      AND ($7::timestamptz IS NULL OR file.created_at <= $7)
+    ORDER BY rank DESC, file.created_at DESC
     LIMIT $8
 "#;
 
