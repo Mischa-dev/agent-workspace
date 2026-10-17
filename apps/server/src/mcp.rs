@@ -2008,6 +2008,109 @@ pub fn oauth_router() -> Router<AppState> {
     oauth::router()
 }
 
+/// Every tool's name, description, schemas and hints, for the public API's
+/// OpenAPI document (X3). Generated from the same Rust types the tools take.
+pub(crate) fn tool_catalog() -> Vec<rmcp::model::Tool> {
+    McpServer::tool_router().list_all()
+}
+
+/// Why a direct tool call didn't produce a result.
+#[derive(Debug)]
+pub(crate) enum DirectCallError {
+    UnknownTool,
+    /// The arguments didn't match the tool's input schema.
+    InvalidArguments(String),
+    /// A key or project in the arguments the caller can't reach, or a
+    /// lookup that failed.
+    Refused(AppError),
+}
+
+/// Runs one tool for a caller that isn't on the MCP transport: the public
+/// REST API (X3) and automations acting as their owner (X5). The arguments
+/// are rewritten and the project scoped exactly as `authenticate_mcp` does
+/// for an MCP call, and the tool then checks the caller's current access
+/// itself, as it always does. Returns the tool's structured result.
+pub(crate) async fn call_tool_direct(
+    state: &AppState,
+    mut principal: McpPrincipal,
+    tool: &str,
+    mut arguments: serde_json::Value,
+) -> Result<serde_json::Value, DirectCallError> {
+    let router = McpServer::tool_router();
+    if !router.has_route(tool) {
+        return Err(DirectCallError::UnknownTool);
+    }
+    if !arguments.is_object() {
+        return Err(DirectCallError::InvalidArguments(
+            "The body must be a JSON object of the tool's arguments.".to_owned(),
+        ));
+    }
+    keys_to_ids(state, &principal, tool, &mut arguments)
+        .await
+        .map_err(DirectCallError::Refused)?;
+    if let Some(project_id) = scoped_project(state, &principal, tool, &arguments)
+        .await
+        .map_err(DirectCallError::Refused)?
+    {
+        principal.project_id = project_id;
+        principal.project_explicit = true;
+    }
+    let serde_json::Value::Object(arguments) = arguments else {
+        return Err(DirectCallError::InvalidArguments(
+            "The body must be a JSON object of the tool's arguments.".to_owned(),
+        ));
+    };
+    let (mut parts, ()) = http::Request::builder()
+        .method(http::Method::POST)
+        .uri(MCP_PATH)
+        .body(())
+        .map_err(|_| DirectCallError::Refused(AppError::Internal("direct tool request")))?
+        .into_parts();
+    parts.extensions.insert(principal);
+    let server = McpServer {
+        state: state.clone(),
+    };
+    // A request context needs a peer; tools never write to it, so a peer on
+    // an in-memory pipe that nobody reads serves for the one call.
+    let (pipe, _other_end) = tokio::io::duplex(64);
+    let running =
+        rmcp::service::serve_directly::<RoleServer, _, _, _, _>(server.clone(), pipe, None);
+    let mut context = RequestContext::new(
+        rmcp::model::NumberOrString::Number(1),
+        running.peer().clone(),
+    );
+    context.extensions.insert(parts);
+    let params = rmcp::model::CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
+    let outcome = router
+        .call(rmcp::handler::server::tool::ToolCallContext::new(
+            &server, params, context,
+        ))
+        .await;
+    drop(running);
+    let result = match outcome {
+        Ok(rmcp::model::CallToolResponse::Complete(result)) => result,
+        Ok(_) => {
+            return Err(DirectCallError::Refused(AppError::Internal(
+                "tool asked for input",
+            )));
+        }
+        Err(error) => return Err(DirectCallError::InvalidArguments(error.message.to_string())),
+    };
+    if let Some(structured) = result.structured_content {
+        return Ok(structured);
+    }
+    let text = result
+        .content
+        .iter()
+        .filter_map(|block| block.as_text().map(|text| text.text.clone()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if result.is_error == Some(true) {
+        return Err(DirectCallError::InvalidArguments(text));
+    }
+    Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text)))
+}
+
 async fn authenticate_mcp(
     State(state): State<AppState>,
     mut request: Request<Body>,

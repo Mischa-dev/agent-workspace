@@ -41,6 +41,7 @@ pub mod policy_inventory;
 pub mod profile_runtime;
 pub mod projects;
 pub mod provider;
+pub mod public_api;
 pub mod push;
 pub mod rate_limit;
 pub mod reactions;
@@ -135,6 +136,7 @@ pub fn router(state: AppState) -> Router {
         .merge(metrics::router())
         .merge(mcp::oauth_router())
         .merge(mcp::router(state.clone()))
+        .merge(public_api::router())
         .route("/api/v1", any(api_not_found))
         .route("/api/v1/{*path}", any(api_not_found))
         .fallback_service(
