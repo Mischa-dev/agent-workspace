@@ -8,7 +8,7 @@ import { IconButton, Menu, showToast, type MenuEntry } from '../ui'
 import { changeSaved, invalidateLater, removeSaved, saveForLater } from './api'
 import { ForwardDialog, MessageTaskDialog } from './dialogs'
 import { TimeDialog } from './TimeDialog'
-import { describeWhen, whenChoices } from './when'
+import { describeWhen, whenChoices, whenPhrase } from './when'
 
 type Open =
   | { kind: 'remind'; message: ConversationMessage }
@@ -58,7 +58,7 @@ export function useLaterActions({
       refresh()
       showToast({
         tone: 'success',
-        title: item.remindAt ? `I’ll remind you ${describeWhen(item.remindAt).toLowerCase()}` : 'Saved for later',
+        title: item.remindAt ? `I’ll remind you ${whenPhrase(item.remindAt)}` : 'Saved for later',
         action: { label: 'View Later', onSelect: () => navigate('/later') },
       })
     })

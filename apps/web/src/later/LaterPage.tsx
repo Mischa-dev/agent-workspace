@@ -21,7 +21,7 @@ import {
 } from './api'
 import { SavedRow, ScheduledRow } from './LaterRows'
 import { TimeDialog } from './TimeDialog'
-import { describeWhen } from './when'
+import { whenPhrase } from './when'
 import './later.css'
 
 type Tab = 'open' | 'done' | 'scheduled'
@@ -75,7 +75,7 @@ export function LaterPage() {
   }
 
   const remind = (item: SavedItem, at: Date | null) =>
-    act(item.id, () => changeSaved(item.id, { remindAt: at ? at.toISOString() : null }), at ? `I’ll remind you ${describeWhen(at).toLowerCase()}` : 'Reminder off')
+    act(item.id, () => changeSaved(item.id, { remindAt: at ? at.toISOString() : null }), at ? `I’ll remind you ${whenPhrase(at)}` : 'Reminder off')
 
   const closeNew = () => {
     setEditing(null)
@@ -198,7 +198,7 @@ export function LaterPage() {
           onPick={async (at, note) => {
             await saveForLater({ note, remindAt: at.toISOString() })
             invalidateLater(queryClient)
-            showToast({ tone: 'success', title: `I’ll remind you ${describeWhen(at).toLowerCase()}` })
+            showToast({ tone: 'success', title: `I’ll remind you ${whenPhrase(at)}` })
           }}
           title="New reminder"
         />
@@ -254,7 +254,7 @@ function EditScheduledDialog({ item, onClose }: { item: ScheduledMessage; onClos
   }
   return (
     <Dialog
-      description={`Sends to ${item.place} ${describeWhen(item.sendAt).toLowerCase()}.`}
+      description={`Sends to ${item.place} ${whenPhrase(item.sendAt)}.`}
       footer={
         <>
           <Button onClick={onClose} variant="ghost">

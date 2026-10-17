@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 
 import { createIdempotencyKey } from '../conversations/composerModel'
 import type { ConversationKind, MessageContentV1 } from '../conversations/types'
-import { Banner, Icon, showToast, type MenuEntry } from '../ui'
+import { Banner, showToast, type MenuEntry } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import {
   invalidateLater,
@@ -18,7 +18,7 @@ import {
   type NotificationLevel,
 } from './api'
 import { commandsFor, type SlashCommand, type SlashOutcome } from './slashCommands'
-import { describeWhen, parseReminder, parseSchedule } from './when'
+import { parseReminder, parseSchedule, whenPhrase } from './when'
 
 const LEVELS: { level: NotificationLevel; label: string }[] = [
   { level: 'all', label: 'Every new message' },
@@ -65,7 +65,7 @@ export function useConversationTools({
   const schedule = async (content: MessageContentV1, at: Date) => {
     await scheduleMessage(conversationId, content, at.toISOString())
     invalidateLater(queryClient)
-    showToast({ tone: 'success', title: `Scheduled for ${describeWhen(at).toLowerCase()}`, action: viewLater('scheduled') })
+    showToast({ tone: 'success', title: `Scheduled to send ${whenPhrase(at)}`, action: viewLater('scheduled') })
   }
 
   const onCommand = async (
@@ -81,7 +81,7 @@ export function useConversationTools({
         if (reminder.at.getTime() <= Date.now()) throw new Error('That time has passed.')
         await saveForLater({ note: reminder.note, remindAt: reminder.at.toISOString() })
         invalidateLater(queryClient)
-        showToast({ tone: 'success', title: `I’ll remind you ${describeWhen(reminder.at).toLowerCase()}`, description: reminder.note, action: viewLater() })
+        showToast({ tone: 'success', title: `I’ll remind you ${whenPhrase(reminder.at)}`, description: reminder.note, action: viewLater() })
         return { kind: 'done' }
       }
       case 'later': {
@@ -160,7 +160,7 @@ export function useConversationTools({
   const banner = waiting.length ? (
     <Banner className="aw-conv__banner" icon="clock" tone="info">
       {waiting.length === 1
-        ? `You have a message scheduled here for ${describeWhen(waiting[0].sendAt).toLowerCase()}.`
+        ? `You have a message scheduled to send here ${whenPhrase(waiting[0].sendAt)}.`
         : `You have ${waiting.length} messages scheduled here.`}{' '}
       <Link to="/later?view=scheduled">See scheduled</Link>
     </Banner>
@@ -169,8 +169,6 @@ export function useConversationTools({
   const muted =
     current === 'nothing' ? (
       <BellOff aria-label="Muted" className="aw-icon aw-convhead__muted" role="img" size={14} />
-    ) : current === 'all' ? (
-      <Icon className="aw-convhead__muted" label="Every message notifies you" name="messages" size={14} />
     ) : null
 
   return {

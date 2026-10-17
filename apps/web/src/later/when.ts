@@ -34,7 +34,7 @@ export function whenChoices(now = new Date()): WhenChoice[] {
   return [
     { id: '20m', label: 'In 20 minutes', at: new Date(now.getTime() + 20 * MINUTE) },
     { id: '1h', label: 'In 1 hour', at: new Date(now.getTime() + 60 * MINUTE) },
-    { id: 'tomorrow', label: 'Tomorrow at 9:00', at: atHour(addDays(now, 1), 9) },
+    { id: 'tomorrow', label: 'Tomorrow morning', at: atHour(addDays(now, 1), 9) },
     { id: 'next-week', label: 'Next week', at: nextWeek(now) },
   ]
 }
@@ -218,4 +218,11 @@ export function describeWhen(at: Date | string, now = new Date()) {
   if (days === 1) return `Tomorrow at ${time}`
   if (days === -1) return `Yesterday at ${time}`
   return `${formatShortDate(iso, now)} at ${time}`
+}
+
+/** For the middle of a sentence: "today at 3:00 PM", "tomorrow at 9:00 AM", "on Nov 2 at 9:00 AM". */
+export function whenPhrase(at: Date | string, now = new Date()) {
+  const text = describeWhen(at, now)
+  if (/^(Today|Tomorrow|Yesterday) /.test(text)) return text.charAt(0).toLowerCase() + text.slice(1)
+  return text ? `on ${text}` : ''
 }
