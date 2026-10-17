@@ -24,10 +24,12 @@ import {
 import type { SettingsPageProps } from '../types'
 import { useSwitchWorkspace } from '../workspaceChoice'
 import {
+  getServerVersion,
   getWorkspace,
   leaveWorkspace,
   listWorkspaceMembers,
   renameWorkspace,
+  type ServerVersion,
   transferOwnership,
   workspaceKeys,
   type Workspace,
@@ -36,6 +38,7 @@ import {
 /** Workspace › General: its name, which workspace is your default, and leaving or handing it over. */
 export default function GeneralPage({ session, workspace: summary }: SettingsPageProps) {
   const organizationId = summary?.id ?? ''
+  const serverVersion = useQuery({ queryKey: ['server-version'], queryFn: getServerVersion, staleTime: Infinity })
   const workspace = useQuery({
     queryKey: workspaceKeys.workspace(organizationId),
     queryFn: () => getWorkspace(organizationId),
@@ -63,6 +66,7 @@ export default function GeneralPage({ session, workspace: summary }: SettingsPag
                 { label: 'Members', value: String(workspace.data.memberCount) },
                 { label: 'Projects', value: String(workspace.data.projectCount) },
                 { label: 'Created', value: formatShortDate(workspace.data.createdAt) },
+                ...(serverVersion.data ? [{ label: 'Server version', value: versionLabel(serverVersion.data) }] : []),
               ]}
             />
           </Section>
@@ -279,4 +283,8 @@ function LeaveSection({ workspace }: { workspace: Workspace }) {
       />
     </Section>
   )
+}
+
+function versionLabel({ version, commit }: ServerVersion) {
+  return commit === 'dev' ? `${version} (development build)` : `${version} (${commit.slice(0, 7)})`
 }

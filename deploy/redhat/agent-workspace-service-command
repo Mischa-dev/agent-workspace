@@ -3,7 +3,18 @@ set -euo pipefail
 
 readonly service_user="agent-workspace"
 readonly service_environment="/etc/agent-workspace/agent-workspace.env"
-readonly service_binary="/opt/agent-workspace/current/bin/agent-workspace-server"
+release_root="/opt/agent-workspace/current"
+# deploy-release.sh runs a new release's `preflight` before switching to it.
+if [[ "${1:-}" == "--release" ]]; then
+  release_root="$(readlink -f -- "${2:?--release needs a release directory}")"
+  if [[ "${release_root}" != /opt/agent-workspace/releases/* ]]; then
+    echo "--release must name a directory under /opt/agent-workspace/releases." >&2
+    exit 1
+  fi
+  shift 2
+fi
+readonly release_root
+readonly service_binary="${release_root}/bin/agent-workspace-server"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run this host-local wrapper through sudo." >&2
@@ -21,6 +32,6 @@ source "${service_environment}"
 set +a
 export HOME="/var/lib/agent-workspace"
 export PATH="/opt/agent-workspace/toolchains/node-v24.18.1-linux-arm64/bin:/usr/local/bin:/usr/bin"
-export AGENT_WORKSPACE_WEB_ROOT="/opt/agent-workspace/current/web"
+export AGENT_WORKSPACE_WEB_ROOT="${release_root}/web"
 
 exec /usr/sbin/runuser --user "${service_user}" --preserve-environment -- "${service_binary}" "$@"

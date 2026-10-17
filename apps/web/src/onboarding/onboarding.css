@@ -127,7 +127,11 @@
     gap: var(--space-4);
   }
 
+  /* Positioned so the steps' screen-reader text (absolutely positioned) is
+     clipped by the strip too; otherwise it sits far to the right and the whole
+     page scrolls sideways on a phone. */
   .aw-onboarding__steps ol {
+    position: relative;
     display: flex;
     overflow-x: auto;
     padding-bottom: var(--space-2);

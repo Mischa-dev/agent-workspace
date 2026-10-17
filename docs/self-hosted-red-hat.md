@@ -160,6 +160,9 @@ files before adding their paths to this environment. Never print those files.
 
 ## Build, migrate, and deploy the exact commit
 
+Deploying main over the release from before the roadmap? Start with
+`docs/operations/alpha-deploy.md`, which lists the new settings it needs.
+
 The deployment script installs a new immutable release, atomically selects it,
 and restarts the hardened unit:
 
