@@ -46,7 +46,9 @@ load_host() {
     nixos)
       transport=ssh target=aw-ci@100.84.251.51 work=/var/lib/aw-ci/agent-workspace
       database_base=postgres://aw_test@127.0.0.1:55433
-      memory_max=8G cpu_weight=20 probe=yes
+      # Each parallel rustc compiling the server's tests can take about 2 GB,
+      # so more than 4 jobs overrun the memory cap.
+      memory_max=8G cpu_weight=20 jobs=4 probe=yes
       # Playwright's own Chromium builds don't run on NixOS; the system Chrome does.
       browser=/run/current-system/sw/bin/google-chrome-stable
       ;;
@@ -58,7 +60,7 @@ load_host() {
       fi
       work=/opt/aw-runner/ci
       database_base=postgres://aw_test:aw_test@127.0.0.1:55433
-      memory_max=10G cpu_weight=100 probe=no
+      memory_max=10G cpu_weight=100 jobs=4 probe=no
       browser=""  # aw-runner has `playwright install chromium` in ~/.cache
       ;;
     *) echo "ci: unknown host $1" >&2; return 1 ;;
@@ -194,7 +196,7 @@ sync_source
 set +e
 remote "cd ${work}/src && CI_RUN_ID='${run_id}' CI_DATABASE_BASE='${database_base}' \
   CI_TARGET_DIR='${work}/target' CI_LOCK_DIR='${work}/lock' \
-  CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' \
+  CI_MEMORY_MAX='${memory_max}' CI_CPU_WEIGHT='${cpu_weight}' CARGO_BUILD_JOBS='${jobs}' \
   ${browser:+PLAYWRIGHT_CHROMIUM_EXECUTABLE='${browser}'} \
   exec setsid -w tools/ci/checks.sh '${areas}'" < /dev/null &
 # Wait in the background so a cancelled job runs the traps (and frees the
