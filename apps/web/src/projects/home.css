@@ -1,0 +1,129 @@
+/* Home (P3). Loads with the Home page. */
+
+.aw-home__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 0 var(--space-8);
+  align-items: start;
+}
+
+.aw-home__column {
+  display: grid;
+  min-width: 0;
+}
+
+.aw-home__quiet {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-home__key {
+  font: var(--t-mono-small, var(--t-small));
+  color: var(--content-fg-muted);
+}
+
+.aw-home__setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-home__setup-title {
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-home__setup-text {
+  margin: var(--space-1) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-home__setup-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.aw-home__capacity {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-home__window-link {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  min-height: 44px;
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.aw-home__window-link:hover {
+  background: var(--surface-hover, var(--surface-raised));
+}
+
+.aw-home__window-link:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 2px;
+}
+
+.aw-home__window-name {
+  min-width: 0;
+  overflow: hidden;
+  font: var(--t-ui-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-home__window-label,
+.aw-home__window-reset {
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-home__window-left {
+  font: var(--t-ui-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-home__window-reset {
+  grid-column: 1 / -1;
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-home__meter {
+  grid-column: 1 / -1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+
+.aw-home__meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.aw-home__window.is-warning .aw-home__meter > span {
+  background: var(--warning);
+}
+
+.aw-home__window.is-danger .aw-home__meter > span {
+  background: var(--danger);
+}
