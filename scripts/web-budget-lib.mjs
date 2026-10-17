@@ -38,8 +38,10 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // one shared chunk (532,641 / 175,934); the rest load only when a board
   // uses them. The largest, the font subsetter for exports, is 1,821,039 raw /
   // 735,032 gzip; its stylesheet is 142,020. Excalidraw 0.18.1, October 2026.
+  // The same file gzips to 740,312 on the NixOS CI host (another zlib), so
+  // the gzip limit leaves room for that.
   whiteboardChunkJavascriptRawBytes: 1792 * 1024,
-  whiteboardChunkJavascriptGzipBytes: 720 * 1024,
+  whiteboardChunkJavascriptGzipBytes: 752 * 1024,
   whiteboardChunkCssRawBytes: 140 * 1024,
 })
 
