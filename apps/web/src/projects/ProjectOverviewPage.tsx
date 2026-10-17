@@ -203,7 +203,15 @@ function RecentWork({ base, projectId }: { base: string; projectId: string }) {
           </Banner>
         )}
         {work.isSuccess && !work.data.items.length && (
-          <EmptyState icon="work" title="No work items yet">
+          <EmptyState
+            action={
+              <Link className="aw-btn aw-btn--secondary aw-btn--md" to={`${base}/work-items`}>
+                <span className="aw-btn__label">Open work items</span>
+              </Link>
+            }
+            icon="work"
+            title="No work items yet"
+          >
             Track what needs doing here, then hand it to a person or an agent.
           </EmptyState>
         )}

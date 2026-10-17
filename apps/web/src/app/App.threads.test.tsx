@@ -167,8 +167,8 @@ describe('App Thread access and capabilities', () => {
     expect(
       screen.queryByRole('button', { name: 'Stop run' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Describe the change for Codex')).not.toBeInTheDocument()
-    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Describe the change for the agent')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run an agent' })).not.toBeInTheDocument()
     // Realtime is authenticated at the browser-session boundary, not scoped
     // to a resource that a mismatched response could cause us to subscribe to.
     expect(WebSocketStub.instances).toHaveLength(1)
@@ -390,8 +390,8 @@ describe('App Thread access and capabilities', () => {
     expect(
       screen.queryByRole('button', { name: 'Stop run' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Describe the change for Codex')).not.toBeInTheDocument()
-    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Describe the change for the agent')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run an agent' })).not.toBeInTheDocument()
   })
 
   it('fails Worker invocation closed when its timeline capability is absent', async () => {
@@ -425,8 +425,8 @@ describe('App Thread access and capabilities', () => {
     expect(
       screen.queryByRole('button', { name: 'Start run' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Describe the change for Codex')).not.toBeInTheDocument()
-    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Describe the change for the agent')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run an agent' })).not.toBeInTheDocument()
   })
 
   it('shows Worker invocation only when the server explicitly grants it', async () => {
@@ -456,9 +456,9 @@ describe('App Thread access and capabilities', () => {
 
     // Without message access the thread opens straight into the run composer.
     expect(
-      await screen.findByLabelText('Describe the change for Codex'),
+      await screen.findByLabelText('Describe the change for the agent'),
     ).toBeVisible()
-    expect(screen.queryByRole('radio', { name: 'Run with Codex' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Run an agent' })).not.toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: 'Start run' }),
     ).toBeDisabled()

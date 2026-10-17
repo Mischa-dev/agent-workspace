@@ -95,7 +95,7 @@ export function DevUiPage() {
             </Button>
             <Button
               onClick={() =>
-                showToast({ tone: 'agent', title: 'Run finished', description: 'Codex opened a pull request.', action: { label: 'Open PR', onSelect: () => undefined } })
+                showToast({ tone: 'agent', title: 'Run finished', description: 'The agent opened a pull request.', action: { label: 'Open PR', onSelect: () => undefined } })
               }
             >
               Background result

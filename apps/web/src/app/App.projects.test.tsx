@@ -397,7 +397,7 @@ describe('App Project creation and settings', () => {
     fireEvent.click(within(sections).getByRole('link', { name: 'Repositories' }))
     expect(await screen.findByRole('heading', { name: 'Repositories' })).toBeVisible()
     expect(
-      screen.queryByRole('heading', { name: 'Codex account' }),
+      screen.queryByRole('heading', { name: 'Accounts for runs' }),
     ).not.toBeInTheDocument()
   })
 })

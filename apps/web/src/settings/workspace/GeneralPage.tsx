@@ -12,6 +12,7 @@ import {
   DetailList,
   Dialog,
   ErrorState,
+  ListSkeleton,
   PageHeader,
   Section,
   SelectField,
@@ -205,7 +206,7 @@ function TransferSection({ workspace }: { workspace: Workspace }) {
         title="Transfer ownership"
       >
         {members.isPending ? (
-          <p className="aw-quiet">Loading members…</p>
+          <ListSkeleton avatars label="Loading members" rows={2} />
         ) : members.isError ? (
           <Banner tone="danger">Members didn’t load.</Banner>
         ) : candidates.length ? (

@@ -3,8 +3,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
-import { formatFullDate } from '../conversations/timeFormat'
-import { Banner, Button, EmptyState, IconButton, Row, RowList, Section, StatusChip, Switch } from '../ui'
+import {
+  Banner,
+  Button,
+  EmptyState,
+  IconButton,
+  Row,
+  RowList,
+  Section,
+  StatusChip,
+  Switch,
+  formatFullDate,
+  formatRelative,
+  formatShortDate,
+} from '../ui'
 
 type ConnectedApp = {
   id: string
@@ -68,7 +80,7 @@ export function ConnectedAppsSection() {
   return (
     <>
       <Section
-        description="Apps like Claude Code, Codex and ChatGPT that act as you: they see what you see and, with full access, can send messages and change tasks and pages for you."
+        description="Coding agents and chat apps that act as you: they see what you see and, with full access, can send messages and change tasks and pages for you."
         title="Connected apps"
       >
         {error ? <Banner tone="danger">{error}</Banner> : null}
@@ -91,10 +103,14 @@ export function ConnectedAppsSection() {
                 meta={
                   <>
                     <StatusChip tone={app.access === 'full' ? 'agent' : 'muted'}>{app.access === 'full' ? 'Full access' : 'Read only'}</StatusChip>
-                    <span>
+                    <span
+                      title={[`Connected ${formatFullDate(app.createdAt)}`, app.lastUsedAt ? `last used ${formatFullDate(app.lastUsedAt)}` : null]
+                        .filter(Boolean)
+                        .join(', ')}
+                    >
                       {app.actingAs === 'you' ? 'Acts as you' : `Acts as ${app.actingAs}`}
-                      {app.actingAs === 'you' && !app.accountWide ? ' in one project' : ''} · connected {formatFullDate(app.createdAt)}
-                      {app.lastUsedAt ? ` · last used ${formatFullDate(app.lastUsedAt)}` : ''}
+                      {app.actingAs === 'you' && !app.accountWide ? ' in one project' : ''} · connected {formatShortDate(app.createdAt)}
+                      {app.lastUsedAt ? ` · last used ${formatRelative(app.lastUsedAt)}` : ''}
                     </span>
                   </>
                 }
@@ -121,8 +137,8 @@ export function ConnectedAppsSection() {
         <div className="aw-connect">
           <CopyLine label="Setup guide for a bot" value={guideUrl} />
           <p className="aw-connect__note">
-            Send this link to Codex, Claude, Muse, Hermes or any other agent. It explains how to connect, whether it works for
-            you or has its own agent account.
+            Send this link to any agent. It explains how to connect, whether it works for you or has its own agent
+            account.
           </p>
           <CopyLine label="MCP address" value={mcpUrl} />
           <CopyLine label="Claude Code" value={`claude mcp add --scope user --transport http agent-workspace ${mcpUrl}`} />

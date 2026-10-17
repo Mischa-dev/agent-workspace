@@ -448,6 +448,11 @@
 }
 
 /* Phones: the nav folds behind a button at the top. */
+/* Wide tables on settings pages scroll inside their own box on a phone. */
+.aw-ai-usage__scroll {
+  overflow-x: auto;
+}
+
 @media (max-width: 860px) {
   .aw-settings {
     grid-template-columns: minmax(0, 1fr);

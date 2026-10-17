@@ -5,7 +5,7 @@ import { requestJson } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
 import { isApiError } from '../../api/errors'
 import { startWorkOs, workOsStatus } from '../../auth/workos'
-import { Avatar, Banner, Button, PageHeader, Section, TextField } from '../../ui'
+import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField } from '../../ui'
 import type { SettingsPageProps } from '../types'
 
 /** Account › Profile: your name, your GitHub username and how you sign in. */
@@ -95,8 +95,19 @@ export default function ProfilePage({ session }: SettingsPageProps) {
         id="sign-in-heading"
         title="Sign-in"
       >
-        {status.isPending && <p className="aw-quiet">Loading sign-in settings…</p>}
-        {status.isError && <Banner tone="danger">Could not load sign-in settings.</Banner>}
+        {status.isPending && <SettingsSkeleton label="Loading sign-in settings" sections={1} />}
+        {status.isError && (
+          <Banner
+            action={
+              <Button onClick={() => void status.refetch()} size="sm">
+                Try again
+              </Button>
+            }
+            tone="danger"
+          >
+            Sign-in settings didn’t load.
+          </Banner>
+        )}
         <div className="aw-form__row">
           {status.data?.googleEnabled && (
             <Button busy={link.isPending} onClick={() => link.mutate('GoogleOAuth')}>

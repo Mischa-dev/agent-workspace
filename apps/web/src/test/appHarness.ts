@@ -134,6 +134,7 @@ export const timeline = {
     repositoryId: 'repo-1',
     repositoryWorkspaceId: 'workspace-1',
     providerSessionId: null,
+    config: { harness: 'codex' },
     failureReason: null,
     createdAt: '2026-07-31T04:00:00Z',
     updatedAt: '2026-07-31T04:01:00Z',
