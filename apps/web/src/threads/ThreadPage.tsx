@@ -41,6 +41,7 @@ import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
 import { useArchiveConversation } from '../conversations/useArchiveConversation'
+import { SessionLinks } from '../launch/SessionLinks'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { useInstantMutation } from '../app/mutations'
 import { usePageTitle } from '../shell/documentTitleModel'
@@ -915,6 +916,7 @@ export function ThreadPage() {
         actions={
           verifiedTimeline ? (
             <>
+              <SessionLinks conversationId={threadId} projectId={projectId} />
               <ThreadStatusButton
                 onSaved={() => void thread.timeline.refetch()}
                 thread={{

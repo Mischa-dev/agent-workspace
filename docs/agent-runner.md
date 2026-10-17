@@ -62,7 +62,8 @@ request; every read is checked against what the agent can see.
   "messageId": "0199…",
   "generation": 0,
   "followsRequestId": null,
-  "sessionRef": null
+  "sessionRef": null,
+  "sessionHarness": null
 }
 ```
 
@@ -72,8 +73,10 @@ request; every read is checked against what the agent can see.
 | `reply.followup` | A person wrote again in a thread where the agent holds a claim. `followsRequestId` is that claim. | Feed it into the session already working on `followsRequestId`, then claim it when you get to it. |
 | `reply.cancelled` | A person pressed Stop. | Stop the session working on `replyRequestId` now. Don't reply to it. |
 
-`threadId` is set once a channel tag has its thread. `sessionRef` is reserved
-for the session binding that comes with agent sessions; it is `null` for now.
+`threadId` is set once a channel tag has its thread. `sessionRef` and
+`sessionHarness` name the session already working in that conversation, as you
+bound it with `session_bind` (or as a harness run recorded it), so you can
+resume it instead of starting another; both are `null` when there is none.
 
 Webhooks set up before typed wakeups receive `{"event": "inbox.available",
 "deliveryId", "agentId", "replyRequestId"}` instead, and no stop events. That
@@ -99,6 +102,14 @@ A tag in a project channel is answered in a thread started from the tagged
 message. The server starts it when you claim, so `replyConversationId` is the
 thread. Keep one session per thread: key your sessions on
 `replyConversationId`, and route follow-ups with `followsRequestId`.
+
+Once your session has started, call `session_bind(conversationId,
+externalRef, harness, url?, state?)` with your own reference for it (a Claude
+Code session ID, a Codex thread ID) and, if there is one, an https page where
+people can watch it. The thread header then shows "Claude Code · Open
+session", later wakeups for the conversation carry it as `sessionRef`, and
+`reply_claim` returns it as `session`. Bind again with `state: "idle"` when
+you stop; Stop marks it cancelled for you.
 
 ## 3. Work in the open
 

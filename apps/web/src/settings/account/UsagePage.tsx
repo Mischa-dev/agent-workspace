@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
+import { QuickLaunch } from '../../launch/QuickLaunch'
 import {
   Banner,
   Button,
@@ -297,9 +298,12 @@ function ReadyTasks({ accountId, initiallyOpen }: { accountId: string; initially
           {ready.data.tasks.map((task) => (
             <Row
               actions={
-                <Link className="aw-btn aw-btn--secondary aw-btn--sm" to={task.href}>
-                  <span className="aw-btn__label">Open</span>
-                </Link>
+                <>
+                  <Link className="aw-btn aw-btn--secondary aw-btn--sm" to={task.href}>
+                    <span className="aw-btn__label">Open</span>
+                  </Link>
+                  <QuickLaunch providerAccountId={accountId} task={task} />
+                </>
               }
               key={task.id}
               meta={[task.projectName, task.priority !== 'none' ? task.priority : null, task.unblocks > 0 ? `unblocks ${task.unblocks}` : null]

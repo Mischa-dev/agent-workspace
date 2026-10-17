@@ -15,6 +15,19 @@ pub(super) async fn adapter_contract(
     account: AccountHandle,
     worktree: &Path,
 ) {
+    adapter_contract_with(adapter, account, worktree, RunConfig::default(), true).await;
+}
+
+/// The contract with launch settings every run needs (a cloud adapter's
+/// environment). `account_pages` is false for an adapter whose account
+/// pages are another adapter's (already covered by that one's contract).
+pub(super) async fn adapter_contract_with(
+    adapter: &dyn HarnessAdapter,
+    account: AccountHandle,
+    worktree: &Path,
+    launch: RunConfig,
+    account_pages: bool,
+) {
     let manifest = adapter.manifest();
     assert!(
         manifest
@@ -52,9 +65,12 @@ pub(super) async fn adapter_contract(
         .resolve(&RunConfig::default(), manifest, &manifest.default_models)
         .expect("the manifest's own defaults resolve");
     assert_eq!(defaults.harness.as_deref(), Some(manifest.kind.as_str()));
+    let defaults = launch
+        .resolve(&RunConfig::default(), manifest, &manifest.default_models)
+        .expect("the launch settings resolve");
 
     // Account pages work.
-    {
+    if account_pages {
         let mut control = adapter
             .acquire_control(account.clone())
             .await
@@ -97,12 +113,17 @@ pub(super) async fn adapter_contract(
 
     // An account page while every run slot is busy still works (F8), and
     // never takes a run's place.
-    {
+    if account_pages {
         let mut control = adapter
             .acquire_control(account.clone())
             .await
             .expect("control session while runs are busy");
         control.read_account().await.expect("read account");
+    } else {
+        adapter
+            .acquire_control(account.clone())
+            .await
+            .expect("control session while runs are busy");
     }
     drop(runs.pop());
     let mut again = adapter

@@ -67,6 +67,7 @@ mod criteria;
 mod groups;
 mod history;
 mod labels;
+mod launch_tools;
 mod memory_tools;
 mod message_edits;
 mod notifications;
@@ -765,6 +766,25 @@ impl McpServer {
     ) -> Json<replies::ReplyToolResult<replies::ClaimProjection>> {
         let principal = principal_or!(parts, replies::ReplyToolResult::denied());
         Json(replies::reply_claim(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Agents: record your runner's own session (a Claude Code session, a Codex thread) in a conversation you were asked to reply in, so the thread links to it and later wakeups and reply_claim name it (sessionRef) for you to resume. Bind again to move it, or with state idle when you stop.",
+        annotations(
+            title = "Bind agent session",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn session_bind(
+        &self,
+        Parameters(arguments): Parameters<launch_tools::SessionBindArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<launch_tools::SessionBindValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(launch_tools::session_bind(&self.state, principal, arguments).await)
     }
 
     #[tool(
@@ -1688,6 +1708,25 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Launch tasks: start a run for each with the project's defaults (environment, harness, model) and a prompt built from the task by the project's launch template, in the task's thread. One task starts at once; several, or startWhen at, window_reset or blockers_done, go through the launch queue, which starts them as your account's slots free up, blocked ones last. People with full access only. Follow a run with run_get and the queue with launch_list.",
+        annotations(
+            title = "Launch tasks",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn task_launch(
+        &self,
+        Parameters(arguments): Parameters<launch_tools::TaskLaunchArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<launch_tools::TaskLaunchValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(launch_tools::task_launch(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
         description = "A Codex run: its stage (queued, working, waiting_for_approval, finished, failed, published, checks_pending, checks_passed, checks_failed), its pull request and checks, and what to do next. Poll it every pollAfterSeconds to follow a run.",
         annotations(title = "Get run", read_only_hint = true, open_world_hint = false)
     )]
@@ -1711,6 +1750,40 @@ impl McpServer {
     ) -> Json<common::ToolResult<runs::RunListValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(runs::run_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's launch queue: what waits to start and why (blocked by a task, waiting for an account slot, a set time), and the latest launches that started, failed or were cancelled.",
+        annotations(
+            title = "List launches",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn launch_list(
+        &self,
+        Parameters(arguments): Parameters<launch_tools::ProjectArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<launch_tools::LaunchListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(launch_tools::launch_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "A project's environments: where its runs execute (this server, or a provider's cloud such as Codex Cloud), with the harness, the provider's environment ID, repository, branch, setup notes and which one is the default. They are set up in project settings.",
+        annotations(
+            title = "List environments",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn environment_list(
+        &self,
+        Parameters(arguments): Parameters<launch_tools::ProjectArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<launch_tools::EnvironmentListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(launch_tools::environment_list(&self.state, principal, arguments).await)
     }
 
     #[tool(

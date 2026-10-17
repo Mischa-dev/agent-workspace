@@ -445,19 +445,19 @@ clear from the keyboard.
 
 #### W7. Launch
 
-*7 items · Starts when W1, W2 and W5 have merged · 3 add a migration*
+*7 items · Starts when W1, W2 and W5 have merged · 3 add a migration · Built in #144*
 
 Moment 1: a project knows its environments and run defaults, and one click, or
 '@codex do X', starts a run on the host or in Codex Cloud, with its progress
 and pull request in the task's thread.
 
-- [ ] [C1](#c1-environments) Environments
-- [ ] [C2](#c2-codex-cloud-adapter) Codex Cloud adapter
-- [ ] [C4](#c4-the-launch-button) The Launch button
-- [ ] [C5](#c5-launch-queue) Launch queue
-- [ ] [C6](#c6-launch-prompt-templates) Launch prompt templates
-- [ ] [A3](#a3-agent-sessions) Agent sessions
-- [ ] [A8](#a8-tag-to-launch) Tag to launch
+- [x] [C1](#c1-environments) Environments
+- [x] [C2](#c2-codex-cloud-adapter) Codex Cloud adapter
+- [x] [C4](#c4-the-launch-button) The Launch button
+- [x] [C5](#c5-launch-queue) Launch queue
+- [x] [C6](#c6-launch-prompt-templates) Launch prompt templates
+- [x] [A3](#a3-agent-sessions) Agent sessions
+- [x] [A8](#a8-tag-to-launch) Tag to launch
 
 **Owns:** New environments, launch and launch-queue modules, the Codex Cloud
 adapter in `provider/`, the agent sessions table (A3), `task_launch`, and the

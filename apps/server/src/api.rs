@@ -154,6 +154,10 @@ pub(crate) struct StartRunRequest {
     /// harness's catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) config: Option<RunConfig>,
+    /// One of the caller's own provider accounts to run on; left out, their
+    /// preferred profile's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_account_id: Option<Uuid>,
 }
 
 #[derive(Debug, FromRow)]
@@ -296,20 +300,55 @@ pub(crate) async fn start_run_in(
     }
 
     let launch = request.config.clone().unwrap_or_default();
-    let setup = select_run_setup_for(
+    // The person's and project's run settings (S2) fill in what the launch
+    // leaves out: the harness (the default environment's first), the
+    // repository when there are several, and the run defaults.
+    let defaults = crate::launch::run_defaults(
         &mut transaction,
         conversation.project_id,
-        conversation_id,
         principal.actor_id(),
-        request.repository_id,
-        launch.harness.as_deref(),
     )
     .await?;
+    let mut harness = launch
+        .harness
+        .clone()
+        .or_else(|| defaults.preferred_harness());
+    let mut repository_id = request.repository_id;
+    let setup = loop {
+        match select_run_setup_for(
+            &mut transaction,
+            conversation.project_id,
+            conversation_id,
+            principal.actor_id(),
+            repository_id,
+            harness.as_deref(),
+            request.provider_account_id,
+        )
+        .await
+        {
+            // No account for the default harness: any harness they have.
+            Err(AppError::ExecutionProfileRequired)
+                if launch.harness.is_none() && harness.is_some() =>
+            {
+                harness = None;
+            }
+            Err(AppError::RepositoryChoiceRequired { .. })
+                if repository_id.is_none() && defaults.repository_id.is_some() =>
+            {
+                repository_id = defaults.repository_id;
+            }
+            result => break result?,
+        }
+    };
+    let account_defaults = match state.supervisors.manifest(&setup.adapter_kind) {
+        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, &defaults, manifest),
+        None => setup.run_defaults.clone(),
+    };
     let config = crate::provider::resolve_run_config(
         state,
         setup.organization_id,
         &setup.adapter_kind,
-        &setup.run_defaults,
+        &account_defaults,
         &launch,
     )
     .await?;
@@ -558,6 +597,7 @@ async fn retry_agent_run(
         principal.actor_id,
         Some(repository_id),
         predecessor_config.harness.as_deref(),
+        None,
     )
     .await?;
     let config = crate::provider::resolve_stored_run_config(
@@ -783,6 +823,7 @@ pub(crate) async fn select_run_setup(
         profile_owner_actor_id,
         explicit_repository_id,
         None,
+        None,
     )
     .await
 }
@@ -796,6 +837,7 @@ pub(crate) async fn select_run_setup_for(
     profile_owner_actor_id: Uuid,
     explicit_repository_id: Option<Uuid>,
     harness: Option<&str>,
+    provider_account_id: Option<Uuid>,
 ) -> Result<RunSetup, AppError> {
     let bound_repository_id = sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT repository_id FROM conversations WHERE id = $1 AND project_id = $2 FOR UPDATE",
@@ -904,6 +946,7 @@ pub(crate) async fn select_run_setup_for(
         JOIN provider_accounts account
           ON account.id = profile.provider_account_id
          AND ($4::text IS NULL OR account.adapter_kind = $4)
+         AND ($5::uuid IS NULL OR account.id = $5)
         JOIN project_memberships owner_membership
           ON owner_membership.project_id = profile.project_id
          AND owner_membership.actor_id = profile.owner_actor_id
@@ -923,6 +966,7 @@ pub(crate) async fn select_run_setup_for(
     .bind(selected_repository_id)
     .bind(profile_owner_actor_id)
     .bind(harness)
+    .bind(provider_account_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::ExecutionProfileRequired)

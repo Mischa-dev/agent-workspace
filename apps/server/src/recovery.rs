@@ -133,6 +133,17 @@ pub async fn reconcile_non_terminal_runs(state: &AppState) -> Result<u64, AppErr
         if recovered_completion {
             continue;
         }
+        // A cloud task keeps running while this server restarts: follow it
+        // again rather than interrupting the run.
+        if let (ProviderRecovery::Resumed { latest_turn_status }, Some(path)) =
+            (&provider_outcome, &worktree_path)
+            && latest_turn_status == "inProgress"
+            && provider::follow_recovered_run(state, run.id, path.clone())
+                .await
+                .unwrap_or(false)
+        {
+            continue;
+        }
 
         let provider_resumed = matches!(
             &provider_outcome,

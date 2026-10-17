@@ -1,0 +1,87 @@
+.aw-launchcard__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.aw-launchcard__latest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-launchcard__latest > p {
+  flex-basis: 100%;
+}
+
+.aw-launchcard__link {
+  font: var(--t-small);
+  color: var(--accent);
+}
+
+.aw-launch__note {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-launches__reason {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-environment__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.aw-launch-template textarea {
+  font: var(--t-code);
+}
+
+.aw-launch-template__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-sessionlinks {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.aw-sessionlinks a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  min-height: 28px;
+  border-radius: var(--radius-full);
+  font: var(--t-small);
+  color: var(--content-fg);
+  text-decoration: none;
+  white-space: nowrap;
+  background: var(--surface-sunken);
+}
+
+.aw-sessionlinks a:hover {
+  background: var(--content-hover);
+}
+
+.aw-sessionlinks a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .aw-sessionlinks__harness {
+    display: none;
+  }
+}

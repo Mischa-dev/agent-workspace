@@ -225,6 +225,18 @@ pub(super) struct ClaimProjection {
     /// Oldest first. The message you were asked about is `request.messageId`.
     recent_messages: Vec<ContextMessage>,
     instructions: String,
+    /// Your session in this conversation, if you bound one with
+    /// `session_bind`: resume it rather than starting cold.
+    session: Option<ClaimSession>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ClaimSession {
+    external_ref: String,
+    harness: String,
+    url: Option<String>,
+    state: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -498,9 +510,19 @@ pub(super) async fn reply_claim(
     .bind(principal.actor_id)
     .fetch_all(&mut *transaction)
     .await;
-    let (Ok(request), Ok(recent_messages)) = (request, recent) else {
+    let session =
+        crate::agent_sessions::session_for(&mut *transaction, context_id, principal.actor_id).await;
+    let (Ok(request), Ok(recent_messages), Ok(session)) = (request, recent, session) else {
         return ReplyToolResult::from_failure(ReadFailure::Database("reply_claim_context"));
     };
+    let session = session
+        .filter(|session| matches!(session.state.as_str(), "active" | "idle"))
+        .map(|session| ClaimSession {
+            external_ref: session.external_ref,
+            harness: session.harness,
+            url: session.url,
+            state: session.state,
+        });
     if notify_request(
         &mut transaction,
         principal.project_id,
@@ -528,6 +550,7 @@ pub(super) async fn reply_claim(
             request,
             recent_messages,
             instructions,
+            session,
         },
     }
 }
