@@ -34,6 +34,7 @@ import { useThreads } from './threadModel'
 import { ThreadDialog } from './ThreadDialog'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { usePageTitle } from '../shell/documentTitleModel'
+import { uploadFile } from '../files/api'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from './Timeline'
 import type { ConversationTimelineEntry, SidebarThread } from './types'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
@@ -342,6 +343,7 @@ export function ChannelPage() {
           </ConversationIntro>
         ) : null}
         <TimelineEntries
+          conversationId={channelId}
           entries={entries}
           firstUnreadSequence={firstUnread.channelId === channelId ? firstUnread.sequence : null}
           renderExtras={(entry) => {
@@ -402,6 +404,7 @@ export function ChannelPage() {
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}
           draftKey={channelId}
+          upload={uploadFile({ kind: 'conversation', conversationId: channelId })}
           label={`Message #${name}`}
           onSubmit={sendMessage}
           placeholder={`Message #${name}`}

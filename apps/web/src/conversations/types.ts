@@ -48,6 +48,10 @@ export type ConversationMessage = {
   removed: MessageRemoval | null
   /** Emoji reactions in the order first added. Always empty once removed. */
   reactions?: MessageReaction[]
+  /** Files sent with it, as the server sent them: read with normalizeFiles. None once removed. */
+  attachments?: unknown[]
+  /** Pages it links to, once fetched and not hidden: read with normalizeLinkPreviews. */
+  linkPreviews?: unknown[]
 }
 
 /** One emoji on a message: how many reacted, whether you did, and the first 20 who did. */

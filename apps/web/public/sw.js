@@ -8,9 +8,14 @@
 // approval request has Approve and Deny buttons, and a question or mention a
 // Reply button; those send the push's own short-lived action token, never
 // the session cookie, and the server checks the person's access when they act.
+// Files another app shares (Share to Workspace) arrive as a POST to /share;
+// they wait in a cache of their own only until the share page picks them up,
+// which deletes them.
 
 const SHELL_CACHE = 'aw-shell-v1'
 const ASSET_CACHE = 'aw-assets-v1'
+const SHARE_CACHE = 'aw-share-v1'
+const MAX_SHARED_FILES = 10
 const SHELL_URL = '/index.html'
 const MAX_ASSETS = 120
 // Client-side routes that the server answers with index.html.
@@ -27,7 +32,7 @@ self.addEventListener('activate', (event) => {
       .then((names) =>
         Promise.all(
           names
-            .filter((name) => name.startsWith('aw-') && name !== SHELL_CACHE && name !== ASSET_CACHE)
+            .filter((name) => name.startsWith('aw-') && ![SHELL_CACHE, ASSET_CACHE, SHARE_CACHE].includes(name))
             .map((name) => caches.delete(name)),
         ),
       )
@@ -37,9 +42,13 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const request = event.request
-  if (request.method !== 'GET') return
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
+  if (request.method === 'POST' && url.pathname === '/share') {
+    event.respondWith(receiveShare(request))
+    return
+  }
+  if (request.method !== 'GET') return
   if (request.mode === 'navigate') {
     if (APP_ROUTE.test(url.pathname)) event.respondWith(openApp(event))
     return
@@ -175,6 +184,39 @@ function showPush(event) {
       title,
     },
   })
+}
+
+// A share with files: keep the files for the share page (it reads and deletes
+// them), and open the page with the title, text and link in its address, as a
+// share without files arrives.
+async function receiveShare(request) {
+  const target = new URL('/share', self.location.origin)
+  try {
+    const form = await request.formData()
+    for (const name of ['title', 'text', 'url']) {
+      const value = form.get(name)
+      if (typeof value === 'string' && value) target.searchParams.set(name, value.slice(0, 20000))
+    }
+    const files = form.getAll('files').filter((file) => typeof file !== 'string').slice(0, MAX_SHARED_FILES)
+    if (files.length) {
+      const cache = await caches.open(SHARE_CACHE)
+      for (const old of await cache.keys()) await cache.delete(old)
+      await Promise.all(
+        files.map((file, index) =>
+          cache.put(
+            `/__shared/${index}`,
+            new Response(file, {
+              headers: { 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name || `file-${index + 1}`) },
+            }),
+          ),
+        ),
+      )
+      target.searchParams.set('files', String(files.length))
+    }
+  } catch {
+    // An unreadable share still opens the page, empty.
+  }
+  return Response.redirect(target.href, 303)
 }
 
 // Focus an open window of the app and take it there, else open one.

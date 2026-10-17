@@ -43,6 +43,7 @@ import {
 import { addGroupMember, conversationTitle, directQueryKey, removeGroupMember, useDirectOverview } from './api'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { ThreadPanel } from '../threads/ThreadPanel'
+import { uploadFile } from '../files/api'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -314,6 +315,7 @@ export function DirectConversationPage() {
         ) : null}
         {valid && !olderCursor ? intro : null}
         <TimelineEntries
+          conversationId={conversationId}
           entries={entries}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
@@ -371,6 +373,7 @@ export function DirectConversationPage() {
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}
           draftKey={conversationId}
+          upload={uploadFile({ kind: 'conversation', conversationId: conversationId })}
           label={`Message ${title}`}
           onSubmit={send}
           placeholder={`Message ${title}`}

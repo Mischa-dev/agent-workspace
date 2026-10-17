@@ -19,6 +19,7 @@ import {
   useUpdateWorkItem,
   useWorkItem,
   useWorkItemWorkflow,
+  useTaskFiles,
   useWorkItemTimeline,
 } from './hooks'
 import { useCreateLaunches, useLaunchPlan } from '../launch/hooks'
@@ -59,6 +60,7 @@ vi.mock('./hooks', () => ({
   useWorkItem: vi.fn(),
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
+  useTaskFiles: vi.fn(),
   useWorkItemTimeline: vi.fn(),
 }))
 vi.mock('../launch/hooks', () => ({ useCreateLaunches: vi.fn(), useLaunchPlan: vi.fn() }))
@@ -260,6 +262,11 @@ beforeEach(() => {
       isError: false,
     } as never)
   }
+  vi.mocked(useTaskFiles).mockReturnValue({
+    data: [],
+    isError: false,
+    isSuccess: true,
+  } as unknown as ReturnType<typeof useTaskFiles>)
   vi.mocked(useWorkItemTimeline).mockReturnValue({
     data: [],
     isPending: false,

@@ -14,6 +14,7 @@ import { PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
 import type { ConversationActor, ConversationTimelineEntry, ConversationWorkItemReference, ReplyRequest } from '../conversations/types'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { Button, ErrorState, Icon, IconButton, MessageSkeleton } from '../ui'
+import { uploadFile } from '../files/api'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
@@ -154,6 +155,7 @@ export function ThreadPanel({
         ) : null}
         {page && !valid ? <ErrorState title="This thread isn’t in this conversation" /> : null}
         <TimelineEntries
+          conversationId={threadId}
           entries={live.entries}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
@@ -177,6 +179,7 @@ export function ThreadPanel({
       {valid && page?.capabilities.sendMessage ? (
         <StructuredComposer
           draftKey={threadId}
+          upload={uploadFile({ kind: 'conversation', conversationId: threadId })}
           label="Reply in thread"
           onSubmit={send}
           placeholder="Reply in thread"

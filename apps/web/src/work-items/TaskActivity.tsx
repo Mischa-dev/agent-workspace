@@ -1,12 +1,16 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
+import { queryKeys } from '../api/queryKeys'
+import { Attachments } from '../files/Attachments'
+import { uploadFile, type FileAttachment } from '../files/api'
 import { ActorTag, Avatar, Banner, Icon, MessageSkeleton, actorKind, formatDateTime, formatFullDate } from '../ui'
 import { searchWorkItemReferences } from './api'
 import { formatChanges, type FormattedChange } from './historyFormat'
-import { useCreateWorkItemComment, useWorkItemTimeline } from './hooks'
+import { useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
 import type { WorkItem } from './types'
 
 /** "Priority High → Urgent", with the old value struck through for sighted readers. */
@@ -58,6 +62,12 @@ function DescriptionDiff({ change }: { change: Extract<FormattedChange, { kind: 
 export function TaskActivity({ disabled, item }: { disabled: boolean; item: WorkItem }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
   const createComment = useCreateWorkItemComment()
+  const queryClient = useQueryClient()
+  const files = useTaskFiles(item.projectId, item.id)
+  const commentFiles = new Map<string, FileAttachment[]>()
+  for (const file of files.data ?? []) {
+    if (file.commentId) commentFiles.set(file.commentId, [...(commentFiles.get(file.commentId) ?? []), file])
+  }
   return (
     <section aria-labelledby={`activity-${item.id}`} className="aw-worksection">
       <header className="aw-worksection__head">
@@ -101,6 +111,7 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
                         fallbackPlainText={entry.comment.plainText}
                         workItems={entry.comment.referencedWorkItems}
                       />
+                      <Attachments files={commentFiles.get(entry.comment.id) ?? []} />
                     </div>
                   </div>
                 </li>
@@ -138,13 +149,20 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
           disabled={createComment.isPending}
           draftKey={`comment:${item.id}`}
           label="Add a comment"
-          onSubmit={async ({ content, idempotencyKey }) => {
-            await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content, idempotencyKey })
+          onSubmit={async ({ attachments, content, idempotencyKey, text }) => {
+            // A comment needs words; one that is only files says what it attaches.
+            const words =
+              text || !attachments?.length
+                ? content
+                : { version: 1 as const, nodes: [{ type: 'text' as const, text: `Attached ${attachments.map((file) => file.name).join(', ')}`.slice(0, 2000) }] }
+            await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments })
+            if (attachments?.length) void queryClient.invalidateQueries({ queryKey: queryKeys.workItemFiles(item.projectId, item.id) })
           }}
           placeholder="Add a comment. @mention someone or reference a work item."
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
           searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}
           submitLabel="Comment"
+          upload={uploadFile({ kind: 'task', projectId: item.projectId, workItemId: item.id, forComment: true })}
         />
       ) : null}
     </section>

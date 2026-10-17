@@ -1,4 +1,4 @@
-export { Icon, type IconName } from './icons'
+export { Icon, type IconGlyph, type IconName } from './icons'
 export { ActorTag, Avatar, AvatarStack, Badge, Dots, StatusChip, type ChipTone } from './identity'
 export { SWATCHES, actorKind, initials, swatchFor, type ActorKind, type Swatch } from './identityModel'
 export { Dialog, Menu, Tooltip, type MenuEntry, type Placement } from './overlays'

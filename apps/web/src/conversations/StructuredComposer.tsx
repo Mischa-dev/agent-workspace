@@ -4,15 +4,22 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
 
 import { isConnectionError, onReconnect, readLocal, writeLocal } from '../app/localDrafts'
-import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, actorKind, type IconName } from '../ui'
+import type { Uploader } from '../files/api'
+import { UploadChips } from '../files/UploadChips'
+import { useUploads } from '../files/useUploads'
+import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, actorKind, type IconGlyph, type IconName } from '../ui'
+import { applyEdit, formatEdit, type FormatAction } from '../ui/markdown/editing'
 import {
   activeTrigger,
+  BLANK_MESSAGE_CONTENT,
   buildMessageContent,
   composerScalarValues,
   createIdempotencyKey,
@@ -22,6 +29,7 @@ import {
   type Trigger,
 } from './composerModel'
 import type { ConversationActor, ConversationWorkItemReference } from './types'
+import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
 
 type StructuredComposerProps = {
   disabled?: boolean
@@ -47,6 +55,11 @@ type StructuredComposerProps = {
   className?: string
   submitIcon?: IconName
   /**
+   * Lets people attach files (picker, phone camera or library, paste, drop).
+   * Each uploads at once; the submission carries the ones that finished.
+   */
+  upload?: Uploader
+  /**
    * Keep the draft in this browser under this key (a conversation's id), so a
    * reload or a dropped connection doesn't lose it, and keep sends that fail
    * for want of a connection to send again when it's back.
@@ -56,6 +69,32 @@ type StructuredComposerProps = {
 
 /** A send that couldn't reach the server, kept to send again with the same key. */
 type QueuedSend = ComposerSubmission & { text: string }
+
+/** The formatting row, and Slack's shortcuts for it (Ctrl or ⌘). */
+const FORMATS: { action: FormatAction; icon: IconGlyph; label: string; shortcut: string }[] = [
+  { action: 'bold', icon: Bold, label: 'Bold', shortcut: 'B' },
+  { action: 'italic', icon: Italic, label: 'Italic', shortcut: 'I' },
+  { action: 'code', icon: Code, label: 'Code', shortcut: 'E' },
+  { action: 'codeblock', icon: SquareCode, label: 'Code block', shortcut: 'Alt+Shift+C' },
+  { action: 'bullet', icon: 'list', label: 'Bulleted list', shortcut: 'Shift+8' },
+  { action: 'quote', icon: TextQuote, label: 'Quote', shortcut: 'Shift+9' },
+]
+
+function shortcutAction(event: KeyboardEvent<HTMLTextAreaElement>): FormatAction | null {
+  if (!(event.metaKey || event.ctrlKey)) return null
+  const key = event.key.toLowerCase()
+  if (event.shiftKey && event.altKey && (key === 'c' || event.code === 'KeyC')) return 'codeblock'
+  if (event.altKey) return null
+  if (event.shiftKey) {
+    if (event.code === 'Digit8' || key === '*') return 'bullet'
+    if (event.code === 'Digit9' || key === '(') return 'quote'
+    return null
+  }
+  if (key === 'b') return 'bold'
+  if (key === 'i') return 'italic'
+  if (key === 'e') return 'code'
+  return null
+}
 
 type Suggestion =
   | { kind: 'mention'; actor: ConversationActor }
@@ -85,8 +124,13 @@ function ComposerBox({
   className,
   submitIcon = 'send',
   draftKey,
+  upload,
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploads = useUploads(upload)
+  const [dragging, setDragging] = useState(false)
+  const [formatting, setFormatting] = useState(false)
   const idempotencyKeyRef = useRef(createIdempotencyKey())
   const searchGeneration = useRef(0)
   const id = useId()
@@ -131,7 +175,7 @@ function ComposerBox({
     try {
       for (const item of [...queuedRef.current]) {
         try {
-          await onSubmit({ content: item.content, idempotencyKey: item.idempotencyKey, text: item.text })
+          await onSubmit({ content: item.content, idempotencyKey: item.idempotencyKey, text: item.text, attachments: item.attachments })
           queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
         } catch (reason) {
           if (isConnectionError(reason)) break
@@ -164,8 +208,10 @@ function ComposerBox({
 
   const scalarValues = composerScalarValues(text)
   const overLimit = scalarValues > MAX_MESSAGE_SCALAR_VALUES
-  const content = overLimit ? null : buildMessageContent(text, mentions, workItems)
-  const canSend = Boolean(content) && !disabled
+  const typed = overLimit ? null : buildMessageContent(text, mentions, workItems)
+  // A message can be only files.
+  const content = typed ?? (!overLimit && uploads.ready.length > 0 ? BLANK_MESSAGE_CONTENT : null)
+  const canSend = Boolean(content) && !disabled && !uploads.uploading
 
   useLayoutEffect(() => {
     const element = textareaRef.current
@@ -272,12 +318,53 @@ function ComposerBox({
     })
   }
 
+  const applyFormat = (action: FormatAction) => {
+    const element = textareaRef.current
+    if (!element) return
+    const edit = formatEdit(action, { value: text, start: element.selectionStart, end: element.selectionEnd })
+    setText(applyEdit(text, edit))
+    window.requestAnimationFrame(() => {
+      element.focus()
+      element.setSelectionRange(edit.selectStart, edit.selectEnd)
+    })
+  }
+
+  const attach = (files: Iterable<File>) => {
+    const warning = uploads.add(files)
+    setError(warning)
+  }
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!upload) return
+    const files = [...event.clipboardData.files]
+    if (files.length === 0) return
+    // A screenshot comes as a file alone; copied text that brings a picture along stays text.
+    if (!event.clipboardData.types.includes('text/plain')) event.preventDefault()
+    else return
+    attach(files)
+  }
+
+  const hasFiles = (event: DragEvent) => Boolean(upload) && [...event.dataTransfer.types].includes('Files')
+  const onDragOver = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasFiles(event) || disabled) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    if (!dragging) setDragging(true)
+  }
+  const onDrop = (event: DragEvent<HTMLFormElement>) => {
+    setDragging(false)
+    if (!hasFiles(event) || disabled) return
+    event.preventDefault()
+    attach(event.dataTransfer.files)
+  }
+
   const submit = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
     if (!content || !canSend || (keepDraftWhileSaving && busy)) return
     // Clear right away so it feels instant. A failed send puts the draft back and keeps its
     // idempotency key, so retrying can't post it twice; the next message gets a fresh key.
     const draft = { text, mentions, workItems }
+    const attachments = uploads.ready.length ? uploads.ready : undefined
     const key = idempotencyKeyRef.current
     idempotencyKeyRef.current = createIdempotencyKey()
     setBusy(true)
@@ -286,15 +373,17 @@ function ComposerBox({
       setText('')
       setMentions([])
       setWorkItems([])
+      uploads.clear()
     }
-    void onSubmit({ content, idempotencyKey: key, text: draft.text.trim() })
+    void onSubmit({ content, idempotencyKey: key, text: draft.text.trim(), attachments })
       .catch((reason: unknown) => {
         if (draftKey && !keepDraftWhileSaving && isConnectionError(reason)) {
           // Kept and sent again when the connection is back; never dropped.
-          queue((current) => [...current, { content, idempotencyKey: key, text: draft.text.trim() }])
+          queue((current) => [...current, { content, idempotencyKey: key, text: draft.text.trim(), attachments }])
           return
         }
         idempotencyKeyRef.current = key
+        if (attachments && !keepDraftWhileSaving) uploads.restore(attachments)
         setText((current) => (current.trim() ? current : draft.text))
         setMentions((current) => [...draft.mentions, ...current.filter((actor) => !draft.mentions.some((m) => m.id === actor.id))])
         setWorkItems((current) => [...draft.workItems, ...current.filter((item) => !draft.workItems.some((w) => w.id === item.id))])
@@ -307,6 +396,12 @@ function ComposerBox({
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const format = shortcutAction(event)
+    if (format) {
+      event.preventDefault()
+      applyFormat(format)
+      return
+    }
     if (trigger && suggestions.length) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -357,13 +452,23 @@ function ComposerBox({
   const remaining = MAX_MESSAGE_SCALAR_VALUES - scalarValues
 
   return (
-    <form className={className ? `aw-composer-wrap ${className}` : 'aw-composer-wrap'} onSubmit={submit}>
+    <form
+      className={className ? `aw-composer-wrap ${className}` : 'aw-composer-wrap'}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+      }}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onSubmit={submit}
+    >
       {queued.length ? (
         <div aria-label="Waiting to send" className="aw-composer__queued" role="list">
           {queued.map((item) => (
             <div className="aw-composer__queued-item" key={item.idempotencyKey} role="listitem">
               <Icon name="clock" size={14} />
-              <span className="aw-composer__queued-text">{item.text}</span>
+              <span className="aw-composer__queued-text">
+                {item.text || (item.attachments?.length ? `${item.attachments.length} ${item.attachments.length === 1 ? 'file' : 'files'}` : '')}
+              </span>
               <Button onClick={() => editQueued(item)} size="sm" variant="ghost">
                 Edit
               </Button>
@@ -378,7 +483,29 @@ function ComposerBox({
         </div>
       ) : null}
       {toolbar ? <div className="aw-composer__toolbar">{toolbar}</div> : null}
-      <div className={`aw-composer${busy ? ' is-busy' : ''}`}>
+      <div className={`aw-composer${busy ? ' is-busy' : ''}${dragging ? ' is-dropping' : ''}`}>
+        {dragging ? (
+          <div aria-hidden="true" className="aw-composer__drop">
+            <Icon name={Paperclip} />
+            Drop to attach
+          </div>
+        ) : null}
+        {formatting ? (
+          <div aria-label="Formatting" className="aw-composer__formats" role="toolbar">
+            {FORMATS.map((format) => (
+              <IconButton
+                disabled={disabled || busy}
+                icon={format.icon}
+                key={format.action}
+                label={format.label}
+                onClick={() => applyFormat(format.action)}
+                onMouseDown={(event) => event.preventDefault()}
+                shortcut={`Ctrl+${format.shortcut}`}
+                size="sm"
+              />
+            ))}
+          </div>
+        ) : null}
         {trigger ? (
           <div className="aw-mentions" id={listId} role="listbox" aria-label={trigger.kind === 'mention' ? 'People and agents' : 'Work items'}>
             <div className="aw-mentions__head">
@@ -436,6 +563,7 @@ function ComposerBox({
             updateTrigger(event.target.value, event.target.selectionStart ?? event.target.value.length)
           }}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           onSelect={(event) => {
             const element = event.currentTarget
             if (trigger) updateTrigger(element.value, element.selectionStart ?? element.value.length)
@@ -446,12 +574,37 @@ function ComposerBox({
           rows={1}
           value={text}
         />
+        <UploadChips items={uploads.items} onRemove={uploads.remove} />
         <div className="aw-composer__bar">
           <div className="aw-composer__tools">
+            {upload ? (
+              <>
+                <IconButton disabled={disabled || busy} icon={Paperclip} label="Attach files" onClick={() => fileInputRef.current?.click()} size="sm" />
+                <input
+                  className="visually-hidden"
+                  multiple
+                  onChange={(event) => {
+                    if (event.target.files) attach(event.target.files)
+                    event.target.value = ''
+                  }}
+                  ref={fileInputRef}
+                  tabIndex={-1}
+                  type="file"
+                />
+              </>
+            ) : null}
             <IconButton disabled={disabled || busy} icon="at-sign" label="Mention someone" onClick={() => insertTrigger('@')} size="sm" />
             {searchWorkItems ? (
               <IconButton disabled={disabled || busy} icon="work" label="Reference a work item" onClick={() => insertTrigger('#')} size="sm" />
             ) : null}
+            <IconButton
+              disabled={disabled}
+              icon={Type}
+              label={formatting ? 'Hide formatting' : 'Formatting'}
+              onClick={() => setFormatting((shown) => !shown)}
+              pressed={formatting}
+              size="sm"
+            />
           </div>
           <div className="aw-composer__end">
             {remaining < MAX_MESSAGE_SCALAR_VALUES * 0.1 ? (

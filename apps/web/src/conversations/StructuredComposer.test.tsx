@@ -37,6 +37,49 @@ function type(value: string) {
 }
 
 describe('StructuredComposer', () => {
+  it('sends a message that is only a file once its upload finishes', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    let finish: (value: unknown) => void = () => undefined
+    const upload = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const { container } = render(<StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} upload={upload as never} />)
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['hi'], 'notes.txt', { type: 'text/plain' })] } })
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+
+    const file = {
+      id: '019fb8b0-0000-7000-8000-0000000000f1',
+      name: 'notes.txt',
+      contentType: 'text/plain',
+      size: 2,
+      width: null,
+      height: null,
+      commentId: null,
+      uploadedBy: human.id,
+      createdAt: '',
+    }
+    finish(file)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].attachments).toEqual([file])
+    expect(onSubmit.mock.calls[0][0].content).toEqual({ version: 1, nodes: [{ type: 'text', text: '' }] })
+    await waitFor(() => expect(screen.queryByText('notes.txt')).not.toBeInTheDocument())
+  })
+
+  it('formats the selection with Slack-style shortcuts', () => {
+    render(<StructuredComposer onSubmit={vi.fn()} searchActors={vi.fn()} />)
+    const box = type('make this bold')
+    box.setSelectionRange(5, 9)
+    fireEvent.keyDown(box, { key: 'b', ctrlKey: true })
+    expect(box).toHaveValue('make **this** bold')
+  })
+
   it('retains the same idempotency key and draft across a retry', async () => {
     const onSubmit = vi.fn().mockRejectedValueOnce(new Error('Temporary failure')).mockResolvedValueOnce(undefined)
     render(<StructuredComposer onSubmit={onSubmit} searchActors={vi.fn()} />)

@@ -10,6 +10,7 @@ import { LabelManager } from './LabelManager'
 import { workItemHref } from './links'
 import { useReleaseClaim } from './planningHooks'
 import { TaskActivity } from './TaskActivity'
+import { TaskFiles } from './TaskFiles'
 import { TaskDependencies, TaskSubtasks, type OpenTask } from './TaskConnections'
 import { AcceptanceCriteria } from './TaskCriteria'
 import { DescriptionField, TitleField } from './TaskFields'
@@ -185,6 +186,7 @@ function TaskDetailBody({
         <TaskDependencies disabled={disabled} item={item} onOpen={onOpenTask} save={save} />
         <AcceptanceCriteria disabled={disabled} item={item} />
         <TaskLinks disabled={disabled} item={item} />
+        <TaskFiles disabled={disabled} item={item} />
         <Suspense fallback={null}>
           <LinkedWhiteboards canEdit={!disabled} projectId={item.projectId} targetId={item.id} targetKind="task" />
         </Suspense>

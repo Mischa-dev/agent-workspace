@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import type { FileAttachment } from '../files/model'
 import {
   isSafeMessageText,
   parseMessageContent,
@@ -165,6 +166,10 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
           )
       : [],
     reactions: normalizeReactions(message.reactions),
+    // Checked where they're shown (normalizeFiles, normalizeLinkPreviews), so
+    // that code loads with the conversation pages rather than with the app.
+    attachments: Array.isArray(message.attachments) ? message.attachments : undefined,
+    linkPreviews: Array.isArray(message.linkPreviews) ? message.linkPreviews : undefined,
   }
 }
 
@@ -402,6 +407,7 @@ export async function sendConversationMessage(input: {
   kind: ConversationKind
   content: MessageContentV1
   idempotencyKey: string
+  attachments?: FileAttachment[]
 }) {
   const collection =
     input.kind === 'channel'
@@ -414,7 +420,9 @@ export async function sendConversationMessage(input: {
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      json: { content: input.content },
+      json: input.attachments?.length
+        ? { content: input.content, attachments: input.attachments.map((file) => file.id) }
+        : { content: input.content },
     },
   )
 }

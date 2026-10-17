@@ -49,6 +49,7 @@ import type { ConversationTimelineEntry } from '../conversations/types'
 import { useConversationRealtime } from '../realtime/realtimeContext'
 import { useSetWorkItemThreadLink } from '../work-items/hooks'
 import { searchWorkItemReferences } from '../work-items/api'
+import { uploadFile } from '../files/api'
 import {
   ActorTag,
   Avatar,
@@ -391,6 +392,7 @@ export function ThreadPage() {
           </ConversationIntro>
         ) : null}
         <TimelineEntries
+          conversationId={threadId}
           agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
           entries={entries}
           onOpenHistory={messageActions.openHistory}
@@ -455,6 +457,7 @@ export function ThreadPage() {
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}
           draftKey={threadId}
+          upload={uploadFile({ kind: 'conversation', conversationId: threadId })}
           label={`Message ${threadName}`}
           onSubmit={sendMessage}
           placeholder={`Reply in ${threadName}`}

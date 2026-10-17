@@ -38,6 +38,8 @@ export const queryKeys = {
     ['project', projectId, 'work-items', 'assignees', query] as const,
   workItemTimeline: (projectId: string, workItemId: string) =>
     ['project', projectId, 'work-items', 'timeline', workItemId] as const,
+  workItemFiles: (projectId: string, workItemId: string) =>
+    ['project', projectId, 'work-items', 'files', workItemId] as const,
   workItemPages: (projectId: string, filters: Record<string, unknown>) =>
     ['project', projectId, 'work-items', 'pages', filters] as const,
   workItemGroups: (projectId: string, filters: Record<string, unknown>) =>

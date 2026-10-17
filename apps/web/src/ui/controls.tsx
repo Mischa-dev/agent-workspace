@@ -10,7 +10,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react'
 
-import { Icon, type IconName } from './icons'
+import { Icon, type IconGlyph, type IconName } from './icons'
 import { Tooltip } from './overlays'
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -20,8 +20,8 @@ export const Button = forwardRef<
   ButtonHTMLAttributes<HTMLButtonElement> & {
     variant?: ButtonVariant
     size?: 'sm' | 'md' | 'lg'
-    icon?: IconName
-    iconEnd?: IconName
+    icon?: IconGlyph
+    iconEnd?: IconGlyph
     busy?: boolean
   }
 >(function Button(
@@ -49,7 +49,7 @@ export const Button = forwardRef<
 export const IconButton = forwardRef<
   HTMLButtonElement,
   ButtonHTMLAttributes<HTMLButtonElement> & {
-    icon: IconName
+    icon: IconGlyph
     label: string
     size?: 'sm' | 'md'
     pressed?: boolean
