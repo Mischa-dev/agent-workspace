@@ -305,7 +305,7 @@ export function TemplateEditor({ projectId }: { projectId: string }) {
     <form className="aw-launch-template" onSubmit={submit}>
       <TextArea
         disabled={!canEdit}
-        hint={`Now using the ${sourceLabel(setting?.source ?? 'default')} prompt. Fields: {{task.key}}, {{task.title}}, {{task.description}}, {{task.criteria}}, {{task.url}}, {{task.priority}}, {{task.type}}, {{task.labels}}, {{task.pages}}, {{project.name}}, {{project.key}}, {{project.guide}}. Wrap a part in {{#if field}}…{{/if}} to keep it only when the field has a value, or {{#harness codex_cloud}}…{{/harness}} for one agent.`}
+        hint={`Now using the ${sourceLabel(setting?.source ?? 'default')} prompt. Fields: {{task.key}}, {{task.title}}, {{task.description}}, {{task.criteria}}, {{task.url}}, {{task.priority}}, {{task.type}}, {{task.labels}}, {{task.pages}}, {{project.name}}, {{project.key}}, {{project.guide}}, {{project.skills}}. Wrap a part in {{#if field}}…{{/if}} to keep it only when the field has a value, or {{#harness codex_cloud}}…{{/harness}} for one agent.`}
         id="launch-template"
         label="Prompt template"
         maxLength={12000}

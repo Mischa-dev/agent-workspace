@@ -433,6 +433,10 @@ pub(super) struct ProjectOverview {
     /// The project's guide page: how this project works. Read it first.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide: Option<GuidePage>,
+    /// Skills: instructions for a kind of work, each with when to use it.
+    /// Load the ones that fit your work with skill_get.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<super::memory_tools::SkillLine>,
     /// Other pages, titles only. Read one with page_get.
     pub pages: Vec<PageLine>,
     /// Recent decisions that still hold.
@@ -555,10 +559,12 @@ pub(super) async fn project_open(
                     stale: page.stale,
                 }
             });
+        let skills =
+            super::memory_tools::skill_lines(memory::list_skills(&state.pool, project_id).await?);
         let pages = memory::list_pages(&state.pool, project_id, false)
             .await?
             .into_iter()
-            .filter(|page| !page.is_guide)
+            .filter(|page| !page.is_guide && page.skill_description.is_none())
             .take(50)
             .map(|page| PageLine {
                 id: page.id.to_string(),
@@ -659,6 +665,7 @@ pub(super) async fn project_open(
                 ),
             },
             guide,
+            skills,
             pages,
             decisions,
             tasks: TaskOverview {

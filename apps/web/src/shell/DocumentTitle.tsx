@@ -1,8 +1,10 @@
 import { useEffect, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 
+import { useAuthenticatedSession } from '../auth/session'
 import { useDirectOverview } from '../direct/api'
 import { useProjects } from '../projects/hooks'
+import { loadShellLazy } from './loadShellLazy'
 import { pageTitleFor, unreadCount, usePageTitleOverride } from './documentTitleModel'
 
 const BASE_ICON = '/icons/icon.svg'
@@ -63,6 +65,20 @@ function useAppBadge(count: number) {
   )
 }
 
+/** Remembers the page for the command menu's Recent list once you've stayed on it a moment. */
+function useRememberPlace(path: string, title: string, namedByPage: boolean) {
+  const actorId = useAuthenticatedSession().user.actorId
+  useEffect(() => {
+    if (!title) return undefined
+    const timer = window.setTimeout(() => {
+      void loadShellLazy().then((places) => {
+        if (places.isRememberedPlace(path, title, namedByPage)) places.rememberPlace(actorId, { path, title, at: Date.now() })
+      })
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [actorId, namedByPage, path, title])
+}
+
 /**
  * Keeps the tab title on the page you're on, with an unread count in front,
  * and the favicon and app badge in step with it.
@@ -89,5 +105,6 @@ export function DocumentTitle() {
   }, [])
   useFaviconBadge(count)
   useAppBadge(count)
+  useRememberPlace(location.pathname, title, Boolean(override))
   return null
 }

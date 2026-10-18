@@ -993,7 +993,7 @@ async fn build_workspace(
     let page = string_at(&page, "/value/id");
     call(
         "page_write",
-        json!({"pageId": page, "body": format!("Launch notes, second draft{m}"), "expectedVersion": 1}),
+        json!({"pageId": page, "body": format!("Launch notes, second draft{m}"), "skillDescription": format!("Use when launching{m}"), "expectedVersion": 1}),
     )
     .await;
 
@@ -3009,6 +3009,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "run_usage",
     "search",
     "settings_get",
+    "skill_get",
+    "skill_list",
     "task_list",
     "task_open",
     "task_ready_list",
@@ -3083,6 +3085,7 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("agent_profile_list"),
         by_project("environment_list"),
         by_project("page_list"),
+        by_project("skill_list"),
         by_project("decision_list"),
         by_project("milestone_list"),
         by_project("task_ready_list"),
@@ -3327,6 +3330,18 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![
                 json!({"pageId": b.page}),
                 json!({"pageId": b.page, "version": 1}),
+            ],
+            vec![],
+        ),
+        case(
+            "skill_get",
+            vec![
+                json!({"pageId": a.page}),
+                json!({"projectId": a.project, "name": "launch-page"}),
+            ],
+            vec![
+                json!({"pageId": b.page}),
+                json!({"projectId": b.project, "name": format!("launch-page-{}", b.marker)}),
             ],
             vec![],
         ),

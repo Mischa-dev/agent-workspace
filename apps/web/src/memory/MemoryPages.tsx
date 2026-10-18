@@ -8,6 +8,7 @@ import { formatFullDate } from '../conversations/timeFormat'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
+import { usePageTitle } from '../shell/documentTitleModel'
 import {
   Banner,
   Button,
@@ -113,6 +114,7 @@ function PagesList({ projectId }: { projectId: string }) {
               meta={
                 <>
                   {page.isGuide ? <StatusChip tone="agent">Guide</StatusChip> : null}
+                  {page.skillDescription ? <StatusChip tone="agent">Skill</StatusChip> : null}
                   {page.stale ? <StatusChip tone="warning">Not updated in months</StatusChip> : null}
                   <span>
                     Edited {formatFullDate(page.updatedAt)}
@@ -157,6 +159,7 @@ export function PageDetailPage() {
 function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }) {
   const queryClient = useQueryClient()
   const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
+  usePageTitle(page.data?.title ?? null)
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId) })
   const [editing, setEditing] = useState(() => new URLSearchParams(window.location.search).get('edit') === '1')
   const [viewing, setViewing] = useState<{ version: number; title: string; body: string } | null>(null)
@@ -201,6 +204,11 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
         </Banner>
       ) : null}
       {current.archived ? <Banner tone="offline">This page is archived.</Banner> : null}
+      {current.skillDescription && !editing ? (
+        <Banner tone="agent" title="Skill">
+          Agents read this page when it fits their work: {current.skillDescription}
+        </Banner>
+      ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {editing ? (
         <PageEditor projectId={projectId} onCancel={() => setEditing(false)} onSaved={async (saved) => { await refresh(saved); setEditing(false) }} page={current} />
@@ -283,19 +291,22 @@ function PageEditor({
   const [title, setTitle] = useState(page.title)
   const [body, setBody] = useState(page.body)
   const [guide, setGuide] = useState(page.isGuide)
+  const [skill, setSkill] = useState(page.skillDescription !== null)
+  const [skillDescription, setSkillDescription] = useState(page.skillDescription ?? '')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
   const save = (event: FormEvent) => {
     event.preventDefault()
-    if (!title.trim() || busy) return
+    if (!title.trim() || busy || (skill && !skillDescription.trim())) return
     setBusy(true)
     setError(null)
     void updatePage(page.id, {
       title: title.trim(),
       body,
       isGuide: guide,
+      skillDescription: skill ? skillDescription.trim() : '',
       expectedVersion: page.version,
       note: note.trim() || undefined,
     })
@@ -328,10 +339,25 @@ function PageEditor({
         label="This is the project guide"
         onChange={setGuide}
       />
+      <Checkbox
+        checked={skill}
+        description="Agents see the list of skills in a project and follow one when its description fits their work."
+        label="Agents can use this as a skill"
+        onChange={setSkill}
+      />
+      {skill ? (
+        <TextField
+          hint="One line, starting with when: “Use when deploying the web app.”"
+          label="When agents should use it"
+          maxLength={500}
+          onChange={(event) => setSkillDescription(event.target.value)}
+          value={skillDescription}
+        />
+      ) : null}
       <TextField label="What changed (optional)" maxLength={500} onChange={(event) => setNote(event.target.value)} value={note} />
       <div className="aw-form__actions">
         <Button onClick={onCancel}>Cancel</Button>
-        <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">
+        <Button busy={busy} disabled={!title.trim() || (skill && !skillDescription.trim())} type="submit" variant="primary">
           Save
         </Button>
       </div>

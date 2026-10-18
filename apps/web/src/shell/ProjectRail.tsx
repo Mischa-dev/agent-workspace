@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -11,6 +11,10 @@ import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { openCommandMenu, useCommandState } from './commandStore'
+import { loadShellLazy } from './loadShellLazy'
+
+// Loaded after the first paint: whether you've paused notifications.
+const PausedMark = lazy(() => loadShellLazy().then((module) => ({ default: module.PausedMark })))
 
 function projectRecency(project: Project) {
   const value = project.navigation.lastOpenedAt
@@ -246,6 +250,14 @@ export function ProjectRail({
         <Menu
           items={[
             { heading: user.displayName },
+            {
+              label: 'Pause or resume notifications',
+              icon: 'moon',
+              onSelect: () => {
+                onNavigate()
+                openCommandMenu('Pause notifications')
+              },
+            },
             { label: 'Settings', icon: 'settings', onSelect: () => { onNavigate(); navigate('/settings', { state: settingsState }) } },
             { label: 'Appearance', icon: 'palette', onSelect: () => { onNavigate(); navigate('/settings/account/appearance') } },
             { separator: true },
@@ -256,6 +268,9 @@ export function ProjectRail({
           trigger={
             <button aria-label={`Account: ${user.displayName}`} className="aw-rail__me" type="button">
               <Avatar name={user.displayName} presence={presence} seed={user.actorId} size={36} />
+              <Suspense fallback={null}>
+                <PausedMark />
+              </Suspense>
             </button>
           }
         />

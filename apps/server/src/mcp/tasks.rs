@@ -1351,6 +1351,10 @@ pub(super) struct TaskDetail {
     pub task: WorkItemProjection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claimed_by: Option<ClaimValue>,
+    /// Notes left by whoever last let go of this task (task_release with
+    /// handoff), newest first: where the work got to and what's left.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handoffs: Vec<HandoffNote>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subtasks: Vec<TaskSummary>,
     /// Threads and conversations about this task.
@@ -1654,7 +1658,9 @@ pub(super) async fn task_open(
             planning::visible_links(&mut connection, principal, project_id, task_id).await?;
         let watchers = planning::visible_watchers(&mut connection, project_id, task_id).await?;
         drop(connection);
+        let handoffs = handoff_notes(state, task_id, 3).await?;
         Ok::<_, AppError>(ToolResult::ok(TaskDetail {
+            handoffs,
             parent,
             milestone: planning_row.milestone_id.map(|id| MilestoneRef {
                 id: id.to_string(),
@@ -2524,6 +2530,47 @@ pub(super) struct ClaimValue {
     pub note: Option<String>,
     pub claimed_at: String,
     pub expires_at: String,
+    /// On a claim you just took: the last handoff note left on the task.
+    /// Read it before you start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffNote>,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct HandoffNote {
+    pub by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    pub note: String,
+    pub at: String,
+}
+
+/// The latest handoff notes on a task, newest first.
+async fn handoff_notes(
+    state: &AppState,
+    task_id: Uuid,
+    limit: i64,
+) -> Result<Vec<HandoffNote>, AppError> {
+    Ok(sqlx::query_as::<_, HandoffNote>(
+        r#"
+        SELECT COALESCE(member.display_name, 'Former member') AS by,
+               via_client.client_name AS via, handoff.note, handoff.created_at::text AS at
+        FROM work_item_handoffs handoff
+        LEFT JOIN project_memberships member
+          ON member.project_id = handoff.project_id AND member.actor_id = handoff.actor_id
+        LEFT JOIN mcp_oauth_grants via_grant
+          ON via_grant.id = handoff.via_oauth_grant_id AND via_grant.show_via
+        LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+        WHERE handoff.work_item_id = $1
+        ORDER BY handoff.created_at DESC, handoff.id DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(task_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await?)
 }
 
 #[derive(Debug, FromRow)]
@@ -2556,6 +2603,7 @@ async fn current_claim(state: &AppState, task_id: Uuid) -> Result<Option<ClaimVa
         note: row.note,
         claimed_at: row.claimed_at,
         expires_at: row.expires_at,
+        handoff: None,
     }))
 }
 
@@ -2666,9 +2714,10 @@ pub(super) async fn task_claim(
             .await?;
         }
         transaction.commit().await?;
-        let claim = current_claim(state, task_id)
+        let mut claim = current_claim(state, task_id)
             .await?
             .ok_or(AppError::Internal("claim just written"))?;
+        claim.handoff = handoff_notes(state, task_id, 1).await?.into_iter().next();
         Ok::<_, AppError>(ToolResult::ok(claim))
     }
     .await;
@@ -2680,6 +2729,11 @@ pub(super) async fn task_claim(
 pub(super) struct TaskReleaseArguments {
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
+    /// For whoever picks the task up next: where the work got to, what's
+    /// left, and anything that would trip them up (a branch, a failing test,
+    /// a question you're waiting on). Up to 4,000 characters. The next
+    /// task_claim returns it, and task_open shows it.
+    pub handoff: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -2687,7 +2741,12 @@ pub(super) struct TaskReleaseArguments {
 pub(super) struct ReleaseValue {
     pub task_id: String,
     pub released: bool,
+    /// Whether your handoff note was saved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handoff_saved: bool,
 }
+
+const MAX_HANDOFF_CHARS: usize = 4_000;
 
 pub(super) async fn task_release(
     state: &AppState,
@@ -2697,21 +2756,68 @@ pub(super) async fn task_release(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
+    let handoff = arguments
+        .handoff
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if handoff.is_some_and(|note| note.chars().count() > MAX_HANDOFF_CHARS || note.contains('\0')) {
+        return ToolResult::invalid("handoff", "Keep the handoff note to 4,000 characters.");
+    }
     let result = async {
-        let Some((task_id, _)) = resolve_task(state, principal, &arguments.task_id).await? else {
+        let Some((task_id, project_id)) =
+            resolve_task(state, principal, &arguments.task_id).await?
+        else {
             return Ok(ToolResult::not_found("That task"));
         };
+        if handoff.is_some()
+            && !can_write_in(state, principal, project_id, Action::WorkItemEdit).await?
+        {
+            return Ok(ToolResult::denied(
+                "You can't work on tasks in that project.",
+            ));
+        }
+        let mut transaction = state.pool.begin().await?;
         let released =
             sqlx::query("DELETE FROM work_item_claims WHERE work_item_id = $1 AND actor_id = $2")
                 .bind(task_id)
                 .bind(principal.actor_id)
-                .execute(&state.pool)
+                .execute(&mut *transaction)
                 .await?
                 .rows_affected()
                 == 1;
+        if let Some(note) = handoff {
+            sqlx::query(
+                r#"
+                INSERT INTO work_item_handoffs (
+                    id, project_id, work_item_id, actor_id, via_oauth_grant_id, note
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+            )
+            .bind(Uuid::now_v7())
+            .bind(project_id)
+            .bind(task_id)
+            .bind(principal.actor_id)
+            .bind(principal.via_grant_id())
+            .bind(note)
+            .execute(&mut *transaction)
+            .await?;
+            insert_activity(
+                &mut transaction,
+                project_id,
+                task_id,
+                principal.actor_id,
+                "work_item_updated",
+                &format!("Handed off: {}", snippet(note, 200)),
+                &serde_json::json!({ "handoff": true }),
+            )
+            .await?;
+        }
+        transaction.commit().await?;
         Ok::<_, AppError>(ToolResult::ok(ReleaseValue {
             task_id: task_id.to_string(),
             released,
+            handoff_saved: handoff.is_some(),
         }))
     }
     .await;

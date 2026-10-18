@@ -3,11 +3,17 @@ import { useNavigate } from 'react-router-dom'
 
 import { useProjects } from '../projects/hooks'
 import { projectSettingsHref } from '../settings/paths'
-import { closeCommandMenu, openCommandMenu, openShortcutSheet, useCommandState } from './commandStore'
+import { closeCommandMenu, openCommandMenu, openMarkAllRead, openShortcutSheet, useCommandState } from './commandStore'
+import { loadShellLazy } from './loadShellLazy'
 import { createShortcutMatcher, type ShortcutAction } from './shortcuts'
 import { projectPath, useRouteProject } from './useRouteProject'
 
 const loadPalette = () => import('./CommandPalette')
+
+/** ⌥↑ and ⌥↓, loaded on first use to keep them out of the first page load. */
+function moveInSidebar(direction: 1 | -1, unreadOnly: boolean) {
+  void loadShellLazy().then((module) => module.moveInSidebar(direction, unreadOnly))
+}
 const CommandPalette = lazy(() => loadPalette().then((module) => ({ default: module.CommandPalette })))
 
 /**
@@ -56,6 +62,11 @@ export function CommandCenter() {
         else openCommandMenu('Create task in')
       },
       search: () => go('/search'),
+      'mark-all-read': openMarkAllRead,
+      'previous-conversation': () => moveInSidebar(-1, false),
+      'next-conversation': () => moveInSidebar(1, false),
+      'previous-unread': () => moveInSidebar(-1, true),
+      'next-unread': () => moveInSidebar(1, true),
       'go-home': () => go('/home'),
       'go-inbox': () => go('/inbox'),
       'go-my-work': () => go('/my-work'),

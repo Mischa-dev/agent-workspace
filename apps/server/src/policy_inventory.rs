@@ -1049,6 +1049,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",
         ExternalAgentManage
     ),
+    policy_route!(
+        "external_agents",
+        Post,
+        "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
+        ExternalAgentManage
+    ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),

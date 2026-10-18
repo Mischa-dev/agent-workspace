@@ -97,6 +97,10 @@ Restart the service after editing.
   through the updated service worker (`dist/sw.js`, part of the web build); an
   installed home-screen app picks it up the next time it opens, and on Android
   re-adding the app forces it if the old buttons stay.
+- **Agent skills and handoffs (W22).** Nothing goes in this file. The
+  migration `20261017170000_agent_skills_and_handoffs.sql` runs with the rest.
+  If the reverse proxy only forwards some paths to the server, add
+  `/llms.txt` and `/mcp-tools.md` next to `/connect.md`.
 - **Files and link previews (W20).** Nothing new goes in this file. Uploaded
   files live in `<data root>/files` (`/var/lib/agent-workspace/files`), which
   the server creates; the nightly backup now includes it (installed
@@ -128,7 +132,9 @@ Restart the service after editing.
 9. In any channel, type `/remind me to check the deploy in 2 minutes`. The
    reminder should reach the inbox and the phone, with Done and Snooze on the
    push. Later (the bookmark in the rail) lists it.
-10. Files (W20): Settings › Workspace has the upload size limit (25 MB), the
+10. For each agent with a webhook (Agents page), press Send a test wakeup and
+    check its runner answers.
+11. Files (W20): Settings › Workspace has the upload size limit (25 MB), the
     workspace's file storage (10 GB) and link previews (on). Attach a picture
     to a message once to check uploads get through the proxy. On Android,
     remove and re-add the home-screen app so sharing pictures and files to it

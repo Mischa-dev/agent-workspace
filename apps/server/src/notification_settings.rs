@@ -214,11 +214,25 @@ pub struct QuietHours {
     pub start: i64,
     pub end: i64,
     pub time_zone: Option<String>,
+    /// Notifications paused by hand until then ("Pause for an hour"). Read
+    /// with `paused_at`; a time in the past means not paused.
+    pub paused_until: Option<DateTime<Utc>>,
 }
 
 impl QuietHours {
-    /// When quiet hours end, if `now` is inside them.
+    /// When the pause ends, if one is on at `now`.
+    pub fn paused_at(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.paused_until.filter(|until| *until > now)
+    }
+
+    /// When pushes may go out again, if `now` is inside a pause or quiet
+    /// hours. A pause that ends inside quiet hours waits for them too.
     pub fn ends_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let paused = self.paused_at(now);
+        self.scheduled_end_after(paused.unwrap_or(now)).or(paused)
+    }
+
+    fn scheduled_end_after(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         if !self.enabled || self.start == self.end {
             return None;
         }
@@ -273,6 +287,10 @@ pub async fn quiet_hours(
                 .value::<i64>("notifications.quiet_hours_end")
                 .unwrap_or(7 * 60),
             time_zone: effective.string("notifications.time_zone"),
+            paused_until: effective
+                .value::<i64>("notifications.paused_until")
+                .filter(|seconds| *seconds > 0)
+                .and_then(|seconds| DateTime::from_timestamp(seconds, 0)),
         },
         effective
             .string("notifications.digest")
@@ -806,6 +824,7 @@ mod tests {
             start: 22 * 60,
             end: 7 * 60,
             time_zone: Some("Europe/Berlin".to_owned()),
+            paused_until: None,
         };
         // 23:30 in Berlin (CEST, UTC+2) is 21:30 UTC.
         let late = Utc.with_ymd_and_hms(2026, 10, 16, 21, 30, 0).unwrap();
@@ -820,5 +839,33 @@ mod tests {
             ..quiet
         };
         assert_eq!(off.ends_after(late), None);
+    }
+
+    #[test]
+    fn a_pause_holds_pushes_until_it_ends_and_then_waits_for_quiet_hours() {
+        let noon = Utc.with_ymd_and_hms(2026, 10, 16, 10, 0, 0).unwrap();
+        let in_an_hour = Utc.with_ymd_and_hms(2026, 10, 16, 11, 0, 0).unwrap();
+        let paused = QuietHours {
+            enabled: false,
+            start: 22 * 60,
+            end: 7 * 60,
+            time_zone: None,
+            paused_until: Some(in_an_hour),
+        };
+        assert_eq!(paused.paused_at(noon), Some(in_an_hour));
+        assert_eq!(paused.ends_after(noon), Some(in_an_hour));
+        // Over, it changes nothing.
+        assert_eq!(paused.paused_at(in_an_hour), None);
+        assert_eq!(paused.ends_after(in_an_hour), None);
+        // A pause until 23:00 UTC ends inside quiet hours, so pushes wait for 07:00.
+        let late_pause = QuietHours {
+            enabled: true,
+            paused_until: Some(Utc.with_ymd_and_hms(2026, 10, 16, 23, 0, 0).unwrap()),
+            ..paused
+        };
+        assert_eq!(
+            late_pause.ends_after(noon),
+            Some(Utc.with_ymd_and_hms(2026, 10, 17, 7, 0, 0).unwrap())
+        );
     }
 }

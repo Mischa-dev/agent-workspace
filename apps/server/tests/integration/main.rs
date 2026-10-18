@@ -61,6 +61,7 @@ mod w18_phone_first;
 mod w19_self_hosting;
 mod w20_files;
 mod w21_later_and_scheduling;
+mod w22_agent_kit;
 mod w2_harness_platform;
 mod w3_tasks_http;
 mod w7_launch;

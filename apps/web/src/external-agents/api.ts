@@ -124,3 +124,19 @@ export function setExternalAgentWebhook(
     { method: 'POST', json: { url } },
   )
 }
+
+export type TestWakeupResult = {
+  ok: boolean
+  status: number | null
+  error: string | null
+  elapsedMs: number
+  deliveryId: string
+}
+
+/** Send the runner a signed test wakeup now, and say what it answered. */
+export function testExternalAgentWebhook(projectId: string, connectionId: string) {
+  return requestJson<TestWakeupResult>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/external-agents/${encodeURIComponent(connectionId)}/webhook/test`,
+    { method: 'POST' },
+  )
+}

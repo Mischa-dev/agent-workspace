@@ -72,6 +72,7 @@ request; every read is checked against what the agent can see.
 | `reply.requested` | Someone asked the agent: a tag, a DM, a group message. | Start a session and claim the request. |
 | `reply.followup` | A person wrote again in a thread where the agent holds a claim. `followsRequestId` is that claim. | Feed it into the session already working on `followsRequestId`, then claim it when you get to it. |
 | `reply.cancelled` | A person pressed Stop. | Stop the session working on `replyRequestId` now. Don't reply to it. |
+| `ping` | A person pressed **Send a test wakeup** on the Agents page. It names no request. | Verify it like any wakeup and answer `2xx`. The page shows what you answered. |
 
 `threadId` is set once a channel tag has its thread. `sessionRef` and
 `sessionHarness` name the session already working in that conversation, as you

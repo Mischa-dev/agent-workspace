@@ -1456,6 +1456,103 @@ async fn post_wakeup(
     }
 }
 
+/// What a runner answered to a test wakeup.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TestWakeup {
+    pub ok: bool,
+    /// The HTTP status the runner answered with, if it answered.
+    pub status: Option<u16>,
+    /// Why it didn't work, in words a person can act on.
+    pub error: Option<String>,
+    pub elapsed_ms: u64,
+    pub delivery_id: Uuid,
+}
+
+/// Send a signed `ping` to a runner, now, and report what it answered. It is
+/// signed and sent exactly like a real wakeup (same headers, same timeout,
+/// same address checks), but names no request, so a runner only has to
+/// verify it and answer 2xx. Nothing is queued or retried.
+pub(crate) async fn send_test_wakeup(
+    url: &str,
+    secret: &str,
+    agent_id: Uuid,
+    project_id: Uuid,
+    trusted_origins: &[String],
+) -> TestWakeup {
+    let delivery_id = Uuid::now_v7();
+    let started = std::time::Instant::now();
+    let outcome = async {
+        let (url, client) = webhook_client(url, trusted_origins)
+            .await
+            .map_err(|error| (None, error.to_owned()))?;
+        let body = serde_json::json!({
+            "event": "ping",
+            "deliveryId": delivery_id,
+            "agentId": agent_id,
+            "projectId": project_id,
+            "message": "A test wakeup from Agent Workspace. Verify the signature and answer 2xx; there is nothing to claim.",
+        })
+        .to_string();
+        let timestamp = unix_timestamp();
+        let signature = sign(secret, &timestamp, &body)
+            .ok_or((None, "could not sign the wakeup".to_owned()))?;
+        let response = client
+            .post(url)
+            .header("content-type", "application/json")
+            .header("x-workspace-delivery", delivery_id.to_string())
+            .header("x-workspace-event", "ping")
+            .header("x-workspace-timestamp", &timestamp)
+            .header("x-workspace-signature", format!("sha256={signature}"))
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| {
+                (
+                    None,
+                    if error.is_timeout() {
+                        "the runner didn't answer within 8 seconds".to_owned()
+                    } else {
+                        "the runner couldn't be reached".to_owned()
+                    },
+                )
+            })?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(status.as_u16())
+        } else if matches!(status.as_u16(), 401 | 403) {
+            Err((
+                Some(status.as_u16()),
+                "the runner refused the signature: check it uses this webhook's current secret"
+                    .to_owned(),
+            ))
+        } else {
+            Err((
+                Some(status.as_u16()),
+                format!("the runner answered {status}"),
+            ))
+        }
+    }
+    .await;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match outcome {
+        Ok(status) => TestWakeup {
+            ok: true,
+            status: Some(status),
+            error: None,
+            elapsed_ms,
+            delivery_id,
+        },
+        Err((status, error)) => TestWakeup {
+            ok: false,
+            status,
+            error: Some(error),
+            elapsed_ms,
+            delivery_id,
+        },
+    }
+}
+
 /// Validate webhook destinations without making a network request: public
 /// https only, unless the URL's origin is one the operator trusts
 /// (`AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS`), which may also be http on a
@@ -1566,7 +1663,7 @@ pub(crate) fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
 }
 
 /// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
-pub(crate) fn sign(secret: &str, timestamp: &str, body: &str) -> Option<String> {
+pub fn sign(secret: &str, timestamp: &str, body: &str) -> Option<String> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(timestamp.as_bytes());
     mac.update(b".");

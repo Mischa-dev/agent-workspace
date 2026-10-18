@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod account_security;
+pub mod agent_docs;
 pub mod agent_profiles;
 pub mod agent_sessions;
 pub mod ai;
@@ -174,6 +175,7 @@ pub fn router(state: AppState) -> Router {
         .merge(whiteboards::router())
         .merge(search::router())
         .merge(connected_apps::router())
+        .merge(agent_docs::router())
         .merge(settings::router())
         .merge(secrets::router())
         .merge(metrics::router())
