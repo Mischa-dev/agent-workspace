@@ -8,6 +8,7 @@ import { formatFullDate } from '../conversations/timeFormat'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
+import { MemoryTabs } from '../shell/ProjectTabs'
 import { usePageTitle } from '../shell/documentTitleModel'
 import {
   Banner,
@@ -95,6 +96,7 @@ function PagesList({ projectId }: { projectId: string }) {
   }
   return (
     <>
+      <MemoryTabs current="pages" projectId={projectId} />
       <PageHeader icon="list" title="Pages">
         What’s true for this project now: how it works, conventions, plans. People and agents both read and edit these, and every
         version is kept.
@@ -396,6 +398,7 @@ function DecisionsList({ projectId }: { projectId: string }) {
   }
   return (
     <>
+      <MemoryTabs current="decisions" projectId={projectId} />
       <PageHeader icon="check" title="Decisions">
         What was settled and why. Save one from any message, or record it here. A decision from a private conversation is only
         visible to the people in it.

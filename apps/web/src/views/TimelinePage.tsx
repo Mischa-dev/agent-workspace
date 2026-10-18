@@ -8,6 +8,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
+import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, Checkbox, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, SelectField, showToast } from '../ui'
 import { updateWorkItem } from '../work-items/api'
 import { workItemHref } from '../work-items/links'
@@ -239,6 +240,7 @@ export function TimelinePage() {
   return (
     <AppShell mainClassName="aw-main--page" project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-timeline">
+        <WorkTabs current="timeline" projectId={project.data.id} />
         <PageHeader icon="clock" title="Timeline">
           Milestones and tasks in {project.data.name} by date. Drag one, or focus it and press ← or →, to see what slips.
         </PageHeader>

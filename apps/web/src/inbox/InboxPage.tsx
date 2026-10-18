@@ -250,7 +250,7 @@ export function InboxPage() {
   const caughtUp = !inbox.isPending && !inbox.isError && notifications.length === 0
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-page--wide aw-inbox" data-detail-open={detailOpen && selected ? 'true' : 'false'}>
         <PageHeader
           actions={

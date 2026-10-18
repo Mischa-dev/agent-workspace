@@ -21,7 +21,7 @@ export function MyWorkPage() {
   const empty = work.data && !work.data.assigned.total && !work.data.claimed.total && !work.data.review.total
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-mywork">
         <PageHeader icon="checklist" title="My work">
           What’s yours in every Project, soonest due first.

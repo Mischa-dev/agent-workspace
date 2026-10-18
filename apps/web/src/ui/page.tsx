@@ -71,10 +71,13 @@ export function Section({
 export function PageTabs({
   current,
   label,
+  replace = true,
   tabs,
 }: {
   current: string
   label: string
+  /** Swap the history entry, for sections of one page; false for separate pages. */
+  replace?: boolean
   tabs: { id: string; label: string; to: string; icon?: IconName }[]
 }) {
   return (
@@ -84,7 +87,7 @@ export function PageTabs({
           aria-current={tab.id === current ? 'page' : undefined}
           className="aw-tabs__tab"
           key={tab.id}
-          replace
+          replace={replace}
           to={tab.to}
         >
           {tab.icon ? <Icon name={tab.icon} size={16} /> : null}
