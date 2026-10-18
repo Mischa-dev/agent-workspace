@@ -1071,9 +1071,10 @@ fn navigation_view(row: &ProjectRow) -> Result<NavigationView, AppError> {
 
 fn navigation_href(project_id: Uuid, location: &NavigationLocation) -> Result<String, AppError> {
     match (location.kind.as_str(), location.conversation_id) {
-        ("project_overview", None) => Ok(format!("/projects/{project_id}")),
         ("work_items", None) => Ok(format!("/projects/{project_id}/work-items")),
-        ("settings", None) => Ok(format!("/projects/{project_id}/settings")),
+        // Older clients saved settings as the last place; opening the Project
+        // from there should lead out of settings, so it lands on the overview.
+        ("project_overview" | "settings", None) => Ok(format!("/projects/{project_id}")),
         ("thread", Some(conversation_id)) => {
             Ok(format!("/projects/{project_id}/threads/{conversation_id}"))
         }

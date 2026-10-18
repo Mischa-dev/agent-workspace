@@ -2,12 +2,10 @@ import { Suspense, useEffect, useId, useMemo, useRef, useState, type KeyboardEve
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type AuthenticatedSession } from '../auth/session'
-import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
 import { ProjectPageError } from '../projects/ProjectPageStates'
 import { useProject, useProjects } from '../projects/hooks'
 import { projectLocationHref } from '../projects/locations'
 import type { Project } from '../projects/types'
-import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import { Button, EmptyState, Icon, SettingsSkeleton } from '../ui'
 import { useSettingsRegistry } from './api'
@@ -120,7 +118,6 @@ export default function SettingsArea() {
     content = (
       <ProjectScope
         entry={entry}
-        projectId={route.projectId ?? ''}
         projects={projects}
         query={routeProject}
         session={session}
@@ -198,29 +195,24 @@ function PageBody({ entry, props }: { entry: SettingsPage; props: SettingsPagePr
   )
 }
 
-/** A Project page: loads the Project, remembers you were in its settings, and checks you can use the page. */
+/**
+ * A Project page: loads the Project and checks you can use the page. It doesn't
+ * remember settings as where you were, or the Project's tile would lead back here.
+ */
 function ProjectScope({
   entry,
-  projectId,
   projects,
   query,
   section,
   session,
 }: {
   entry: SettingsPage | null
-  projectId: string
   projects: Project[]
   query: ReturnType<typeof useProject>
   section: string
   session: AuthenticatedSession
 }) {
   const project = query.data ?? null
-  const navigationSync = useRememberProjectLocation(
-    projectId,
-    { kind: 'settings' },
-    Boolean(project && !project.archivedAt && project.capabilities.navigationWrite),
-    project?.navigation,
-  )
   if (query.isPending) return <SettingsSkeleton label="Loading Project" />
   if (query.isError || !project) return <ProjectPageError onRetry={() => void query.refetch()} />
   if (project.archivedAt && !isArchiving(project.id)) {
@@ -233,10 +225,7 @@ function ProjectScope({
     return <Navigate replace to={projectSettingsHref(project.id)} />
   }
   return (
-    <>
-      <NavigationSyncAlert {...navigationSync} />
-      <PageBody entry={entry} props={{ session, workspace, project, projects }} />
-    </>
+    <PageBody entry={entry} props={{ session, workspace, project, projects }} />
   )
 }
 

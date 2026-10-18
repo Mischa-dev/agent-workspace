@@ -207,8 +207,13 @@ describe('App shell and Project navigation', () => {
 
   it('serializes a navigation conflict retry with the newest expected version', async () => {
     const projectCId = '019fb600-0000-7000-8000-000000000088'
-    const projectC = project(projectCId, 'GAMMA', 'Gamma Project')
-    window.history.replaceState({}, '', `/projects/${projectCId}/settings`)
+    const base = project(projectCId, 'GAMMA', 'Gamma Project')
+    // Last seen on its work items, so opening the overview saves a new place.
+    const projectC = {
+      ...base,
+      navigation: { ...base.navigation, location: { kind: 'work_items' as const }, href: `/projects/${projectCId}/work-items` },
+    }
+    window.history.replaceState({}, '', `/projects/${projectCId}`)
     let navigationReads = 0
     const navigationWrites: Array<Record<string, unknown>> = []
     vi.stubGlobal(
@@ -256,8 +261,8 @@ describe('App shell and Project navigation', () => {
             }
             return jsonResponse({
               ...projectC.navigation,
-              location: { kind: 'settings' },
-              href: `/projects/${projectCId}/settings`,
+              location: { kind: 'project_overview' },
+              href: `/projects/${projectCId}`,
               version: 3,
             })
           }
@@ -268,22 +273,27 @@ describe('App shell and Project navigation', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'General' }),
+      await screen.findByRole('heading', { level: 1, name: 'Gamma Project' }),
     ).toBeVisible()
     await waitFor(() => expect(navigationWrites).toHaveLength(2))
     expect(navigationWrites.map((write) => write.expectedVersion)).toEqual([
       1, 2,
     ])
     expect(navigationWrites[1]).toMatchObject({
-      location: { kind: 'settings' },
+      location: { kind: 'project_overview' },
     })
     expect(navigationWrites[1]).not.toHaveProperty('actorId')
   })
 
   it('announces a terminal remembered-location failure and offers retry', async () => {
     const projectCId = '019fb600-0000-7000-8000-000000000089'
-    const projectC = project(projectCId, 'DELTA', 'Delta Project')
-    window.history.replaceState({}, '', `/projects/${projectCId}/settings`)
+    const base = project(projectCId, 'DELTA', 'Delta Project')
+    // Last seen on its work items, so opening the overview saves a new place.
+    const projectC = {
+      ...base,
+      navigation: { ...base.navigation, location: { kind: 'work_items' as const }, href: `/projects/${projectCId}/work-items` },
+    }
+    window.history.replaceState({}, '', `/projects/${projectCId}`)
     let navigationReads = 0
     let navigationWrites = 0
     vi.stubGlobal(
@@ -341,8 +351,8 @@ describe('App shell and Project navigation', () => {
             }
             return jsonResponse({
               ...projectC.navigation,
-              location: { kind: 'settings' },
-              href: `/projects/${projectCId}/settings`,
+              location: { kind: 'project_overview' },
+              href: `/projects/${projectCId}`,
               version: 3,
             })
           }
@@ -352,8 +362,8 @@ describe('App shell and Project navigation', () => {
     )
     render(<App />)
 
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('Navigation could not be saved.')
+    // The overview's other panels aren't stubbed and show their own alerts.
+    const alert = (await screen.findByText('Navigation could not be saved.')).closest<HTMLElement>('[role="alert"]')!
     expect(navigationWrites).toBe(2)
     fireEvent.click(
       within(alert).getByRole('button', { name: 'Try saving again' }),
