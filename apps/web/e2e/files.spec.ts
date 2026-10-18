@@ -94,3 +94,51 @@ test.describe('on a phone', () => {
     await page.screenshot({ path: path.join(screenshotDir, 'files-message-phone.png') })
   })
 })
+
+// A task (issue) gets files when it's made, from its Files section, and on a
+// comment; all of them show on the task, at a desk and on a phone.
+for (const device of [
+  { name: 'desktop', use: { viewport: { width: 1280, height: 800 } } },
+  { name: 'phone', use: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } },
+]) {
+  test.describe(`task files on ${device.name}`, () => {
+    test.use(device.use)
+
+    test('attaches files to a task as it is made, later, and on a comment', async ({ page }) => {
+      const errors: string[] = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/work-items`)
+      await page.getByRole('button', { name: 'New work item' }).first().click()
+      const dialog = page.getByRole('dialog', { name: 'New work item' })
+      await dialog.getByLabel('Title').fill(`Files on ${device.name}`)
+      await dialog.locator('input[type="file"]').setInputFiles([{ name: 'spec.png', mimeType: 'image/png', buffer: PNG }])
+      await expect(dialog.getByRole('list', { name: 'Files to attach' }).getByText('spec.png')).toBeVisible()
+      await page.screenshot({ path: path.join(screenshotDir, `task-files-new-${device.name}.png`) })
+      await dialog.getByRole('button', { name: 'Create work item' }).click()
+      await expect(dialog).toBeHidden()
+
+      const filesSection = page.locator('section.aw-worksection', { has: page.getByRole('heading', { name: 'Files' }) })
+      await expect(filesSection.getByRole('button', { name: 'Open spec.png' })).toBeVisible()
+      await filesSection.locator('input[type="file"]').setInputFiles([
+        { name: 'later.txt', mimeType: 'text/plain', buffer: Buffer.from('added later') },
+      ])
+      await expect(filesSection.getByRole('link', { name: 'Download later.txt' })).toBeVisible()
+
+      const comment = page.getByRole('combobox', { name: 'Add a comment' })
+      const composer = page.locator('.aw-composer', { has: comment })
+      await composer.locator('input[type="file"]').setInputFiles([
+        { name: 'log.txt', mimeType: 'text/plain', buffer: Buffer.from('a log') },
+      ])
+      await expect(composer.locator('.aw-upload.is-done')).toHaveCount(1)
+      await comment.fill('Here is the log')
+      await comment.press('Enter')
+      const posted = page.locator('.aw-msg, li, article', { hasText: 'Here is the log' }).last()
+      await expect(posted.getByRole('link', { name: 'Download log.txt' })).toBeVisible()
+      await filesSection.scrollIntoViewIfNeeded()
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+      expect(overflow).toBeLessThanOrEqual(0)
+      await page.screenshot({ path: path.join(screenshotDir, `task-files-${device.name}.png`), fullPage: true })
+      expect(errors, 'uncaught errors on the page').toEqual([])
+    })
+  })
+}

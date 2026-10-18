@@ -386,6 +386,114 @@ async fn files_open_only_where_their_message_or_task_does() {
         opened.to_string().contains("run-output.log"),
         "attachments show in conversation_read: {opened}"
     );
+
+    // On a task: the agent adds a file to the task and one to a comment, and
+    // task_open lists both where they belong. Someone else's upload can't be
+    // posted on its comment.
+    let own = tool(
+        &setup.app,
+        &token,
+        &session,
+        "file_upload",
+        json!({"taskId": task, "name": "notes.txt", "text": "task notes"}),
+    )
+    .await;
+    assert_eq!(own["outcome"], "ok", "{own}");
+    let for_comment = tool(
+        &setup.app,
+        &token,
+        &session,
+        "file_upload",
+        json!({"taskId": task, "forComment": true, "name": "trace.log", "text": "trace"}),
+    )
+    .await;
+    assert_eq!(for_comment["outcome"], "ok", "{for_comment}");
+    let for_comment = for_comment["value"]["fileId"]
+        .as_str()
+        .expect("file")
+        .to_owned();
+    // Held for a comment, nobody else sees it yet.
+    assert_eq!(
+        read(&setup, owner, &for_comment).await,
+        Err(StatusCode::NOT_FOUND)
+    );
+    let (status, owners_upload) = upload(
+        &setup,
+        owner,
+        &format!("/api/v1/projects/{work}/work-items/{task}/files?name=mine.txt&for=comment"),
+        "text/plain",
+        b"mine",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{owners_upload}");
+    let refused = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_comment",
+        json!({
+            "taskId": task,
+            "text": "taking someone's file",
+            "clientRequestId": "w20-comment-refused",
+            "attachmentIds": [owners_upload["id"]],
+        }),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let commented = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_comment",
+        json!({
+            "taskId": task,
+            "text": "Trace attached",
+            "clientRequestId": "w20-comment",
+            "attachmentIds": [for_comment],
+        }),
+    )
+    .await;
+    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(
+        read(&setup, owner, &for_comment)
+            .await
+            .expect("owner reads"),
+        b"trace"
+    );
+    let opened = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_open",
+        json!({"taskId": task}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let names = |files: &Value| {
+        files
+            .as_array()
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(|file| file["name"].as_str().map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        names(&opened["value"]["files"]),
+        ["plan.md", "notes.txt"],
+        "{opened}"
+    );
+    let comment = opened["value"]["comments"]
+        .as_array()
+        .and_then(|comments| comments.iter().find(|c| c["text"] == "Trace attached"))
+        .expect("the comment");
+    assert_eq!(names(&comment["files"]), ["trace.log"], "{opened}");
+    assert!(
+        !opened.to_string().contains("mine.txt"),
+        "an unsent upload stays out of task_open: {opened}"
+    );
 }
 
 #[tokio::test]

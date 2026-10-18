@@ -69,7 +69,7 @@ impl From<&FileRow> for FileSummary {
     }
 }
 
-fn reader(principal: &McpPrincipal) -> Reader {
+pub(super) fn reader(principal: &McpPrincipal) -> Reader {
     Reader::Mcp {
         actor_id: principal.actor_id,
         connection_id: principal.external_agent_connection_id,
@@ -386,6 +386,9 @@ pub(super) struct FileUploadArguments {
     pub conversation_id: Option<String>,
     /// Or keep the file on this task (ID, key or link), shown at once.
     pub task_id: Option<String>,
+    /// With taskId: hold the file for a comment instead, attached when you
+    /// pass its fileId in task_comment's attachmentIds.
+    pub for_comment: Option<bool>,
     /// The file name people see, such as report.md or screenshot.png.
     pub name: String,
     /// The MIME type. Images are recognized from their bytes; otherwise the
@@ -431,7 +434,10 @@ pub(super) async fn file_upload(
             };
             upload_to_conversation(state, principal, conversation_id, upload).await
         }
-        (None, Some(task)) => upload_to_task(state, principal, task, upload).await,
+        (None, Some(task)) => {
+            let for_comment = arguments.for_comment.unwrap_or(false);
+            upload_to_task(state, principal, task, for_comment, upload).await
+        }
         _ => {
             return ToolResult::invalid("conversationId", "Pass either conversationId or taskId.");
         }
@@ -492,6 +498,7 @@ async fn upload_to_task(
     state: &AppState,
     principal: &McpPrincipal,
     task: &str,
+    for_comment: bool,
     upload: Upload,
 ) -> Result<FileRow, AppError> {
     let Some((work_item_id, project_id)) = resolve_task(state, principal, task).await? else {
@@ -528,11 +535,13 @@ async fn upload_to_task(
         Destination::Task {
             project_id,
             work_item_id,
-            for_comment: false,
+            for_comment,
         },
         upload,
     )
     .await?;
-    crate::work_items::notify_files_changed(&state.pool, project_id, work_item_id).await?;
+    if !for_comment {
+        crate::work_items::notify_files_changed(&state.pool, project_id, work_item_id).await?;
+    }
     Ok(row)
 }
