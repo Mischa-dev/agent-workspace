@@ -215,6 +215,9 @@ pub(super) struct PageLineValue {
     pub id: String,
     pub title: String,
     pub is_guide: bool,
+    /// Set when the page is a skill: when to use it. skill_get loads it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_description: Option<String>,
     pub version: i64,
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -263,6 +266,7 @@ pub(super) async fn page_list(
                     id: page.id.to_string(),
                     title: page.title,
                     is_guide: page.is_guide,
+                    skill_description: page.skill_description,
                     version: page.version,
                     updated_at: page.updated_at,
                     updated_by: page.updated_by,
@@ -294,6 +298,9 @@ pub(super) struct PageValue {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
     pub is_guide: bool,
+    /// Set when the page is a skill: the line that says when to use it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_description: Option<String>,
     /// Pass this as expectedVersion when you save.
     pub version: i64,
     pub updated_at: String,
@@ -366,6 +373,7 @@ pub(super) async fn page_get(
             body,
             truncated,
             is_guide: page.is_guide,
+            skill_description: page.skill_description,
             version: page.version,
             updated_at: page.updated_at,
             stale: page.stale,
@@ -402,6 +410,10 @@ pub(super) struct PageWriteArguments {
     pub body: Option<String>,
     /// Make this the project's guide page, the one everyone reads first.
     pub is_guide: Option<bool>,
+    /// Make the page a skill: one line saying when an agent should use it
+    /// ("Use when deploying the web app"). An empty string makes it a plain
+    /// page again.
+    pub skill_description: Option<String>,
     /// The version you last read. The save is refused if someone changed the
     /// page since.
     pub expected_version: Option<i64>,
@@ -447,6 +459,7 @@ pub(super) async fn page_write(
         title: arguments.title,
         body: arguments.body,
         is_guide: arguments.is_guide,
+        skill_description: arguments.skill_description,
         expected_version: arguments.expected_version,
         restore_version: arguments.restore_version,
         archived: arguments.archived,
@@ -526,6 +539,212 @@ pub(super) async fn page_write(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "page_write"))
+}
+
+// ---------------------------------------------------------------------------
+// Skills
+//
+// A skill is a page with a one-line description of when to use it. Agents
+// read the list (cheap: names and descriptions) and load a skill's page only
+// when its description fits the work, as Claude Code and Codex do with skill
+// folders. skill_get also returns the skill as a SKILL.md, so an agent can
+// keep a copy where its own harness looks for skills.
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SkillListArguments {
+    pub project_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SkillLine {
+    /// Pass this to skill_get.
+    pub name: String,
+    /// When to use it.
+    pub description: String,
+    pub page_id: String,
+    pub title: String,
+    pub version: i64,
+    pub updated_at: String,
+    /// Not touched in months: check it's still right before relying on it.
+    pub stale: bool,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SkillListValue {
+    pub skills: Vec<SkillLine>,
+}
+
+pub(super) fn skill_lines(pages: Vec<memory::PageSummary>) -> Vec<SkillLine> {
+    pages
+        .into_iter()
+        .filter_map(|page| {
+            Some(SkillLine {
+                name: memory::skill_name(&page.title),
+                description: page.skill_description?,
+                page_id: page.id.to_string(),
+                title: page.title,
+                version: page.version,
+                updated_at: page.updated_at,
+                stale: page.stale,
+            })
+        })
+        .collect()
+}
+
+pub(super) async fn skill_list(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: SkillListArguments,
+) -> ToolResult<SkillListValue> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    if parse_id(&arguments.project_id) != Some(principal.project_id) {
+        return ToolResult::not_found("That project");
+    }
+    let result = async {
+        memory::project_access(
+            &state.pool,
+            principal.actor_id,
+            principal.actor_kind,
+            principal.project_id,
+            Action::McpRead,
+        )
+        .await?;
+        let skills = memory::list_skills(&state.pool, principal.project_id).await?;
+        Ok::<_, AppError>(ToolResult::ok(SkillListValue {
+            skills: skill_lines(skills),
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "skill_list"))
+}
+
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SkillGetArguments {
+    // Read by the MCP middleware, which scopes the call to this project.
+    #[allow(dead_code)]
+    /// The project. Needed with name; not with pageId.
+    pub project_id: Option<String>,
+    /// The skill's name, as skill_list shows it.
+    pub name: Option<String>,
+    /// Or the skill's page.
+    pub page_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SkillValue {
+    pub name: String,
+    pub description: String,
+    /// The instructions, in Markdown.
+    pub body: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    pub page_id: String,
+    pub project_id: String,
+    pub version: i64,
+    pub updated_at: String,
+    pub stale: bool,
+    /// The same skill as a SKILL.md file, to save as
+    /// `<skills folder>/<name>/SKILL.md` for a harness that loads skills from
+    /// disk (Claude Code reads .claude/skills).
+    pub skill_md: String,
+    pub url: String,
+}
+
+/// A skill in the SKILL.md format: YAML front matter with the name and
+/// description, then the instructions.
+pub(super) fn skill_md(name: &str, description: &str, body: &str) -> String {
+    let quoted = serde_json::to_string(description).unwrap_or_default();
+    format!(
+        "---\nname: {name}\ndescription: {quoted}\n---\n\n{}\n",
+        body.trim_end()
+    )
+}
+
+pub(super) async fn skill_get(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: SkillGetArguments,
+) -> ToolResult<SkillValue> {
+    if !principal.can_read() {
+        return ToolResult::denied("This connection can't read.");
+    }
+    let page_id = match (arguments.page_id.as_deref(), arguments.name.as_deref()) {
+        (Some(value), None) => match parse_id(value) {
+            Some(id) => Some(id),
+            None => return ToolResult::invalid("pageId", "Pass a page ID or link."),
+        },
+        (None, Some(_)) => {
+            if !project_is_chosen(principal) {
+                return ToolResult::invalid(
+                    "projectId",
+                    "Say which project the skill is in (projectId).",
+                );
+            }
+            None
+        }
+        _ => return ToolResult::invalid("name", "Pass name or pageId, one of them."),
+    };
+    let result = async {
+        memory::project_access(
+            &state.pool,
+            principal.actor_id,
+            principal.actor_kind,
+            principal.project_id,
+            Action::McpRead,
+        )
+        .await?;
+        let page_id = match (page_id, arguments.name.as_deref()) {
+            (Some(page_id), _) => Some(page_id),
+            (None, Some(name)) => {
+                let wanted = memory::skill_name(name);
+                memory::list_skills(&state.pool, principal.project_id)
+                    .await?
+                    .into_iter()
+                    .find(|page| memory::skill_name(&page.title) == wanted)
+                    .map(|page| page.id)
+            }
+            (None, None) => None,
+        };
+        let page = match page_id {
+            Some(page_id) => memory::get_page(&state.pool, page_id).await?,
+            None => None,
+        };
+        let Some(page) = page.filter(|page| {
+            page.project_id == principal.project_id
+                && !page.archived
+                && page.skill_description.is_some()
+        }) else {
+            return Ok(ToolResult::not_found("That skill"));
+        };
+        let name = memory::skill_name(&page.title);
+        let description = page.skill_description.clone().unwrap_or_default();
+        let (body, truncated) = truncate_text(&page.body, PAGE_BODY_CHARACTERS);
+        Ok::<_, AppError>(ToolResult::ok(SkillValue {
+            skill_md: skill_md(&name, &description, &body),
+            url: public_url(
+                state,
+                &format!("/projects/{}/pages/{}", page.project_id, page.id),
+            ),
+            name,
+            description,
+            body,
+            truncated,
+            page_id: page.id.to_string(),
+            project_id: page.project_id.to_string(),
+            version: page.version,
+            updated_at: page.updated_at,
+            stale: page.stale,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "skill_get"))
 }
 
 // ---------------------------------------------------------------------------

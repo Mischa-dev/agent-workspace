@@ -44,6 +44,7 @@ const PHRASES: Record<string, string> = {
   'external_agent.removed': 'removed an agent',
   'external_agent.credential_rotated': 'replaced an agent’s credential',
   'external_agent.webhook_updated': 'changed an agent’s webhook',
+  'external_agent.webhook_tested': 'sent an agent a test wakeup',
   'repository.write': 'changed a repository',
   'work_item.created': 'created a work item',
   'work_item.mcp_created': 'created a work item',

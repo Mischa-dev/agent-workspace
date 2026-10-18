@@ -25,6 +25,7 @@ import {
   removeExternalAgent,
   rotateExternalAgentCredential,
   setExternalAgentWebhook,
+  testExternalAgentWebhook,
   updateExternalAgent,
   type ExternalAgentConnection,
   type ExternalAgentMutation,
@@ -548,15 +549,33 @@ function WebhookField({ connection, disabled }: { connection: ExternalAgentConne
   const [secret, setSecret] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [test, setTest] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null)
   const save = (next: string | null) => {
     setBusy(true)
     setError(null)
+    setTest(null)
     void setExternalAgentWebhook(connection.projectId, connection.id, next)
       .then(async (result) => {
         setSecret(result.webhookSecret)
         await queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(connection.projectId) })
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The webhook wasn’t saved.'))
+      .finally(() => setBusy(false))
+  }
+  const sendTest = () => {
+    setBusy(true)
+    setTest(null)
+    void testExternalAgentWebhook(connection.projectId, connection.id)
+      .then((result) =>
+        setTest(
+          result.ok
+            ? { tone: 'success', text: `The runner answered ${result.status ?? 'OK'} in ${result.elapsedMs} ms.` }
+            : { tone: 'danger', text: `The test wakeup didn’t get through: ${result.error ?? 'no answer'}.` },
+        ),
+      )
+      .catch((reason: unknown) =>
+        setTest({ tone: 'danger', text: reason instanceof Error ? reason.message : 'The test wakeup wasn’t sent.' }),
+      )
       .finally(() => setBusy(false))
   }
   const lastWakeup = formatWhen(connection.lastWakeupAt)
@@ -588,11 +607,17 @@ function WebhookField({ connection, disabled }: { connection: ExternalAgentConne
           Save webhook
         </Button>
         {connection.webhookUrl ? (
+          <Button disabled={disabled || busy} onClick={sendTest} size="sm" variant="secondary">
+            Send a test wakeup
+          </Button>
+        ) : null}
+        {connection.webhookUrl ? (
           <Button disabled={disabled || busy} onClick={() => save(null)} size="sm" variant="ghost">
             Stop wakeups
           </Button>
         ) : null}
       </div>
+      {test ? <Banner tone={test.tone}>{test.text}</Banner> : null}
       {secret ? (
         <p className="aw-token__meta">
           Signing secret, shown once: <code>{secret}</code>

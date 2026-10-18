@@ -329,11 +329,11 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "launch.template",
         label: "Launch prompt",
-        description: "The prompt Launch builds from a task, in Markdown. Fields such as {{task.title}}, {{task.criteria}} and {{project.guide}} are filled in; {{#if task.pages}}…{{/if}} keeps a part only when the field has a value, and {{#harness codex_cloud}}…{{/harness}} only for that harness.",
+        description: "The prompt Launch builds from a task, in Markdown. Fields such as {{task.title}}, {{task.criteria}}, {{project.guide}} and {{project.skills}} are filled in; {{#if task.pages}}…{{/if}} keeps a part only when the field has a value, and {{#harness codex_cloud}}…{{/harness}} only for that harness.",
         kind: SettingType::Markdown { max_chars: 12000 },
         scopes: TEAM_SCOPES,
         launch_override: false,
-        default: r#""You're working on {{task.key}} in {{project.name}}: {{task.title}}\n{{#if task.description}}\n\n## What to do\n\n{{task.description}}\n{{/if}}\n{{#if task.criteria}}\n\n## Done when\n\n{{task.criteria}}\n{{/if}}\n{{#if task.pages}}\n\n## Linked pages\n\n{{task.pages}}\n{{/if}}\n{{#if project.guide}}\n\n## Project guide\n\n{{project.guide}}\n{{/if}}\n\nWhen you finish, say what you changed and how you checked it.\n""#,
+        default: r#""You're working on {{task.key}} in {{project.name}}: {{task.title}}\n{{#if task.description}}\n\n## What to do\n\n{{task.description}}\n{{/if}}\n{{#if task.criteria}}\n\n## Done when\n\n{{task.criteria}}\n{{/if}}\n{{#if task.pages}}\n\n## Linked pages\n\n{{task.pages}}\n{{/if}}\n{{#if project.guide}}\n\n## Project guide\n\n{{project.guide}}\n{{/if}}{{#if project.skills}}\n\n## Skills\n\nUse a skill only when its description fits this task.\n\n{{project.skills}}\n{{/if}}\n\nWhen you finish, say what you changed and how you checked it.\n""#,
     },
     SettingDef {
         key: "ai.auto_apply_suggestions",

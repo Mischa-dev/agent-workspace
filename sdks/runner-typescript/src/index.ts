@@ -9,7 +9,8 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 // ---------------------------------------------------------------------------
 // Wakeups
 
-export type WakeupEvent = 'reply.requested' | 'reply.followup' | 'reply.cancelled' | 'inbox.available'
+/** `ping` is a test wakeup from the Agents page: answer it and do nothing else. */
+export type WakeupEvent = 'reply.requested' | 'reply.followup' | 'reply.cancelled' | 'inbox.available' | 'ping'
 
 export type Wakeup = {
   event: WakeupEvent
@@ -443,6 +444,7 @@ export class Runner {
     } catch (error) {
       return { status: error instanceof WakeupError ? error.status : 400 }
     }
+    if (wakeup.event === 'ping') return { status: 204 }
     if (this.deduper.first(wakeup.deliveryId)) void this.dispatch(wakeup).catch((error) => this.report(error))
     return { status: 204 }
   }

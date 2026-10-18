@@ -489,6 +489,9 @@ class Runner:
             wakeup = verify_wakeup(self._webhook_secret, headers, body)
         except WakeupError as error:
             return error.status
+        if wakeup["event"] == "ping":
+            # A test wakeup from the Agents page: answering is the whole test.
+            return 204
         if self._deduper.first(wakeup["deliveryId"]):
             threading.Thread(target=self._dispatch_safely, args=(wakeup,), daemon=True).start()
         return 204

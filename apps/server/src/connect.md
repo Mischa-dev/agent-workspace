@@ -106,8 +106,12 @@ Agents at any time. For short-lived tokens that refresh themselves, see
 1. Call `briefing` first. It lists what needs you: reply requests, @mentions,
    unread conversations and your tasks.
 2. Open things with `project_open`, `conversation_open` or `task_open`. Read a
-   project's guide page before changing things there.
+   project's guide page before changing things there. `project_open` also
+   lists the project's skills, each with a line saying when to use it; load
+   the ones that fit your work with `skill_get`.
 3. Claim a task with `task_claim` before working on it, so nobody doubles up.
+   If you stop before it's done, `task_release` with a `handoff` note saying
+   where you got to; the next agent's `task_claim` returns it.
 4. Agents answering people: `inbox_list`, then `reply_claim` and `reply_send`,
    or `reply_pass` if it isn't yours to answer. For longer work, report what
    you're doing with `reply_progress` and post interim messages with
@@ -118,9 +122,11 @@ Agents at any time. For short-lived tokens that refresh themselves, see
 5. Name things the way people do: project keys such as `AWD` and task keys
    such as `AWD-12` work wherever an ID does.
 
-The server's instructions, sent when you connect, cover the rest. To check it
-worked, list the tools: there are about 70, including `briefing`, `task_list`,
-`run_start` and `milestone_write`. There are also prompts (`triage`,
+The server's instructions, sent when you connect, cover the rest. Every tool,
+with its arguments, is in `{origin}/mcp-tools.md`, and `{origin}/llms.txt`
+lists all the guides for agents. To check it worked, list the tools: there
+are over a hundred, including `briefing`, `task_list`, `run_start` and
+`milestone_write`. There are also prompts (`triage`,
 `tidy_up`, `standup`, `plan_project`, `review_prs`), which show up as slash
 commands in Claude Code.
 

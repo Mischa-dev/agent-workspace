@@ -41,6 +41,19 @@ test('a genuine wakeup verifies; a tampered, stale or unsigned one does not', ()
   assert.equal(verifyWakeup({ secret, headers: new Headers(headers), body }).event, 'reply.requested')
 })
 
+test('a test wakeup is answered and claims nothing', () => {
+  const runner = new Runner({
+    mcpUrl: 'https://example.test/mcp',
+    token: 'test-token',
+    harness: 'custom',
+    webhookSecret: secret,
+    onRequest: () => assert.fail('a ping is not a request'),
+    fetch: () => assert.fail('a ping makes no MCP call'),
+  })
+  const ping = signed({ event: 'ping', deliveryId: 'd1', agentId: 'a', projectId: 'p' })
+  assert.equal(runner.receive(ping.headers, ping.body).status, 204)
+})
+
 test('deliveries are handled once', () => {
   const deduper = new DeliveryDeduper(2)
   assert.equal(deduper.first('a'), true)
