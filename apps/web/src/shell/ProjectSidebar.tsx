@@ -1,18 +1,17 @@
-import { lazy, Suspense, useRef, useState, type FormEvent } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { queryKeys } from '../api/queryKeys'
-import { createChannel } from '../conversations/api'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { SidebarThread } from '../conversations/types'
 import type { Project } from '../projects/types'
-import { Button, Dialog, TextField, type MenuEntry } from '../ui'
+import { IconButton, type MenuEntry } from '../ui'
+import { projectSection } from './projectSections'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 import { projectSettingsHref } from '../settings/paths'
 
 const PinnedViews = lazy(() => import('./PinnedViews'))
 const SidebarAgents = lazy(() => import('../agents/SidebarAgents'))
+const ChannelCreator = lazy(() => import('./ChannelCreator'))
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -52,21 +51,36 @@ export function ProjectSidebar({
     { label: 'Archived conversations', icon: 'archive', onSelect: () => go(`${base}/conversations/archived`) },
     { label: 'Project settings', icon: 'settings', onSelect: () => go(projectSettingsHref(project.id)) },
   ]
+  const section = projectSection(location.pathname, base)
   const listedThread = sidebar.data?.channels.some((channel) => channel.threads.some((candidate) => candidate.id === thread?.id))
 
   return (
-    <SidebarFrame id="project-sidebar" label={`${project.name} navigation`} menu={menu} mobileOpen={mobileOpen} title={project.name}>
+    <SidebarFrame
+      actions={
+        <IconButton
+          icon="search"
+          label={`Search ${project.name}`}
+          onClick={() => go(`/search?projectId=${encodeURIComponent(project.id)}`)}
+          side="bottom"
+        />
+      }
+      id="project-sidebar"
+      label={`${project.name} navigation`}
+      menu={menu}
+      mobileOpen={mobileOpen}
+      title={project.name}
+    >
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
-        <SidebarLink icon="work" label="Work items" onNavigate={onNavigate} to={`${base}/work-items`} />
-        <SidebarLink icon="checklist" label="Milestones" onNavigate={onNavigate} to={`${base}/milestones`} />
-        <SidebarLink icon="play" label="Up next" onNavigate={onNavigate} to={`${base}/next`} />
-        <SidebarLink icon="branch" label="Graph" onNavigate={onNavigate} to={`${base}/graph`} />
-        <SidebarLink icon="clock" label="Timeline" onNavigate={onNavigate} to={`${base}/timeline`} />
+        <SidebarLink
+          active={section === 'work'}
+          icon="work"
+          label="Work items"
+          onNavigate={onNavigate}
+          to={`${base}/work-items`}
+        />
+        <SidebarLink active={section === 'pages'} icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
         <SidebarLink icon="play" label="Launches" onNavigate={onNavigate} to={`${base}/launches`} />
-        <SidebarLink icon="list" label="Pages" onNavigate={onNavigate} to={`${base}/pages`} />
-        <SidebarLink icon="check" label="Decisions" onNavigate={onNavigate} to={`${base}/decisions`} />
-        <SidebarLink icon="search" label="Search" onNavigate={onNavigate} to={`/search?projectId=${encodeURIComponent(project.id)}`} />
       </ul>
       <Suspense fallback={null}>
         <PinnedViews onNavigate={onNavigate} projectId={project.id} />
@@ -127,76 +141,11 @@ export function ProjectSidebar({
         ) : null}
       </SidebarSection>
       {sidebar.isError ? <p className="aw-sidebar__note">Channels couldn’t load. They’ll retry on their own.</p> : null}
-      <ChannelCreator
-        onClose={() => setCreating(false)}
-        onCreated={(to) => go(to)}
-        open={creating}
-        projectId={project.id}
-      />
+      {creating ? (
+        <Suspense fallback={null}>
+          <ChannelCreator onClose={() => setCreating(false)} onCreated={(to) => go(to)} open projectId={project.id} />
+        </Suspense>
+      ) : null}
     </SidebarFrame>
-  )
-}
-
-function ChannelCreator({
-  onClose,
-  onCreated,
-  open,
-  projectId,
-}: {
-  onClose: () => void
-  onCreated: (to: string) => void
-  open: boolean
-  projectId: string
-}) {
-  const queryClient = useQueryClient()
-  const idempotencyKey = useRef(crypto.randomUUID())
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const value = name.trim().replace(/^#/, '')
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!value || busy) return
-    setBusy(true)
-    setError(null)
-    void createChannel({ projectId, name: value, idempotencyKey: idempotencyKey.current })
-      .then((channel) => {
-        idempotencyKey.current = crypto.randomUUID()
-        setName('')
-        onClose()
-        void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
-        onCreated(`/projects/${encodeURIComponent(projectId)}/channels/${encodeURIComponent(channel.id)}`)
-      })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The channel wasn’t created. Try again.'))
-      .finally(() => setBusy(false))
-  }
-
-  return (
-    <Dialog
-      description="Channels are where a Project’s conversations happen. Everyone in the Project can read and post."
-      onClose={onClose}
-      open={open}
-      title="New channel"
-    >
-      <form className="aw-form" id="new-channel-form" onSubmit={submit}>
-        <TextField
-          autoComplete="off"
-          error={error ?? undefined}
-          hint="Short and lowercase works best, like design or deploys."
-          label="Name"
-          maxLength={120}
-          onChange={(event) => setName(event.target.value)}
-          prefix="#"
-          value={name}
-        />
-        <div className="aw-form__actions">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button busy={busy} disabled={!value} type="submit" variant="primary">
-            Create channel
-          </Button>
-        </div>
-      </form>
-    </Dialog>
   )
 }

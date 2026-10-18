@@ -1,5 +1,5 @@
 import { Children, isValidElement, useId, useState, type ReactElement, type ReactNode } from 'react'
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 
 import { Avatar, Badge, Dots, Icon, IconButton, Menu, type ActorKind, type IconName, type MenuEntry } from '../ui'
 
@@ -103,6 +103,7 @@ function AttentionMark({ kind }: { kind: SidebarAttention }) {
 
 /** One row: a link with an icon or avatar, bold when unread, with optional state on the right. */
 export function SidebarLink({
+  active,
   attention,
   attentionLabel,
   avatar,
@@ -117,6 +118,8 @@ export function SidebarLink({
   to,
   unread = false,
 }: {
+  /** Marks the row current for pages it holds besides its own, such as Work items on Milestones. */
+  active?: boolean
   attention?: SidebarAttention
   /** Spoken state, for example "Needs your response". */
   attentionLabel?: string
@@ -133,33 +136,38 @@ export function SidebarLink({
   to: string
   unread?: boolean
 }) {
+  const rowClass = (isActive: boolean) =>
+    ['aw-item', isActive ? 'is-active' : '', unread || badge ? 'is-unread' : '', nested ? 'aw-item--nested' : ''].filter(Boolean).join(' ')
+  const content = (
+    <>
+      {nested ? null : (
+        <span className="aw-item__lead">
+          {avatar ? <Avatar kind={avatar.kind} name={avatar.name} seed={avatar.seed} size={20} /> : icon ? <Icon name={icon} /> : null}
+        </span>
+      )}
+      <span className="aw-item__label">{label}</span>
+      {attentionLabel ? <span className="visually-hidden">, {attentionLabel}</span> : null}
+      {attention || badge || meta ? (
+        <span className="aw-item__trail">
+          {attention ? <AttentionMark kind={attention} /> : null}
+          {badge ? <Badge count={badge} /> : null}
+          {meta ? <span className="aw-item__meta">{meta}</span> : null}
+        </span>
+      ) : null}
+    </>
+  )
   return (
     <li data-attention={dataAttention}>
-      <NavLink
-        className={({ isActive }) =>
-          ['aw-item', isActive ? 'is-active' : '', unread || badge ? 'is-unread' : '', nested ? 'aw-item--nested' : '']
-            .filter(Boolean)
-            .join(' ')
-        }
-        end={end}
-        onClick={onNavigate}
-        to={to}
-      >
-        {nested ? null : (
-          <span className="aw-item__lead">
-            {avatar ? <Avatar kind={avatar.kind} name={avatar.name} seed={avatar.seed} size={20} /> : icon ? <Icon name={icon} /> : null}
-          </span>
-        )}
-        <span className="aw-item__label">{label}</span>
-        {attentionLabel ? <span className="visually-hidden">, {attentionLabel}</span> : null}
-        {attention || badge || meta ? (
-          <span className="aw-item__trail">
-            {attention ? <AttentionMark kind={attention} /> : null}
-            {badge ? <Badge count={badge} /> : null}
-            {meta ? <span className="aw-item__meta">{meta}</span> : null}
-          </span>
-        ) : null}
-      </NavLink>
+      {/* NavLink only marks its own path current, so a row that holds other pages marks itself. */}
+      {active === undefined ? (
+        <NavLink className={({ isActive }) => rowClass(isActive)} end={end} onClick={onNavigate} to={to}>
+          {content}
+        </NavLink>
+      ) : (
+        <Link aria-current={active ? 'page' : undefined} className={rowClass(active)} onClick={onNavigate} to={to}>
+          {content}
+        </Link>
+      )}
     </li>
   )
 }

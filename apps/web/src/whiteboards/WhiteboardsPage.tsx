@@ -50,7 +50,7 @@ export function WhiteboardsPage() {
   })
   const workspaces = boards.data?.workspaces ?? []
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-page--wide">
         <PageHeader
           actions={

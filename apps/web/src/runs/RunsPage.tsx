@@ -59,7 +59,7 @@ export function RunsPage() {
   }
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-runs">
         <PageHeader icon="activity" title="Runs">
           What agents did on your tasks, what they used and what it cost.

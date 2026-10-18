@@ -15,11 +15,13 @@ test('opens Ready for agents from the sidebar, then My work and the timeline', a
   await expect(page).toHaveURL(/ready=true/)
   await expect(page.getByRole('button', { name: /^Ready for agents/ })).toBeVisible()
 
-  await page.getByRole('navigation', { name: 'Projects' }).getByRole('link', { name: 'My work' }).click()
+  await page.getByRole('navigation', { name: 'Projects' }).getByRole('link', { name: /^Home/ }).click()
+  await page.getByRole('complementary', { name: 'Home navigation' }).getByRole('link', { name: 'My work' }).click()
   await expect(page.getByRole('heading', { name: 'My work', exact: true })).toBeVisible()
   await page.screenshot({ path: `${screenshotDir}/my-work.png`, fullPage: true })
 
-  await page.goto(`/projects/${projectId}/timeline`)
+  await page.goto(`/projects/${projectId}/work-items`)
+  await page.getByRole('navigation', { name: 'Work items' }).getByRole('link', { name: 'Timeline' }).click()
   await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible()
 })
 
