@@ -66,6 +66,12 @@ pub mod kind {
     pub const REVIEW_REQUESTED: &str = "review_requested";
     /// Someone else changed or commented on a task you watch.
     pub const TASK_CHANGED: &str = "task_changed";
+    /// A new message in a conversation you set to every message (W21).
+    pub const CONVERSATION_MESSAGE: &str = "conversation_message";
+    /// A reminder you set is due (W21).
+    pub const REMINDER: &str = "reminder";
+    /// A message you scheduled couldn't be sent (W21).
+    pub const SCHEDULED_SEND_FAILED: &str = "scheduled_send_failed";
 }
 
 /// Groups of kinds people filter the inbox by.
@@ -333,7 +339,9 @@ pub async fn fan_out(
 ) -> Result<usize, AppError> {
     let notifications = match payload {
         OutboxEventPayload::MessageCreated(created) => {
-            message_mentions(transaction, created.message_id).await?
+            let mut found = message_mentions(transaction, created.message_id).await?;
+            found.extend(followed_messages(transaction, created.message_id).await?);
+            found
         }
         OutboxEventPayload::MessageUpdated(updated) if updated.removed => {
             forget_message(transaction, updated.message_id).await?;
@@ -466,6 +474,9 @@ async fn message_mentions(
           ON recipient.actor_id <> message.author_actor_id
         WHERE actor_can_access_project(recipient.actor_id, NULL, message.project_id)
           AND conversation_visible_to(message.conversation_id, recipient.actor_id)
+          -- W21: set to nothing, a conversation doesn't notify even of mentions.
+          AND conversation_notification_level(recipient.actor_id, message.conversation_id)
+              <> 'nothing'
         ORDER BY recipient.actor_id
         "#,
     )
@@ -485,6 +496,67 @@ async fn message_mentions(
                 row.conversation_id,
                 format!("mention:{}", row.conversation_id),
                 format!("mention:{message_id}"),
+            );
+            notification.actor_id = Some(row.author_actor_id);
+            notification.conversation_id = Some(row.conversation_id);
+            notification.message_id = Some(message_id);
+            notification
+        })
+        .collect())
+}
+
+/// People who set this message's conversation (or a thread's channel) to
+/// every message, and can see it, other than its author and anyone it
+/// mentions (they get the mention).
+async fn followed_messages(
+    transaction: &mut Transaction<'_, Postgres>,
+    message_id: Uuid,
+) -> Result<Vec<NewNotification>, AppError> {
+    let rows = sqlx::query_as::<_, MentionRow>(
+        r#"
+        WITH message AS (
+            SELECT message.id, message.project_id, message.conversation_id,
+                   message.author_actor_id, conversation.parent_channel_id
+            FROM messages message
+            JOIN conversations conversation ON conversation.id = message.conversation_id
+            WHERE message.id = $1 AND message.removed_at IS NULL
+        ),
+        following AS (
+            SELECT level.actor_id
+            FROM message
+            JOIN conversation_notification_levels level
+              ON level.level = 'all'
+             AND level.conversation_id IN (message.conversation_id, message.parent_channel_id)
+        )
+        SELECT DISTINCT message.project_id, message.conversation_id, message.author_actor_id,
+               following.actor_id AS recipient_actor_id
+        FROM message
+        JOIN following ON following.actor_id <> message.author_actor_id
+        JOIN actors actor ON actor.id = following.actor_id AND actor.kind = 'human'
+        WHERE conversation_notification_level(following.actor_id, message.conversation_id) = 'all'
+          AND actor_can_access_project(following.actor_id, NULL, message.project_id)
+          AND conversation_visible_to(message.conversation_id, following.actor_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM message_mentions mention
+              WHERE mention.message_id = message.id AND mention.actor_id = following.actor_id
+          )
+        ORDER BY recipient_actor_id
+        "#,
+    )
+    .bind(message_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let mut notification = NewNotification::new(
+                row.project_id,
+                row.recipient_actor_id,
+                kind::CONVERSATION_MESSAGE,
+                "conversation",
+                row.conversation_id,
+                format!("messages:{}", row.conversation_id),
+                format!("message:{message_id}"),
             );
             notification.actor_id = Some(row.author_actor_id);
             notification.conversation_id = Some(row.conversation_id);
@@ -1049,6 +1121,9 @@ pub struct NotificationView {
     /// The conversation a Reply from the notification posts in (mentions).
     #[serde(skip)]
     pub reply_conversation_id: Option<Uuid>,
+    /// A reminder's saved item, which Done and Snooze change (W21).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_item_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1378,6 +1453,28 @@ fn view(row: NotificationRow) -> NotificationView {
             format!("{who} mentioned you in {place}"),
             row.message_preview.clone(),
         ),
+        kind::CONVERSATION_MESSAGE => (format!("{who} in {place}"), row.message_preview.clone()),
+        kind::REMINDER => {
+            let note = row
+                .detail
+                .get("note")
+                .and_then(serde_json::Value::as_str)
+                .filter(|note| !note.trim().is_empty());
+            let title = match (note, row.message_id, &row.work_item_key) {
+                (Some(note), _, _) => format!("Reminder: {note}"),
+                (None, Some(_), _) => format!("Reminder: a message in {place}"),
+                (None, None, Some(_)) => format!("Reminder: {task}"),
+                _ => "Reminder".to_owned(),
+            };
+            let preview = if note.is_some() || row.message_id.is_some() {
+                row.message_preview
+                    .clone()
+                    .or_else(|| row.work_item_title.clone())
+            } else {
+                row.work_item_title.clone()
+            };
+            (title, preview)
+        }
         kind::COMMENT_MENTION => (
             format!("{who} mentioned you on {task_key}"),
             row.comment_preview.clone(),
@@ -1449,7 +1546,12 @@ fn view(row: NotificationRow) -> NotificationView {
             .map(|id| format!("/projects/{}/work-items/{id}", row.project_id)),
         "pull_request" => row.pull_request_url.clone(),
         _ => conversation_href(&row).map(|href| match row.message_id {
-            Some(message_id) if row.kind == kind::MENTION && row.message_preview.is_some() => {
+            Some(message_id)
+                if matches!(
+                    row.kind.as_str(),
+                    kind::MENTION | kind::CONVERSATION_MESSAGE | kind::REMINDER
+                ) && row.message_preview.is_some() =>
+            {
                 format!("{href}#message-{message_id}")
             }
             _ => href,
@@ -1493,9 +1595,20 @@ fn view(row: NotificationRow) -> NotificationView {
                 .map(str::to_owned),
         })
     });
-    let reply_conversation_id = row
-        .conversation_id
-        .filter(|_| row.kind == kind::MENTION && row.message_id.is_some());
+    let reply_conversation_id = row.conversation_id.filter(|_| {
+        matches!(
+            row.kind.as_str(),
+            kind::MENTION | kind::CONVERSATION_MESSAGE
+        ) && row.message_id.is_some()
+    });
+    let saved_item_id = (row.kind == kind::REMINDER)
+        .then(|| {
+            row.detail
+                .get("savedItemId")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())
+        })
+        .flatten();
     // Kinds that belong to no project (capacity alerts) name their place.
     let project_name = row
         .detail
@@ -1535,6 +1648,7 @@ fn view(row: NotificationRow) -> NotificationView {
         launch_href,
         batch,
         reply_conversation_id,
+        saved_item_id,
     }
 }
 

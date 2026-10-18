@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
+import { useLaterActions } from '../later/MessageLaterActions'
 import { IconButton } from '../ui'
 import { markConversationUnread, setMessageReaction } from './api'
 import { dropRemovedMessage, invalidateConversation, refreshMemoryCaches, setCachedReactions } from './liveMessages'
@@ -41,6 +42,7 @@ export function useMessageActions({
   projectId,
   searchActors,
   searchWorkItems,
+  taskProject = false,
   viewerId,
 }: {
   /** The page's buttons for a message that isn't removed. */
@@ -54,6 +56,8 @@ export function useMessageActions({
   projectId: string
   searchActors: (query: string) => Promise<ConversationActor[]>
   searchWorkItems?: (query: string) => Promise<ConversationWorkItemReference[]>
+  /** In a project with tasks: messages can become tasks. */
+  taskProject?: boolean
   viewerId: string
 }) {
   const queryClient = useQueryClient()
@@ -64,6 +68,7 @@ export function useMessageActions({
   // The latest reaction request per message: an older answer arriving late
   // never replaces a newer one.
   const reactionRequests = useRef(new Map<string, number>())
+  const later = useLaterActions({ canForward: true, conversationId, projectId, taskProject })
 
   const canEdit = (message: ConversationMessage) =>
     Boolean(capabilities?.editMessages) && message.author.id === viewerId && !message.removed
@@ -147,6 +152,7 @@ export function useMessageActions({
           />
         ) : null}
         {actionsFor?.(message, entry)}
+        {later.buttonsFor(message)}
         {capabilities?.markSeen ? (
           <IconButton icon="inbox" label="Mark unread from here" onClick={() => markUnread(message)} size="sm" />
         ) : null}
@@ -192,6 +198,7 @@ export function useMessageActions({
 
   const dialogs = (
     <>
+      {later.dialogs}
       {removing ? (
         <RemoveMessageDialog
           conversationId={conversationId}

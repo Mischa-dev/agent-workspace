@@ -507,6 +507,8 @@ export async function createWorkItem(input: {
   dueDate?: string
   estimate?: number
   acceptanceCriteria?: string[]
+  /** Made from a message: the task links back to it. */
+  sourceMessageId?: string
   idempotencyKey: string
 }) {
   const { projectId, idempotencyKey, ...json } = input

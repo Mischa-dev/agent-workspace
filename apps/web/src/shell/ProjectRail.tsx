@@ -171,6 +171,7 @@ export function ProjectRail({
           to="/inbox"
         />
         <UtilityTile active={location.pathname === '/my-work'} icon="checklist" label="My work" onClick={onNavigate} to="/my-work" />
+        <UtilityTile active={location.pathname === '/later'} icon="bookmark" label="Later" onClick={onNavigate} to="/later" />
         <UtilityTile active={location.pathname.startsWith('/runs')} icon="activity" label="Runs" onClick={onNavigate} to="/runs" />
         <UtilityTile
           active={location.pathname.startsWith('/whiteboards')}

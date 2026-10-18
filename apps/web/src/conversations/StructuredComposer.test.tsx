@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { SLASH_COMMANDS } from '../later/slashCommands'
 import { StructuredComposer } from './StructuredComposer'
 
 const human = {
@@ -153,5 +154,41 @@ describe('StructuredComposer', () => {
     fireEvent.keyDown(box, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
     expect(box).toHaveFocus()
+  })
+
+  it('runs a slash command instead of sending, and sends an unknown one as text', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const onCommand = vi.fn().mockResolvedValue({ kind: 'done' })
+    render(<StructuredComposer commands={SLASH_COMMANDS} onCommand={onCommand} onSubmit={onSubmit} searchActors={vi.fn()} />)
+
+    // Typing the name offers it; Enter completes it rather than sending.
+    const box = type('/rem')
+    expect(screen.getByRole('option', { name: /remind/ })).toBeInTheDocument()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(box).toHaveValue('/remind ')
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    type('/remind me to stretch at 3pm')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1))
+    expect(onCommand.mock.calls[0][0].name).toBe('remind')
+    expect(onCommand.mock.calls[0][1]).toBe('me to stretch at 3pm')
+    expect(onSubmit).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByLabelText('Message')).toHaveValue(''))
+
+    type('/shrug fine')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].text).toBe('/shrug fine')
+    expect(onCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the text when a command fails', async () => {
+    const onCommand = vi.fn().mockRejectedValue(new Error('Add a time, like “at 3pm”.'))
+    render(<StructuredComposer commands={SLASH_COMMANDS} onCommand={onCommand} onSubmit={vi.fn()} searchActors={vi.fn()} />)
+    type('/remind me to stretch')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Add a time')
+    expect(screen.getByLabelText('Message')).toHaveValue('/remind me to stretch')
   })
 })

@@ -54,6 +54,7 @@ const RunPage = lazy(() => import('../runs/RunPage').then((module) => ({ default
 const WhiteboardsPage = lazy(() => import('../whiteboards/WhiteboardsPage').then((module) => ({ default: module.WhiteboardsPage })))
 const WhiteboardPage = lazy(() => import('../whiteboards/WhiteboardPage').then((module) => ({ default: module.WhiteboardPage })))
 const InboxPage = lazy(() => import('../inbox/InboxPage').then((module) => ({ default: module.InboxPage })))
+const LaterPage = lazy(() => import('../later/LaterPage').then((module) => ({ default: module.LaterPage })))
 const QuickAddPage = lazy(() => import('../quick-add/QuickAddPage').then((module) => ({ default: module.QuickAddPage })))
 const TaskKeyRedirect = lazy(() => import('./TaskKeyRedirect').then((module) => ({ default: module.TaskKeyRedirect })))
 // Only development builds include the kit page; production drops the import.
@@ -152,6 +153,7 @@ export function App() {
                     }
                     path="/inbox"
                   />
+                  <Route element={<AuthenticatedRouteBoundary><LaterPage /></AuthenticatedRouteBoundary>} path="/later" />
                   <Route element={<AuthenticatedRouteBoundary><QuickAddPage /></AuthenticatedRouteBoundary>} path="/new-task" />
                   <Route element={<AuthenticatedRouteBoundary><QuickAddPage /></AuthenticatedRouteBoundary>} path="/share" />
                   <Route

@@ -31,6 +31,7 @@ import { ConversationHeader } from '../conversations/ConversationHeader'
 import { ThreadStatusButton } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
+import { useConversationTools } from '../later/useConversationTools'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
@@ -189,6 +190,7 @@ export function ThreadPage() {
     capabilities: verifiedTimeline?.capabilities,
     searchActors,
     searchWorkItems,
+    taskProject: verifiedTimeline?.conversation.parentKind === 'channel',
     onReactionsChanged: older.patchReactions,
     onChanged: (entry) => {
       older.replaceEntry(entry)
@@ -209,6 +211,14 @@ export function ThreadPage() {
       setPendingSends((current) => current.filter((item) => item.key !== submission.idempotencyKey))
     }
   }
+
+  const tools = useConversationTools({
+    canPost: Boolean(verifiedTimeline?.capabilities.sendMessage && !verifiedTimeline.conversation.archivedAt),
+    conversationId: threadId,
+    kind: 'thread',
+    latestMessageId: entries.at(-1)?.message?.id,
+    projectId,
+  })
 
   if (isApiError(thread.timeline.error) && thread.timeline.error.status === 404) {
     const parent = verifiedTimeline?.conversation.parentChannelId ?? null
@@ -346,11 +356,14 @@ export function ThreadPage() {
         back={{ label: parentChannel ? `Back to #${parentChannel.name}` : 'Back to the channel', to: channelRoute }}
         icon="messages"
         menu={
-          verifiedTimeline?.capabilities.archive && !archived
+          verifiedTimeline
             ? [
                 { label: parentChannel ? `Back to #${parentChannel.name}` : 'Back to the channel', icon: 'arrow-left', onSelect: () => navigate(channelRoute) },
                 { separator: true },
-                { label: 'Archive thread', icon: 'archive', danger: true, onSelect: () => setArchiveOpen(true) },
+                ...tools.levelMenu,
+                ...(verifiedTimeline.capabilities.archive && !archived
+                  ? [{ separator: true as const }, { label: 'Archive thread', icon: 'archive' as const, danger: true, onSelect: () => setArchiveOpen(true) }]
+                  : []),
               ]
             : undefined
         }
@@ -461,6 +474,7 @@ export function ThreadPage() {
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}
           toolbar={modeSwitch}
+          {...tools.composer}
         />
       ) : null}
       {mode === 'run' && showRunComposer ? <RunComposer actions={runActions} activeRun={activeRun} modeSwitch={modeSwitch} /> : null}

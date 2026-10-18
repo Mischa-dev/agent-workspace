@@ -397,6 +397,12 @@ async fn locked_entry(
         viewer,
     )
     .await?;
+    crate::forwarding::attach_forwards(
+        &mut **transaction,
+        std::slice::from_mut(&mut entry),
+        viewer,
+    )
+    .await?;
     Ok(entry)
 }
 
@@ -1117,6 +1123,18 @@ async fn get_message(
     reactions::attach_reactions(
         &state.pool,
         conversation.id,
+        std::slice::from_mut(&mut entry),
+        principal.actor_id,
+    )
+    .await?;
+    crate::forwarding::attach_forwards(
+        &state.pool,
+        std::slice::from_mut(&mut entry),
+        principal.actor_id,
+    )
+    .await?;
+    crate::later::attach_saved(
+        &state.pool,
         std::slice::from_mut(&mut entry),
         principal.actor_id,
     )

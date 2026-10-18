@@ -54,7 +54,7 @@ self.addEventListener('push', (event) => {
   event.waitUntil(showPush(event))
 })
 
-const TOKEN_ACTIONS = ['approve', 'deny', 'reply']
+const TOKEN_ACTIONS = ['approve', 'deny', 'reply', 'done', 'snooze']
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
@@ -73,8 +73,8 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(focusApp(target))
 })
 
-const DONE = { approve: 'Approved', deny: 'Denied', reply: 'Reply sent' }
-const FAILED = { approve: 'Not approved', deny: 'Not denied', reply: 'Reply not sent' }
+const DONE = { approve: 'Approved', deny: 'Denied', reply: 'Reply sent', done: 'Marked done', snooze: 'Reminding you in an hour' }
+const FAILED = { approve: 'Not approved', deny: 'Not denied', reply: 'Reply not sent', done: 'Not marked done', snooze: 'Not snoozed' }
 
 // Answer from the notification, then say what happened in a quiet one that
 // replaces it. A failure says why and opens the app where it can be done.

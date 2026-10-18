@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 
-import { ActorTag, Avatar, Icon, IconButton, actorKind, type IconName } from '../ui'
+import { ActorTag, Avatar, Icon, IconButton, actorKind, showToast, type IconName } from '../ui'
+import { ForwardedQuote } from './ForwardedQuote'
 import { MessageContent } from './MessageContent'
 import { dayKey, dayLabel, eventLabel, formatFullDate, formatTime } from './timeFormat'
 import type { ConversationMessage, ConversationTimelineEntry, ConversationWorkerEvent } from './types'
@@ -172,7 +173,10 @@ export function MessageRow({
   const edited = !removed && (message.revision > 1 || Boolean(message.editedAt))
   const copyLink = () => {
     const url = `${window.location.origin}${window.location.pathname}#message-${message.id}`
-    void navigator.clipboard?.writeText(url).catch(() => undefined)
+    void navigator.clipboard
+      ?.writeText(url)
+      .then(() => showToast({ tone: 'success', title: 'Link copied' }))
+      .catch(() => undefined)
   }
   return (
     <article
@@ -206,6 +210,7 @@ export function MessageRow({
             <span className="aw-msg__author">{message.author.displayName}</span>
             <ActorTag kind={kind} />
             {message.via ? <span className="aw-msg__via">via {message.via}</span> : null}
+            {message.saved && !removed ? <Icon className="aw-msg__saved" label="Saved for later" name="bookmark" size={14} /> : null}
             <time className="aw-msg__time" dateTime={entry.createdAt} title={formatFullDate(entry.createdAt)}>
               {formatTime(entry.createdAt)}
             </time>
@@ -233,6 +238,7 @@ export function MessageRow({
             ) : null}
           </div>
         )}
+        {removed || editor || !message.forwarded ? null : <ForwardedQuote value={message.forwarded} />}
         {removed || editor ? null : reactions}
         {extras}
       </div>

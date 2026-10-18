@@ -23,6 +23,7 @@ pub mod execution_setup;
 pub mod external_agents;
 pub mod external_events;
 pub mod external_execution;
+pub mod forwarding;
 pub mod git_runtime;
 pub mod github;
 pub mod harness_host;
@@ -32,6 +33,7 @@ pub mod home;
 pub mod idempotency;
 pub mod invitations;
 pub mod jobs;
+pub mod later;
 pub mod launch;
 pub mod mail;
 pub mod mcp;
@@ -65,6 +67,7 @@ pub mod retention;
 pub mod run_log;
 pub mod run_views;
 pub mod runs;
+pub mod scheduled_messages;
 pub mod scheduler;
 pub mod search;
 pub mod secrets;
@@ -142,6 +145,9 @@ pub fn router(state: AppState) -> Router {
         .merge(home::router())
         .merge(push::router())
         .merge(notification_settings::router())
+        .merge(later::router())
+        .merge(scheduled_messages::router())
+        .merge(forwarding::router())
         .merge(mail::http::router())
         .merge(external_agents::router())
         .merge(repositories::router())

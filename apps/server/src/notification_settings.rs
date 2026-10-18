@@ -26,7 +26,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiQuery, AppError},
+    error::{ApiJson, ApiPath, ApiQuery, AppError},
     notifications::kind,
     settings::{self, SettingsContext},
     usage::alerts,
@@ -68,23 +68,26 @@ pub enum Group {
     Tasks,
     PullRequests,
     Usage,
+    Reminders,
     Other,
 }
 
 impl Group {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Mentions,
         Self::Approvals,
         Self::Runs,
         Self::Tasks,
         Self::PullRequests,
         Self::Usage,
+        Self::Reminders,
         Self::Other,
     ];
 
     pub fn of(kind: &str) -> Self {
         match kind {
-            kind::MENTION | kind::COMMENT_MENTION => Self::Mentions,
+            kind::MENTION | kind::COMMENT_MENTION | kind::CONVERSATION_MESSAGE => Self::Mentions,
+            kind::REMINDER | kind::SCHEDULED_SEND_FAILED => Self::Reminders,
             kind::APPROVAL_REQUESTED | kind::RUN_WAITING => Self::Approvals,
             kind::RUN_COMPLETED | kind::RUN_FAILED => Self::Runs,
             kind::ASSIGNED | kind::TASK_CHANGED => Self::Tasks,
@@ -102,6 +105,7 @@ impl Group {
             Self::Tasks => "tasks",
             Self::PullRequests => "pull_requests",
             Self::Usage => "usage",
+            Self::Reminders => "reminders",
             Self::Other => "other",
         }
     }
@@ -118,6 +122,7 @@ impl Group {
             Self::Tasks => "Tasks assigned or changed",
             Self::PullRequests => "Pull request checks and reviews",
             Self::Usage => "Capacity alerts",
+            Self::Reminders => "Reminders and scheduled messages",
             Self::Other => "Everything else",
         }
     }
@@ -128,7 +133,7 @@ impl Group {
             Channel::InApp => true,
             Channel::Push => matches!(
                 self,
-                Self::Mentions | Self::Approvals | Self::Runs | Self::Usage
+                Self::Mentions | Self::Approvals | Self::Runs | Self::Usage | Self::Reminders
             ),
             Channel::Email => false,
         }
@@ -312,6 +317,8 @@ pub struct NotificationSettingsView {
     pub mail_configured: bool,
     /// The person's confirmed address, if any.
     pub email_address: Option<String>,
+    /// Conversations set to every message or to nothing (W21).
+    pub conversation_levels: Vec<ConversationLevelView>,
 }
 
 /// The workspace notification settings apply to: `wanted` if the person is
@@ -391,6 +398,17 @@ pub async fn read(
     .bind(organization_id)
     .fetch_all(pool)
     .await?;
+    let conversation_levels = sqlx::query_as::<_, ConversationLevelRow>(&format!(
+        "{LEVEL_SQL} AND project.organization_id = $2 AND level.level <> 'mentions'
+         ORDER BY project.name, conversation.name LIMIT 200"
+    ))
+    .bind(actor_id)
+    .bind(organization_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(ConversationLevelView::from)
+    .collect();
     let mut connection = pool.acquire().await?;
     let (quiet_hours, digest) = quiet_hours(&mut connection, organization_id, actor_id).await?;
     let mail_configured = crate::mail::configured(&mut *connection, organization_id).await?;
@@ -404,6 +422,7 @@ pub async fn read(
         email_available: mail_configured && email_address.is_some(),
         mail_configured,
         email_address,
+        conversation_levels,
     })
 }
 
@@ -478,6 +497,146 @@ pub async fn set_mute(
 }
 
 // ---------------------------------------------------------------------------
+// Per conversation (W21)
+
+/// How much a person hears from one conversation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationLevel {
+    /// Every message, as a notification.
+    All,
+    /// Only mentions of you (the default).
+    Mentions,
+    /// Nothing, not even mentions.
+    Nothing,
+}
+
+impl ConversationLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Mentions => "mentions",
+            Self::Nothing => "nothing",
+        }
+    }
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "all" => Self::All,
+            "nothing" => Self::Nothing,
+            _ => Self::Mentions,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationLevelView {
+    pub conversation_id: Uuid,
+    pub project_id: Uuid,
+    pub place: String,
+    /// What applies here.
+    pub level: ConversationLevel,
+    /// Set on this conversation itself (false: the default, or a thread
+    /// following its channel).
+    pub own: bool,
+}
+
+#[derive(FromRow)]
+struct ConversationLevelRow {
+    conversation_id: Uuid,
+    project_id: Uuid,
+    kind: String,
+    name: String,
+    level: Option<String>,
+    effective: String,
+}
+
+impl From<ConversationLevelRow> for ConversationLevelView {
+    fn from(row: ConversationLevelRow) -> Self {
+        let place = match row.kind.as_str() {
+            "dm" => "a DM".to_owned(),
+            "channel" => format!("#{}", row.name),
+            "group" if row.name.is_empty() => "a group".to_owned(),
+            _ => row.name,
+        };
+        Self {
+            conversation_id: row.conversation_id,
+            project_id: row.project_id,
+            place,
+            level: ConversationLevel::parse(&row.effective),
+            own: row.level.is_some(),
+        }
+    }
+}
+
+/// Conversations `$1` can see, with their own level when they set one.
+const LEVEL_SQL: &str = r#"
+    SELECT conversation.id AS conversation_id, conversation.project_id, conversation.kind,
+           conversation.name, level.level,
+           conversation_notification_level($1, conversation.id) AS effective
+    FROM conversations conversation
+    JOIN projects project ON project.id = conversation.project_id
+    LEFT JOIN conversation_notification_levels level
+      ON level.conversation_id = conversation.id AND level.actor_id = $1
+    WHERE actor_can_access_project($1, NULL, conversation.project_id)
+      AND conversation_visible_to(conversation.id, $1)
+"#;
+
+pub async fn conversation_level(
+    pool: &PgPool,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<ConversationLevelView, AppError> {
+    sqlx::query_as::<_, ConversationLevelRow>(&format!("{LEVEL_SQL} AND conversation.id = $2"))
+        .bind(actor_id)
+        .bind(conversation_id)
+        .fetch_optional(pool)
+        .await?
+        .map(ConversationLevelView::from)
+        .ok_or(AppError::NotFound("conversation"))
+}
+
+/// Set a conversation the person can see to `level`, or (`None`) back to
+/// what it would be by default.
+pub async fn set_conversation_level(
+    pool: &PgPool,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    level: Option<ConversationLevel>,
+) -> Result<ConversationLevelView, AppError> {
+    let current = conversation_level(pool, actor_id, conversation_id).await?;
+    match level {
+        Some(level) => {
+            sqlx::query(
+                r#"
+                INSERT INTO conversation_notification_levels (actor_id, conversation_id, project_id, level)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (actor_id, conversation_id)
+                DO UPDATE SET level = EXCLUDED.level, updated_at = now()
+                "#,
+            )
+            .bind(actor_id)
+            .bind(conversation_id)
+            .bind(current.project_id)
+            .bind(level.as_str())
+            .execute(pool)
+            .await?;
+        }
+        None => {
+            sqlx::query(
+                "DELETE FROM conversation_notification_levels WHERE actor_id = $1 AND conversation_id = $2",
+            )
+            .bind(actor_id)
+            .bind(conversation_id)
+            .execute(pool)
+            .await?;
+        }
+    }
+    conversation_level(pool, actor_id, conversation_id).await
+}
+
+// ---------------------------------------------------------------------------
 // HTTP
 
 pub fn router() -> Router<AppState> {
@@ -488,6 +647,10 @@ pub fn router() -> Router<AppState> {
             put(set_channel_http),
         )
         .route("/api/v1/notification-settings/mutes", put(set_mute_http))
+        .route(
+            "/api/v1/conversations/{id}/notification-level",
+            get(conversation_level_http).put(set_conversation_level_http),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -577,6 +740,42 @@ async fn set_mute_http(
             .await?;
     Ok(Json(
         read(&state.pool, principal.actor_id, organization_id).await?,
+    ))
+}
+
+async fn conversation_level_http(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+) -> Result<Json<ConversationLevelView>, AppError> {
+    Ok(Json(
+        conversation_level(&state.pool, principal.actor_id, conversation_id).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationLevelChange {
+    /// all, mentions or nothing; null for the default.
+    pub level: Option<ConversationLevel>,
+}
+
+async fn set_conversation_level_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath(conversation_id): ApiPath<Uuid>,
+    ApiJson(change): ApiJson<ConversationLevelChange>,
+) -> Result<Json<ConversationLevelView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    Ok(Json(
+        set_conversation_level(
+            &state.pool,
+            principal.actor_id,
+            conversation_id,
+            change.level,
+        )
+        .await?,
     ))
 }
 
