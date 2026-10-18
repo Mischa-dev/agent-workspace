@@ -1,0 +1,29 @@
+/* Markdown in messages (W20): as compact as plain text, headings no larger than bold. */
+.aw-msg__body .aw-md p,
+.aw-msg__body .aw-md ul,
+.aw-msg__body .aw-md ol,
+.aw-msg__body .aw-md blockquote,
+.aw-msg__body .aw-md pre,
+.aw-msg__body .aw-md .aw-md__table {
+  margin-bottom: var(--space-2);
+}
+
+.aw-msg__body .aw-md > :last-child {
+  margin-bottom: 0;
+}
+
+.aw-msg__body .aw-md p,
+.aw-msg__body .aw-md li {
+  white-space: pre-wrap;
+}
+
+.aw-msg__body .aw-md h1,
+.aw-msg__body .aw-md h2,
+.aw-msg__body .aw-md h3,
+.aw-msg__body .aw-md h4,
+.aw-msg__body .aw-md h5,
+.aw-msg__body .aw-md h6 {
+  margin: var(--space-2) 0 var(--space-1);
+  font: var(--t-ui-strong, var(--t-body));
+  font-weight: 650;
+}

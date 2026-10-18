@@ -1,0 +1,395 @@
+/* Files, uploads and link previews (W20). Loaded with the pages that show them. */
+
+/* Files on a message, comment or task (W20) */
+.aw-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  white-space: normal;
+}
+
+.aw-files__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-files__image-wrap {
+  position: relative;
+}
+
+.aw-files__image {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  cursor: zoom-in;
+}
+
+.aw-files__image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.aw-files__image:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.aw-files__remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+.aw-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: min(100%, 360px);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-file__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.aw-file__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--content-fg);
+  text-decoration: none;
+}
+
+.aw-msg__body .aw-file__main {
+  color: var(--content-fg);
+}
+
+.aw-file__name {
+  overflow: hidden;
+  font: var(--t-ui);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-file__main:hover .aw-file__name {
+  text-decoration: underline;
+}
+
+.aw-file__meta {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+/* A picture full size */
+.aw-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px var(--space-4) var(--space-4);
+  background: #0d0c1ae6;
+}
+
+.aw-viewer__bar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  color: #fff;
+}
+
+.aw-viewer__bar .aw-iconbtn {
+  color: #fff;
+}
+
+.aw-viewer__name {
+  min-width: 0;
+  overflow: hidden;
+  font: var(--t-ui);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-viewer__meta {
+  flex: 1;
+  font: var(--t-caption);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.aw-viewer__image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.aw-viewer__step {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: #ffffff26;
+  color: #fff;
+  transform: translateY(-50%);
+}
+
+.aw-viewer__step.is-previous {
+  left: var(--space-3);
+}
+
+.aw-viewer__step.is-next {
+  right: var(--space-3);
+}
+
+.aw-viewer__step.is-next svg {
+  transform: rotate(180deg);
+}
+
+/* Link previews */
+.aw-previews {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  white-space: normal;
+}
+
+.aw-preview {
+  position: relative;
+  max-width: min(100%, 440px);
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--content-border);
+}
+
+.aw-msg__body a.aw-preview__link,
+.aw-preview__link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 28px;
+  color: var(--content-fg);
+  text-decoration: none;
+}
+
+.aw-preview__site {
+  font: var(--t-caption);
+  color: var(--content-fg-muted);
+}
+
+.aw-preview__title {
+  font: var(--t-ui);
+  font-weight: 650;
+  color: var(--link);
+}
+
+.aw-preview__link:hover .aw-preview__title {
+  text-decoration: underline;
+}
+
+.aw-preview__desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  font: var(--t-small);
+  color: var(--content-fg);
+}
+
+.aw-preview__image {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 220px;
+  margin-top: var(--space-1);
+  border-radius: var(--radius-md);
+  object-fit: cover;
+}
+
+.aw-preview__hide {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  opacity: 0;
+}
+
+.aw-preview:hover .aw-preview__hide,
+.aw-preview__hide:focus-visible {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .aw-preview__hide {
+    opacity: 1;
+  }
+}
+
+/* Files waiting in a composer (W20) */
+.aw-uploads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3) 0;
+  list-style: none;
+}
+
+.aw-worksection .aw-uploads {
+  padding: 0 0 var(--space-2);
+}
+
+.aw-upload {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 240px;
+  min-height: 44px;
+  padding: 4px 2px 4px 4px;
+  overflow: hidden;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-upload.is-failed {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.aw-upload__thumb,
+.aw-upload__icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-raised);
+  color: var(--content-fg-muted);
+}
+
+.aw-upload.is-failed .aw-upload__icon {
+  color: var(--danger);
+}
+
+.aw-upload__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aw-upload__name {
+  overflow: hidden;
+  font: var(--t-small);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--content-fg);
+}
+
+.aw-upload__meta {
+  overflow: hidden;
+  font: var(--t-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--content-fg-muted);
+}
+
+.aw-upload.is-failed .aw-upload__meta {
+  color: var(--danger);
+}
+
+.aw-upload__progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--accent);
+  transform-origin: left;
+  transition: transform var(--duration-fast) linear;
+}
+
+.aw-upload__remove {
+  flex: none;
+}
+
+.aw-composer__formats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-composer.is-dropping,
+.aw-worksection.is-dropping {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.aw-worksection.is-dropping {
+  border-radius: var(--radius-md);
+}
+
+.aw-composer__drop {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: inherit;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: var(--t-ui);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* Files waiting in the new task dialog, uploaded once the task is made. */
+.aw-newtask-files {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}

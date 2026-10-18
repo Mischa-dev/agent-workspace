@@ -1366,6 +1366,10 @@ pub(super) struct TaskDetail {
     /// The latest comments and updates, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<CommentItem>,
+    /// Files attached to the task itself, oldest first; file_read opens one
+    /// and file_upload (taskId) adds one. Comments list their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<super::file_tools::FileSummary>,
     /// Where to read how this project works: project_open or page_get.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide_page_id: Option<String>,
@@ -1450,11 +1454,16 @@ pub(super) struct LinkedItem {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CommentItem {
+    pub id: String,
     pub author: String,
     pub text: String,
     pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Files posted with the comment: read them with file_read.
+    #[sqlx(skip)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<super::file_tools::FileSummary>,
 }
 
 pub(super) async fn task_open(
@@ -1604,7 +1613,8 @@ pub(super) async fn task_open(
         .await?;
         let mut comments = sqlx::query_as::<_, CommentItem>(
             r#"
-            SELECT COALESCE(author.display_name, 'Former member') AS author,
+            SELECT comment.id::text AS id,
+                   COALESCE(author.display_name, 'Former member') AS author,
                    comment.plain_text AS text, comment.created_at::text AS at,
                    via_client.client_name AS via
             FROM work_item_comments comment
@@ -1622,6 +1632,26 @@ pub(super) async fn task_open(
         .fetch_all(&state.pool)
         .await?;
         comments.reverse();
+        // Files on the task and on its comments (file_read opens them).
+        let mut files = Vec::new();
+        for row in crate::files::task_files(
+            &state.pool,
+            super::file_tools::reader(principal),
+            project_id,
+            task_id,
+        )
+        .await?
+        {
+            let summary = super::file_tools::FileSummary::from(&row);
+            match row.comment_id.map(|id| id.to_string()) {
+                Some(comment_id) => {
+                    if let Some(comment) = comments.iter_mut().find(|comment| comment.id == comment_id) {
+                        comment.files.push(summary);
+                    }
+                }
+                None => files.push(summary),
+            }
+        }
         let guide_page_id = sqlx::query_scalar::<_, Uuid>(
             "SELECT id FROM project_pages WHERE project_id = $1 AND is_guide AND archived_at IS NULL",
         )
@@ -1684,6 +1714,7 @@ pub(super) async fn task_open(
             conversations,
             links,
             comments,
+            files,
             guide_page_id,
             history,
         }))

@@ -48,6 +48,10 @@ export type ConversationMessage = {
   removed: MessageRemoval | null
   /** Emoji reactions in the order first added. Always empty once removed. */
   reactions?: MessageReaction[]
+  /** Files sent with it, as the server sent them: read with normalizeFiles. None once removed. */
+  attachments?: unknown[]
+  /** Pages it links to, once fetched and not hidden: read with normalizeLinkPreviews. */
+  linkPreviews?: unknown[]
   /** A forward: the message it quotes, as you may see it now (a ForwardedMessage, read by ForwardedQuote). */
   forwarded?: unknown
   /** You saved this for later. */

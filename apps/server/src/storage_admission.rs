@@ -3,6 +3,10 @@ use std::{fs, os::unix::fs::MetadataExt, path::Path};
 use crate::error::AppError;
 
 const MAX_ACCOUNTED_ENTRIES: usize = 250_000;
+/// Folders directly under the data root whose bytes are counted elsewhere:
+/// uploaded files are counted from the database (`files::require_room`), so
+/// many small files can't run the walk into its entry limit.
+const ACCOUNTED_ELSEWHERE: &[&str] = &["files"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StorageAdmission {
@@ -48,11 +52,18 @@ pub fn inspect(
             let children = fs::read_dir(&path)
                 .map_err(|_| AppError::Internal("read storage admission root"))?;
             for child in children {
-                pending.push(
-                    child
-                        .map_err(|_| AppError::Internal("read storage admission entry"))?
-                        .path(),
-                );
+                let child = child
+                    .map_err(|_| AppError::Internal("read storage admission entry"))?
+                    .path();
+                if path == data_root
+                    && child
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| ACCOUNTED_ELSEWHERE.contains(&name))
+                {
+                    continue;
+                }
+                pending.push(child);
             }
         } else if metadata.is_file() {
             allocated_bytes = allocated_bytes.saturating_add(metadata.blocks().saturating_mul(512));

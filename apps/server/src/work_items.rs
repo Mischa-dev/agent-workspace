@@ -586,6 +586,9 @@ struct RemoveCriterionRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateCommentRequest {
     content: serde_json::Value,
+    /// Files uploaded to the task for this comment (`?for=comment`), in order.
+    #[serde(default)]
+    attachments: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2695,7 +2698,14 @@ async fn create_work_item_comment(
     let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
     let key = IdempotencyKey::from_headers(&headers)?;
     let scope = resource_bound_scope("work_items", work_item_id, "comment_create")?;
-    let request_hash = RequestHash::for_value(&content)?;
+    let request_hash = if request.attachments.is_empty() {
+        RequestHash::for_value(&content)?
+    } else {
+        RequestHash::for_value(&serde_json::json!({
+            "content": &content,
+            "attachments": &request.attachments,
+        }))?
+    };
     let mut transaction = state.pool.begin().await?;
     let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
         .await?
@@ -2820,6 +2830,15 @@ async fn create_work_item_comment(
         comment_id,
         current.version,
         "work_item.comment_created",
+    )
+    .await?;
+    crate::files::attach_to_comment(
+        &mut transaction,
+        project_id,
+        work_item_id,
+        comment_id,
+        principal.actor_id,
+        &request.attachments,
     )
     .await?;
     let author = fetch_comment_actor_rows(&mut transaction, project_id, &[principal.actor_id])
@@ -3221,6 +3240,100 @@ fn authorize_work_item(
         Decision::Allow => Ok(()),
         Decision::Deny(_) if action == Action::WorkItemView => Err(AppError::NotFound("work_item")),
         Decision::Deny(_) => Err(AppError::Forbidden),
+    }
+}
+
+/// Tells open task pages that a task's files changed (the task itself is
+/// unchanged, so its version stays).
+pub(crate) async fn notify_files_changed(
+    pool: &PgPool,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<(), AppError> {
+    let mut transaction = pool.begin().await?;
+    let version = sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM work_items WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if let Some(version) = version {
+        crate::outbox::enqueue_work_item_updated(
+            &mut transaction,
+            project_id,
+            work_item_id,
+            version,
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Whether a person may see a task: what reading its files needs.
+pub(crate) async fn authorize_task_view(
+    pool: &PgPool,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<(), AppError> {
+    let membership = project_membership(pool, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        principal,
+        &membership,
+        Action::WorkItemView,
+        Some(work_item_id),
+    )?;
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM work_items WHERE project_id = $1 AND id = $2)",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_one(pool)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("work_item"))
+    }
+}
+
+/// Whether a person may change a task, which attaching a file to it or to
+/// one of its comments needs: the same rule as editing it, in an active
+/// project, on a task that isn't archived.
+pub(crate) async fn authorize_task_change(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<(), AppError> {
+    let membership = lock_project_membership(transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("work_item"))?;
+    authorize_work_item(
+        principal,
+        &membership,
+        Action::WorkItemEdit,
+        Some(work_item_id),
+    )?;
+    if membership.project_archived_at.is_some() {
+        return Err(AppError::ProjectArchived);
+    }
+    let active = sqlx::query_scalar::<_, bool>(
+        "SELECT archived_at IS NULL FROM work_items WHERE project_id = $1 AND id = $2",
+    )
+    .bind(project_id)
+    .bind(work_item_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or(AppError::NotFound("work_item"))?;
+    if active {
+        Ok(())
+    } else {
+        Err(AppError::Conflict("work_item", "archived"))
     }
 }
 

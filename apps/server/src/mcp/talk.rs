@@ -21,7 +21,7 @@ use crate::{
     AppState,
     conversations::{
         ConversationAccessRow, MessageCommandActor, MessageMcpCredential,
-        THREAD_STATUS_SUGGESTIONS, ThreadPatch, UnreadFrom, append_message_command,
+        THREAD_STATUS_SUGGESTIONS, ThreadPatch, UnreadFrom, append_message_command_with,
         authorize_conversation_row_for, enqueue_event, fetch_conversation_access,
         lock_conversation_for, mark_unread_from, normalize_conversation_name,
         suggested_thread_name as suggested_name, update_thread,
@@ -118,6 +118,9 @@ pub(super) struct MessageSendArguments {
     pub text: Option<String>,
     /// Structured content instead of text, for exact mentions and task links.
     pub content: Option<MessageContent>,
+    /// Files to attach (up to 10), uploaded first with file_upload to this
+    /// conversation. With files, text may be left out.
+    pub attachment_ids: Option<Vec<String>>,
     /// A stable ID for this message, so retrying never sends it twice.
     pub client_request_id: Option<String>,
 }
@@ -283,6 +286,9 @@ pub(super) struct MessageItem {
     /// Emoji reactions, in the order first added. None on a removed message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<ReactionSummary>,
+    /// Files attached to the message. Read one with file_read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<super::file_tools::FileSummary>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -936,6 +942,7 @@ pub(super) async fn message_items(
         .filter_map(|row| row.message_id)
         .collect::<Vec<_>>();
     let mut reactions = reaction_rows(&state.pool, conversation_id, &live, viewer).await?;
+    let mut attachments = super::file_tools::message_attachments(state, &live).await?;
     Ok(rows
         .into_iter()
         .map(|row| {
@@ -943,8 +950,13 @@ pub(super) async fn message_items(
                 .message_id
                 .and_then(|id| reactions.remove(&id))
                 .unwrap_or_default();
+            let files = row
+                .message_id
+                .and_then(|id| attachments.remove(&id))
+                .unwrap_or_default();
             let mut item = message_item(row);
             item.reactions = reaction_summaries(summaries);
+            item.attachments = files;
             item
         })
         .collect())
@@ -997,6 +1009,7 @@ fn message_item(row: MessageRow) -> MessageItem {
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default(),
         reactions: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -1347,23 +1360,33 @@ pub(super) async fn message_send(
     let Some(conversation_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass a conversation ID or link.");
     };
-    let content = match message_content(
-        state,
-        principal,
-        arguments.text.as_deref(),
-        arguments.content,
-        "message_send",
-    )
-    .await
-    {
-        Ok(content) => content,
+    let attachments = match super::file_tools::attachment_ids(arguments.attachment_ids) {
+        Ok(ids) => ids,
         Err(refused) => return refused,
     };
+    let content =
+        if attachments.is_empty() || arguments.text.is_some() || arguments.content.is_some() {
+            match message_content(
+                state,
+                principal,
+                arguments.text.as_deref(),
+                arguments.content,
+                "message_send",
+            )
+            .await
+            {
+                Ok(content) => content,
+                Err(refused) => return refused,
+            }
+        } else {
+            super::file_tools::blank_content()
+        };
     send(
         state,
         principal,
         conversation_id,
         content,
+        &attachments,
         arguments.client_request_id,
     )
     .await
@@ -1432,6 +1455,7 @@ async fn send(
     principal: &McpPrincipal,
     conversation_id: Uuid,
     content: serde_json::Value,
+    attachments: &[Uuid],
     client_request_id: Option<String>,
 ) -> ToolResult<SentMessage> {
     let key = client_request_id.unwrap_or_else(|| Uuid::now_v7().to_string());
@@ -1445,14 +1469,16 @@ async fn send(
         Ok(actor) => actor,
         Err(message) => return ToolResult::denied(message),
     };
-    match append_message_command(
+    match append_message_command_with(
         state,
         actor,
         conversation_id,
         None,
         idempotency_key,
         content,
+        attachments,
         None,
+        crate::conversations::AppendExtras::default(),
     )
     .await
     {
@@ -1468,6 +1494,10 @@ async fn send(
             "That clientRequestId was already used for a different message. Use a new one.",
         ),
         Err(AppError::NotFound(_)) => ToolResult::not_found("That conversation"),
+        Err(AppError::Validation("attachments")) => ToolResult::invalid(
+            "attachmentIds",
+            "Attach files you uploaded to this conversation with file_upload and haven't sent yet.",
+        ),
         Err(error) => ToolResult::from_error(error, "message_send"),
     }
 }
@@ -1598,7 +1628,7 @@ pub(super) async fn conversation_start(
         {
             Some(text) => {
                 let content = content_from_text(state, space_id, text).await?;
-                match send(state, principal, conversation_id, content, None).await {
+                match send(state, principal, conversation_id, content, &[], None).await {
                     ToolResult::Ok { value } => Some(value),
                     failed => return Ok(retype(failed)),
                 }
@@ -1925,7 +1955,7 @@ async fn post_optional(
     });
     let content = content_from_text(state, principal.project_id, text).await?;
     Ok(
-        match send(state, principal, conversation_id, content, key).await {
+        match send(state, principal, conversation_id, content, &[], key).await {
             ToolResult::Ok { value } => Some(value),
             _ => None,
         },

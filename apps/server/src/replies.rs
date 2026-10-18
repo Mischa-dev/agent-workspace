@@ -1634,7 +1634,7 @@ pub(crate) async fn webhook_client(
     Ok((url, client))
 }
 
-fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+pub(crate) fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
     !(a == 0
         || a == 10
@@ -1651,7 +1651,7 @@ fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
         || a >= 224)
 }
 
-fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
+pub(crate) fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
     let segments = ip.segments();
     !ip.is_unspecified()
         && !ip.is_loopback()

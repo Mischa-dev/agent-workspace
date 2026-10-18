@@ -277,6 +277,7 @@ pub(crate) async fn forward(
         None,
         idempotency_key,
         serde_json::to_value(content).map_err(|_| AppError::Internal("forward content"))?,
+        &[],
         None,
         AppendExtras {
             forwarded_message_id: Some(source.id),

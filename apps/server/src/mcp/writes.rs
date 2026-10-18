@@ -87,6 +87,10 @@ pub struct PostUpdateArguments {
     #[serde(rename = "text", alias = "update")]
     pub update: String,
     pub client_request_id: String,
+    /// Files to post with it: up to 10 fileIds from file_upload with taskId
+    /// and forComment: true on this task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_ids: Option<Vec<String>>,
 }
 
 // The argument structs below are also each write's idempotency request hash
@@ -1192,6 +1196,13 @@ async fn post_update_inner(
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
     };
+    let Ok(attachments) = super::file_tools::parse_attachment_ids(arguments.attachment_ids.clone())
+    else {
+        return Ok(WriteResult::invalid(
+            "attachmentIds",
+            "Pass up to 10 file IDs returned by file_upload (taskId, forComment: true).",
+        ));
+    };
     let mut transaction = state.pool.begin().await?;
     if let Some(result) = authorize_write(&mut transaction, principal).await? {
         return Ok(result);
@@ -1257,6 +1268,25 @@ async fn post_update_inner(
         "work_item.mcp_update_posted",
     )
     .await?;
+    match crate::files::attach_to_comment(
+        &mut transaction,
+        principal.project_id,
+        work_item_id,
+        comment_id,
+        principal.actor_id,
+        &attachments,
+    )
+    .await
+    {
+        Ok(_) => {}
+        Err(AppError::Validation(_)) => {
+            return Ok(WriteResult::invalid(
+                "attachmentIds",
+                "Those files aren't your unsent uploads for a comment on this task.",
+            ));
+        }
+        Err(error) => return Err(error),
+    }
     let location = locate(&mut transaction, state, principal.project_id, work_item_id).await?;
     let result = applied(
         work_item_id,

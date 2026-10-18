@@ -9,7 +9,7 @@ import { AppShell } from '../shell/AppShell'
 import { Banner, Button, EmptyState, ListSkeleton, PageHeader, Row, RowList, StatusChip, TextField } from '../ui'
 
 type SearchHit = {
-  kind: 'message' | 'thread' | 'task' | 'page' | 'decision'
+  kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'file'
   id: string
   title: string
   snippet: string
@@ -26,9 +26,10 @@ const KIND_LABEL: Record<SearchHit['kind'], string> = {
   thread: 'Thread',
   task: 'Task',
   message: 'Message',
+  file: 'File',
 }
 
-/** Search everything you can see: messages, threads, tasks, pages and decisions. */
+/** Search everything you can see: messages, threads, tasks, pages, decisions and files by name. */
 export function SearchPage() {
   const session = useAuthenticatedSession()
   const [params, setParams] = useSearchParams()
@@ -54,7 +55,7 @@ export function SearchPage() {
     <AppShell mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page">
         <PageHeader icon="search" title="Search">
-          Messages, threads, tasks, pages and decisions you can see. Settled things, like decisions and pages, come first.
+          Messages, threads, tasks, pages, decisions and files you can see. Settled things, like decisions and pages, come first.
         </PageHeader>
         <form className="aw-inline-form" onSubmit={submit} role="search">
           <TextField

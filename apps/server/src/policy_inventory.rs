@@ -739,6 +739,31 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages/{message_id}",
         MessageSend
     ),
+    // Uploading a file for a message needs MessageSend in the conversation;
+    // a task's files need WorkItemEdit on the task. Removing an unsent
+    // upload is its uploader's; a task's own file, its uploader's or a task
+    // editor's (checked in the handler).
+    policy_route!(
+        "files/http",
+        Post,
+        "/api/v1/conversations/{id}/files",
+        MessageSend
+    ),
+    policy_route!(
+        "files/http",
+        Post,
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/files",
+        WorkItemEdit
+    ),
+    policy_route!("files/http", Delete, "/api/v1/files/{id}", WorkItemEdit),
+    // Hiding a link preview follows the rule for removing the message: its
+    // author, or a person who may moderate.
+    policy_route!(
+        "link_previews",
+        Delete,
+        "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
+        MessageSend
+    ),
     // Anyone who can post in a conversation can react there.
     policy_route!(
         "reactions",
@@ -1429,6 +1454,8 @@ mod tests {
         ("replies", include_str!("replies.rs")),
         ("message_edits", include_str!("message_edits.rs")),
         ("reactions", include_str!("reactions.rs")),
+        ("files/http", include_str!("files/http.rs")),
+        ("link_previews", include_str!("link_previews.rs")),
         ("notifications", include_str!("notifications.rs")),
         (
             "notification_settings",

@@ -28,7 +28,7 @@ apply_common_defaults
 : "${BACKUP_DATA_ROOT:=/var/lib/agent-workspace}"
 # Provider account homes and uploaded files. Repository mirrors and worktrees
 # are left out: they are re-cloned from GitHub.
-: "${BACKUP_DATA_PATHS:=attachments artifacts codex/profiles}"
+: "${BACKUP_DATA_PATHS:=attachments artifacts files codex/profiles}"
 : "${BACKUP_DATA_EXCLUDES:=}"
 : "${BACKUP_LOCAL_KEEP_DAYS:=7}"
 : "${BACKUP_REMOTE_KEEP_DAYS:=30}"

@@ -2,6 +2,8 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode 
 import { useLocation } from 'react-router-dom'
 
 import { ActorTag, Avatar, Icon, IconButton, actorKind, showToast, type IconName } from '../ui'
+import { Attachments, LinkPreviews } from '../files/Attachments'
+import { normalizeFiles, normalizeLinkPreviews } from '../files/model'
 import { ForwardedQuote } from './ForwardedQuote'
 import { MessageContent } from './MessageContent'
 import { dayKey, dayLabel, eventLabel, formatFullDate, formatTime } from './timeFormat'
@@ -144,6 +146,7 @@ function EditedMark({ message, onOpenHistory }: { message: ConversationMessage; 
 
 export function MessageRow({
   continued = false,
+  conversationId,
   editor,
   entry,
   extras,
@@ -154,6 +157,8 @@ export function MessageRow({
   viewerId,
 }: {
   continued?: boolean
+  /** Where the message is, for hiding one of its link previews. */
+  conversationId?: string
   /** Replaces the body while the message is being edited. */
   editor?: ReactNode
   entry: ConversationTimelineEntry
@@ -235,6 +240,15 @@ export function MessageRow({
                 {' '}
                 <EditedMark message={message} onOpenHistory={onOpenHistory} />
               </>
+            ) : null}
+            {message.attachments?.length ? <Attachments files={normalizeFiles(message.attachments)} /> : null}
+            {message.linkPreviews?.length ? (
+              <LinkPreviews
+                canHide={Boolean(viewerId) && viewerId === message.author.id}
+                conversationId={conversationId}
+                messageId={message.id}
+                previews={normalizeLinkPreviews(message.linkPreviews)}
+              />
             ) : null}
           </div>
         )}
@@ -327,6 +341,7 @@ export function SystemRow({ createdAt }: { createdAt: string }) {
 /** Day dividers, the New line and Slack-style grouping for a run of timeline entries. */
 export function TimelineEntries({
   agentName,
+  conversationId,
   entries,
   firstUnreadSequence,
   onOpenHistory,
@@ -338,6 +353,8 @@ export function TimelineEntries({
 }: {
   /** The name of the agent behind a run's events, by run id. */
   agentName?: (agentRunId: string) => string
+  /** Where the entries are, for actions on a message such as hiding a link preview. */
+  conversationId?: string
   entries: ConversationTimelineEntry[]
   /** Show the New line before the first entry at or past this sequence. */
   firstUnreadSequence?: number | null
@@ -377,6 +394,7 @@ export function TimelineEntries({
       row = (
         <MessageRow
           continued={continued}
+          conversationId={conversationId}
           editor={renderEditor?.(entry)}
           entry={entry}
           extras={renderExtras?.(entry)}

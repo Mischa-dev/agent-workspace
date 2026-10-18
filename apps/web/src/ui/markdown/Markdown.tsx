@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { Fragment, useMemo, type ReactNode } from 'react'
 import { Link, useInRouterContext } from 'react-router-dom'
 
 import { CodeBlock } from './CodeBlock'
@@ -15,19 +15,32 @@ export type MarkdownProps = {
   className?: string
   /** Shown when the source is empty or only whitespace. */
   empty?: ReactNode
+  /**
+   * Renders plain text runs, for example to turn placeholders back into
+   * mention chips. Text in code is passed through `codeText` instead.
+   */
+  renderText?: (value: string) => ReactNode
+  codeText?: (value: string) => string
 }
 
 const defaultTaskHref = (key: string) => `/${key}`
 
-type RenderContext = { taskHref: (key: string) => string | null; router: boolean }
+type RenderContext = {
+  taskHref: (key: string) => string | null
+  router: boolean
+  renderText?: (value: string) => ReactNode
+  codeText: (value: string) => string
+}
+
+const asIs = (value: string) => value
 
 /** Renders Markdown as React elements; never as HTML. */
-export function Markdown({ className, empty = null, source, taskHref = defaultTaskHref }: MarkdownProps) {
+export function Markdown({ className, codeText = asIs, empty = null, renderText, source, taskHref = defaultTaskHref }: MarkdownProps) {
   const router = useInRouterContext()
   const blocks = useMemo(() => parseMarkdown(source), [source])
   const classes = ['aw-md', className].filter(Boolean).join(' ')
   if (!source.trim()) return empty == null ? null : <div className={classes}>{empty}</div>
-  return <div className={classes}>{renderBlocks(blocks, { taskHref, router })}</div>
+  return <div className={classes}>{renderBlocks(blocks, { taskHref, router, renderText, codeText })}</div>
 }
 
 function renderBlocks(blocks: Block[], context: RenderContext): ReactNode[] {
@@ -43,7 +56,7 @@ function renderBlock(block: Block, key: number, context: RenderContext): ReactNo
     case 'paragraph':
       return <p key={key}>{renderInlines(block.children, context)}</p>
     case 'code':
-      return <CodeBlock key={key} language={block.lang} value={block.value} />
+      return <CodeBlock key={key} language={block.lang} value={context.codeText(block.value)} />
     case 'quote':
       return <blockquote key={key}>{renderBlocks(block.children, context)}</blockquote>
     case 'hr':
@@ -51,7 +64,7 @@ function renderBlock(block: Block, key: number, context: RenderContext): ReactNo
     case 'overflow':
       return (
         <p className="aw-md__overflow" key={key}>
-          {block.value}
+          {context.codeText(block.value)}
         </p>
       )
     case 'list': {
@@ -128,7 +141,7 @@ function renderInlines(inlines: Inline[], context: RenderContext): ReactNode[] {
 function renderInline(inline: Inline, key: number, context: RenderContext): ReactNode {
   switch (inline.type) {
     case 'text':
-      return inline.value
+      return context.renderText ? <Fragment key={key}>{context.renderText(inline.value)}</Fragment> : inline.value
     case 'strong':
       return <strong key={key}>{renderInlines(inline.children, context)}</strong>
     case 'em':
@@ -138,7 +151,7 @@ function renderInline(inline: Inline, key: number, context: RenderContext): Reac
     case 'code':
       return (
         <code className="aw-md__code" key={key}>
-          {inline.value}
+          {context.codeText(inline.value)}
         </code>
       )
     case 'br':

@@ -15,6 +15,35 @@ const actor = {
 }
 
 describe('MessageContent', () => {
+  it('renders Markdown with picked mentions as chips, even inside formatting and code', () => {
+    const { container, unmount } = render(
+      <MemoryRouter>
+        <MessageContent
+          actors={[actor]}
+          content={{
+            version: 1,
+            nodes: [
+              { type: 'text', text: 'Plan:\n- ship **' },
+              { type: 'mention', actorId: actor.id },
+              { type: 'text', text: '** today\n- see https://example.com/x\n\n`ping ' },
+              { type: 'mention', actorId: actor.id },
+              { type: 'text', text: '` <b>no html</b>' },
+            ],
+          }}
+          fallbackPlainText="fallback"
+        />
+      </MemoryRouter>,
+    )
+
+    expect(container.querySelectorAll('li')).toHaveLength(2)
+    expect(container.querySelector('strong .aw-mention')).toHaveTextContent('@Mischa <Owner>')
+    expect(container.querySelector('a[href="https://example.com/x"]')).not.toBeNull()
+    expect(container.querySelector('code')).toHaveTextContent('ping @mischa')
+    expect(container.querySelector('b')).toBeNull()
+    expect(container).toHaveTextContent('<b>no html</b>')
+    unmount()
+  })
+
   it('marks @everyone and @here but not email addresses', () => {
     const { container } = render(
       <MessageContent
