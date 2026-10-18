@@ -29,12 +29,17 @@ function nextWeek(now: Date) {
   return atHour(addDays(now, days), 9)
 }
 
+/** 9:00 after the next night's sleep: today's before 5:00, as notification pauses read it. */
+function nextMorning(now: Date) {
+  return atHour(now.getHours() >= 5 ? addDays(now, 1) : now, 9)
+}
+
 /** The quick choices for "remind me" and "schedule". */
 export function whenChoices(now = new Date()): WhenChoice[] {
   return [
     { id: '20m', label: 'In 20 minutes', at: new Date(now.getTime() + 20 * MINUTE) },
     { id: '1h', label: 'In 1 hour', at: new Date(now.getTime() + 60 * MINUTE) },
-    { id: 'tomorrow', label: 'Tomorrow morning', at: atHour(addDays(now, 1), 9) },
+    { id: 'tomorrow', label: now.getHours() >= 5 ? 'Tomorrow morning' : 'This morning', at: nextMorning(now) },
     { id: 'next-week', label: 'Next week', at: nextWeek(now) },
   ]
 }
@@ -50,13 +55,10 @@ const UNITS: Record<string, number> = {
   hrs: 60 * MINUTE,
   hour: 60 * MINUTE,
   hours: 60 * MINUTE,
-  d: 24 * 60 * MINUTE,
-  day: 24 * 60 * MINUTE,
-  days: 24 * 60 * MINUTE,
-  w: 7 * 24 * 60 * MINUTE,
-  week: 7 * 24 * 60 * MINUTE,
-  weeks: 7 * 24 * 60 * MINUTE,
 }
+
+// Days and weeks count on the calendar, so "in 3 days" keeps its clock time across a DST change.
+const DAY_UNITS: Record<string, number> = { d: 1, day: 1, days: 1, w: 7, week: 7, weeks: 7 }
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 
@@ -101,8 +103,10 @@ export function parseLeadingWhen(text: string, now = new Date()): { at: Date; le
   const relative = /^in\s+(\d{1,4}|an?|one)\s*([a-z]+)(?=\s|$|[,.!?])/.exec(lower)
   if (relative) {
     const unit = UNITS[relative[2]]
+    const days = DAY_UNITS[relative[2]]
     const count = /^\d/.test(relative[1]) ? Number(relative[1]) : 1
     if (unit && count > 0) return { at: new Date(now.getTime() + count * unit), length: relative[0].length }
+    if (days && count > 0) return { at: addDays(now, count * days), length: relative[0].length }
   }
 
   const half = /^in\s+half\s+an?\s+hour(?=\s|$|[,.!?])/.exec(lower)
@@ -115,6 +119,9 @@ export function parseLeadingWhen(text: string, now = new Date()): { at: Date; le
   }
 
   if (/^tomorrow(?=\s|$|[,.!?])/.test(lower)) return day('tomorrow', addDays(now, 1), 9)
+  // "tonight" and "today 3pm" name today, so once that time has gone they stay
+  // in the past, and /remind, /schedule and the time dialog say it has passed;
+  // only a bare clock time ("at 3pm") rolls on to tomorrow.
   if (/^tonight(?=\s|$|[,.!?])/.test(lower)) return { at: atHour(now, 20), length: 'tonight'.length }
   if (/^today(?=\s|$|[,.!?])/.test(lower)) {
     const clock = optionalClock(text.slice(5))

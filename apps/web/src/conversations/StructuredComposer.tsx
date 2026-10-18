@@ -80,8 +80,11 @@ type StructuredComposerProps = {
   onSchedule?: (content: MessageContentV1, at: Date) => Promise<void>
 }
 
-/** A send that couldn't reach the server, kept to send again with the same key. */
-type QueuedSend = ComposerSubmission & { text: string }
+/**
+ * A send that couldn't reach the server, kept to send again with the same key,
+ * with the people and tasks it named so a refusal puts all of it back.
+ */
+type QueuedSend = ComposerSubmission & { text: string } & Partial<Pick<ComposerDraft, 'mentions' | 'workItems'>>
 
 /** The formatting row, and Slack's shortcuts for it (Ctrl or ⌘). */
 const FORMATS: { action: FormatAction; icon: IconGlyph; label: string; shortcut: string }[] = [
@@ -107,6 +110,11 @@ function shortcutAction(event: KeyboardEvent<HTMLTextAreaElement>): FormatAction
   if (key === 'i') return 'italic'
   if (key === 'e') return 'code'
   return null
+}
+
+/** Outside the component: the time is read when it's picked. */
+function isPast(at: Date) {
+  return at.getTime() <= Date.now()
 }
 
 type Suggestion =
@@ -156,12 +164,21 @@ function ComposerBox({
   const [workItems, setWorkItems] = useState<ConversationWorkItemReference[]>(initialDraft?.workItems ?? saved?.workItems ?? [])
   const [queued, setQueued] = useState<QueuedSend[]>(() => (draftKey ? (readLocal<QueuedSend[]>(`unsent:${draftKey}`) ?? []) : []))
   const flushing = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const [trigger, setTrigger] = useState<Trigger | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [active, setActive] = useState(0)
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [sending, setBusy] = useState(false)
+  const [scheduling, setScheduling] = useState(false)
+  const busy = sending || scheduling
   const [error, setError] = useState<string | null>(null)
   const [slashActive, setSlashActive] = useState(0)
   const [slashClosed, setSlashClosed] = useState(false)
@@ -186,6 +203,17 @@ function ComposerBox({
     setQueued(next)
   }
 
+  // Back into the box: the text above what's there, with its people, tasks and files.
+  const restoreQueued = (item: QueuedSend) => {
+    queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
+    setText((current) => (current.trim() ? `${item.text}\n${current}` : item.text))
+    const mentioned = item.mentions ?? []
+    const referenced = item.workItems ?? []
+    setMentions((current) => [...mentioned, ...current.filter((actor) => !mentioned.some((m) => m.id === actor.id))])
+    setWorkItems((current) => [...referenced, ...current.filter((work) => !referenced.some((w) => w.id === work.id))])
+    if (item.attachments?.length) uploads.restore(item.attachments)
+  }
+
   // Send what's waiting, oldest first, each with the key it was first sent
   // with, so a send that did reach the server isn't posted twice.
   const flush = async () => {
@@ -199,8 +227,7 @@ function ComposerBox({
         } catch (reason) {
           if (isConnectionError(reason)) break
           // Refused for good: back into the box to change or copy.
-          queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
-          setText((current) => (current.trim() ? `${item.text}\n${current}` : item.text))
+          restoreQueued(item)
           setError(reason instanceof Error ? reason.message : 'Your message wasn’t sent.')
         }
       }
@@ -220,8 +247,7 @@ function ComposerBox({
   }, [hasQueued])
 
   const editQueued = (item: QueuedSend) => {
-    queue((current) => current.filter((entry) => entry.idempotencyKey !== item.idempotencyKey))
-    setText((current) => (current.trim() ? `${item.text}\n${current}` : item.text))
+    restoreQueued(item)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
@@ -417,10 +443,17 @@ function ComposerBox({
   }
 
   const schedule = async (at: Date) => {
-    if (!content || !onSchedule) return
+    if (!content || !onSchedule || scheduling) return
+    if (isPast(at)) throw new Error('That time has passed.')
+    // Busy while it schedules, so Enter can't send the same text as well.
+    setScheduling(true)
     setError(null)
-    await onSchedule(content, at)
-    clearDraft()
+    try {
+      await onSchedule(content, at)
+      clearDraft()
+    } finally {
+      setScheduling(false)
+    }
   }
 
   const submit = (event?: FormEvent<HTMLFormElement>) => {
@@ -430,7 +463,7 @@ function ComposerBox({
       runCommand(command.command, command.args)
       return
     }
-    if (!content || !canSend || (keepDraftWhileSaving && busy)) return
+    if (!content || !canSend || scheduling || (keepDraftWhileSaving && busy)) return
     // Clear right away so it feels instant. A failed send puts the draft back and keeps its
     // idempotency key, so retrying can't post it twice; the next message gets a fresh key.
     const draft = { text, mentions, workItems }
@@ -449,7 +482,23 @@ function ComposerBox({
       .catch((reason: unknown) => {
         if (draftKey && !keepDraftWhileSaving && isConnectionError(reason)) {
           // Kept and sent again when the connection is back; never dropped.
-          queue((current) => [...current, { content, idempotencyKey: key, text: draft.text.trim(), attachments }])
+          queue((current) => [
+            ...current,
+            { content, idempotencyKey: key, text: draft.text.trim(), attachments, mentions: draft.mentions, workItems: draft.workItems },
+          ])
+          return
+        }
+        if (!mounted.current) {
+          // The box is gone (they moved on while it sent): keep the text as
+          // this conversation's draft so it's there when they come back.
+          if (draftKey && !keepDraftWhileSaving && draft.text.trim()) {
+            const left = readLocal<ComposerDraft>(`draft:${draftKey}`)
+            writeLocal<ComposerDraft>(`draft:${draftKey}`, {
+              text: left?.text.trim() ? `${draft.text}\n${left.text}` : draft.text,
+              mentions: [...draft.mentions, ...(left?.mentions ?? []).filter((actor) => !draft.mentions.some((m) => m.id === actor.id))],
+              workItems: [...draft.workItems, ...(left?.workItems ?? []).filter((item) => !draft.workItems.some((w) => w.id === item.id))],
+            })
+          }
           return
         }
         idempotencyKeyRef.current = key
@@ -565,7 +614,7 @@ function ComposerBox({
             </div>
           ))}
           <p aria-live="polite" className="aw-composer__queued-note">
-            {queued.length === 1 ? 'Not sent yet.' : `${queued.length} messages not sent yet.`} No connection; this sends by itself when you’re back online.{' '}
+            {queued.length === 1 ? 'Not sent yet.' : `${queued.length} messages not sent yet.`} No connection; this sends when you’re back online with this conversation open.{' '}
             <Button onClick={() => void flush()} size="sm" variant="ghost">
               Try now
             </Button>
@@ -743,8 +792,9 @@ function ComposerBox({
                   ...whenChoices().map((choice) => ({
                     label: choice.label,
                     icon: 'clock' as const,
+                    // The time is worked out when it's picked, not when the menu was drawn.
                     onSelect: () =>
-                      void schedule(choice.at).catch((reason: unknown) =>
+                      void schedule(whenChoices().find((now) => now.id === choice.id)?.at ?? choice.at).catch((reason: unknown) =>
                         setError(reason instanceof Error ? reason.message : 'It wasn’t scheduled.'),
                       ),
                   })),
@@ -755,7 +805,7 @@ function ComposerBox({
                 trigger={<IconButton disabled={!canSend || busy || uploads.items.length > 0 || Boolean(matchSlashCommand(text, commands))} icon="clock" label="Schedule message" size="sm" />}
               />
             ) : null}
-            <button aria-label={submitLabel} className="aw-composer__send" disabled={!canSend || (keepDraftWhileSaving && busy)} type="submit">
+            <button aria-label={submitLabel} className="aw-composer__send" disabled={!canSend || scheduling || (keepDraftWhileSaving && busy)} type="submit">
               <Icon className={busy ? 'aw-spin' : undefined} name={busy ? 'loader' : submitIcon} />
             </button>
           </div>

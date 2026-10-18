@@ -126,6 +126,44 @@ describe('StructuredComposer', () => {
     expect(window.localStorage.length).toBe(0)
   })
 
+  it('keeps a failed send as the draft when the box closed while it was sending', async () => {
+    let refuse: (reason: Error) => void = () => undefined
+    const onSubmit = vi.fn(() => new Promise<void>((_, reject) => (refuse = reject)))
+    const first = render(<StructuredComposer draftKey="channel-2" onSubmit={onSubmit} searchActors={vi.fn()} />)
+    type('Sent while leaving')
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    first.unmount()
+    refuse(new Error('Too long.'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    render(<StructuredComposer draftKey="channel-2" onSubmit={onSubmit} searchActors={vi.fn()} />)
+    expect(screen.getByLabelText('Message')).toHaveValue('Sent while leaving')
+    window.localStorage.clear()
+  })
+
+  it('puts a queued message the server refuses back with its mentions', async () => {
+    const onSubmit = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new Error('Not allowed.'))
+      .mockResolvedValue(undefined)
+    const searchActors = vi.fn().mockResolvedValue([worker])
+    render(<StructuredComposer draftKey="channel-3" onSubmit={onSubmit} searchActors={searchActors} />)
+    const box = type('Ask @ag')
+    await screen.findByRole('option', { name: /Agent/ })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Not allowed.')
+    expect(box).toHaveValue('Ask @agent')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(3))
+    expect(onSubmit.mock.calls[2][0].content.nodes).toContainEqual({ type: 'mention', actorId: worker.id })
+    window.localStorage.clear()
+  })
+
   it('picks a mention inline with the keyboard and submits an Actor ID node where it was typed', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     const searchActors = vi.fn().mockResolvedValue([human, worker])
