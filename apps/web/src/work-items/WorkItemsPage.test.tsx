@@ -61,6 +61,7 @@ vi.mock('./hooks', () => ({
   useWorkItems: vi.fn(),
   useWorkItemWorkflow: vi.fn(),
   useTaskFiles: vi.fn(),
+  taskFilesKey: vi.fn(),
   useWorkItemTimeline: vi.fn(),
 }))
 vi.mock('../launch/hooks', () => ({ useCreateLaunches: vi.fn(), useLaunchPlan: vi.fn() }))

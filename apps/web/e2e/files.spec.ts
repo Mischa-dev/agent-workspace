@@ -6,6 +6,17 @@ import { screenshotDir, seededValue, storageStatePath } from './environment'
 
 test.use({ storageState: storageStatePath })
 
+// The first page to load saves this browser's appearance to the account, and
+// later specs expect "follow the system", so start from that.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'agent-workspace:appearance:v2',
+      JSON.stringify({ theme: 'system', overrides: {}, density: 'comfortable', textSize: 'default' }),
+    )
+  })
+})
+
 /** A 2x2 PNG, red. */
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==',

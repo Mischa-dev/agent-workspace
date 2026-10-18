@@ -57,10 +57,14 @@ export function useWorkItemTimeline(projectId: string, workItemId: string) {
   })
 }
 
+/** Under the task's other queries, so they're refreshed together. */
+export const taskFilesKey = (projectId: string, workItemId: string) =>
+  ['project', projectId, 'work-items', 'files', workItemId] as const
+
 /** A task's files: its own and its comments' (W20). */
 export function useTaskFiles(projectId: string, workItemId: string) {
   return useQuery({
-    queryKey: queryKeys.workItemFiles(projectId, workItemId),
+    queryKey: taskFilesKey(projectId, workItemId),
     queryFn: () => listTaskFiles(projectId, workItemId),
     enabled: Boolean(projectId && workItemId),
   })

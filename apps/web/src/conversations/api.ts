@@ -169,8 +169,8 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
     reactions: normalizeReactions(message.reactions),
     // Checked where they're shown (normalizeFiles, normalizeLinkPreviews), so
     // that code loads with the conversation pages rather than with the app.
-    attachments: Array.isArray(message.attachments) ? message.attachments : undefined,
-    linkPreviews: Array.isArray(message.linkPreviews) ? message.linkPreviews : undefined,
+    attachments: message.attachments as unknown[] | undefined,
+    linkPreviews: message.linkPreviews as unknown[] | undefined,
     // Checked where it's shown (ForwardedQuote), off the first load.
     forwarded: message.forwarded ?? null,
     saved: normalizeSavedMark(message.saved),
@@ -429,9 +429,8 @@ export async function sendConversationMessage(input: {
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      json: input.attachments?.length
-        ? { content: input.content, attachments: input.attachments.map((file) => file.id) }
-        : { content: input.content },
+      // JSON leaves out `attachments` when there are none.
+      json: { content: input.content, attachments: input.attachments?.map((file) => file.id) },
     },
   )
 }

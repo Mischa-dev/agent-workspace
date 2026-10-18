@@ -1,13 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useRef, useState, type DragEvent } from 'react'
 
-import { queryKeys } from '../api/queryKeys'
 import { Attachments } from '../files/Attachments'
 import { removeFile, uploadFile, type FileAttachment } from '../files/api'
 import { UploadChips } from '../files/UploadChips'
 import { useUploads } from '../files/useUploads'
 import { Banner, Button, Icon } from '../ui'
-import { useTaskFiles } from './hooks'
+import { taskFilesKey, useTaskFiles } from './hooks'
 import type { WorkItem } from './types'
 import { Paperclip } from '../files/icons'
 
@@ -18,7 +17,7 @@ export function TaskFiles({ disabled, item }: { disabled: boolean; item: WorkIte
   const input = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.workItemFiles(item.projectId, item.id) })
+  const refresh = () => queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
   const upload = uploadFile({ kind: 'task', projectId: item.projectId, workItemId: item.id })
   const uploads = useUploads(async (file, onProgress, signal) => {
     const uploaded = await upload(file, onProgress, signal)

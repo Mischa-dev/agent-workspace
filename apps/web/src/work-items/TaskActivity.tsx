@@ -4,13 +4,12 @@ import { useState } from 'react'
 import { searchMentionableActors } from '../conversations/api'
 import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import { queryKeys } from '../api/queryKeys'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
 import { ActorTag, Avatar, Banner, Icon, MessageSkeleton, actorKind, formatDateTime, formatFullDate } from '../ui'
 import { searchWorkItemReferences } from './api'
 import { formatChanges, type FormattedChange } from './historyFormat'
-import { useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
+import { taskFilesKey, useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
 import type { WorkItem } from './types'
 
 /** "Priority High → Urgent", with the old value struck through for sighted readers. */
@@ -156,7 +155,7 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
                 ? content
                 : { version: 1 as const, nodes: [{ type: 'text' as const, text: `Attached ${attachments.map((file) => file.name).join(', ')}`.slice(0, 2000) }] }
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments })
-            if (attachments?.length) void queryClient.invalidateQueries({ queryKey: queryKeys.workItemFiles(item.projectId, item.id) })
+            if (attachments?.length) void queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
           }}
           placeholder="Add a comment. @mention someone or reference a work item."
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
