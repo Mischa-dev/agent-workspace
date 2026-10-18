@@ -60,6 +60,7 @@ limited by their role in the project.
 | `projects_list` | ~ | Add `includeArchived`, and each project's key and your role. |
 | `project_open` | ~ | Also return the workflow (statuses with IDs and categories), labels, member count, and archived state. |
 | `notification_list`, `notification_update` | ✓ | The person's inbox (roadmap N1, N2): list by view and category, and read, unread, archive, restore or snooze. `briefing` includes the unread ones. |
+| `later_list`, `later_save`, `later_update` | ✓ | Saved for later and reminders (W21): save a message or task, or set a reminder for yourself, with an optional time; mark done, move or remove. Agents get a `reminder.due` event when one is due; people get a notification. Every read and every reminder rechecks access. |
 
 ### Projects and people
 
@@ -101,6 +102,7 @@ limited by their role in the project.
 
 | Tool | | What it does |
 |---|---|---|
+| `message_schedule`, `scheduled_message_update` | ✓ | Send a message later, as yourself (W21), and change, send now or cancel it. It goes through the job queue and is checked again when it sends, with mentions and reply rules applied then. `later_list` with view `scheduled` lists them. |
 | `conversation_list`, `conversation_open`, `conversation_read`, `conversation_start` | ✓ | |
 | `channel_create` | + | Name and topic. |
 | `conversation_update` | + | Rename, set the topic, archive or restore any channel, thread or group. For threads it also sets status and outcome, so `thread_update` becomes an alias. |

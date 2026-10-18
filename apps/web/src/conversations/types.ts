@@ -52,6 +52,27 @@ export type ConversationMessage = {
   attachments?: unknown[]
   /** Pages it links to, once fetched and not hidden: read with normalizeLinkPreviews. */
   linkPreviews?: unknown[]
+  /** A forward: the message it quotes, as you may see it now (a ForwardedMessage, read by ForwardedQuote). */
+  forwarded?: unknown
+  /** You saved this for later. */
+  saved?: SavedMark | null
+}
+
+/** The original of a forwarded message. Only `available` is set when you can't see it. */
+export type ForwardedMessage = {
+  messageId: string
+  available: boolean
+  removed: boolean
+  authorName: string | null
+  place: string | null
+  text: string | null
+  createdAt: string | null
+  href: string | null
+}
+
+export type SavedMark = {
+  id: string
+  remindAt: string | null
 }
 
 /** One emoji on a message: how many reacted, whether you did, and the first 20 who did. */

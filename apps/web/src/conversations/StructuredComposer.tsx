@@ -15,7 +15,10 @@ import { isConnectionError, onReconnect, readLocal, writeLocal } from '../app/lo
 import type { Uploader } from '../files/api'
 import { UploadChips } from '../files/UploadChips'
 import { useUploads } from '../files/useUploads'
-import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, actorKind, type IconGlyph, type IconName } from '../ui'
+import { matchSlashCommand, suggestSlashCommands, type SlashCommand, type SlashOutcome } from '../later/slashCommands'
+import { TimeDialog } from '../later/TimeDialog'
+import { whenChoices } from '../later/when'
+import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, Menu, actorKind, type IconGlyph, type IconName } from '../ui'
 import { applyEdit, formatEdit, type FormatAction } from '../ui/markdown/editing'
 import {
   activeTrigger,
@@ -28,7 +31,7 @@ import {
   type ComposerSubmission,
   type Trigger,
 } from './composerModel'
-import type { ConversationActor, ConversationWorkItemReference } from './types'
+import type { ConversationActor, ConversationWorkItemReference, MessageContentV1 } from './types'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
 
 type StructuredComposerProps = {
@@ -65,6 +68,16 @@ type StructuredComposerProps = {
    * for want of a connection to send again when it's back.
    */
   draftKey?: string
+  /** Slash commands offered as you type "/"; text naming none is sent as typed. */
+  commands?: SlashCommand[]
+  /** Run a command; `build` turns text into content with the people and tasks picked here. */
+  onCommand?: (
+    command: SlashCommand,
+    args: string,
+    build: (text: string) => MessageContentV1 | null,
+  ) => Promise<SlashOutcome>
+  /** Shows Schedule next to Send: send this message at a later time. */
+  onSchedule?: (content: MessageContentV1, at: Date) => Promise<void>
 }
 
 /** A send that couldn't reach the server, kept to send again with the same key. */
@@ -125,6 +138,9 @@ function ComposerBox({
   submitIcon = 'send',
   draftKey,
   upload,
+  commands,
+  onCommand,
+  onSchedule,
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -147,6 +163,9 @@ function ComposerBox({
   const [searchError, setSearchError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [slashActive, setSlashActive] = useState(0)
+  const [slashClosed, setSlashClosed] = useState(false)
+  const [customSchedule, setCustomSchedule] = useState(false)
   // Pages pass new search functions each render; read the latest without restarting the search.
   const searchers = useRef({ searchActors, searchWorkItems })
   useEffect(() => {
@@ -212,6 +231,7 @@ function ComposerBox({
   // A message can be only files.
   const content = typed ?? (!overLimit && uploads.ready.length > 0 ? BLANK_MESSAGE_CONTENT : null)
   const canSend = Boolean(content) && !disabled && !uploads.uploading
+  const slashMatches = commands && onCommand && !trigger && !slashClosed ? suggestSlashCommands(text, commands) : []
 
   useLayoutEffect(() => {
     const element = textareaRef.current
@@ -358,8 +378,58 @@ function ComposerBox({
     attach(event.dataTransfer.files)
   }
 
+  const clearDraft = () => {
+    setText('')
+    setMentions([])
+    setWorkItems([])
+  }
+
+  const completeSlash = (command: SlashCommand) => {
+    const next = `/${command.name} `
+    setText(next)
+    setSlashClosed(true)
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(next.length, next.length)
+    })
+  }
+
+  // A command runs instead of sending; its text stays in the box if it fails.
+  const runCommand = (command: SlashCommand, args: string) => {
+    if (!onCommand) return
+    setBusy(true)
+    setError(null)
+    void onCommand(command, args, (value) => buildMessageContent(value, mentions, workItems))
+      .then((outcome) => {
+        if (outcome.kind === 'replace') {
+          setText(outcome.text)
+          updateTrigger(outcome.text, outcome.text.length)
+          window.requestAnimationFrame(() => {
+            textareaRef.current?.focus()
+            textareaRef.current?.setSelectionRange(outcome.text.length, outcome.text.length)
+          })
+        } else {
+          clearDraft()
+        }
+      })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'That command didn’t work.'))
+      .finally(() => setBusy(false))
+  }
+
+  const schedule = async (at: Date) => {
+    if (!content || !onSchedule) return
+    setError(null)
+    await onSchedule(content, at)
+    clearDraft()
+  }
+
   const submit = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
+    const command = onCommand && commands ? matchSlashCommand(text, commands) : null
+    if (command && !busy && !disabled) {
+      runCommand(command.command, command.args)
+      return
+    }
     if (!content || !canSend || (keepDraftWhileSaving && busy)) return
     // Clear right away so it feels instant. A failed send puts the draft back and keeps its
     // idempotency key, so retrying can't post it twice; the next message gets a fresh key.
@@ -401,6 +471,25 @@ function ComposerBox({
       event.preventDefault()
       applyFormat(format)
       return
+    }
+    if (slashMatches.length) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setSlashActive((index) => (index + step + slashMatches.length) % slashMatches.length)
+        return
+      }
+      if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+        event.preventDefault()
+        completeSlash(slashMatches[slashActive] ?? slashMatches[0])
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setSlashClosed(true)
+        return
+      }
     }
     if (trigger && suggestions.length) {
       if (event.key === 'ArrowDown') {
@@ -452,6 +541,7 @@ function ComposerBox({
   const remaining = MAX_MESSAGE_SCALAR_VALUES - scalarValues
 
   return (
+    <>
     <form
       className={className ? `aw-composer-wrap ${className}` : 'aw-composer-wrap'}
       onDragLeave={(event) => {
@@ -506,6 +596,29 @@ function ComposerBox({
             ))}
           </div>
         ) : null}
+        {slashMatches.length ? (
+          <div aria-label="Commands" className="aw-mentions" id={listId} role="listbox">
+            <div className="aw-mentions__head">Commands</div>
+            {slashMatches.map((command, index) => (
+              <div
+                aria-selected={index === slashActive}
+                className={index === slashActive ? 'aw-mentions__item is-active' : 'aw-mentions__item'}
+                id={`${listId}-${index}`}
+                key={command.name}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  completeSlash(command)
+                }}
+                onMouseEnter={() => setSlashActive(index)}
+                role="option"
+              >
+                <Icon name={command.icon} />
+                <span className="aw-mentions__key">/{command.name}</span>
+                <span className="aw-mentions__name aw-mentions__title">{command.description}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {trigger ? (
           <div className="aw-mentions" id={listId} role="listbox" aria-label={trigger.kind === 'mention' ? 'People and agents' : 'Work items'}>
             <div className="aw-mentions__head">
@@ -551,15 +664,19 @@ function ComposerBox({
           {label}
         </label>
         <textarea
-          aria-activedescendant={trigger && suggestions.length ? `${listId}-${active}` : undefined}
+          aria-activedescendant={
+            slashMatches.length ? `${listId}-${slashActive}` : trigger && suggestions.length ? `${listId}-${active}` : undefined
+          }
           aria-autocomplete="list"
-          aria-controls={trigger ? listId : undefined}
-          aria-expanded={Boolean(trigger)}
+          aria-controls={trigger || slashMatches.length ? listId : undefined}
+          aria-expanded={Boolean(trigger) || slashMatches.length > 0}
           disabled={disabled}
           id={id}
           onBlur={() => window.setTimeout(closeSuggestions, 120)}
           onChange={(event) => {
             setText(event.target.value)
+            setSlashClosed(false)
+            setSlashActive(0)
             updateTrigger(event.target.value, event.target.selectionStart ?? event.target.value.length)
           }}
           onKeyDown={onKeyDown}
@@ -618,6 +735,25 @@ function ComposerBox({
                 Cancel
               </Button>
             ) : null}
+            {onSchedule ? (
+              <Menu
+                items={[
+                  { heading: 'Send later' },
+                  ...whenChoices().map((choice) => ({
+                    label: choice.label,
+                    icon: 'clock' as const,
+                    onSelect: () =>
+                      void schedule(choice.at).catch((reason: unknown) =>
+                        setError(reason instanceof Error ? reason.message : 'It wasn’t scheduled.'),
+                      ),
+                  })),
+                  { label: 'Custom time…', icon: 'clock' as const, onSelect: () => setCustomSchedule(true) },
+                ]}
+                label="Schedule message"
+                placement="bottom-end"
+                trigger={<IconButton disabled={!canSend || busy || uploads.items.length > 0 || Boolean(matchSlashCommand(text, commands))} icon="clock" label="Schedule message" size="sm" />}
+              />
+            ) : null}
             <button aria-label={submitLabel} className="aw-composer__send" disabled={!canSend || (keepDraftWhileSaving && busy)} type="submit">
               <Icon className={busy ? 'aw-spin' : undefined} name={busy ? 'loader' : submitIcon} />
             </button>
@@ -636,12 +772,21 @@ function ComposerBox({
         </p>
       ) : note ? (
         <p className="aw-composer__note">{note}</p>
+      ) : text.startsWith('/') && commands && matchSlashCommand(text, commands) ? (
+        <p className="aw-composer__hint is-visible">
+          <Kbd>Enter</Kbd> to run /{matchSlashCommand(text, commands)?.command.name} · {matchSlashCommand(text, commands)?.command.usage || matchSlashCommand(text, commands)?.command.description}
+        </p>
       ) : (
         <p aria-hidden={!text} className={text ? 'aw-composer__hint is-visible' : 'aw-composer__hint'}>
           <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> for a new line
         </p>
       )}
     </form>
+    {/* Outside the form: a portal's submit would bubble into it. */}
+    {customSchedule ? (
+      <TimeDialog action="Schedule" onClose={() => setCustomSchedule(false)} onPick={schedule} title="Schedule message" />
+    ) : null}
+    </>
   )
 }
 

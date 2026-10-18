@@ -90,6 +90,13 @@ Restart the service after editing.
   and the host needs outbound access to the mail server's port (587 for
   STARTTLS or 465 for TLS). Links in emails use the public origin, so
   `AGENT_WORKSPACE_PUBLIC_ORIGIN` must be the address people open.
+- **Later, reminders and scheduling (W21).** Nothing goes in this file. The
+  migration `20261017160000_later_and_scheduling.sql` runs with the rest.
+  Reminders and scheduled messages are background jobs, so they fire only
+  while the service runs. Their push notifications offer Done and Snooze
+  through the updated service worker (`dist/sw.js`, part of the web build); an
+  installed home-screen app picks it up the next time it opens, and on Android
+  re-adding the app forces it if the old buttons stay.
 - **Files and link previews (W20).** Nothing new goes in this file. Uploaded
   files live in `<data root>/files` (`/var/lib/agent-workspace/files`), which
   the server creates; the nightly backup now includes it (installed
@@ -118,11 +125,14 @@ Restart the service after editing.
    email works.
 8. Settings › Workspace › Server: check that the checks are green and the last
    backup shows up after the first nightly run.
-9. Files (W20): Settings › Workspace has the upload size limit (25 MB), the
-   workspace's file storage (10 GB) and link previews (on). Attach a picture
-   to a message once to check uploads get through the proxy. On Android,
-   remove and re-add the home-screen app so sharing pictures and files to it
-   works (its share target changed).
+9. In any channel, type `/remind me to check the deploy in 2 minutes`. The
+   reminder should reach the inbox and the phone, with Done and Snooze on the
+   push. Later (the bookmark in the rail) lists it.
+10. Files (W20): Settings › Workspace has the upload size limit (25 MB), the
+    workspace's file storage (10 GB) and link previews (on). Attach a picture
+    to a message once to check uploads get through the proxy. On Android,
+    remove and re-add the home-screen app so sharing pictures and files to it
+    works (its share target changed).
 
 ## Nightly backups
 

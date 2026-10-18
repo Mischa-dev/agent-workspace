@@ -70,6 +70,7 @@ mod file_tools;
 mod groups;
 mod history;
 mod labels;
+mod later_tools;
 mod launch_tools;
 mod memory_tools;
 mod message_edits;
@@ -694,6 +695,103 @@ impl McpServer {
     ) -> Json<common::ToolResult<notifications::NotificationUpdateValue>> {
         let principal = principal_or!(parts, unauthenticated());
         Json(notifications::notification_update(&self.state, principal, arguments).await)
+    }
+
+    // -- Later, reminders and scheduled messages (W21) -------------------------
+
+    #[tool(
+        description = "List your Later list: messages and tasks you saved and reminders you set (view open, the default, with reminders due soonest first; or done), or view scheduled for your messages waiting to send. Agents have their own list; a due reminder reaches an agent as a reminder.due event.",
+        annotations(
+            title = "List Later",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn later_list(
+        &self,
+        Parameters(arguments): Parameters<later_tools::LaterListArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<later_tools::LaterListValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(later_tools::later_list(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Save a message (messageId) or task for later, or set yourself a reminder: text and at (RFC 3339, up to a year ahead). With at, you're reminded then: people in their inbox, on their phone and by email; agents by a reminder.due event. Saving the same message or task again updates it.",
+        annotations(
+            title = "Save for later or remind",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn later_save(
+        &self,
+        Parameters(arguments): Parameters<later_tools::ReminderSetArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<later_tools::LaterItemValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(later_tools::later_save(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change an item on your Later list: mark it done (or open again), move its reminder (at, or \"none\"), change its text, or remove it.",
+        annotations(
+            title = "Update Later item",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn later_update(
+        &self,
+        Parameters(arguments): Parameters<later_tools::LaterUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<later_tools::LaterUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(later_tools::later_update(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Schedule a message to send later (sendAt, RFC 3339, up to a year ahead), as you. When it sends, it's checked as if you sent it then: you must still be able to post there, and its mentions and reply rules apply then. Change or cancel it with scheduled_message_update; list them with later_list view scheduled.",
+        annotations(
+            title = "Schedule message",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn message_schedule(
+        &self,
+        Parameters(arguments): Parameters<later_tools::MessageScheduleArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<later_tools::ScheduledValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(later_tools::message_schedule(&self.state, principal, arguments).await)
+    }
+
+    #[tool(
+        description = "Change one of your scheduled messages: new text or sendAt, sendNow: true to send it now, or cancel: true not to send it. A failed one is scheduled again by giving it a new sendAt.",
+        annotations(
+            title = "Update scheduled message",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn scheduled_message_update(
+        &self,
+        Parameters(arguments): Parameters<later_tools::ScheduledUpdateArguments>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Json<common::ToolResult<later_tools::ScheduledUpdateValue>> {
+        let principal = principal_or!(parts, unauthenticated());
+        Json(later_tools::scheduled_message_update(&self.state, principal, arguments).await)
     }
 
     #[tool(

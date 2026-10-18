@@ -15,6 +15,7 @@ import { ConversationHeader } from '../conversations/ConversationHeader'
 import type { ComposerSubmission } from '../conversations/composerModel'
 import { useConversationTimeline } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
+import { useConversationTools } from '../later/useConversationTools'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { ThreadBoard, ThreadStatusChip } from '../conversations/threadBoard'
@@ -181,6 +182,14 @@ export function DirectConversationPage() {
   const title = summary ? conversationTitle(summary, viewerId) : page?.conversation.name ?? 'Conversation'
   usePageTitle(summary || page ? title : null)
 
+  const tools = useConversationTools({
+    canPost: Boolean(valid && page?.capabilities.sendMessage),
+    conversationId,
+    kind: isGroup ? 'group' : 'dm',
+    latestMessageId: entries.at(-1)?.message?.id,
+    projectId,
+  })
+
   if (isApiError(timeline.error) && timeline.error.status === 404) {
     return <Navigate replace to="/messages" />
   }
@@ -202,6 +211,7 @@ export function DirectConversationPage() {
       side="bottom"
     />
   )
+
 
   const header = isGroup ? (
     <ConversationHeader
@@ -225,15 +235,23 @@ export function DirectConversationPage() {
         </>
       }
       icon="users"
+      menu={tools.levelMenu}
       subtitle={othersNames.length ? `With ${listNames(othersNames)}` : undefined}
+      tag={tools.levelMark}
       title={title}
     />
   ) : (
     <ConversationHeader
       actions={threadsButton}
       lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
+      menu={tools.levelMenu}
       subtitle={other ? `@${other.handle}` : undefined}
-      tag={<ActorTag kind={otherKind} />}
+      tag={
+        <>
+          <ActorTag kind={otherKind} />
+          {tools.levelMark}
+        </>
+      }
       title={title}
     />
   )
@@ -303,6 +321,7 @@ export function DirectConversationPage() {
       user={session.user}
     >
       {header}
+      {tools.banner}
       {valid && projectId ? <PinnedBar canEdit={Boolean(page?.capabilities.sendMessage)} conversationId={conversationId} direct projectId={projectId} /> : null}
       <ConversationTimeline busy={timeline.isPending} label={`Messages with ${title}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${page?.replyRequests.map((request) => request.status).join(',') ?? ''}`}>
         {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
@@ -378,6 +397,7 @@ export function DirectConversationPage() {
           onSubmit={send}
           placeholder={`Message ${title}`}
           searchActors={searchMembers}
+          {...tools.composer}
         />
       ) : null}
       {messageActions.dialogs}

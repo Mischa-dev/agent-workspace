@@ -16,8 +16,8 @@ use super::{
 use crate::{
     AppState,
     conversations::{
-        MessageCommandActor, MessageMcpCredential, ReplyCompletion,
-        append_message_command_with_files, enqueue_event, lock_conversation_for,
+        MessageCommandActor, MessageMcpCredential, ReplyCompletion, append_message_command_with,
+        enqueue_event, lock_conversation_for,
     },
     conversations::{normalize_conversation_name, suggested_thread_name},
     error::AppError,
@@ -615,7 +615,7 @@ pub(super) async fn reply_send(
         Ok(content) => content,
         Err(_) => return ReplyToolResult::unavailable(),
     };
-    match append_message_command_with_files(
+    match append_message_command_with(
         state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -636,6 +636,7 @@ pub(super) async fn reply_send(
             generation: arguments.generation,
             final_reply,
         }),
+        crate::conversations::AppendExtras::default(),
     )
     .await
     {

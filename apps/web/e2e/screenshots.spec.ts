@@ -45,6 +45,11 @@ const keyPages: KeyPage[] = [
     ready: (page) => expect(page.getByRole('region', { name: 'Work item board' })).toBeVisible(),
   },
   {
+    name: 'later',
+    path: () => '/later',
+    ready: (page) => expect(page.getByRole('heading', { name: 'Later', exact: true })).toBeVisible(),
+  },
+  {
     name: 'runs',
     path: () => '/runs',
     ready: (page) => expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible(),

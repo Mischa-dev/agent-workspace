@@ -21,7 +21,7 @@ use crate::{
     AppState,
     conversations::{
         ConversationAccessRow, MessageCommandActor, MessageMcpCredential,
-        THREAD_STATUS_SUGGESTIONS, ThreadPatch, UnreadFrom, append_message_command_with_files,
+        THREAD_STATUS_SUGGESTIONS, ThreadPatch, UnreadFrom, append_message_command_with,
         authorize_conversation_row_for, enqueue_event, fetch_conversation_access,
         lock_conversation_for, mark_unread_from, normalize_conversation_name,
         suggested_thread_name as suggested_name, update_thread,
@@ -1469,7 +1469,7 @@ async fn send(
         Ok(actor) => actor,
         Err(message) => return ToolResult::denied(message),
     };
-    match append_message_command_with_files(
+    match append_message_command_with(
         state,
         actor,
         conversation_id,
@@ -1478,6 +1478,7 @@ async fn send(
         content,
         attachments,
         None,
+        crate::conversations::AppendExtras::default(),
     )
     .await
     {

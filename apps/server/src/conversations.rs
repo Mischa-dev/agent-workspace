@@ -336,6 +336,22 @@ pub struct MessageView {
     /// Previews of the web pages it links to that are ready and not hidden.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub link_previews: Vec<crate::link_previews::LinkPreviewView>,
+    /// The message this one forwards, as the viewer may see it (W21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwarded: Option<crate::forwarding::ForwardedView>,
+    /// Set when the viewer saved this message for later and hasn't marked
+    /// it done (W21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved: Option<SavedMark>,
+}
+
+/// The viewer's own saved-for-later mark on a message.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedMark {
+    pub id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remind_at: Option<String>,
 }
 
 fn first_revision() -> i32 {
@@ -581,6 +597,7 @@ struct TimelineEntryRow {
     remover_name: Option<String>,
     remover_handle: Option<String>,
     removed_via: Option<String>,
+    forwarded_message_id: Option<Uuid>,
     agent_run_event_id: Option<Uuid>,
     agent_run_id: Option<Uuid>,
     event_kind: Option<String>,
@@ -1480,7 +1497,7 @@ async fn send_direct_message(
     // the shared visibility check in `lock_message_conversation`.
     require_authenticated_write(&state, &headers, &principal)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let outcome = append_message_command_with_files(
+    let outcome = append_message_command_with(
         &state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -1494,6 +1511,7 @@ async fn send_direct_message(
         request.content,
         &request.attachments,
         None,
+        AppendExtras::default(),
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -1509,7 +1527,7 @@ async fn send_message(
 ) -> Result<Response, AppError> {
     require_authenticated_write(state, headers, principal)?;
     let idempotency_key = IdempotencyKey::from_headers(headers)?;
-    let outcome = append_message_command_with_files(
+    let outcome = append_message_command_with(
         state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -1523,6 +1541,7 @@ async fn send_message(
         request.content,
         &request.attachments,
         None,
+        AppendExtras::default(),
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -1568,7 +1587,7 @@ pub(crate) async fn append_message_command(
     content: serde_json::Value,
     reply: Option<ReplyCompletion>,
 ) -> Result<MessageAppendOutcome, AppError> {
-    append_message_command_with_files(
+    append_message_command_with(
         state,
         actor,
         conversation_id,
@@ -1577,15 +1596,23 @@ pub(crate) async fn append_message_command(
         content,
         &[],
         reply,
+        AppendExtras::default(),
     )
     .await
 }
 
+/// What a new message carries beyond its content.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AppendExtras {
+    /// The message it forwards (W21). The caller checked the sender can see it.
+    pub(crate) forwarded_message_id: Option<Uuid>,
+}
+
 /// `append_message_command` with files the sender uploaded to this
-/// conversation (`files::attach_to_message`). A message with files may have
-/// no text.
+/// conversation (`files::attach_to_message`) and any extras. A message with
+/// files may have no text.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn append_message_command_with_files(
+pub(crate) async fn append_message_command_with(
     state: &AppState,
     actor: MessageCommandActor,
     conversation_id: Uuid,
@@ -1594,6 +1621,7 @@ pub(crate) async fn append_message_command_with_files(
     content: serde_json::Value,
     attachments: &[Uuid],
     reply: Option<ReplyCompletion>,
+    extras: AppendExtras,
 ) -> Result<MessageAppendOutcome, AppError> {
     let content = MessageContent::from_json(content).map_err(message_content_error)?;
     // Without files the hash is the content's alone, as it always was, so
@@ -1659,9 +1687,9 @@ pub(crate) async fn append_message_command_with_files(
         r#"
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
-            content_version, content, plain_text, via_oauth_grant_id
+            content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8)
         "#,
     )
     .bind(message_id)
@@ -1671,6 +1699,7 @@ pub(crate) async fn append_message_command_with_files(
     .bind(&content_json)
     .bind(&plain_text)
     .bind(actor.via_grant_id)
+    .bind(extras.forwarded_message_id)
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -1789,6 +1818,8 @@ pub(crate) async fn append_message_command_with_files(
         reactions: Vec::new(),
         attachments: attached,
         link_previews: Vec::new(),
+        forwarded: None,
+        saved: None,
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -2251,6 +2282,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             remover.display_name AS remover_name,
             remover.handle AS remover_handle,
             removed_via_client.client_name AS removed_via,
+            message.forwarded_message_id,
             event.id AS agent_run_event_id,
             event.agent_run_id,
             event.kind AS event_kind,
@@ -2423,6 +2455,8 @@ async fn conversation_timeline(
         principal.actor_id,
     )
     .await?;
+    crate::forwarding::attach_forwards(&state.pool, &mut entries, principal.actor_id).await?;
+    crate::later::attach_saved(&state.pool, &mut entries, principal.actor_id).await?;
     let read_state = fetch_read_state(&state, conversation.id, principal.actor_id).await?;
     let linked_work_items = if conversation.kind == "thread" {
         let value = sqlx::query_scalar::<_, serde_json::Value>(
@@ -4020,6 +4054,10 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 reactions: Vec::new(),
                 attachments,
                 link_previews,
+                forwarded: row
+                    .forwarded_message_id
+                    .map(crate::forwarding::ForwardedView::unread),
+                saved: None,
             })
         }
         None => None,

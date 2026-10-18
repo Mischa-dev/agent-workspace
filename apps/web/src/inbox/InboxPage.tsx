@@ -57,6 +57,9 @@ const CATEGORIES: { value: InboxCategory; label: string }[] = [
 const KIND_ICON: Record<string, IconName> = {
   mention: 'at-sign',
   comment_mention: 'at-sign',
+  conversation_message: 'message',
+  reminder: 'clock',
+  scheduled_send_failed: 'circle-alert',
   assigned: 'work',
   approval_requested: 'shield-check',
   run_waiting: 'clock',

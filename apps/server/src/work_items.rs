@@ -372,6 +372,10 @@ struct CreateWorkItemRequest {
     estimate: Option<f64>,
     #[serde(default)]
     acceptance_criteria: Vec<String>,
+    /// W21: made from this message, which is linked back to (it must be one
+    /// in this project the creator can see).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_message_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2268,6 +2272,31 @@ async fn create_work_item(
                     return Err(AppError::Internal("new Work Item had a board position"));
                 }
             };
+            if let Some(message_id) = request.source_message_id {
+                let linked = sqlx::query(
+                    r#"
+                    INSERT INTO work_item_links (
+                        work_item_id, project_id, target_kind, target_id, created_by_actor_id
+                    )
+                    SELECT $1, $2, 'message', message.id, $3
+                    FROM messages message
+                    WHERE message.id = $4 AND message.project_id = $2
+                      AND message.removed_at IS NULL
+                      AND conversation_visible_to(message.conversation_id, $3)
+                    ON CONFLICT DO NOTHING
+                    "#,
+                )
+                .bind(work_item_id)
+                .bind(project_id)
+                .bind(principal.actor_id)
+                .bind(message_id)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
+                if linked == 0 {
+                    return Err(AppError::Validation("sourceMessageId"));
+                }
+            }
             let row = fetch_work_item_in_transaction(
                 &mut transaction,
                 project_id,

@@ -14,6 +14,7 @@ import { THEME_PRESETS } from '../theme/slots'
 import { useTheme } from '../theme/themeContext'
 import { Avatar, Button, Dialog, showToast, type CommandItem } from '../ui'
 import { CommandMenu } from '../ui/commandMenu'
+import { SLASH_COMMANDS } from '../later/slashCommands'
 import { searchWorkItemReferences } from '../work-items/api'
 import { closeCommandMenu, openShortcutSheet, pageCommands, useCommandState } from './commandStore'
 import { SHORTCUTS, parseTaskKey } from './shortcuts'
@@ -200,6 +201,19 @@ export function CommandPalette() {
     if (direct.data?.capabilities.startConversation) {
       list.push({ id: 'a:new-message', group: 'Actions', label: 'New message', icon: 'compose', keywords: ['dm', 'group'], onSelect: go('/messages') })
     }
+    // The composer's slash commands that have a place outside a conversation.
+    for (const command of SLASH_COMMANDS) {
+      if (!command.paletteHref) continue
+      list.push({
+        id: `slash:${command.name}`,
+        group: 'Actions',
+        label: command.description,
+        icon: command.icon,
+        hint: `/${command.name}`,
+        keywords: [`/${command.name}`, command.name],
+        onSelect: go(command.paletteHref),
+      })
+    }
     list.push({ id: 'a:shortcuts', group: 'Actions', label: 'Keyboard shortcuts', icon: 'info', shortcut: '?', onSelect: openShortcutSheet })
     list.push({
       id: 'a:sign-out',
@@ -221,6 +235,7 @@ export function CommandPalette() {
     list.push(
       { id: 'g:home', group: 'Go to', label: 'Home', icon: 'home', shortcut: 'G H', onSelect: go('/home') },
       { id: 'g:my-work', group: 'Go to', label: 'My work', icon: 'checklist', shortcut: 'G W', keywords: ['assigned', 'tasks', 'review', 'claimed'], onSelect: go('/my-work') },
+      { id: 'g:later', group: 'Go to', label: 'Later', icon: 'bookmark', shortcut: 'G L', keywords: ['saved', 'bookmarks', 'reminders', 'scheduled'], onSelect: go('/later') },
       { id: 'g:runs', group: 'Go to', label: 'Runs', icon: 'activity', keywords: ['agent runs', 'tokens', 'cost', 'usage', 'diff'], onSelect: go('/runs') },
       { id: 'g:whiteboards', group: 'Go to', label: 'Whiteboards', icon: 'whiteboard', keywords: ['excalidraw', 'draw', 'diagram', 'sketch', 'canvas'], onSelect: go('/whiteboards') },
       { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['inbox', 'dms'], onSelect: go('/messages') },

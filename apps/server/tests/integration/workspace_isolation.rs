@@ -98,6 +98,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/auth/workos",
     "/api/v1/conversations/{id}/messages/{message_id}",
     "/api/v1/conversations/{id}/messages/{message_id}/revisions",
+    "/api/v1/conversations/{id}/notification-level",
     "/api/v1/conversations/{id}/pins",
     "/api/v1/conversations/{id}/threads",
     "/api/v1/conversations/{id}/timeline",
@@ -112,6 +113,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/inbox",
     "/api/v1/inbox/summary",
     "/api/v1/link-previews/{id}/image",
+    "/api/v1/later",
     "/api/v1/my-work",
     "/api/v1/notification-settings",
     "/api/v1/organizations/{organization_id}",
@@ -193,6 +195,7 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/push/subscriptions",
     "/api/v1/runs",
     "/api/v1/runs/usage",
+    "/api/v1/scheduled-messages",
     "/api/v1/search",
     "/api/v1/settings/effective",
     "/api/v1/settings/registry",
@@ -1496,6 +1499,47 @@ async fn build_workspace(
         );
     }
 
+    // Later, reminders and scheduling (W21): a saved message with a
+    // reminder, a saved task, a bare reminder, a scheduled message and a
+    // channel set to every message.
+    let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/v1/later".to_owned(),
+            json!({"messageId": message, "note": format!("Read{m}"), "remindAt": soon}),
+        ),
+        (
+            "POST",
+            "/api/v1/later".to_owned(),
+            json!({"workItemId": task}),
+        ),
+        (
+            "POST",
+            "/api/v1/later".to_owned(),
+            json!({"note": format!("Call back{m}"), "remindAt": soon, "organizationId": organization}),
+        ),
+        (
+            "POST",
+            format!("/api/v1/conversations/{channel}/scheduled-messages"),
+            json!({
+                "content": {"version": 1, "nodes": [{"type": "text", "text": format!("Later{m}")}]},
+                "sendAt": soon,
+            }),
+        ),
+        (
+            "PUT",
+            format!("/api/v1/conversations/{channel}/notification-level"),
+            json!({"level": "all"}),
+        ),
+    ] {
+        let (status, written) = send(app, browser.request(method, &uri, None, body)).await;
+        assert!(
+            status.is_success(),
+            "{label} {method} {uri}: {status} {written}"
+        );
+    }
+
     // Webhooks and automations (W14): a subscription on the whole
     // workspace and a rule that notifies its maker.
     let (status, created) = send(
@@ -1940,6 +1984,39 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/inbox/summary",
             vec!["/api/v1/inbox/summary".to_owned()],
             vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/later",
+            vec![
+                "/api/v1/later".to_owned(),
+                "/api/v1/later?view=done".to_owned(),
+            ],
+            vec![],
+            vec![],
+        ),
+        case(
+            "/api/v1/scheduled-messages",
+            vec![
+                "/api/v1/scheduled-messages".to_owned(),
+                format!("/api/v1/scheduled-messages?conversationId={}", a.channel),
+            ],
+            vec![],
+            vec![format!(
+                "/api/v1/scheduled-messages?conversationId={}",
+                b.channel
+            )],
+        ),
+        case(
+            "/api/v1/conversations/{id}/notification-level",
+            vec![
+                format!("/api/v1/conversations/{}/notification-level", a.channel),
+                format!("/api/v1/conversations/{}/notification-level", a.dm),
+            ],
+            vec![
+                format!("/api/v1/conversations/{}/notification-level", b.channel),
+                format!("/api/v1/conversations/{}/notification-level", b.dm),
+            ],
             vec![],
         ),
         case(
@@ -2909,6 +2986,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "file_read",
     "inbox_list",
     "label_list",
+    "later_list",
     "launch_list",
     "message_history",
     "milestone_list",
@@ -3177,6 +3255,16 @@ fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "inbox_list",
             vec![json!({})],
             vec![json!({"projectId": b.project})],
+            vec![],
+        ),
+        case(
+            "later_list",
+            vec![
+                json!({}),
+                json!({"view": "done"}),
+                json!({"view": "scheduled"}),
+            ],
+            vec![],
             vec![],
         ),
         case(
