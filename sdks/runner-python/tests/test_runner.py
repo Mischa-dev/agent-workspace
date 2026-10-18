@@ -187,6 +187,13 @@ class RunnerTests(unittest.TestCase):
         body = json.dumps({"event": "reply.requested", "deliveryId": "d1", "agentId": "a", "replyRequestId": "r1"})
         self.assertEqual(runner.receive(signed(body, secret="other"), body), 401)
 
+    def test_a_test_wakeup_is_answered_and_claims_nothing(self):
+        fake = FakeMcp(lambda n, a: {})
+        runner = aw.Runner("https://example.test/mcp", "test-token", "custom", lambda c: None, webhook_secret=SECRET, transport=fake)
+        body = json.dumps({"event": "ping", "deliveryId": "d1", "agentId": "a", "projectId": "p"})
+        self.assertEqual(runner.receive(signed(body), body), 204)
+        self.assertEqual(fake.calls, [])
+
     def test_the_listener_answers_wakeups(self):
         import urllib.error
         import urllib.request

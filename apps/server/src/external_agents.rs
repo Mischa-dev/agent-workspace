@@ -59,6 +59,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook",
             post(set_webhook),
         )
+        .route(
+            "/api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
+            post(test_webhook),
+        )
 }
 
 #[derive(Debug, FromRow)]
@@ -648,6 +652,79 @@ async fn set_webhook(
         connection: row.into(),
         webhook_secret: secret,
     }))
+}
+
+/// Send the runner a signed test wakeup now and say what it answered, so a
+/// person setting one up sees at once whether the URL, the network path and
+/// the signature check work. Only a project's managers can, like changing
+/// the webhook.
+async fn test_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiPath((project_id, connection_id)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Json<crate::replies::TestWakeup>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let mut transaction = state.pool.begin().await?;
+    let access = load_access_tx(&mut transaction, principal.actor_id, project_id)
+        .await?
+        .ok_or(AppError::NotFound("project"))?;
+    authorize_management(&principal, &access, project_id)?;
+    let (agent_id, url, plaintext, secret_id) =
+        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, Option<Uuid>)>(
+            r#"
+            SELECT actor_id, webhook_url, webhook_secret, webhook_secret_id
+            FROM external_agent_connections
+            WHERE project_id = $1 AND id = $2 AND status <> 'removed'
+            "#,
+        )
+        .bind(project_id)
+        .bind(connection_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound("external agent connection"))?;
+    let Some(url) = url else {
+        return Err(AppError::Conflict(
+            "webhook_missing",
+            "This agent has no webhook to test. Add its runner's URL first.",
+        ));
+    };
+    let secret = match (secret_id, plaintext) {
+        (Some(id), _) => {
+            let keys = crate::secrets::keyring(&state.config)?;
+            crate::secrets::reveal(&mut *transaction, keys.as_ref(), id, "agent_webhook.test")
+                .await?
+        }
+        (None, Some(plaintext)) => crate::secrets::SecretValue::new(plaintext),
+        (None, None) => {
+            return Err(AppError::Conflict(
+                "webhook_secret_missing",
+                "This webhook has no signing secret. Save the webhook again to get one.",
+            ));
+        }
+    };
+    insert_audit(
+        &mut transaction,
+        &headers,
+        &principal,
+        project_id,
+        connection_id,
+        "external_agent.webhook_tested",
+        serde_json::json!({}),
+    )
+    .await?;
+    // Commit before the network call: the runner may take seconds to answer.
+    transaction.commit().await?;
+    Ok(Json(
+        crate::replies::send_test_wakeup(
+            &url,
+            secret.expose(),
+            agent_id,
+            project_id,
+            &state.config.webhook_trusted_origins,
+        )
+        .await,
+    ))
 }
 
 async fn rotate_credential(

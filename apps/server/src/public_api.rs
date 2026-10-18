@@ -130,7 +130,7 @@ pub(crate) fn status_for(result: &Value) -> StatusCode {
 // The OpenAPI document
 
 /// Groups operations by the noun their tool starts with.
-fn tag_for(tool: &str) -> &'static str {
+pub(crate) fn tag_for(tool: &str) -> &'static str {
     let noun = tool.split('_').next().unwrap_or(tool);
     match noun {
         "briefing" | "inbox" | "notification" | "mark" => "Inbox and notifications",
@@ -138,7 +138,7 @@ fn tag_for(tool: &str) -> &'static str {
         "conversation" | "message" | "thread" | "channel" | "pin" | "people" => "Conversations",
         "reply" | "session" | "agent" => "Agents and replies",
         "task" | "label" | "milestone" | "view" | "my" | "template" => "Tasks",
-        "page" | "decision" | "search" => "Pages and search",
+        "page" | "skill" | "decision" | "search" => "Pages and search",
         "run" | "approval" | "environment" | "external" | "usage" => "Runs and launching",
         "repository" | "pull" => "Code",
         "webhook" => "Webhooks",

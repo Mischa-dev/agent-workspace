@@ -4,6 +4,8 @@ export type PageSummary = {
   id: string
   title: string
   isGuide: boolean
+  /** Set when the page is a skill agents load: when to use it. */
+  skillDescription: string | null
   version: number
   updatedAt: string
   updatedBy: string | null
@@ -26,6 +28,7 @@ export type Page = {
   title: string
   body: string
   isGuide: boolean
+  skillDescription: string | null
   version: number
   createdAt: string
   updatedAt: string
@@ -39,6 +42,8 @@ export type PageInput = {
   title?: string
   body?: string
   isGuide?: boolean
+  /** One line saying when agents should use it; an empty string stops it being a skill. */
+  skillDescription?: string
   expectedVersion?: number
   restoreVersion?: number
   archived?: boolean

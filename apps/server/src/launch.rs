@@ -47,6 +47,9 @@ pub const MAX_TASKS_PER_LAUNCH: usize = 50;
 const MAX_PROMPT_CHARS: usize = 19_000;
 const MAX_DESCRIPTION_CHARS: usize = 8_000;
 const MAX_GUIDE_CHARS: usize = 4_000;
+/// The skills' instructions written into a prompt, together. Skills past it
+/// are listed by name and link only.
+const MAX_SKILLS_CHARS: usize = 4_000;
 const ACTIVE_RUN_STATES: &str =
     "('created', 'queued', 'starting', 'working', 'blocked', 'recovering')";
 
@@ -303,7 +306,44 @@ pub(crate) async fn task_fields(
     fields.insert("project.name", task.project_name);
     fields.insert("project.key", task.project_key);
     fields.insert("project.guide", shorten(&guide, MAX_GUIDE_CHARS));
+    let skills = sqlx::query_as::<_, (Uuid, String, String, String)>(
+        r#"
+        SELECT id, title, skill_description, body FROM project_pages
+        WHERE project_id = $1 AND skill_description IS NOT NULL AND archived_at IS NULL
+        ORDER BY lower(title), id
+        LIMIT 200
+        "#,
+    )
+    .bind(project_id)
+    .fetch_all(&state.pool)
+    .await?;
+    fields.insert(
+        "project.skills",
+        skills_field(&skills, &format!("{origin}/projects/{project_id}/pages")),
+    );
     Ok(fields)
+}
+
+/// The project's skills for a prompt: each one's name and when to use it,
+/// with its instructions while they fit in `MAX_SKILLS_CHARS`. A run may not
+/// be connected to Agent Workspace, so the instructions travel with it.
+fn skills_field(skills: &[(Uuid, String, String, String)], pages_url: &str) -> String {
+    let mut budget = MAX_SKILLS_CHARS;
+    let mut parts = Vec::new();
+    for (page_id, title, description, body) in skills {
+        let name = crate::memory::skill_name(title);
+        let body = body.trim();
+        let length = body.chars().count();
+        if !body.is_empty() && length <= budget {
+            budget -= length;
+            parts.push(format!("### {name}\n\n{description}\n\n{body}"));
+        } else {
+            parts.push(format!(
+                "### {name}\n\n{description} Instructions: {pages_url}/{page_id}"
+            ));
+        }
+    }
+    parts.join("\n\n")
 }
 
 async fn load_task(

@@ -31,6 +31,7 @@ use crate::{
 
 pub const MAX_PAGE_TITLE: usize = 200;
 pub const MAX_PAGE_BODY: usize = 200_000;
+pub const MAX_SKILL_DESCRIPTION: usize = 500;
 pub const MAX_DECISION_TITLE: usize = 300;
 pub const MAX_DECISION_DETAIL: usize = 20_000;
 /// A page nobody has touched in this many days is flagged for review.
@@ -85,6 +86,8 @@ pub struct PageSummary {
     pub id: Uuid,
     pub title: String,
     pub is_guide: bool,
+    /// Set when the page is a skill: the line that says when to use it.
+    pub skill_description: Option<String>,
     pub version: i64,
     pub updated_at: String,
     pub updated_by: Option<String>,
@@ -100,6 +103,7 @@ pub struct PageView {
     pub title: String,
     pub body: String,
     pub is_guide: bool,
+    pub skill_description: Option<String>,
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -248,7 +252,7 @@ pub async fn list_pages(
 ) -> Result<Vec<PageSummary>, AppError> {
     Ok(sqlx::query_as::<_, PageSummary>(
         r#"
-        SELECT page.id, page.title, page.is_guide, page.version,
+        SELECT page.id, page.title, page.is_guide, page.skill_description, page.version,
                page.updated_at::text AS updated_at,
                editor.display_name AS updated_by,
                page.updated_at < now() - make_interval(days => $3) AS stale,
@@ -269,7 +273,8 @@ pub async fn list_pages(
 }
 
 const PAGE_SELECT: &str = r#"
-    SELECT page.id, page.project_id, page.title, page.body, page.is_guide, page.version,
+    SELECT page.id, page.project_id, page.title, page.body, page.is_guide,
+           page.skill_description, page.version,
            page.created_at::text AS created_at, page.updated_at::text AS updated_at,
            editor.display_name AS updated_by,
            page.archived_at IS NOT NULL AS archived,
@@ -326,6 +331,31 @@ pub async fn guide_page(pool: &PgPool, project_id: Uuid) -> Result<Option<PageVi
     }
 }
 
+/// A Project's skills, by title. Agents read the descriptions and load a
+/// skill's page only when it applies.
+pub async fn list_skills(pool: &PgPool, project_id: Uuid) -> Result<Vec<PageSummary>, AppError> {
+    Ok(sqlx::query_as::<_, PageSummary>(
+        r#"
+        SELECT page.id, page.title, page.is_guide, page.skill_description, page.version,
+               page.updated_at::text AS updated_at,
+               editor.display_name AS updated_by,
+               page.updated_at < now() - make_interval(days => $2) AS stale,
+               left(regexp_replace(page.body, '\s+', ' ', 'g'), 240) AS excerpt
+        FROM project_pages page
+        LEFT JOIN project_memberships editor
+          ON editor.project_id = page.project_id AND editor.actor_id = page.updated_by_actor_id
+        WHERE page.project_id = $1 AND page.skill_description IS NOT NULL
+          AND page.archived_at IS NULL
+        ORDER BY lower(page.title), page.id
+        LIMIT 200
+        "#,
+    )
+    .bind(project_id)
+    .bind(STALE_AFTER_DAYS)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn get_revision(
     pool: &PgPool,
     page_id: Uuid,
@@ -358,6 +388,9 @@ pub struct PageInput {
     pub title: Option<String>,
     pub body: Option<String>,
     pub is_guide: Option<bool>,
+    /// Make the page a skill with this one-line description of when to use
+    /// it; an empty string makes it a plain page again.
+    pub skill_description: Option<String>,
     /// Refuse the save if someone else changed the page since this version.
     pub expected_version: Option<i64>,
     /// Put back the title and body saved in this version.
@@ -381,6 +414,43 @@ fn normalize_body(value: &str, max: usize) -> Result<String, AppError> {
         return Err(AppError::Validation("body"));
     }
     Ok(value.to_owned())
+}
+
+/// A skill description is one line. `Some(None)` turns the skill off.
+fn normalize_skill_description(value: Option<&str>) -> Result<Option<Option<String>>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let description = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if description.is_empty() {
+        return Ok(Some(None));
+    }
+    if description.chars().count() > MAX_SKILL_DESCRIPTION {
+        return Err(AppError::Validation("skillDescription"));
+    }
+    Ok(Some(Some(description)))
+}
+
+/// The name an agent calls a skill by: its page title in lowercase words
+/// joined by hyphens, as Claude Code and Codex name skill folders.
+pub fn skill_name(title: &str) -> String {
+    let mut name = String::new();
+    for character in title.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() {
+            name.push(character);
+        } else if !name.is_empty() && !name.ends_with('-') {
+            name.push('-');
+        }
+    }
+    while name.ends_with('-') {
+        name.pop();
+    }
+    name.truncate(
+        name.char_indices()
+            .nth(64)
+            .map_or(name.len(), |(index, _)| index),
+    );
+    name.trim_end_matches('-').to_owned()
 }
 
 fn normalize_note(value: Option<&str>) -> Result<Option<String>, AppError> {
@@ -417,6 +487,8 @@ pub async fn create_page(
     let body = normalize_body(input.body.as_deref().unwrap_or_default(), MAX_PAGE_BODY)?;
     let note = normalize_note(input.note.as_deref())?;
     let is_guide = input.is_guide.unwrap_or(false);
+    let skill_description =
+        normalize_skill_description(input.skill_description.as_deref())?.flatten();
     if is_guide {
         clear_guide(transaction, writer, project_id, None).await?;
     }
@@ -424,8 +496,9 @@ pub async fn create_page(
     sqlx::query(
         r#"
         INSERT INTO project_pages (
-            id, project_id, title, body, is_guide, created_by_actor_id, updated_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $6)
+            id, project_id, title, body, is_guide, skill_description,
+            created_by_actor_id, updated_by_actor_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
         "#,
     )
     .bind(page_id)
@@ -433,6 +506,7 @@ pub async fn create_page(
     .bind(&title)
     .bind(&body)
     .bind(is_guide)
+    .bind(&skill_description)
     .bind(writer.actor_id)
     .execute(&mut **transaction)
     .await
@@ -458,10 +532,11 @@ pub async fn update_page(
     page_id: Uuid,
     input: &PageInput,
 ) -> Result<Uuid, AppError> {
-    let (project_id, title, body, version, is_guide, archived) =
-        sqlx::query_as::<_, (Uuid, String, String, i64, bool, bool)>(
+    let (project_id, title, body, version, is_guide, skill_description, archived) =
+        sqlx::query_as::<_, (Uuid, String, String, i64, bool, Option<String>, bool)>(
             r#"
-            SELECT project_id, title, body, version, is_guide, archived_at IS NOT NULL
+            SELECT project_id, title, body, version, is_guide, skill_description,
+                   archived_at IS NOT NULL
             FROM project_pages WHERE id = $1 FOR UPDATE
             "#,
         )
@@ -499,9 +574,26 @@ pub async fn update_page(
         new_body = normalize_body(value, MAX_PAGE_BODY)?;
     }
     let new_guide = input.is_guide.unwrap_or(is_guide);
+    let new_skill = normalize_skill_description(input.skill_description.as_deref())?
+        .unwrap_or_else(|| skill_description.clone());
     let new_archived = input.archived.unwrap_or(archived);
-    if new_title == title && new_body == body && new_guide == is_guide && new_archived == archived {
+    if new_title == title
+        && new_body == body
+        && new_guide == is_guide
+        && new_skill == skill_description
+        && new_archived == archived
+    {
         return Ok(project_id);
+    }
+    if new_skill.is_some() != skill_description.is_some() {
+        note.get_or_insert_with(|| {
+            if new_skill.is_some() {
+                "Made a skill"
+            } else {
+                "No longer a skill"
+            }
+            .to_owned()
+        });
     }
     if new_guide && !is_guide {
         clear_guide(transaction, writer, project_id, Some(page_id)).await?;
@@ -515,7 +607,8 @@ pub async fn update_page(
         UPDATE project_pages
         SET title = $2, body = $3, is_guide = $4,
             archived_at = CASE WHEN $5 THEN COALESCE(archived_at, now()) ELSE NULL END,
-            version = $6, updated_by_actor_id = $7, updated_at = now()
+            version = $6, updated_by_actor_id = $7, updated_at = now(),
+            skill_description = $8
         WHERE id = $1
         "#,
     )
@@ -526,6 +619,7 @@ pub async fn update_page(
     .bind(new_archived)
     .bind(next_version)
     .bind(writer.actor_id)
+    .bind(&new_skill)
     .execute(&mut **transaction)
     .await
     .map_err(map_page_title_conflict)?;
