@@ -102,26 +102,22 @@ pub fn links_in(text: &str) -> Vec<String> {
         // closing bracket to the Markdown or prose around the link.
         loop {
             let trimmed = link.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_', '~']);
-            let trimmed = if trimmed.ends_with(')')
-                && trimmed.matches(')').count() > trimmed.matches('(').count()
-            {
-                &trimmed[..trimmed.len() - 1]
-            } else if trimmed.ends_with(']') {
-                &trimmed[..trimmed.len() - 1]
-            } else {
-                trimmed
+            let unbalanced = trimmed.matches(')').count() > trimmed.matches('(').count();
+            let trimmed = match trimmed.strip_suffix(')') {
+                Some(shorter) if unbalanced => shorter,
+                _ => trimmed.strip_suffix(']').unwrap_or(trimmed),
             };
             if trimmed.len() == link.len() {
                 break;
             }
             link = trimmed;
         }
-        if let Some(url) = normalize(link) {
-            if !found.contains(&url) {
-                found.push(url);
-                if found.len() == MAX_PREVIEWS_PER_MESSAGE {
-                    break;
-                }
+        if let Some(url) = normalize(link)
+            && !found.contains(&url)
+        {
+            found.push(url);
+            if found.len() == MAX_PREVIEWS_PER_MESSAGE {
+                break;
             }
         }
         rest = &candidate[end.max(1)..];

@@ -355,7 +355,11 @@ mod tests {
             <meta property=og:site_name content=Example>
             <meta property="og:image" content="/img/card.png">
             </head><body><meta property="og:title" content="ignored"></body></html>"#;
-        let page = parse(html, &Url::parse("https://example.com/post/1").unwrap()).unwrap();
+        let page = parse(
+            html,
+            &Url::parse("https://example.com/post/1").expect("test fixture"),
+        )
+        .expect("test fixture");
         assert_eq!(page.title, "Rich \"title\"");
         assert_eq!(page.description.as_deref(), Some("The description"));
         assert_eq!(page.site_name.as_deref(), Some("Example"));
@@ -370,31 +374,33 @@ mod tests {
         assert!(
             parse(
                 "<html><head></head></html>",
-                &Url::parse("https://x.example/").unwrap()
+                &Url::parse("https://x.example/").expect("test fixture")
             )
             .is_none()
         );
         let page = parse(
             "<title>\n  Just   a title &#8212; ok\n</title>",
-            &Url::parse("https://x.example/").unwrap(),
+            &Url::parse("https://x.example/").expect("test fixture"),
         )
-        .unwrap();
+        .expect("test fixture");
         assert_eq!(page.title, "Just a title — ok");
         assert_eq!(page.image_url, None);
         // Scripts in an image URL never become a link.
         let page = parse(
             r#"<title>t</title><meta property="og:image" content="javascript:alert(1)">"#,
-            &Url::parse("https://x.example/").unwrap(),
+            &Url::parse("https://x.example/").expect("test fixture"),
         )
-        .unwrap();
+        .expect("test fixture");
         assert_eq!(page.image_url, None);
     }
 
     /// A one-shot HTTP server on loopback answering each request with the
     /// next canned response.
     async fn serve(responses: Vec<String>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test fixture");
+        let address = listener.local_addr().expect("test fixture");
         tokio::spawn(async move {
             for response in responses {
                 let Ok((mut socket, _)) = listener.accept().await else {

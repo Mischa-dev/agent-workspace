@@ -276,11 +276,11 @@ fn strip_jpeg(bytes: &[u8]) -> Option<(Vec<u8>, u8)> {
         }
         // Start of scan: the rest is image data.
         if marker == 0xda {
-            if let Some(at) = orientation_at {
-                if orientation != 1 {
-                    let segment = orientation_segment(orientation);
-                    out.splice(at..at, segment);
-                }
+            if let Some(at) = orientation_at
+                && orientation != 1
+            {
+                let segment = orientation_segment(orientation);
+                out.splice(at..at, segment);
             }
             out.extend_from_slice(&bytes[position..]);
             return Some((out, orientation));
@@ -458,11 +458,19 @@ mod tests {
         bytes.extend_from_slice(&[0xff, 0xe0, 0, 16]);
         bytes.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
         bytes.extend_from_slice(&[0xff, 0xe1]);
-        bytes.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+        bytes.extend_from_slice(
+            &u16::try_from(exif.len() + 2)
+                .expect("test fixture")
+                .to_be_bytes(),
+        );
         bytes.extend_from_slice(&exif);
         let xmp = b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>GPSLatitude</x:xmpmeta>";
         bytes.extend_from_slice(&[0xff, 0xe1]);
-        bytes.extend_from_slice(&u16::try_from(xmp.len() + 2).unwrap().to_be_bytes());
+        bytes.extend_from_slice(
+            &u16::try_from(xmp.len() + 2)
+                .expect("test fixture")
+                .to_be_bytes(),
+        );
         bytes.extend_from_slice(xmp);
         bytes.extend_from_slice(&[0xff, 0xda, 0, 2, 1, 2, 3, 0xff, 0xd9]);
         bytes
@@ -494,11 +502,15 @@ mod tests {
     fn png_text_and_exif_chunks_are_dropped() {
         let png = base64::engine::general_purpose::STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
-            .unwrap();
+            .expect("test fixture");
         // Insert a tEXt chunk after IHDR (8 + 25 bytes).
         let mut with_text = png[..33].to_vec();
         let text = b"Comment\0lat 52.52";
-        with_text.extend_from_slice(&u32::try_from(text.len()).unwrap().to_be_bytes());
+        with_text.extend_from_slice(
+            &u32::try_from(text.len())
+                .expect("test fixture")
+                .to_be_bytes(),
+        );
         with_text.extend_from_slice(b"tEXt");
         with_text.extend_from_slice(text);
         with_text.extend_from_slice(&[0, 0, 0, 0]);
@@ -521,7 +533,7 @@ mod tests {
     fn thumbnails_turn_with_the_camera() {
         let png = base64::engine::general_purpose::STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
-            .unwrap();
+            .expect("test fixture");
         let thumbnail = thumbnail(&png, ImageFormat::Png, 1, 1, 6, 64).expect("thumbnail");
         assert_eq!(thumbnail.content_type, "image/png");
         assert!(thumbnail.bytes.starts_with(b"\x89PNG"));

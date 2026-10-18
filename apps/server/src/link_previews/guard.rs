@@ -119,7 +119,7 @@ mod tests {
     use super::*;
 
     fn checked(url: &str) -> Result<(), &'static str> {
-        Policy::public().check_url(&Url::parse(url).unwrap())
+        Policy::public().check_url(&Url::parse(url).expect("test fixture"))
     }
 
     #[test]

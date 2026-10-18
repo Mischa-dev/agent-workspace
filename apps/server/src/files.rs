@@ -363,11 +363,11 @@ pub(crate) async fn store_upload(
     let thumbnail_key = thumbnail.as_ref().map(|_| format!("{storage_key}.thumb"));
     let store = FileStore::from_config(&state.config);
     store.put(&storage_key, &bytes).await?;
-    if let (Some(key), Some(thumbnail)) = (&thumbnail_key, &thumbnail) {
-        if let Err(error) = store.put(key, &thumbnail.bytes).await {
-            let _ = store.delete(&storage_key).await;
-            return Err(error);
-        }
+    if let (Some(key), Some(thumbnail)) = (&thumbnail_key, &thumbnail)
+        && let Err(error) = store.put(key, &thumbnail.bytes).await
+    {
+        let _ = store.delete(&storage_key).await;
+        return Err(error);
     }
     let sha256 = hex::encode(Sha256::digest(&bytes));
     let (conversation_id, work_item_id, attached) = match destination {
