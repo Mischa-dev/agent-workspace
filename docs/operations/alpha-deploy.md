@@ -110,6 +110,13 @@ Restart the service after editing.
   from the server, so it needs outbound HTTP and HTTPS; private, loopback and
   Tailscale addresses are always refused. The CSP is unchanged: pictures and
   preview images are served from the app's own origin.
+- **Bug sweep (2026-10-18).** Nothing goes in this file. The migrations
+  `20261017200000_push_action_approval.sql` and
+  `20261017200100_agent_saved_items.sql` run with the rest. Approve, Deny and
+  Answer buttons on pushes sent before the deploy stop working (they open the
+  app instead of acting); new pushes have working buttons. Drafts and unsent
+  messages kept on a device from before the deploy are forgotten once, the
+  first time the app opens, because they are now kept per person.
 
 ## After: in the app
 
