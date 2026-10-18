@@ -6,6 +6,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
+import { usePageTitle } from '../shell/documentTitleModel'
 import { Icon } from '../ui'
 import { useWorkItem } from './hooks'
 import { workItemsHref } from './links'
@@ -19,6 +20,7 @@ export function WorkItemDetailPage() {
   const { projectId = '', workItemId = '' } = useParams()
   const project = useProject(projectId)
   const item = useWorkItem(projectId, workItemId)
+  usePageTitle(item.data ? `${item.data.key} ${item.data.title}` : null)
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'work_items' },

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { filterCommands, type CommandItem } from '../ui'
 import { pageTitleFor, unreadCount } from './documentTitleModel'
+import { SHORTCUTS } from './shortcutSheet'
 import { createShortcutMatcher, parseTaskKey } from './shortcuts'
 
 function key(value: string, extra: Partial<KeyboardEvent> = {}) {
@@ -27,6 +28,44 @@ describe('keyboard shortcuts', () => {
     // ⌘K still opens the menu while typing.
     expect(press(key('k', { ctrlKey: true, target: field }))).toBe('command-menu')
     field.remove()
+  })
+
+  it('moves between conversations and marks all read, also from the composer', () => {
+    const press = createShortcutMatcher()
+    const composer = document.createElement('textarea')
+    document.body.appendChild(composer)
+    expect(press(key('ArrowDown', { altKey: true, target: composer }))).toBe('next-conversation')
+    expect(press(key('ArrowUp', { altKey: true }))).toBe('previous-conversation')
+    expect(press(key('ArrowDown', { altKey: true, shiftKey: true }))).toBe('next-unread')
+    expect(press(key('ArrowUp', { altKey: true, shiftKey: true }))).toBe('previous-unread')
+    expect(press(key('Escape', { shiftKey: true, target: composer }))).toBe('mark-all-read')
+    expect(press(key('Escape'))).toBeNull()
+    expect(press(key('ArrowDown'))).toBeNull()
+    composer.remove()
+    // A menu or dialog keeps its own arrows.
+    const menu = document.createElement('div')
+    menu.setAttribute('role', 'menu')
+    const item = document.createElement('button')
+    menu.appendChild(item)
+    document.body.appendChild(menu)
+    expect(press(key('ArrowDown', { altKey: true, target: item }))).toBeNull()
+    menu.remove()
+  })
+
+  it('does what the shortcut sheet says for every key it lists', () => {
+    type Modifiers = { metaKey?: boolean; altKey?: boolean; shiftKey?: boolean }
+    const named: Record<string, Modifiers> = { '⌘': { metaKey: true }, '⌥': { altKey: true }, '⇧': { shiftKey: true } }
+    const keyNames: Record<string, string> = { '↑': 'ArrowUp', '↓': 'ArrowDown', Esc: 'Escape' }
+    for (const shortcut of SHORTCUTS) {
+      const press = createShortcutMatcher()
+      const modifiers = shortcut.keys.filter((part) => part in named)
+      const rest = shortcut.keys.filter((part) => !(part in named)).map((part) => keyNames[part] ?? part.toLowerCase())
+      const extra: Modifiers = Object.assign({}, ...modifiers.map((part) => named[part]))
+      if (rest[0] === '?') extra.shiftKey = true
+      let action = null
+      for (const part of rest) action = press(key(part, extra))
+      expect(action, shortcut.keys.join(' ')).toBe(shortcut.action)
+    }
   })
 
   it('reads task keys in any case and rejects look-alikes', () => {

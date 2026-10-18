@@ -226,7 +226,14 @@ export type NotificationChannel = 'in_app' | 'push' | 'email'
 
 export type GroupSetting = { group: NotificationGroup; label: string; inApp: boolean; push: boolean; email: boolean }
 export type ProjectMute = { projectId: string; projectName: string; group: NotificationGroup | 'all' }
-export type QuietHours = { enabled: boolean; start: number; end: number; timeZone: string | null }
+export type QuietHours = {
+  enabled: boolean
+  start: number
+  end: number
+  timeZone: string | null
+  /** A pause set by hand, as an ISO time; past or absent means not paused. */
+  pausedUntil?: string | null
+}
 
 export type NotificationSettings = {
   organizationId: string

@@ -163,6 +163,13 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
         if !decision.email {
             return Ok(());
         }
+        // Paused by hand: no email now; the inbox and any digest still have it.
+        let (quiet, _) =
+            notification_settings::quiet_hours(&mut connection, organization_id, job.recipient)
+                .await?;
+        if quiet.paused_at(Utc::now()).is_some() {
+            return Ok(());
+        }
     }
     let Some(address) = mail::verified_address_for_actor(&state.pool, job.recipient).await? else {
         return Ok(());

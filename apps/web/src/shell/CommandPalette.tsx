@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { clearAuthenticatedQueryCache, logout, useAuthenticatedSession } from '../auth/session'
 import { useProjectConversationSidebar } from '../conversations/hooks'
@@ -16,8 +16,12 @@ import { Avatar, Button, Dialog, showToast, type CommandItem } from '../ui'
 import { CommandMenu } from '../ui/commandMenu'
 import { SLASH_COMMANDS } from '../later/slashCommands'
 import { searchWorkItemReferences } from '../work-items/api'
-import { closeCommandMenu, openShortcutSheet, pageCommands, useCommandState } from './commandStore'
-import { SHORTCUTS, parseTaskKey } from './shortcuts'
+import { closeCommandMenu, openMarkAllRead, openShortcutSheet, pageCommands, useCommandState } from './commandStore'
+import { markAllRead } from './markAllRead'
+import { pauseChoices, pausedUntilLabel, useNotificationPause } from './notificationPause'
+import { placeIcon, readRecentPlaces } from './recentPlaces'
+import { SHORTCUTS } from './shortcutSheet'
+import { parseTaskKey } from './shortcuts'
 import { useProjectByKey } from './useProjectByKey'
 import { projectPath, useRouteProject } from './useRouteProject'
 
@@ -62,8 +66,10 @@ function useTaskResults(query: string, current: Project | null) {
 export function CommandPalette() {
   const session = useAuthenticatedSession()
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const theme = useTheme()
+  const notificationPause = useNotificationPause()
   const state = useCommandState()
   const projectsQuery = useProjects()
   const projects = useMemo(
@@ -94,6 +100,14 @@ export function CommandPalette() {
     if (state.open !== 'commands') return []
     const go = (to: string) => () => navigate(to)
     const list: CommandItem[] = []
+
+    // Where you were last, for opening the menu and pressing Enter.
+    if (!query.trim()) {
+      const here = location.pathname
+      for (const place of readRecentPlaces(session.user.actorId).filter((place) => place.path !== here).slice(0, 6)) {
+        list.push({ id: `r:${place.path}`, group: 'Recent', label: place.title, icon: placeIcon(place.path), onSelect: go(place.path) })
+      }
+    }
 
     if (current) {
       const id = current.id
@@ -214,6 +228,45 @@ export function CommandPalette() {
         onSelect: go(command.paletteHref),
       })
     }
+    list.push({
+      id: 'a:mark-all-read',
+      group: 'Actions',
+      label: 'Mark all messages read',
+      icon: 'check',
+      shortcut: '⇧ Esc',
+      keywords: ['read all', 'clear unread', 'catch up'],
+      onSelect: openMarkAllRead,
+    })
+    if (notificationPause.available) {
+      const pauseFailed = (reason: unknown) =>
+        showToast({ tone: 'danger', title: 'Couldn’t change notifications.', description: reason instanceof Error ? reason.message : 'Try again.' })
+      const pauseWords = ['pause', 'do not disturb', 'dnd', 'snooze', 'quiet', 'mute', 'notifications']
+      if (notificationPause.until) {
+        list.push({
+          id: 'a:resume-notifications',
+          group: 'Actions',
+          label: 'Resume notifications',
+          hint: `Paused until ${pausedUntilLabel(notificationPause.until, new Date())}`,
+          icon: 'play',
+          keywords: pauseWords,
+          onSelect: () => void notificationPause.resume().then(() => showToast({ tone: 'success', title: 'Notifications are back on' }), pauseFailed),
+        })
+      } else {
+        for (const choice of pauseChoices(new Date())) {
+          list.push({
+            id: `a:pause-notifications:${choice.id}`,
+            group: 'Actions',
+            label: `Pause notifications ${choice.label.charAt(0).toLowerCase()}${choice.label.slice(1)}`,
+            icon: 'moon',
+            keywords: pauseWords,
+            onSelect: () =>
+              void notificationPause
+                .pause(choice.until)
+                .then(() => showToast({ tone: 'success', title: `Notifications paused until ${pausedUntilLabel(choice.until, new Date())}` }), pauseFailed),
+          })
+        }
+      }
+    }
     list.push({ id: 'a:shortcuts', group: 'Actions', label: 'Keyboard shortcuts', icon: 'info', shortcut: '?', onSelect: openShortcutSheet })
     list.push({
       id: 'a:sign-out',
@@ -327,13 +380,13 @@ export function CommandPalette() {
       })
     }
     return list
-  }, [current, direct.data, navigate, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
+  }, [current, direct.data, location.pathname, navigate, notificationPause, projectSearch.data, projects, query, queryClient, session.user, sidebar.data, state.open, state.page, switchProject, tasks.data, theme, updateNavigation])
 
   // With nothing typed, show where you'd most likely go; everything else is a search away.
   const visibleItems = useMemo(() => {
     if (query.trim()) return items
     const quiet = new Set(['Threads', 'People', 'Theme'])
-    return items.filter((item) => !quiet.has(item.group) && !item.id.startsWith('a:create-task:'))
+    return items.filter((item) => !quiet.has(item.group) && !item.id.startsWith('a:create-task:') && !item.id.startsWith('a:pause-notifications:'))
   }, [items, query])
 
   return (
@@ -357,12 +410,13 @@ export function CommandPalette() {
         />
       ) : null}
       <ShortcutSheet inProject={Boolean(current)} onClose={closeCommandMenu} open={state.open === 'shortcuts'} />
+      <MarkAllReadDialog onClose={closeCommandMenu} open={state.open === 'mark-all-read'} projectIds={projects.map((project) => project.id)} />
     </>
   )
 }
 
 function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClose: () => void; open: boolean }) {
-  const groups = ['General', 'Go to'] as const
+  const groups = ['General', 'Conversations', 'Go to'] as const
   return (
     <Dialog
       description={inProject ? undefined : 'Open a Project for its Tasks, Board, Pages and settings shortcuts.'}
@@ -380,7 +434,7 @@ function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClo
               {SHORTCUTS.filter((shortcut) => shortcut.group === group).map((shortcut) => (
                 <div className="aw-shortcuts__row" key={shortcut.action} style={{ display: 'contents' }}>
                   <dt>{shortcut.label}</dt>
-                  <dd aria-label={shortcut.keys.length === 2 && shortcut.keys[0] === 'G' ? `G then ${shortcut.keys[1]}` : shortcut.keys.join(' ')}>
+                  <dd aria-label={shortcut.keys.length === 2 && shortcut.keys[0] === 'G' ? `G then ${shortcut.keys[1]}` : shortcut.keys.map(spokenKey).join(' ')}>
                     {shortcut.keys.map((key, index) => (
                       <kbd key={index}>{key}</kbd>
                     ))}
@@ -392,5 +446,50 @@ function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClo
         ))}
       </div>
     </Dialog>
+  )
+}
+
+const SPOKEN_KEYS: Record<string, string> = { '⌘': 'Command', '⌥': 'Option', '⇧': 'Shift', '↑': 'Up', '↓': 'Down', Esc: 'Escape' }
+
+function spokenKey(key: string) {
+  return SPOKEN_KEYS[key] ?? key
+}
+
+/** Asks first: there's no undo for marking everything read. */
+function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void; open: boolean; projectIds: string[] }) {
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    setBusy(true)
+    try {
+      const { marked, failed } = await markAllRead(projectIds)
+      await queryClient.invalidateQueries()
+      if (failed) {
+        showToast({ tone: 'danger', title: `Marked ${marked} read; some didn’t update.`, description: 'Try again in a moment.' })
+      } else {
+        showToast({ tone: 'success', title: marked ? `Marked ${marked} ${marked === 1 ? 'conversation' : 'conversations'} read` : 'Everything was already read' })
+      }
+      onClose()
+    } catch (reason) {
+      showToast({ tone: 'danger', title: 'Couldn’t mark everything read.', description: reason instanceof Error ? reason.message : 'Try again.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog
+      description="Every channel, thread, DM and group you can see will be marked read. Your inbox doesn’t change."
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button busy={busy} onClick={() => void run()} variant="primary">
+            Mark all read
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      open={open}
+      title="Mark all messages read?"
+    />
   )
 }
