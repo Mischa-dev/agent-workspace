@@ -135,7 +135,9 @@ pub(crate) fn tag_for(tool: &str) -> &'static str {
     match noun {
         "briefing" | "inbox" | "notification" | "mark" => "Inbox and notifications",
         "project" | "projects" | "workflow" | "settings" => "Projects",
-        "conversation" | "message" | "thread" | "channel" | "pin" | "people" => "Conversations",
+        "conversation" | "message" | "file" | "thread" | "channel" | "pin" | "people" => {
+            "Conversations"
+        }
         "reply" | "session" | "agent" => "Agents and replies",
         "task" | "label" | "milestone" | "view" | "my" | "template" => "Tasks",
         "page" | "skill" | "decision" | "search" => "Pages and search",
