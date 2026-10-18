@@ -10,6 +10,15 @@ It builds on
 runs and GitHub). `PROJECT_SOURCE_OF_TRUTH.md` is history and a reference for
 how existing code behaves; don't add to it for ordinary changes.
 
+## Skills for working here
+
+Step-by-step guides for the jobs that keep coming up are in
+`.claude/skills/<name>/SKILL.md`; read the one that fits before you start:
+`add-mcp-tool` (a tool on the app's MCP server), `add-migration` (any
+database change), `check-in-browser` (looking at a web change in a real
+browser) and `steward` (the checks before pushing, and driving a pull
+request to green). Claude Code loads them by itself.
+
 ## Commands
 
 - Install frontend dependencies: `corepack pnpm install`

@@ -617,11 +617,7 @@ function WebhookField({ connection, disabled }: { connection: ExternalAgentConne
           </Button>
         ) : null}
       </div>
-      {test ? (
-        <p className={`aw-webhook__test aw-webhook__test--${test.tone}`} role="status">
-          {test.text}
-        </p>
-      ) : null}
+      {test ? <Banner tone={test.tone}>{test.text}</Banner> : null}
       {secret ? (
         <p className="aw-token__meta">
           Signing secret, shown once: <code>{secret}</code>

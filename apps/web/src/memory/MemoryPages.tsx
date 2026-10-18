@@ -203,9 +203,9 @@ function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }
       ) : null}
       {current.archived ? <Banner tone="offline">This page is archived.</Banner> : null}
       {current.skillDescription && !editing ? (
-        <p className="aw-page-skill">
-          <StatusChip tone="agent">Skill</StatusChip> Agents load this when: {current.skillDescription}
-        </p>
+        <Banner tone="agent" title="Skill">
+          Agents read this page when it fits their work: {current.skillDescription}
+        </Banner>
       ) : null}
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {editing ? (
