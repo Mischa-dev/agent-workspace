@@ -20,6 +20,14 @@ allow = [
   "Zlib",
 ]
 
+# jpeg-encoder (picture thumbnails, W20) carries the Independent JPEG Group's
+# license as well as MIT or Apache-2.0. It is permissive; a binary release must
+# say in its documentation that "this software is based in part on the work of
+# the Independent JPEG Group" (see NOTICE).
+[[licenses.exceptions]]
+crate = "jpeg-encoder"
+allow = ["IJG"]
+
 [licenses.private]
 ignore = true
 
