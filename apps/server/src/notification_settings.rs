@@ -18,7 +18,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, put},
 };
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, PgPool};
 use uuid::Uuid;
@@ -251,15 +251,54 @@ impl QuietHours {
         if !inside {
             return None;
         }
-        let mut wait = self.end - minute;
-        if wait <= 0 {
-            wait += 24 * 60;
+        // The end on the local clock, today or tomorrow: counted in wall
+        // time, not minutes, so a daylight-saving change in between still
+        // ends quiet hours at the end the person chose.
+        let end = chrono::NaiveTime::from_hms_opt(
+            u32::try_from(self.end.div_euclid(60)).ok()?,
+            u32::try_from(self.end.rem_euclid(60)).ok()?,
+            0,
+        )?;
+        let mut date = local.date_naive();
+        if self.end <= minute {
+            date = date.succ_opt()?;
         }
-        Some(
-            now + chrono::Duration::minutes(wait)
-                - chrono::Duration::seconds(i64::from(local.second())),
-        )
+        let naive = date.and_time(end);
+        zone.from_local_datetime(&naive)
+            .earliest()
+            // The end falls in a skipped hour: the first moment after it.
+            .or_else(|| {
+                zone.from_local_datetime(&(naive + chrono::Duration::hours(1)))
+                    .earliest()
+            })
+            .map(|ends| ends.with_timezone(&Utc))
     }
+}
+
+/// Whether a conversation's level still lets `notification` reach a phone
+/// or a mailbox when it goes out: set to nothing after a mention arrived (or
+/// off "every message"), a held push or a delayed email stays quiet.
+pub async fn conversation_still_notifies(
+    connection: &mut PgConnection,
+    recipient: Uuid,
+    notification: &crate::notifications::NotificationView,
+) -> Result<bool, AppError> {
+    use crate::notifications::kind;
+    let kind = notification.kind.as_str();
+    if notification.subject.kind != "conversation"
+        || !matches!(kind, kind::MENTION | kind::CONVERSATION_MESSAGE)
+    {
+        return Ok(true);
+    }
+    let level = sqlx::query_scalar::<_, String>("SELECT conversation_notification_level($1, $2)")
+        .bind(recipient)
+        .bind(notification.subject.id)
+        .fetch_one(&mut *connection)
+        .await?;
+    Ok(match kind {
+        kind::CONVERSATION_MESSAGE => level == "all",
+        _ => level != "nothing",
+    })
 }
 
 pub async fn quiet_hours(
@@ -839,6 +878,24 @@ mod tests {
             ..quiet
         };
         assert_eq!(off.ends_after(late), None);
+    }
+
+    #[test]
+    fn quiet_hours_end_on_the_local_clock_across_a_clock_change() {
+        let quiet = QuietHours {
+            enabled: true,
+            start: 22 * 60,
+            end: 7 * 60,
+            time_zone: Some("Europe/Berlin".to_owned()),
+            paused_until: None,
+        };
+        // Berlin leaves summer time on 2026-10-25 at 03:00. 23:30 CEST on
+        // the 24th is 21:30 UTC; 07:00 CET on the 25th is 06:00 UTC.
+        let late = Utc.with_ymd_and_hms(2026, 10, 24, 21, 30, 0).unwrap();
+        assert_eq!(
+            quiet.ends_after(late),
+            Some(Utc.with_ymd_and_hms(2026, 10, 25, 6, 0, 0).unwrap())
+        );
     }
 
     #[test]

@@ -492,6 +492,26 @@ pub(super) async fn task_move(
                 ));
             }
 
+            // Handoff notes go with the task, so whoever claims it in its new
+            // project still reads where the last holder left it.
+            sqlx::query(
+                r#"
+                INSERT INTO work_item_handoffs (
+                    id, project_id, work_item_id, actor_id, via_oauth_grant_id, note, created_at
+                )
+                SELECT gen_random_uuid(), $3, $4, handoff.actor_id, handoff.via_oauth_grant_id,
+                       handoff.note, handoff.created_at
+                FROM work_item_handoffs handoff
+                WHERE handoff.project_id = $1 AND handoff.work_item_id = $2
+                "#,
+            )
+            .bind(source_project_id)
+            .bind(task.id)
+            .bind(target_project_id)
+            .bind(new_id)
+            .execute(&mut *transaction)
+            .await?;
+
             // Point the original at its new home, then archive it.
             add_comment(
                 &mut transaction,

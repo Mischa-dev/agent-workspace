@@ -612,6 +612,15 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
         if !decision.push {
             return Ok(());
         }
+        if !notification_settings::conversation_still_notifies(
+            &mut connection,
+            job.recipient,
+            &notification,
+        )
+        .await?
+        {
+            return Ok(());
+        }
         let (quiet, _) =
             notification_settings::quiet_hours(&mut connection, organization_id, job.recipient)
                 .await?;
@@ -625,7 +634,13 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
                         recipient: job.recipient,
                         delivery_key: job.delivery_key.clone(),
                     })
-                    .unique(format!("{DELIVER_KIND}:{}:after-quiet", job.delivery_key))
+                    // The end in the key: a job held again (a second pause)
+                    // runs while its own row still holds the earlier key.
+                    .unique(format!(
+                        "{DELIVER_KIND}:{}:after-quiet:{}",
+                        job.delivery_key,
+                        ends.timestamp()
+                    ))
                     .run_at(ends)
                     .max_attempts(6),
             )

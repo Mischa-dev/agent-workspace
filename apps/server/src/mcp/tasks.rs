@@ -2817,6 +2817,15 @@ pub(super) async fn task_release(
                 .await?
                 .rows_affected()
                 == 1;
+        // Only whoever held the task hands it off: a note from anyone else
+        // would read to the next claimer as the last holder's word, and a
+        // retried release would save it twice.
+        if handoff.is_some() && !released {
+            transaction.rollback().await?;
+            return Ok(ToolResult::conflict(
+                "You don't hold this task's claim, so there's nothing to hand off. Comment on the task instead.",
+            ));
+        }
         if let Some(note) = handoff {
             sqlx::query(
                 r#"

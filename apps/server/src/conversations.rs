@@ -1626,13 +1626,19 @@ pub(crate) async fn append_message_command_with(
     let content = MessageContent::from_json(content).map_err(message_content_error)?;
     // Without files the hash is the content's alone, as it always was, so
     // replays stored before files existed still match.
-    let request_hash = if attachments.is_empty() {
-        RequestHash::for_value(&content)?
-    } else {
-        RequestHash::for_value(&serde_json::json!({
+    // A forward hashes what it forwards too, so the same key and words for
+    // a different message are a mismatch, not a replay of the first.
+    let request_hash = match extras.forwarded_message_id {
+        Some(forwarded) => RequestHash::for_value(&serde_json::json!({
             "content": &content,
             "attachments": attachments,
-        }))?
+            "forwards": forwarded,
+        }))?,
+        None if attachments.is_empty() => RequestHash::for_value(&content)?,
+        None => RequestHash::for_value(&serde_json::json!({
+            "content": &content,
+            "attachments": attachments,
+        }))?,
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = state.pool.begin().await?;
