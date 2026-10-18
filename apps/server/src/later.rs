@@ -589,6 +589,7 @@ enum Target {
     Reminder,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
