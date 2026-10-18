@@ -475,6 +475,10 @@ async fn require_room(
         ));
     }
     let config = &state.config;
+    // A fresh install may not have made its data folder yet.
+    tokio::fs::create_dir_all(&config.data_root)
+        .await
+        .map_err(|_| AppError::Internal("create the data folder"))?;
     let report = storage_admission::inspect(
         &config.data_root,
         config.data_quota_bytes,

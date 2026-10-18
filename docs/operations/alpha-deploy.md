@@ -16,7 +16,13 @@ PR's description has the detail behind its line here.
    with 4 cargo jobs (`AGENT_WORKSPACE_BUILD_MEMORY_MAX`, `CARGO_BUILD_JOBS`).
    Leave 15 GB free on the disk for the build and the new release.
 3. **Reverse proxy.** Whiteboard images upload up to 4 MiB each. Raise any
-   request body cap below 6 MiB for `/api/v1/whiteboards/`.
+   request body cap below 6 MiB for `/api/v1/whiteboards/` and `/api/v1/mcp`
+   (agents send files there, base64, up to 4 MiB). Files on messages and tasks
+   (W20) upload as the raw body to `/api/v1/conversations/*/files` and
+   `/api/v1/projects/*/work-items/*/files`, up to the workspace's
+   `files.max_upload_mb` setting (25 MB by default, 100 MB at most): give
+   those paths a cap of 100 MiB, and a body timeout long enough for slow phone
+   uploads.
 
 ## Deploy
 
@@ -84,6 +90,15 @@ Restart the service after editing.
   and the host needs outbound access to the mail server's port (587 for
   STARTTLS or 465 for TLS). Links in emails use the public origin, so
   `AGENT_WORKSPACE_PUBLIC_ORIGIN` must be the address people open.
+- **Files and link previews (W20).** Nothing new goes in this file. Uploaded
+  files live in `<data root>/files` (`/var/lib/agent-workspace/files`), which
+  the server creates; the nightly backup now includes it (installed
+  `agent-workspace-backup` and any `BACKUP_DATA_PATHS` in `backup.env` must
+  list `files`). Uploads count toward `AGENT_WORKSPACE_DATA_QUOTA_BYTES` and
+  the free-disk watermark like other data. Link previews fetch public pages
+  from the server, so it needs outbound HTTP and HTTPS; private, loopback and
+  Tailscale addresses are always refused. The CSP is unchanged: pictures and
+  preview images are served from the app's own origin.
 
 ## After: in the app
 
@@ -103,6 +118,11 @@ Restart the service after editing.
    email works.
 8. Settings › Workspace › Server: check that the checks are green and the last
    backup shows up after the first nightly run.
+9. Files (W20): Settings › Workspace has the upload size limit (25 MB), the
+   workspace's file storage (10 GB) and link previews (on). Attach a picture
+   to a message once to check uploads get through the proxy. On Android,
+   remove and re-add the home-screen app so sharing pictures and files to it
+   works (its share target changed).
 
 ## Nightly backups
 
