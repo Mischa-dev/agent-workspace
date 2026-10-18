@@ -498,6 +498,13 @@ pub(crate) async fn apply_edit(
     if updated.rows_affected() != 1 {
         return Err(AppError::Internal("edit a locked message").into());
     }
+    crate::link_previews::refresh_for_message(
+        transaction,
+        locked.project_id,
+        locked.id,
+        &plain_text,
+    )
+    .await?;
 
     // Mentions: drop the ones taken out, add only the new ones (the insert
     // trigger validates every row it sees, even ones a conflict would skip).

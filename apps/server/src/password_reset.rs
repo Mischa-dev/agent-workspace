@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -240,6 +240,7 @@ async fn set_email_http(
     .bind(&address)
     .execute(&mut *transaction)
     .await?;
+    end_live_resets(&mut transaction, principal.user_id).await?;
     queue_confirmation(&mut transaction, principal.user_id).await?;
     audit(
         &mut transaction,
@@ -264,6 +265,7 @@ async fn remove_email_http(
         .bind(principal.user_id)
         .execute(&mut *transaction)
         .await?;
+    end_live_resets(&mut transaction, principal.user_id).await?;
     audit(
         &mut transaction,
         Some(&principal),
@@ -592,21 +594,16 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
         return Ok(());
     }
     // One live link at a time: the newest.
-    sqlx::query(
-        "UPDATE password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL",
-    )
-    .bind(target.user_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(AppError::from)?;
+    end_live_resets(&mut transaction, target.user_id).await?;
     let link_token = token(RESET_PREFIX);
+    let link_id = Uuid::now_v7();
     sqlx::query(
         r#"
         INSERT INTO password_reset_tokens (id, user_id, token_digest, authentication_epoch, expires_at)
         VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5))
         "#,
     )
-    .bind(Uuid::now_v7())
+    .bind(link_id)
     .bind(target.user_id)
     .bind(digest(&link_token).to_vec())
     .bind(target.authentication_epoch)
@@ -624,7 +621,7 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
     .await?;
     transaction.commit().await.map_err(AppError::from)?;
     let origin = crate::events::public_origin(state);
-    mail::send(
+    let sent = mail::send(
         state,
         &transport,
         &Message {
@@ -636,6 +633,31 @@ async fn send_reset(state: &AppState, login: &str) -> Result<(), JobError> {
             ),
         },
     )
+    .await;
+    if let Err(error) = sent {
+        // The link never reached anyone: forget it, so the retry isn't
+        // throttled by it and mails a fresh one.
+        sqlx::query("DELETE FROM password_reset_tokens WHERE id = $1")
+            .bind(link_id)
+            .execute(&state.pool)
+            .await
+            .map_err(AppError::from)?;
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// End every reset link `user_id` still has: a new link, a password change
+/// or a new or removed address each make the old ones useless.
+pub(crate) async fn end_live_resets(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE password_reset_tokens SET consumed_at = now() WHERE user_id = $1 AND consumed_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut **transaction)
     .await?;
     Ok(())
 }

@@ -136,8 +136,9 @@ pub async fn mint(
     sqlx::query(
         r#"
         INSERT INTO notification_action_tokens (
-            id, organization_id, actor_id, notification_id, token_hash, actions, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            id, organization_id, actor_id, notification_id, token_hash, actions, expires_at,
+            approval_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(Uuid::now_v7())
@@ -152,6 +153,7 @@ pub async fn mint(
             .collect::<Vec<_>>(),
     )
     .bind(expires_at)
+    .bind(notification.approval.as_ref().map(|approval| approval.id))
     .execute(pool)
     .await?;
     Ok(Some(MintedActions {
@@ -226,6 +228,7 @@ struct TokenRow {
     id: Uuid,
     actor_id: Uuid,
     notification_id: Uuid,
+    approval_id: Option<Uuid>,
     actions: Vec<String>,
     used_action: Option<String>,
 }
@@ -266,7 +269,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     // or disabled person's tokens act as nobody.
     let token = sqlx::query_as::<_, TokenRow>(
         r#"
-        SELECT t.id, t.actor_id, t.notification_id, t.actions, t.used_action
+        SELECT t.id, t.actor_id, t.notification_id, t.approval_id, t.actions, t.used_action
         FROM notification_action_tokens t
         JOIN actors a ON a.id = t.actor_id AND a.status = 'active' AND a.kind = 'human'
         JOIN users u ON u.actor_id = t.actor_id AND u.status = 'active'
@@ -308,6 +311,13 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
             .into_iter()
             .next()
             .ok_or(AppError::NotFound("notification_action"))?;
+    // Approval notifications are grouped per run, so the row may now show
+    // the run's next approval: a button only answers the one it was shown
+    // with.
+    let shown_approval = notification
+        .approval
+        .as_ref()
+        .filter(|approval| Some(approval.id) == token.approval_id);
     // Every retry of the same button reuses one key, so a send that timed
     // out on the phone can't post or answer twice.
     let key = IdempotencyKey::parse(&format!(
@@ -317,9 +327,7 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
     ))?;
     let outcome = match action {
         NotificationAction::Approve | NotificationAction::Deny => {
-            let approval = notification
-                .approval
-                .as_ref()
+            let approval = shown_approval
                 .filter(|approval| approval.kind == "approval")
                 .ok_or(AppError::NotFound("notification_action"))?;
             if sponsored_execution_request(state, approval.id)
@@ -378,7 +386,10 @@ async fn act(state: &AppState, request: ActRequest) -> Result<ActResponse, AppEr
                 .map(str::trim)
                 .filter(|text| !text.is_empty() && text.chars().count() <= REPLY_CHARACTERS)
                 .ok_or(AppError::Validation("text"))?;
-            match &notification.approval {
+            if notification.approval.is_some() && shown_approval.is_none() {
+                return Err(AppError::NotFound("notification_action"));
+            }
+            match shown_approval {
                 Some(approval) if approval.kind == "question" => {
                     if sponsored_execution_request(state, approval.id)
                         .await?

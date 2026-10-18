@@ -1660,6 +1660,28 @@ pub(crate) fn public_ipv6(ip: std::net::Ipv6Addr) -> bool {
         && (segments[0] & 0xff00) != 0xff00
         && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
         && ip.to_ipv4_mapped().is_none_or(public_ipv4)
+        && embedded_ipv4(ip).is_none_or(public_ipv4)
+}
+
+/// The IPv4 address inside a NAT64 (64:ff9b::/96), 6to4 (2002::/16) or
+/// IPv4-compatible (::a.b.c.d) address, which can reach it on hosts that
+/// translate them.
+fn embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    let s = ip.segments();
+    let from = |high: u16, low: u16| {
+        let [a, b] = high.to_be_bytes();
+        let [c, d] = low.to_be_bytes();
+        std::net::Ipv4Addr::new(a, b, c, d)
+    };
+    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
+        Some(from(s[6], s[7]))
+    } else if s[0] == 0x2002 {
+        Some(from(s[1], s[2]))
+    } else if s[..6] == [0, 0, 0, 0, 0, 0] && !ip.is_loopback() && !ip.is_unspecified() {
+        Some(from(s[6], s[7]))
+    } else {
+        None
+    }
 }
 
 /// HMAC-SHA256 over "{timestamp}.{body}", hex encoded.
@@ -1695,6 +1717,23 @@ pub(crate) fn new_webhook_secret() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv6_addresses_carrying_a_private_ipv4_are_not_public() {
+        for private in [
+            "64:ff9b::10.0.0.1",
+            "2002:a00:1::",
+            "::192.168.1.1",
+            "::ffff:127.0.0.1",
+        ] {
+            let ip = private.parse::<std::net::Ipv6Addr>().expect("address");
+            assert!(!public_ipv6(ip), "{private}");
+        }
+        for public in ["64:ff9b::8.8.8.8", "2002:808:808::", "2606:4700::1111"] {
+            let ip = public.parse::<std::net::Ipv6Addr>().expect("address");
+            assert!(public_ipv6(ip), "{public}");
+        }
+    }
 
     #[test]
     fn signatures_cover_timestamp_and_body() {

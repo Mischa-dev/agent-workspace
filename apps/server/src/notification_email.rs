@@ -163,6 +163,15 @@ async fn send_one(state: &AppState, job: &SendJob) -> Result<(), JobError> {
         if !decision.email {
             return Ok(());
         }
+        if !notification_settings::conversation_still_notifies(
+            &mut connection,
+            job.recipient,
+            &notification,
+        )
+        .await?
+        {
+            return Ok(());
+        }
         // Paused by hand: no email now; the inbox and any digest still have it.
         let (quiet, _) =
             notification_settings::quiet_hours(&mut connection, organization_id, job.recipient)

@@ -578,18 +578,29 @@ async fn run(state: &AppState, payload: &DetectPayload) -> Result<(), AiError> {
     Ok(())
 }
 
-async fn actor_can_access(
+/// Whoever asked for an AI job can still open its project: a person
+/// through their memberships, an agent through any of its connections that
+/// still allows it (a job doesn't keep the connection it was asked through).
+pub(crate) async fn actor_can_access(
     pool: &PgPool,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, AppError> {
-    Ok(
-        sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
-            .bind(actor_id)
-            .bind(project_id)
-            .fetch_one(pool)
-            .await?,
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT CASE WHEN actor.kind = 'external_agent' THEN EXISTS (
+                   SELECT 1 FROM external_agent_connections connection
+                   WHERE connection.actor_id = actor.id
+                     AND agent_connection_can_access(connection.id, $2)
+               ) ELSE actor_can_access_project(actor.id, NULL, $2) END
+        FROM actors actor WHERE actor.id = $1
+        "#,
     )
+    .bind(actor_id)
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or(false))
 }
 
 struct RunContext<'a> {

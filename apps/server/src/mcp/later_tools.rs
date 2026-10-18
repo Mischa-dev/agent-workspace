@@ -40,7 +40,7 @@ pub(super) struct LaterLine {
     pub id: String,
     /// message, work_item or reminder
     pub kind: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remind_at: Option<String>,
@@ -74,9 +74,11 @@ pub(super) struct ScheduledLine {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct LaterListValue {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    // `default` keeps each optional in the output schema: an empty list is
+    // left out, and clients reject a result missing a required field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<LaterLine>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scheduled: Vec<ScheduledLine>,
     pub open_count: i64,
 }
@@ -260,6 +262,7 @@ pub(super) async fn later_save(
             } else {
                 Some(principal.project_id)
             },
+            connection_id: principal.external_agent_connection_id,
         };
         match later::save(
             state,

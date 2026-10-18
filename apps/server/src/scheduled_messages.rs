@@ -53,7 +53,8 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         std::time::Duration::from_secs(120),
         |context| async move {
             let job: SendJob = context.job.payload_as()?;
-            send_due(&context.state, &job).await
+            let last_attempt = context.job.attempts >= context.job.max_attempts;
+            send_due(&context.state, &job, last_attempt).await
         },
     );
 }
@@ -125,7 +126,7 @@ fn select_sql(extra: &str) -> String {
         JOIN conversations conversation ON conversation.id = scheduled.conversation_id
         JOIN projects project ON project.id = scheduled.project_id
         WHERE scheduled.author_actor_id = $1
-          AND actor_can_access_project($1, NULL, scheduled.project_id)
+          AND actor_can_access_project($1, scheduled.external_agent_connection_id, scheduled.project_id)
           AND conversation_visible_to(scheduled.conversation_id, $1)
           {extra}
         "#
@@ -425,6 +426,30 @@ pub(crate) async fn update(
     };
     // Checked again, as if it were new.
     let checked = check(&mut transaction, actor, locked.conversation_id, content).await?;
+    // A failed one is scheduled again only with a new time; fixing just
+    // its text keeps it failed rather than sending it at once.
+    if locked.status == "failed" && send_at.is_none() {
+        sqlx::query(
+            r#"
+            UPDATE scheduled_messages
+            SET content = $2, plain_text = $3, mentioned_actors = $4, referenced_work_items = $5,
+                updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(&checked.content)
+        .bind(&checked.plain_text)
+        .bind(
+            serde_json::to_value(&checked.mentioned_actors)
+                .map_err(|_| AppError::Internal("mentions"))?,
+        )
+        .bind(&checked.referenced_work_items)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        return get_scheduled(&state.pool, actor.actor_id, id).await;
+    }
     let next = send_at.unwrap_or(locked.send_at).max(Utc::now());
     sqlx::query(
         r#"
@@ -484,6 +509,7 @@ pub async fn send_now(
             scheduled_message_id: id,
             at_micros: now.timestamp_micros(),
         },
+        false,
     )
     .await;
     get_scheduled(&state.pool, actor_id, id).await
@@ -587,7 +613,7 @@ fn failure_reason(error: &AppError) -> Option<&'static str> {
     }
 }
 
-async fn send_due(state: &AppState, job: &SendJob) -> Result<(), JobError> {
+async fn send_due(state: &AppState, job: &SendJob, last_attempt: bool) -> Result<(), JobError> {
     let mut transaction = state.pool.begin().await?;
     let Some(row) = sqlx::query_as::<_, DueRow>(
         r#"
@@ -648,6 +674,16 @@ async fn send_due(state: &AppState, job: &SendJob) -> Result<(), JobError> {
         }
         Err(error) => match failure_reason(&error) {
             Some(reason) => fail(&mut transaction, &row, reason).await?,
+            // Out of retries: say so, rather than leaving it "scheduled"
+            // with its time long past.
+            None if last_attempt => {
+                fail(
+                    &mut transaction,
+                    &row,
+                    "It couldn't be sent. Try sending it again.",
+                )
+                .await?
+            }
             None => return Err(error.into()),
         },
     }
@@ -665,12 +701,18 @@ async fn sender(
         "human" => {
             let via = match row.via_oauth_grant_id {
                 Some(grant_id) => {
-                    sqlx::query_scalar::<_, Uuid>(
+                    let live = sqlx::query_scalar::<_, Uuid>(
                         "SELECT id FROM mcp_oauth_grants WHERE id = $1 AND revoked_at IS NULL",
                     )
                     .bind(grant_id)
                     .fetch_optional(&mut **transaction)
-                    .await?
+                    .await?;
+                    // Disconnecting the app stops what it scheduled, as it
+                    // stops an agent's: it doesn't go out as typed by hand.
+                    if live.is_none() {
+                        return Ok(Err("The app it was scheduled through was disconnected."));
+                    }
+                    live
                 }
                 None => None,
             };

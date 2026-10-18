@@ -166,9 +166,14 @@ impl Connection {
                     "the mail server's reply didn't make sense".into(),
                 ));
             }
-            let code = line[..3].parse::<u16>().map_err(|_| {
-                MailError::Permanent("the mail server's reply didn't make sense".into())
-            })?;
+            // `get`, not slicing: a reply with a multi-byte character in
+            // its first three bytes must not panic.
+            let code = line
+                .get(..3)
+                .and_then(|code| code.parse::<u16>().ok())
+                .ok_or_else(|| {
+                    MailError::Permanent("the mail server's reply didn't make sense".into())
+                })?;
             let more = line.as_bytes().get(3) == Some(&b'-');
             lines.push(line.get(4..).unwrap_or_default().to_owned());
             if !more {

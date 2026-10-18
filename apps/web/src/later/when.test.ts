@@ -42,6 +42,30 @@ describe('typed times', () => {
     expect(parseLeadingWhen(text, now)).toBeNull()
   })
 
+  it('leaves “tonight” and “today 3pm” in the past once they have gone, for callers to refuse', () => {
+    const late = new Date(2026, 9, 14, 21, 0, 0)
+    expect(parseLeadingWhen('tonight', late)!.at.getTime()).toBeLessThan(late.getTime())
+    expect(parseLeadingWhen('today 3pm', late)!.at.getTime()).toBeLessThan(late.getTime())
+    // A bare time that has gone means tomorrow.
+    expect(local(parseLeadingWhen('at 3pm', late)?.at)).toBe('2026-10-15 15:00')
+  })
+
+  it('counts days on the calendar across a clock change', () => {
+    // Whatever the zone, the clock time is kept, which adding milliseconds wouldn't do over DST.
+    const before = new Date(2026, 2, 27, 10, 0, 0)
+    expect(local(parseLeadingWhen('in 3 days', before)?.at)).toBe('2026-03-30 10:00')
+    expect(local(parseLeadingWhen('in 2 weeks', before)?.at)).toBe('2026-04-10 10:00')
+    const autumn = new Date(2026, 9, 31, 10, 0, 0)
+    expect(local(parseLeadingWhen('in a week', autumn)?.at)).toBe('2026-11-07 10:00')
+  })
+
+  it('means this morning by “tomorrow morning” in the small hours', () => {
+    const night = new Date(2026, 9, 14, 2, 0, 0)
+    const morning = whenChoices(night).find((choice) => choice.id === 'tomorrow')!
+    expect(local(morning.at)).toBe('2026-10-14 09:00')
+    expect(morning.label).toBe('This morning')
+  })
+
   it('offers quick choices in order', () => {
     expect(whenChoices(now).map((choice) => local(choice.at))).toEqual([
       '2026-10-14 10:20',

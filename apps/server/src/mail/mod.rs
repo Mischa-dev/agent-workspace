@@ -296,7 +296,9 @@ pub(crate) async fn load(state: &AppState, row: SettingsRow) -> Result<Transport
 
 /// The transport for mail to a person outside any one workspace (password
 /// resets, address confirmations): their default workspace's, else the
-/// first workspace they belong to that sends mail.
+/// first workspace they own that sends mail. Never another owner's
+/// workspace they merely joined: that owner controls its mail server and
+/// would receive the person's reset link.
 pub async fn transport_for_actor(
     state: &AppState,
     actor_id: Uuid,
@@ -311,6 +313,7 @@ pub async fn transport_for_actor(
         JOIN workspace_mail_settings mail
           ON mail.organization_id = membership.organization_id AND mail.enabled
         WHERE membership.actor_id = $1 AND membership.enabled
+          AND (membership.organization_id = $2 OR membership.role = 'owner')
         ORDER BY (membership.organization_id = $2) DESC, membership.created_at, membership.organization_id
         LIMIT 1
         "#,

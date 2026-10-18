@@ -10,7 +10,7 @@ import {
 } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { clearLocalDrafts } from '../app/localDrafts'
+import { clearLocalDrafts, setLocalDraftOwner } from '../app/localDrafts'
 import { queryKeys } from '../api/queryKeys'
 import { resetQueryScope } from '../api/queryScope'
 import { closeCommandMenu } from '../shell/commandStore'
@@ -162,15 +162,20 @@ export function normalizeSessionResponse(value: unknown): SessionResponse {
 }
 
 export async function getSession() {
-  return normalizeSessionResponse(
+  const session = normalizeSessionResponse(
     await requestJson<unknown>('/api/v1/auth/session'),
   )
+  // Drafts are kept per person; read only this one's.
+  setLocalDraftOwner(session.user?.actorId ?? null)
+  return session
 }
 
 export async function logout() {
-  await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
-  // Drafts and unsent messages stay on this device only while signed in.
+  // Drafts and unsent messages stay on this device only while signed in;
+  // forget them first, so a failed or slow sign-out can't leave them behind.
   clearLocalDrafts()
+  setLocalDraftOwner(null)
+  await requestJson<void>('/api/v1/auth/logout', { method: 'POST' })
 }
 
 export function useSession() {
@@ -185,6 +190,7 @@ export function useSession() {
 export function clearAuthenticatedQueryCache(queryClient: QueryClient) {
   resetQueryScope()
   clearActorScopedQueries(queryClient)
+  setLocalDraftOwner(null)
   queryClient.setQueryData<SessionResponse>(queryKeys.session, signedOutSession)
 }
 
@@ -194,6 +200,7 @@ export function installAuthenticatedSession(
 ) {
   resetQueryScope()
   clearActorScopedQueries(queryClient)
+  setLocalDraftOwner(session.user.actorId)
   queryClient.setQueryData<SessionResponse>(queryKeys.session, session)
 }
 

@@ -124,6 +124,10 @@ async fn list_sessions(
               ON membership.organization_id = project.organization_id
              AND membership.actor_id = $2
              AND membership.enabled
+            JOIN project_memberships project_membership
+              ON project_membership.project_id = conversation.project_id
+             AND project_membership.actor_id = $2
+             AND project_membership.enabled
             WHERE conversation.id = $1
               AND conversation_visible_to(conversation.id, $2)
         )

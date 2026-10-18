@@ -325,22 +325,33 @@ pub(crate) async fn task_fields(
 }
 
 /// The project's skills for a prompt: each one's name and when to use it,
-/// with its instructions while they fit in `MAX_SKILLS_CHARS`. A run may not
-/// be connected to Agent Workspace, so the instructions travel with it.
+/// with its instructions, all within `MAX_SKILLS_CHARS` (descriptions and
+/// links count too, so many skills can't push the task out of the prompt).
+/// Past what fits in full, a skill is its name and link; past that, a count
+/// and the pages link. A run may not be connected to Agent Workspace, so the
+/// instructions travel with it while they fit.
 fn skills_field(skills: &[(Uuid, String, String, String)], pages_url: &str) -> String {
     let mut budget = MAX_SKILLS_CHARS;
-    let mut parts = Vec::new();
-    for (page_id, title, description, body) in skills {
+    let mut parts: Vec<String> = Vec::new();
+    for (index, (page_id, title, description, body)) in skills.iter().enumerate() {
         let name = crate::memory::skill_name(title);
         let body = body.trim();
-        let length = body.chars().count();
-        if !body.is_empty() && length <= budget {
-            budget -= length;
-            parts.push(format!("### {name}\n\n{description}\n\n{body}"));
-        } else {
-            parts.push(format!(
-                "### {name}\n\n{description} Instructions: {pages_url}/{page_id}"
-            ));
+        let full = format!("### {name}\n\n{description}\n\n{body}");
+        let linked = format!("### {name}\n\n{description} Instructions: {pages_url}/{page_id}");
+        let bare = format!("### {name}\n\nInstructions: {pages_url}/{page_id}");
+        let chosen = [(!body.is_empty()).then_some(full), Some(linked), Some(bare)]
+            .into_iter()
+            .flatten()
+            .find(|part| part.chars().count() + 2 <= budget);
+        match chosen {
+            Some(part) => {
+                budget -= part.chars().count() + 2;
+                parts.push(part);
+            }
+            None => {
+                parts.push(format!("{} more skills: {pages_url}", skills.len() - index));
+                break;
+            }
         }
     }
     parts.join("\n\n")
@@ -2845,6 +2856,31 @@ fn strip_mentions(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_skills_stay_within_their_budget() {
+        let skills = (0..200)
+            .map(|index| {
+                (
+                    Uuid::now_v7(),
+                    format!("Skill {index}"),
+                    "d".repeat(500),
+                    "b".repeat(300),
+                )
+            })
+            .collect::<Vec<_>>();
+        let field = skills_field(&skills, "https://example.com/pages");
+        assert!(
+            field.chars().count() <= MAX_SKILLS_CHARS + 100,
+            "{}",
+            field.len()
+        );
+        assert!(
+            field.ends_with("more skills: https://example.com/pages"),
+            "{field}"
+        );
+        assert!(field.starts_with("### skill-0\n\n"));
+    }
 
     fn fields() -> BTreeMap<&'static str, String> {
         let mut fields = BTreeMap::new();

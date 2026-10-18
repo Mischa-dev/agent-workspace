@@ -228,6 +228,45 @@ pub(crate) async fn add_for_message(
     Ok(())
 }
 
+/// After an edit: previews follow the message's links as they are now. A
+/// link edited out takes its preview with it (title, description and
+/// picture), a link added gets one, and one kept stays as it was, hidden or
+/// not.
+pub(crate) async fn refresh_for_message(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    message_id: Uuid,
+    plain_text: &str,
+) -> Result<(), AppError> {
+    let links = links_in(plain_text);
+    sqlx::query(
+        r#"
+        DELETE FROM message_link_previews shown
+        USING link_previews preview
+        WHERE shown.link_preview_id = preview.id AND shown.message_id = $1
+          AND NOT (preview.url = ANY($2))
+        "#,
+    )
+    .bind(message_id)
+    .bind(&links)
+    .execute(&mut **transaction)
+    .await?;
+    add_for_message(transaction, project_id, message_id, plain_text).await?;
+    sqlx::query(
+        r#"
+        UPDATE message_link_previews shown
+        SET position = array_position($2, preview.url) - 1
+        FROM link_previews preview
+        WHERE shown.link_preview_id = preview.id AND shown.message_id = $1
+        "#,
+    )
+    .bind(message_id)
+    .bind(&links)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FetchPayload {
@@ -263,7 +302,18 @@ async fn fetch_job(context: JobContext) -> Result<(), JobError> {
     let store = FileStore::from_config(&state.config);
     let result = match outcome {
         Ok((found, picture)) => {
-            let image_key = match &picture {
+            let room = match &picture {
+                Some((bytes, _, _, _)) => crate::files::require_room(
+                    state,
+                    organization_id,
+                    u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                )
+                .await
+                .is_ok(),
+                None => false,
+            };
+            // A full workspace or disk keeps the preview's words, not its picture.
+            let image_key = match picture.as_ref().filter(|_| room) {
                 Some((bytes, _, _, _)) => {
                     let key = format!(
                         "{}/{}.preview",
@@ -398,16 +448,24 @@ pub(crate) async fn cleanup(state: &AppState, store: &FileStore) -> Result<u64, 
     .await?;
     let mut deleted = 0;
     for (id, key) in orphans {
-        store.delete(&key).await?;
+        if let Err(error) = store.delete(&key).await {
+            tracing::warn!(preview_id = %id, category = error.log_category(), "preview picture not deleted");
+            continue;
+        }
+        // Marked failed long enough ago to retry: a later message linking
+        // the same page fetches it again, picture and all, rather than
+        // showing it without one for good.
         sqlx::query(
             r#"
             UPDATE link_previews
             SET image_key = NULL, image_bytes = NULL, image_width = NULL, image_height = NULL,
-                image_type = NULL
+                image_type = NULL, status = 'failed', failure = 'expired',
+                fetched_at = now() - make_interval(hours => $2 + 1)
             WHERE id = $1
             "#,
         )
         .bind(id)
+        .bind(RETRY_FAILED_AFTER_HOURS)
         .execute(&state.pool)
         .await?;
         deleted += 1;

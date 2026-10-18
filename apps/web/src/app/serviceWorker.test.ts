@@ -52,6 +52,15 @@ describe('service worker', () => {
     expect(handles(`${origin}/join?token=abc`, { mode: 'navigate' })).toBe(true)
     expect(handles(`${origin}/assets/index-Cx1.js`)).toBe(true)
   })
+
+  it('opens every app page offline, including task links, but not server files', () => {
+    for (const path of ['/later', '/welcome', '/forgot-password', '/reset-password?token=a', '/verify-email', '/AWD-12', '/aw-3/']) {
+      expect(handles(`${origin}${path}`, { mode: 'navigate' })).toBe(true)
+    }
+    for (const path of ['/llms.txt', '/mcp-tools.md', '/.well-known/oauth-authorization-server', '/health', '/AW-0', '/AW-12/x']) {
+      expect(handles(`${origin}${path}`, { mode: 'navigate' })).toBe(false)
+    }
+  })
 })
 
 type ShownOptions = { actions: { title: string }[]; data: { url: string; launch: string | null } }

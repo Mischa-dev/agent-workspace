@@ -371,6 +371,9 @@ async fn change_password(
         .bind(principal.user_id)
         .execute(&mut *transaction)
         .await?;
+    // A reset link someone else asked for stops working once you choose a
+    // new password yourself.
+    crate::password_reset::end_live_resets(&mut transaction, principal.user_id).await?;
     let revoked =
         revoke_sessions_except(&mut transaction, principal.user_id, principal.session_id).await?;
     account_audit(

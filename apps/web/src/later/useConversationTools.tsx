@@ -1,5 +1,5 @@
 import { BellOff } from 'lucide-react'
-import { useState } from 'react'
+import { useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -50,7 +50,8 @@ export function useConversationTools({
   const inProject = kind === 'channel' || kind === 'thread'
   const level = useConversationLevel(conversationId)
   const scheduled = useScheduled(conversationId, canPost)
-  const [taskKey] = useState(createIdempotencyKey)
+  // One key per /task: a retry of the same one after a failure reuses it, anything else gets a new one.
+  const taskKey = useRef<{ title: string; key: string } | null>(null)
   const waiting = (scheduled.data ?? []).filter((item) => item.status === 'scheduled')
 
   const viewLater = (view?: string) => ({ label: 'View', onSelect: () => navigate(view ? `/later?view=${view}` : '/later') })
@@ -123,7 +124,10 @@ export function useConversationTools({
           navigate(`/projects/${encodeURIComponent(projectId)}/work-items?create=task`)
           return { kind: 'done' }
         }
-        const item = await createWorkItem({ projectId, title: args.slice(0, 240), priority: 'no_priority', idempotencyKey: taskKey })
+        const title = args.slice(0, 240)
+        if (taskKey.current?.title !== title) taskKey.current = { title, key: createIdempotencyKey() }
+        const item = await createWorkItem({ projectId, title, priority: 'no_priority', idempotencyKey: taskKey.current.key })
+        taskKey.current = null
         showToast({
           tone: 'success',
           title: `Created ${item.key}`,

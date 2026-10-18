@@ -450,7 +450,13 @@ pub fn skill_name(title: &str) -> String {
             .nth(64)
             .map_or(name.len(), |(index, _)| index),
     );
-    name.trim_end_matches('-').to_owned()
+    let name = name.trim_end_matches('-');
+    // A title of only symbols or emoji still needs a name harnesses accept.
+    if name.is_empty() {
+        "skill".to_owned()
+    } else {
+        name.to_owned()
+    }
 }
 
 fn normalize_note(value: Option<&str>) -> Result<Option<String>, AppError> {
@@ -1441,4 +1447,16 @@ async fn get_claim_http(
     .fetch_optional(&state.pool)
     .await?;
     Ok(Json(ClaimResponse { claim }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skill_name;
+
+    #[test]
+    fn skill_names_are_never_empty() {
+        assert_eq!(skill_name("Deploy the web app!"), "deploy-the-web-app");
+        assert_eq!(skill_name("🚀"), "skill");
+        assert_eq!(skill_name("--"), "skill");
+    }
 }

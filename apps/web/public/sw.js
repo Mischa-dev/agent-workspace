@@ -18,8 +18,10 @@ const SHARE_CACHE = 'aw-share-v1'
 const MAX_SHARED_FILES = 10
 const SHELL_URL = '/index.html'
 const MAX_ASSETS = 120
-// Client-side routes that the server answers with index.html.
-const APP_ROUTE = /^\/(?:|home|inbox|my-work|runs|whiteboards|messages|projects|settings|search|share|new-task|sign-in|join)(?:\/|$)/
+// Client-side routes that the server answers with index.html, and a task's
+// short link (/AW-12). Keep in step with the routes in App.tsx.
+const APP_ROUTE =
+  /^\/(?:|home|welcome|inbox|later|my-work|runs|whiteboards|messages|projects|settings|search|share|new-task|sign-in|forgot-password|reset-password|verify-email|join|dev)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
 
 self.addEventListener('install', (event) => {
   event.waitUntil(cacheShell().catch(() => undefined).then(() => self.skipWaiting()))
@@ -248,10 +250,15 @@ async function openApp(event) {
   }
 }
 
-// Asset names carry a content hash, so a saved copy never goes stale.
+// Asset names carry a content hash, so a saved copy never goes stale. A hit is
+// saved again, which moves it to the end of the cache's order, so trimming
+// drops the files no page has asked for in longest, not the oldest in use.
 async function asset(event) {
   const cached = await caches.match(event.request, { cacheName: ASSET_CACHE }).catch(() => undefined)
-  if (cached) return cached
+  if (cached) {
+    event.waitUntil(save(ASSET_CACHE, event.request, cached.clone()))
+    return cached
+  }
   const response = await fetch(event.request)
   if (response.ok) event.waitUntil(save(ASSET_CACHE, event.request, response.clone()).then(trimAssets))
   return response

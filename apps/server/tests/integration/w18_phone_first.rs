@@ -291,4 +291,39 @@ async fn approve_from_the_notification_answers_once_as_the_person() {
         .next()
         .expect("visible");
     assert!(push::actions::offered(&view).is_empty());
+
+    // The run's next approval reuses the notification row; the old push's
+    // buttons must not answer it.
+    let next = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO agent_approvals (
+            id, agent_run_id, requesting_actor_id, eligible_role, human_required,
+            kind, summary, options, provider_request_id
+        ) VALUES ($1, $2, $3, 'member', true, 'approval', 'Force-push main?',
+                  '[{"id":"approve","label":"Allow"},{"id":"deny","label":"Deny"}]'::jsonb,
+                  'w18-' || $1::text)
+        "#,
+    )
+    .bind(next)
+    .bind(blocked)
+    .bind(seed.human_actor_id)
+    .execute(pool)
+    .await
+    .expect("next approval");
+    sqlx::query("UPDATE notifications SET approval_id = $2 WHERE id = $1")
+        .bind(notification)
+        .bind(next)
+        .execute(pool)
+        .await
+        .expect("regroup");
+    let (status, body) = act(&setup, json!({"token": minted.token, "action": "approve"})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let next_state =
+        sqlx::query_scalar::<_, String>("SELECT status FROM agent_approvals WHERE id = $1")
+            .bind(next)
+            .fetch_one(pool)
+            .await
+            .expect("next approval");
+    assert_eq!(next_state, "pending");
 }

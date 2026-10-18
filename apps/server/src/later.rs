@@ -164,7 +164,7 @@ fn select_sql(extra: &str) -> String {
         LEFT JOIN work_item_statuses status
           ON status.project_id = work.project_id AND status.id = work.status_id
         WHERE item.actor_id = $1
-          AND actor_can_access_project($1, NULL, item.project_id)
+          AND actor_can_access_project($1, item.external_agent_connection_id, item.project_id)
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
           {extra}
         "#
@@ -321,7 +321,7 @@ pub async fn open_count(
         LEFT JOIN messages message ON message.id = item.message_id
         WHERE item.actor_id = $1 AND item.done_at IS NULL
           AND ($2::uuid[] IS NULL OR item.project_id = ANY($2))
-          AND actor_can_access_project($1, NULL, item.project_id)
+          AND actor_can_access_project($1, item.external_agent_connection_id, item.project_id)
           AND (item.message_id IS NULL OR conversation_visible_to(message.conversation_id, $1))
         "#,
     )
@@ -400,6 +400,9 @@ pub struct Saver {
     /// Only messages and tasks in this project (agents, and connections
     /// confined to one project).
     pub within: Option<Uuid>,
+    /// The connection an agent saves through; its rules decide what the
+    /// agent can see, now and when a reminder fires.
+    pub connection_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -476,7 +479,7 @@ pub async fn save(
                 FROM messages message
                 JOIN projects project ON project.id = message.project_id
                 WHERE message.id = $2 AND message.removed_at IS NULL
-                  AND actor_can_access_project($1, NULL, message.project_id)
+                  AND actor_can_access_project($1, $4, message.project_id)
                   AND conversation_visible_to(message.conversation_id, $1)
                   AND ($3::uuid IS NULL OR message.project_id = $3)
                 "#,
@@ -484,12 +487,14 @@ pub async fn save(
             .bind(saver.actor_id)
             .bind(message_id)
             .bind(saver.within)
+            .bind(saver.connection_id)
             .fetch_optional(&mut *transaction)
             .await?
             .ok_or(AppError::NotFound("message"))?;
             upsert(
                 &mut transaction,
                 saver.actor_id,
+                saver.connection_id,
                 organization_id,
                 project_id,
                 Target::Message(message_id),
@@ -504,19 +509,21 @@ pub async fn save(
                 SELECT work.project_id, project.organization_id
                 FROM work_items work
                 JOIN projects project ON project.id = work.project_id
-                WHERE work.id = $2 AND actor_can_access_project($1, NULL, work.project_id)
+                WHERE work.id = $2 AND actor_can_access_project($1, $4, work.project_id)
                   AND ($3::uuid IS NULL OR work.project_id = $3)
                 "#,
             )
             .bind(saver.actor_id)
             .bind(work_item_id)
             .bind(saver.within)
+            .bind(saver.connection_id)
             .fetch_optional(&mut *transaction)
             .await?
             .ok_or(AppError::NotFound("work_item"))?;
             upsert(
                 &mut transaction,
                 saver.actor_id,
+                saver.connection_id,
                 organization_id,
                 project_id,
                 Target::WorkItem(work_item_id),
@@ -548,10 +555,11 @@ pub async fn save(
             } else {
                 let project_id = saver.project_id.ok_or(AppError::Validation("projectId"))?;
                 let organization_id = sqlx::query_scalar::<_, Uuid>(
-                    "SELECT organization_id FROM projects WHERE id = $2 AND actor_can_access_project($1, NULL, id)",
+                    "SELECT organization_id FROM projects WHERE id = $2 AND actor_can_access_project($1, $3, id)",
                 )
                 .bind(saver.actor_id)
                 .bind(project_id)
+                .bind(saver.connection_id)
                 .fetch_optional(&mut *transaction)
                 .await?
                 .ok_or(AppError::NotFound("project"))?;
@@ -560,6 +568,7 @@ pub async fn save(
             upsert(
                 &mut transaction,
                 saver.actor_id,
+                saver.connection_id,
                 organization_id,
                 project_id,
                 Target::Reminder,
@@ -580,9 +589,11 @@ enum Target {
     Reminder,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
+    connection_id: Option<Uuid>,
     organization_id: Uuid,
     project_id: Uuid,
     target: Target,
@@ -625,8 +636,8 @@ async fn upsert(
         r#"
         INSERT INTO saved_items (
             id, organization_id, project_id, actor_id, kind, message_id, work_item_id,
-            note, remind_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, ''), $9)
+            note, remind_at, external_agent_connection_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, ''), $9, $10)
         {conflict} {update}
         RETURNING id, remind_at
         "#,
@@ -636,6 +647,7 @@ async fn upsert(
             "DO UPDATE SET done_at = NULL,
                 note = COALESCE($8, saved_items.note),
                 remind_at = COALESCE($9, saved_items.remind_at),
+                external_agent_connection_id = EXCLUDED.external_agent_connection_id,
                 updated_at = now()"
         },
     );
@@ -649,6 +661,7 @@ async fn upsert(
         .bind(work_item_id)
         .bind(note)
         .bind(remind_at)
+        .bind(connection_id)
         .fetch_one(&mut **transaction)
         .await?;
     if let Some((_, Some(old))) = previous
@@ -870,7 +883,7 @@ async fn remind(state: &AppState, job: &RemindJob) -> Result<(), JobError> {
                item.note, item.message_id, message.conversation_id, item.work_item_id,
                item.remind_at, item.reminded_for, item.done_at,
                (actor.status = 'active'
-                AND actor_can_access_project(item.actor_id, NULL, item.project_id)
+                AND actor_can_access_project(item.actor_id, item.external_agent_connection_id, item.project_id)
                 AND (item.message_id IS NULL
                      OR (message.removed_at IS NULL
                          AND conversation_visible_to(message.conversation_id, item.actor_id))))
@@ -1048,6 +1061,7 @@ async fn save_http(
             organization_id: None,
             project_id: None,
             within: None,
+            connection_id: None,
         },
         request,
     )
