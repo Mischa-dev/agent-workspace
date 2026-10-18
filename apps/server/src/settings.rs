@@ -248,6 +248,18 @@ pub const REGISTRY: &[SettingDef] = &[
         default: "\"off\"",
     },
     SettingDef {
+        key: "notifications.paused_until",
+        label: "Notifications paused until",
+        description: "Hold pushes and skip emails until then, as seconds since 1970. 0, not paused.",
+        kind: SettingType::Integer {
+            min: 0,
+            max: 4_102_444_800,
+        },
+        scopes: PERSONAL_SCOPES,
+        launch_override: false,
+        default: "0",
+    },
+    SettingDef {
         key: "run.harness",
         label: "Harness",
         description: "The harness new runs use, such as Codex or Claude Code. Unset, the first one connected.",

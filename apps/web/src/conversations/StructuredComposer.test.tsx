@@ -54,7 +54,13 @@ describe('StructuredComposer', () => {
   })
 
   it('keeps the draft through a reload and sends what failed offline once the connection is back', async () => {
-    const onSubmit = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue(undefined)
+    // The composer retries a queued send straight away, so every send fails
+    // until the connection is back; otherwise the queue can empty before the
+    // test sees it.
+    let online = false
+    const onSubmit = vi.fn<(submission: { idempotencyKey: string }) => Promise<void>>(async () => {
+      if (!online) throw new TypeError('Failed to fetch')
+    })
     const first = render(<StructuredComposer draftKey="channel-1" onSubmit={onSubmit} searchActors={vi.fn()} />)
     type('Half written')
     first.unmount()
@@ -65,10 +71,15 @@ describe('StructuredComposer', () => {
     expect(await screen.findByText('Half written', { selector: '.aw-composer__queued-text' })).toBeInTheDocument()
     expect(screen.getByLabelText('Message')).toHaveValue('')
 
-    window.dispatchEvent(new Event('online'))
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2))
-    expect(onSubmit.mock.calls[1][0].idempotencyKey).toBe(onSubmit.mock.calls[0][0].idempotencyKey)
-    await waitFor(() => expect(screen.queryByRole('list', { name: 'Waiting to send' })).not.toBeInTheDocument())
+    online = true
+    // An 'online' event that lands while a retry is still failing is skipped
+    // (the composer tries again on its timer), so keep announcing it.
+    await waitFor(() => {
+      window.dispatchEvent(new Event('online'))
+      expect(screen.queryByRole('list', { name: 'Waiting to send' })).not.toBeInTheDocument()
+    })
+    const keys = new Set(onSubmit.mock.calls.map(([submission]) => submission.idempotencyKey))
+    expect(keys.size).toBe(1)
     expect(window.localStorage.length).toBe(0)
   })
 

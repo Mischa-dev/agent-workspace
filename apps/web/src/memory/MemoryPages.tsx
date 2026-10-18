@@ -8,6 +8,7 @@ import { formatFullDate } from '../conversations/timeFormat'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
+import { usePageTitle } from '../shell/documentTitleModel'
 import {
   Banner,
   Button,
@@ -158,6 +159,7 @@ export function PageDetailPage() {
 function PageDetail({ pageId, projectId }: { pageId: string; projectId: string }) {
   const queryClient = useQueryClient()
   const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
+  usePageTitle(page.data?.title ?? null)
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId) })
   const [editing, setEditing] = useState(() => new URLSearchParams(window.location.search).get('edit') === '1')
   const [viewing, setViewing] = useState<{ version: number; title: string; body: string } | null>(null)

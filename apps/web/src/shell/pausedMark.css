@@ -1,0 +1,19 @@
+/* Loaded with PausedMark, outside the first page load. */
+.aw-rail__me {
+  position: relative;
+}
+
+/* Notifications paused by hand: a moon on the avatar, where presence would be. */
+.aw-rail__paused {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--rail-bg);
+  border-radius: var(--radius-full);
+  background: var(--warning);
+  color: var(--rail-bg);
+}

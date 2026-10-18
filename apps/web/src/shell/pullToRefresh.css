@@ -1,0 +1,21 @@
+/* Pull to refresh in the installed phone app: a round marker that follows the finger. */
+.aw-pull {
+  position: fixed;
+  z-index: var(--layer-sticky);
+  top: env(safe-area-inset-top, 0px);
+  left: calc(50% - 18px);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  background: var(--content-bg);
+  box-shadow: var(--shadow-popover);
+  color: var(--content-fg-muted);
+  pointer-events: none;
+}
+
+.aw-pull[data-ready] {
+  color: var(--accent);
+}
