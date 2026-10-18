@@ -14,8 +14,9 @@ describe('structured Project locations', () => {
     expect(projectLocationHref(projectId, { kind: 'project_overview' })).toBe(
       '/projects/project-a',
     )
+    // A Project that last remembered its settings opens on its overview.
     expect(projectLocationHref(projectId, { kind: 'settings' })).toBe(
-      '/projects/project-a/settings',
+      '/projects/project-a',
     )
     expect(projectLocationHref(projectId, { kind: 'work_items' })).toBe(
       '/projects/project-a/work-items',

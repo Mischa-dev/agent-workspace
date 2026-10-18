@@ -19,7 +19,9 @@ export function projectLocationHref(
   if (location.kind === 'thread') {
     return `/projects/${project}/threads/${encodeURIComponent(location.conversationId)}`
   }
-  if (location.kind === 'settings') return `/projects/${project}/settings`
+  // Settings aren't a place in the Project to come back to: opening a Project
+  // that last remembered them (older clients saved it) lands on its overview,
+  // so the Project's own tile always leads out of settings.
   if (location.kind === 'work_items') return `/projects/${project}/work-items`
   return `/projects/${project}`
 }

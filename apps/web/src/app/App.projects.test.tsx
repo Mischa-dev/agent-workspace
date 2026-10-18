@@ -162,6 +162,57 @@ describe('App Project creation and settings', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('leads out of Project settings through the Project tile', async () => {
+    // An older client saved settings as Beta's last place.
+    const rememberedSettings = {
+      ...projectB.navigation,
+      location: { kind: 'settings' },
+      href: `/projects/${projectBId}/settings`,
+    }
+    window.history.replaceState({}, '', `/settings/projects/${projectBId}/general`)
+    const navigationWrites: string[] = []
+    const fetchMock = installStandardApi()
+    const standard = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input)
+        const method = init?.method ?? 'GET'
+        if (path.endsWith('/auth/session')) return jsonResponse(authenticatedSession)
+        if (path.startsWith('/api/v1/projects?') && method === 'GET') {
+          return jsonResponse({
+            projects: [projectA, { ...projectB, navigation: rememberedSettings }],
+          })
+        }
+        if (path.endsWith(`/projects/${projectBId}`)) {
+          return jsonResponse({ ...projectB, navigation: rememberedSettings })
+        }
+        if (path.endsWith(`/projects/${projectBId}/navigation`)) {
+          if (method !== 'GET') navigationWrites.push(String(init?.body))
+          return jsonResponse(rememberedSettings)
+        }
+        if (path.endsWith(`/projects/${projectBId}/switch`) && method === 'POST') {
+          return jsonResponse({
+            project: projectB,
+            navigation: rememberedSettings,
+            href: rememberedSettings.href,
+          })
+        }
+        return standard(input, init)
+      },
+    )
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'General' })).toBeVisible()
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Projects' })).getByRole('link', {
+        name: /^Beta Project/,
+      }),
+    )
+    await waitFor(() => expect(window.location.pathname).toBe(`/projects/${projectBId}`))
+    // Settings never save themselves as the place to come back to.
+    expect(navigationWrites.filter((body) => body.includes('"settings"'))).toEqual([])
+  })
+
   it('requires the exact Project key and archives with its expected version', async () => {
     window.history.replaceState(
       {},
@@ -250,7 +301,7 @@ describe('App Project creation and settings', () => {
       '',
       `/projects/${projectBId}/settings`,
     )
-    let projectReads = 0
+    let archiveAttempts = 0
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const path = String(input)
@@ -262,11 +313,10 @@ describe('App Project creation and settings', () => {
           return jsonResponse({ projects: [projectA, projectB] })
         }
         if (path.endsWith(`/projects/${projectBId}`)) {
-          projectReads += 1
+          // Someone else changed the Project before the first archive attempt.
           return jsonResponse({
             ...projectB,
-            version:
-              code === 'version_conflict' && projectReads > 1 ? 2 : 1,
+            version: code === 'version_conflict' && archiveAttempts > 0 ? 2 : 1,
           })
         }
         if (
@@ -283,6 +333,7 @@ describe('App Project creation and settings', () => {
           path.endsWith(`/projects/${projectBId}/archive`) &&
           method === 'POST'
         ) {
+          archiveAttempts += 1
           return jsonResponse({ error: { code, details, message } }, 409)
         }
         throw new Error(`Unexpected request: ${method} ${path}`)
