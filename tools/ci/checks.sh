@@ -190,6 +190,12 @@ if has rust; then
   createdb --maintenance-db="${CI_DATABASE_BASE}/postgres" "${database}"
   export AGENT_WORKSPACE_DATABASE_URL="${CI_DATABASE_BASE}/${database}"
 
+  # Compiling the server library and its unit tests takes about 5 GB each, so
+  # side by side they overrun an 8 GB cap. Under a cap, build the library and
+  # binaries first; the test build then reuses the library.
+  if [ -n "${CI_MEMORY_MAX:-}" ]; then
+    step "rust build" cargo build --workspace
+  fi
   step "rust tests" cargo nextest run --workspace --profile ci
   step "doc tests" cargo test --workspace --doc --quiet
   if web_failed; then report_web; fi
