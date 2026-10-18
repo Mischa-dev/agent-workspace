@@ -349,10 +349,7 @@ fn skills_field(skills: &[(Uuid, String, String, String)], pages_url: &str) -> S
                 parts.push(part);
             }
             None => {
-                parts.push(format!(
-                    "{} more skills: {pages_url}",
-                    skills.len() - index
-                ));
+                parts.push(format!("{} more skills: {pages_url}", skills.len() - index));
                 break;
             }
         }
@@ -2873,8 +2870,15 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let field = skills_field(&skills, "https://example.com/pages");
-        assert!(field.chars().count() <= MAX_SKILLS_CHARS + 100, "{}", field.len());
-        assert!(field.ends_with("more skills: https://example.com/pages"), "{field}");
+        assert!(
+            field.chars().count() <= MAX_SKILLS_CHARS + 100,
+            "{}",
+            field.len()
+        );
+        assert!(
+            field.ends_with("more skills: https://example.com/pages"),
+            "{field}"
+        );
         assert!(field.starts_with("### skill-0\n\n"));
     }
 

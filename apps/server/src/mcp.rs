@@ -4061,6 +4061,10 @@ mod tests {
             >())
             .clone(),
         );
+        let later_list = serde_json::Value::Object(
+            (*schema_for_output::<common::ToolResult<super::later_tools::LaterListValue>>())
+                .clone(),
+        );
         let update_many = serde_json::Value::Object(
             (*schema_for_output::<
                 super::task_batch::BatchResult<super::task_batch::UpdateManyValue>,
@@ -4108,6 +4112,12 @@ mod tests {
             (&task_link, Some("LinkValue"), &["role", "notes"][..]),
             (&overview, None, &["guide", "labels"][..]),
             (&overview, Some("TaskOverview"), &["blocked", "claimed"][..]),
+            (
+                &later_list,
+                Some("LaterListValue"),
+                &["items", "scheduled"][..],
+            ),
+            (&later_list, Some("LaterLine"), &["note"][..]),
             (&label_list, Some("LabelLine"), &["description"][..]),
             (&label_write, Some("LabelLine"), &["description"][..]),
             (&label_write, Some("LabelWriteValue"), &["note"][..]),

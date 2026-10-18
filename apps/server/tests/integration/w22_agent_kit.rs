@@ -201,11 +201,7 @@ async fn a_handoff_note_reaches_whoever_claims_the_task_next() {
     assert_eq!(released["value"]["handoffSaved"], true);
     // Only the claim's holder hands off: a retry (or anyone without the
     // claim) saves nothing more.
-    let again = mara_call(
-        "task_release",
-        json!({"taskId": "WORK-1", "handoff": note}),
-    )
-    .await;
+    let again = mara_call("task_release", json!({"taskId": "WORK-1", "handoff": note})).await;
     assert_eq!(again["outcome"], "conflict", "{again}");
 
     // Rook isn't in WORK: he can neither leave nor read a note there.

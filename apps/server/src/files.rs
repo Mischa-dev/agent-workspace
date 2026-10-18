@@ -356,6 +356,13 @@ pub(crate) async fn store_upload(
         .saturating_add(thumbnail.as_ref().map_or(0, |thumbnail| {
             u64::try_from(thumbnail.bytes.len()).unwrap_or(u64::MAX)
         }));
+    // One upload at a time per workspace from the room check to the insert,
+    // so uploads side by side can't each see room and together overfill it.
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{organization_id}"))
+        .execute(&mut *transaction)
+        .await?;
     require_room(state, organization_id, incoming).await?;
 
     let id = Uuid::now_v7();
@@ -413,8 +420,12 @@ pub(crate) async fn store_upload(
             .map(|thumbnail| i64::try_from(thumbnail.bytes.len()).unwrap_or(i64::MAX)),
     )
     .bind(attached)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *transaction)
     .await;
+    let inserted = match inserted {
+        Ok(row) => transaction.commit().await.map(|()| row),
+        Err(error) => Err(error),
+    };
     match inserted {
         Ok(row) => Ok(row),
         Err(error) => {
@@ -431,7 +442,7 @@ pub(crate) async fn store_upload(
 /// the server over its storage watermark. The walk of the data root leaves
 /// the file store out (`storage_admission`), so the files the database knows
 /// about are added here.
-async fn require_room(
+pub(crate) async fn require_room(
     state: &AppState,
     organization_id: Uuid,
     incoming: u64,
@@ -451,14 +462,20 @@ async fn require_room(
         .value::<i64>("files.workspace_quota_mb")
         .unwrap_or(10_240)
         .max(0);
+    // Link preview pictures live in the file store too, so they count.
     let (workspace_bytes, all_bytes) = sqlx::query_as::<_, (i64, i64)>(
         r#"
+        WITH stored AS (
+            SELECT organization_id, byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
+            FROM files WHERE blob_deleted_at IS NULL
+            UNION ALL
+            SELECT organization_id, image_bytes
+            FROM link_previews WHERE image_key IS NOT NULL
+        )
         SELECT
-            COALESCE(sum(byte_size + COALESCE(thumbnail_bytes, 0))
-                FILTER (WHERE organization_id = $1), 0)::bigint,
-            COALESCE(sum(byte_size + COALESCE(thumbnail_bytes, 0)), 0)::bigint
-        FROM files
-        WHERE blob_deleted_at IS NULL
+            COALESCE(sum(bytes) FILTER (WHERE organization_id = $1), 0)::bigint,
+            COALESCE(sum(bytes), 0)::bigint
+        FROM stored
         "#,
     )
     .bind(organization_id)
@@ -699,21 +716,35 @@ pub(crate) async fn forget_message_files(
 }
 
 /// Removes a file: an unsent upload by its uploader, or a task's own file by
-/// its uploader or anyone who may edit the task (checked by the caller,
-/// `may_edit_task`). Message and comment files go with their message or
-/// comment instead.
+/// anyone who may edit the task (checked by the caller, `may_edit_task`, so
+/// an archived task or a viewer can't). Message and comment files go with
+/// their message or comment instead.
 pub(crate) async fn remove_file(
     transaction: &mut Transaction<'_, Postgres>,
     row: &FileRow,
     actor: Uuid,
     may_edit_task: bool,
 ) -> Result<(), AppError> {
-    let allowed = if row.attached_at.is_none() {
-        row.uploaded_by_actor_id == actor
+    // Decided on the row as it is now, locked: an upload sent with a message
+    // a moment ago is the message's, not an unsent upload any more.
+    let Some((attached, work_item_id, comment_id, uploader)) =
+        sqlx::query_as::<_, (bool, Option<Uuid>, Option<Uuid>, Uuid)>(
+            r#"
+            SELECT attached_at IS NOT NULL, work_item_id, comment_id, uploaded_by_actor_id
+            FROM files WHERE id = $1 AND removed_at IS NULL
+            FOR UPDATE
+            "#,
+        )
+        .bind(row.id)
+        .fetch_optional(&mut **transaction)
+        .await?
+    else {
+        return Ok(());
+    };
+    let allowed = if attached {
+        work_item_id.is_some() && comment_id.is_none() && may_edit_task
     } else {
-        row.work_item_id.is_some()
-            && row.comment_id.is_none()
-            && (row.uploaded_by_actor_id == actor || may_edit_task)
+        uploader == actor
     };
     if !allowed {
         return Err(AppError::Forbidden);
@@ -766,9 +797,17 @@ pub async fn cleanup(state: &AppState) -> Result<u64, AppError> {
     let store = FileStore::from_config(&state.config);
     let mut deleted = 0;
     for (id, key, thumbnail_key) in removed {
-        store.delete(&key).await?;
-        if let Some(key) = thumbnail_key {
-            store.delete(&key).await?;
+        // One file the store can't delete mustn't stop every later one: it
+        // stays in the batch and is tried again next time.
+        let mut failed = false;
+        for key in std::iter::once(key).chain(thumbnail_key) {
+            if let Err(error) = store.delete(&key).await {
+                tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
+                failed = true;
+            }
+        }
+        if failed {
+            continue;
         }
         sqlx::query("UPDATE files SET blob_deleted_at = now() WHERE id = $1")
             .bind(id)
