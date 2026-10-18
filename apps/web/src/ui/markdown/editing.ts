@@ -5,7 +5,7 @@ export type Selection = { value: string; start: number; end: number }
 /** Replace value[from, to) with `insert`, then select [selectStart, selectEnd) in the new value. */
 export type TextEdit = { from: number; to: number; insert: string; selectStart: number; selectEnd: number }
 
-export type FormatAction = 'bold' | 'italic' | 'code' | 'link' | 'bullet' | 'checklist' | 'quote'
+export type FormatAction = 'bold' | 'italic' | 'code' | 'codeblock' | 'link' | 'bullet' | 'checklist' | 'quote'
 
 export function applyEdit(value: string, edit: TextEdit) {
   return value.slice(0, edit.from) + edit.insert + value.slice(edit.to)
@@ -34,6 +34,16 @@ function code(selection: Selection): TextEdit {
   const insert = `${before}\`\`\`\n${selected.replace(/\n$/, '')}\n\`\`\`${after}`
   const bodyStart = start + before.length + 4
   return { from: start, to: end, insert, selectStart: bodyStart, selectEnd: bodyStart + selected.replace(/\n$/, '').length }
+}
+
+/** A fenced block around the selected lines (or an empty one to type into). */
+function codeBlock({ end, start, value }: Selection): TextEdit {
+  const selected = value.slice(start, end).replace(/\n$/, '')
+  const before = start > 0 && value[start - 1] !== '\n' ? '\n' : ''
+  const after = end < value.length && value[end] !== '\n' ? '\n' : ''
+  const insert = `${before}\`\`\`\n${selected}\n\`\`\`${after}`
+  const bodyStart = start + before.length + 4
+  return { from: start, to: end, insert, selectStart: bodyStart, selectEnd: bodyStart + selected.length }
 }
 
 function link({ end, start, value }: Selection): TextEdit {
@@ -80,6 +90,8 @@ export function formatEdit(action: FormatAction, selection: Selection): TextEdit
       return wrap(selection, '_', 'italic text')
     case 'code':
       return code(selection)
+    case 'codeblock':
+      return codeBlock(selection)
     case 'link':
       return link(selection)
     case 'bullet':

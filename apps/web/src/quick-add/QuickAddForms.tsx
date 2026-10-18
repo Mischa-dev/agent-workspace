@@ -6,18 +6,21 @@ import { queryKeys } from '../api/queryKeys'
 import { isConnectionError, readLocal, writeLocal } from '../app/localDrafts'
 import { useRetryWhenOnline } from '../app/useRetryWhenOnline'
 import { getProjectConversationSidebar, sendConversationMessage } from '../conversations/api'
-import { buildMessageContent, MAX_MESSAGE_SCALAR_VALUES } from '../conversations/composerModel'
+import { BLANK_MESSAGE_CONTENT, buildMessageContent, MAX_MESSAGE_SCALAR_VALUES } from '../conversations/composerModel'
 import type { ConversationKind } from '../conversations/types'
 import { conversationTitle, useDirectOverview } from '../direct/api'
 import type { Project } from '../projects/types'
+import type { FileAttachment } from '../files/api'
 import { Banner, Button, SelectField, TextArea, TextField } from '../ui'
 import { useCreateWorkItem } from '../work-items/hooks'
 import { useTaskDraft } from '../work-items/taskDraft'
 import { messageFromShare, taskFromShare, type SharedContent } from './sharedContent'
+import { uploadShared } from './sharedFiles'
 
 const LAST_PROJECT = 'quick-add:project'
 const LAST_PLACE = 'quick-share:place'
 const DIRECT = 'direct'
+const NO_FILES: File[] = []
 
 function OfflineNote({ what }: { what: string }) {
   return (
@@ -27,14 +30,18 @@ function OfflineNote({ what }: { what: string }) {
   )
 }
 
-export function QuickTaskForm({ projects, shared }: { projects: Project[]; shared: SharedContent | null }) {
+export function QuickTaskForm({ files = NO_FILES, projects, shared }: { files?: File[]; projects: Project[]; shared: SharedContent | null }) {
   const navigate = useNavigate()
   const create = useCreateWorkItem()
   const [chosen, setChosen] = useState(() => readLocal<string>(LAST_PROJECT) ?? '')
   const projectId = projects.some((project) => project.id === chosen) ? chosen : (projects[0]?.id ?? '')
-  const start = useMemo(() => (shared ? taskFromShare(shared) : undefined), [shared])
+  const start = useMemo(
+    () => (shared ? taskFromShare(shared) : files.length ? { title: files[0].name.slice(0, 240), description: '' } : undefined),
+    [files, shared],
+  )
   const { draft, update, clear } = useTaskDraft(projectId, start)
   const [offline, setOffline] = useState(false)
+  const [attaching, setAttaching] = useState<string | null>(null)
 
   const send = () => {
     if (!projectId || !draft.title.trim() || create.isPending) return
@@ -51,7 +58,17 @@ export function QuickTaskForm({ projects, shared }: { projects: Project[]; share
           setOffline(false)
           clear()
           writeLocal(LAST_PROJECT, projectId)
-          navigate(`/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`, { replace: true })
+          const open = () =>
+            navigate(`/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`, { replace: true })
+          if (!files.length) {
+            open()
+            return
+          }
+          // The task exists; its files go up next, and the task opens either way.
+          setAttaching('Attaching files…')
+          uploadShared(files, { kind: 'task', projectId: item.projectId, workItemId: item.id })
+            .then(open)
+            .catch((reason: unknown) => setAttaching(`The task was created, but the files weren’t attached: ${reason instanceof Error ? reason.message : 'try again from the task'}`))
         },
         onError: (reason) => setOffline(isConnectionError(reason)),
       },
@@ -94,6 +111,7 @@ export function QuickTaskForm({ projects, shared }: { projects: Project[]; share
         value={draft.description}
       />
       {offline ? <OfflineNote what="task" /> : create.isError ? <Banner tone="danger">{create.error.message}</Banner> : null}
+      {attaching ? <Banner tone={attaching.startsWith('The task') ? 'danger' : 'info'}>{attaching}</Banner> : null}
       <div className="aw-quick__actions">
         <Button
           busy={create.isPending}
@@ -113,10 +131,12 @@ export function QuickTaskForm({ projects, shared }: { projects: Project[]; share
 type Place = { id: string; kind: ConversationKind; label: string; href: string }
 
 export function QuickMessageForm({
+  files = NO_FILES,
   projects,
   shared,
   viewerId,
 }: {
+  files?: File[]
   projects: Project[]
   shared: SharedContent | null
   viewerId: string
@@ -155,12 +175,20 @@ export function QuickMessageForm({
   const [offline, setOffline] = useState(false)
   const loading = scope === DIRECT ? direct.isPending : sidebar.isPending
   const loadError = scope === DIRECT ? direct.error : sidebar.error
-  const content = [...text.trim()].length <= MAX_MESSAGE_SCALAR_VALUES ? buildMessageContent(text, []) : null
+  const typed = [...text.trim()].length <= MAX_MESSAGE_SCALAR_VALUES ? buildMessageContent(text, []) : null
+  const content = typed ?? (files.length && !text.trim() ? BLANK_MESSAGE_CONTENT : null)
+  // Uploaded once per place, so a retry after a dropped connection doesn't upload twice.
+  const [uploaded, setUploaded] = useState<{ placeId: string; attachments: FileAttachment[] } | null>(null)
 
   const post = useMutation({
-    mutationFn: (target: Place) => {
+    mutationFn: async (target: Place) => {
       if (!content) throw new Error('Write something to post.')
-      return sendConversationMessage({ conversationId: target.id, kind: target.kind, content, idempotencyKey })
+      let attachments = uploaded?.placeId === target.id ? uploaded.attachments : []
+      if (files.length && !attachments.length) {
+        attachments = await uploadShared(files, { kind: 'conversation', conversationId: target.id })
+        setUploaded({ placeId: target.id, attachments })
+      }
+      return sendConversationMessage({ conversationId: target.id, kind: target.kind, content, idempotencyKey, attachments })
     },
     onSuccess: (_response, target) => {
       setOffline(false)

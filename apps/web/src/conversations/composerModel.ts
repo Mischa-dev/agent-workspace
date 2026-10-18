@@ -1,3 +1,4 @@
+import type { FileAttachment } from '../files/model'
 import type {
   ConversationActor,
   ConversationWorkItemReference,
@@ -10,7 +11,12 @@ export type ComposerSubmission = {
   idempotencyKey: string
   /** The draft as typed, for showing the message while it sends. */
   text?: string
+  /** Files uploaded with it, sent by id. */
+  attachments?: FileAttachment[]
 }
+
+/** The content of a message that is only files. */
+export const BLANK_MESSAGE_CONTENT: MessageContentV1 = { version: 1, nodes: [{ type: 'text', text: '' }] }
 
 export const MAX_MESSAGE_SCALAR_VALUES = 20_000
 const MAX_NODES = 128
@@ -25,7 +31,7 @@ export function composerScalarValues(text: string) {
   return [...text.trim()].length
 }
 
-const BEFORE = /[\s([{"'“‘]/
+const BEFORE = /[\s([{"'“‘*_~]/
 const WORD = /[\p{L}\p{N}_.-]/u
 
 /**

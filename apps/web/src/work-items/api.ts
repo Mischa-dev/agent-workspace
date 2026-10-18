@@ -640,15 +640,16 @@ export async function createWorkItemComment(input: {
   workItemId: string
   content: MessageContentV1
   idempotencyKey: string
+  attachments?: { id: string }[]
 }) {
   return requestJson<unknown>(
     `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/comments`,
     {
       method: 'POST',
       idempotencyKey: input.idempotencyKey,
-      json: {
-        content: input.content,
-      },
+      json: input.attachments?.length
+        ? { content: input.content, attachments: input.attachments.map((file) => file.id) }
+        : { content: input.content },
     },
   )
 }

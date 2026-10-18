@@ -134,6 +134,8 @@ const icons = {
 } satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof icons
+/** A registered icon by name, or a Lucide icon a lazy-loaded feature imports itself (keeping the shared set small). */
+export type IconGlyph = IconName | LucideIcon
 
 /** A Lucide icon. Decorative unless given a label. */
 export function Icon({
@@ -144,10 +146,10 @@ export function Icon({
 }: {
   className?: string
   label?: string
-  name: IconName
+  name: IconGlyph
   size?: number
 }) {
-  const Glyph = icons[name]
+  const Glyph = typeof name === 'string' ? icons[name] : name
   return (
     <Glyph
       absoluteStrokeWidth={false}

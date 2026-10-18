@@ -102,7 +102,7 @@ pub(super) async fn search_tool(
             None => {
                 return ToolResult::invalid(
                     "kinds",
-                    "Use messages, threads, tasks, pages, or decisions.",
+                    "Use messages, threads, tasks, pages, decisions, or files.",
                 );
             }
         }

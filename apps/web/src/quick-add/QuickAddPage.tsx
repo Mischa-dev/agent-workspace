@@ -1,13 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { Button, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
+import { formatBytes } from '../files/api'
 import { QuickMessageForm, QuickTaskForm } from './QuickAddForms'
+import { takeSharedFiles } from './sharedFiles'
 import { readSharedContent, type SharedContent } from './sharedContent'
 import './quickAdd.css'
+import { FileGlyph, ImageGlyph } from '../files/icons'
 
 /**
  * Quick add (the home-screen "New task" shortcut) and Share to Workspace
@@ -20,12 +23,24 @@ export function QuickAddPage() {
   const [params] = useSearchParams()
   const sharing = location.pathname === '/share'
   const shared = useMemo(() => (sharing ? readSharedContent(params) : null), [params, sharing])
+  const fileCount = sharing ? Number(params.get('files') ?? 0) : 0
+  const [files, setFiles] = useState<File[] | null>(fileCount > 0 ? null : [])
+  useEffect(() => {
+    if (fileCount <= 0) return
+    let current = true
+    void takeSharedFiles(fileCount).then((taken) => {
+      if (current) setFiles(taken)
+    })
+    return () => {
+      current = false
+    }
+  }, [fileCount])
   const [mode, setMode] = useState<'task' | 'message'>('task')
   const projects = useProjects()
   const active = useMemo(() => (projects.data?.projects ?? []).filter((project) => !project.archivedAt), [projects.data])
 
   let body
-  if (projects.isPending) {
+  if (projects.isPending || files === null) {
     body = <SettingsSkeleton />
   } else if (projects.isError) {
     body = (
@@ -55,9 +70,9 @@ export function QuickAddPage() {
       </EmptyState>
     )
   } else if (mode === 'task') {
-    body = <QuickTaskForm projects={active} shared={shared} />
+    body = <QuickTaskForm files={files} projects={active} shared={shared} />
   } else {
-    body = <QuickMessageForm projects={active} shared={shared} viewerId={session.user.actorId} />
+    body = <QuickMessageForm files={files} projects={active} shared={shared} viewerId={session.user.actorId} />
   }
 
   return (
@@ -67,6 +82,17 @@ export function QuickAddPage() {
           {sharing ? 'Make it a task, or post it in a conversation.' : 'Add a task to a project. It stays here until it’s created, even offline.'}
         </PageHeader>
         {shared ? <SharedPreview shared={shared} /> : null}
+        {files?.length ? (
+          <ul aria-label="Shared files" className="aw-quick__files">
+            {files.map((file, index) => (
+              <li key={`${file.name}-${index}`}>
+                <Icon name={file.type.startsWith('image/') ? ImageGlyph : FileGlyph} size={14} />
+                <span className="aw-quick__file-name">{file.name}</span>
+                <span className="aw-quick__file-size">{formatBytes(file.size)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {sharing ? (
           <SegmentedControl
             label="Share as"

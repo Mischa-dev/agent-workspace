@@ -12,7 +12,7 @@ Each run writes one **set**: a directory named by its UTC start time, such as
 | File | Contents |
 | --- | --- |
 | `database.dump.age` | `pg_dump --format=custom` of the live database, encrypted. |
-| `data.tar.gz.age` | Data root paths that cannot be rebuilt, encrypted. By default: `attachments`, `artifacts` and `codex/profiles` (provider account homes). |
+| `data.tar.gz.age` | Data root paths that cannot be rebuilt, encrypted. By default: `attachments`, `artifacts`, `files` (uploaded files) and `codex/profiles` (provider account homes). |
 | `backup-info` | Plain text: set time, database name, latest migration version, release. No secrets. |
 | `SHA256SUMS` | Checksums of the three files above. |
 

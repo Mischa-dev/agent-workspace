@@ -16,7 +16,7 @@ use super::{
 use crate::{
     AppState,
     conversations::{
-        MessageCommandActor, MessageMcpCredential, ReplyCompletion, append_message_command,
+        MessageCommandActor, MessageMcpCredential, ReplyCompletion, append_message_command_with,
         enqueue_event, lock_conversation_for,
     },
     conversations::{normalize_conversation_name, suggested_thread_name},
@@ -59,6 +59,9 @@ pub(super) struct ReplySendArguments {
     /// request) and keep working; the claim stays yours and its lease renews.
     #[serde(rename = "final")]
     pub final_reply: Option<bool>,
+    /// Files to attach (up to 10), uploaded first with file_upload to the
+    /// request's conversation (or its thread), such as a run's output.
+    pub attachment_ids: Option<Vec<String>>,
     /// Optional retry key. Defaults to one derived from the request and
     /// generation (and, for interim messages, the text), so resending the
     /// same reply is safe.
@@ -573,6 +576,9 @@ pub(super) async fn reply_send(
     if text.is_empty() || text.chars().count() > MAX_REPLY_CHARACTERS {
         return ReplyToolResult::invalid("text");
     }
+    let Ok(attachments) = super::file_tools::parse_attachment_ids(arguments.attachment_ids) else {
+        return ReplyToolResult::invalid("attachmentIds");
+    };
     let final_reply = arguments.final_reply.unwrap_or(true);
     let key = arguments.client_request_id.unwrap_or_else(|| {
         if final_reply {
@@ -609,7 +615,7 @@ pub(super) async fn reply_send(
         Ok(content) => content,
         Err(_) => return ReplyToolResult::unavailable(),
     };
-    match append_message_command(
+    match append_message_command_with(
         state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -624,11 +630,13 @@ pub(super) async fn reply_send(
         None,
         idempotency_key,
         content,
+        &attachments,
         Some(ReplyCompletion {
             request_id,
             generation: arguments.generation,
             final_reply,
         }),
+        crate::conversations::AppendExtras::default(),
     )
     .await
     {
@@ -647,6 +655,7 @@ pub(super) async fn reply_send(
             },
         },
         Err(AppError::NotFound(_)) => ReplyToolResult::from_failure(ReadFailure::NotFound),
+        Err(AppError::Validation("attachments")) => ReplyToolResult::invalid("attachmentIds"),
         Err(AppError::Validation(_) | AppError::Invalid(_)) => ReplyToolResult::invalid("text"),
         Err(error) => {
             tracing::error!(category = error.log_category(), "reply_send failed");

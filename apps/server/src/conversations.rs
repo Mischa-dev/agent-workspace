@@ -195,6 +195,9 @@ struct CreateThreadRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SendMessageRequest {
     content: serde_json::Value,
+    /// Files uploaded to this conversation for this message, in order.
+    #[serde(default)]
+    attachments: Vec<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -326,6 +329,13 @@ pub struct MessageView {
     /// idempotent replays from before reactions have no such field.
     #[serde(default)]
     pub reactions: Vec<ReactionView>,
+    /// Files and images, in the order they were attached. Empty once the
+    /// message is removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::files::FileView>,
+    /// Previews of the web pages it links to that are ready and not hidden.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub link_previews: Vec<crate::link_previews::LinkPreviewView>,
     /// The message this one forwards, as the viewer may see it (W21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forwarded: Option<crate::forwarding::ForwardedView>,
@@ -576,6 +586,8 @@ struct TimelineEntryRow {
     plain_text: Option<String>,
     mentioned_actors: serde_json::Value,
     referenced_work_items: serde_json::Value,
+    attachments: serde_json::Value,
+    link_previews: serde_json::Value,
     via: Option<String>,
     revision: Option<i32>,
     edited_at: Option<String>,
@@ -1485,7 +1497,7 @@ async fn send_direct_message(
     // the shared visibility check in `lock_message_conversation`.
     require_authenticated_write(&state, &headers, &principal)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let outcome = append_message_command(
+    let outcome = append_message_command_with(
         &state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -1497,7 +1509,9 @@ async fn send_direct_message(
         None,
         idempotency_key,
         request.content,
+        &request.attachments,
         None,
+        AppendExtras::default(),
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -1513,7 +1527,7 @@ async fn send_message(
 ) -> Result<Response, AppError> {
     require_authenticated_write(state, headers, principal)?;
     let idempotency_key = IdempotencyKey::from_headers(headers)?;
-    let outcome = append_message_command(
+    let outcome = append_message_command_with(
         state,
         MessageCommandActor {
             actor_id: principal.actor_id,
@@ -1525,7 +1539,9 @@ async fn send_message(
         Some(expected_kind),
         idempotency_key,
         request.content,
+        &request.attachments,
         None,
+        AppendExtras::default(),
     )
     .await?;
     created_message_response(outcome.status, &outcome.body)
@@ -1578,6 +1594,7 @@ pub(crate) async fn append_message_command(
         expected_kind,
         idempotency_key,
         content,
+        &[],
         reply,
         AppendExtras::default(),
     )
@@ -1591,6 +1608,9 @@ pub(crate) struct AppendExtras {
     pub(crate) forwarded_message_id: Option<Uuid>,
 }
 
+/// `append_message_command` with files the sender uploaded to this
+/// conversation (`files::attach_to_message`) and any extras. A message with
+/// files may have no text.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_message_command_with(
     state: &AppState,
@@ -1599,11 +1619,21 @@ pub(crate) async fn append_message_command_with(
     expected_kind: Option<&'static str>,
     idempotency_key: IdempotencyKey,
     content: serde_json::Value,
+    attachments: &[Uuid],
     reply: Option<ReplyCompletion>,
     extras: AppendExtras,
 ) -> Result<MessageAppendOutcome, AppError> {
     let content = MessageContent::from_json(content).map_err(message_content_error)?;
-    let request_hash = RequestHash::for_value(&content)?;
+    // Without files the hash is the content's alone, as it always was, so
+    // replays stored before files existed still match.
+    let request_hash = if attachments.is_empty() {
+        RequestHash::for_value(&content)?
+    } else {
+        RequestHash::for_value(&serde_json::json!({
+            "content": &content,
+            "attachments": attachments,
+        }))?
+    };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = state.pool.begin().await?;
     let conversation = lock_message_conversation(
@@ -1644,7 +1674,13 @@ pub(crate) async fn append_message_command_with(
         mentioned_actor_ids,
         work_item_references,
         work_item_rows,
-    } = resolve_message_content(&mut transaction, conversation.project_id, content).await?;
+    } = resolve_message_content_with(
+        &mut transaction,
+        conversation.project_id,
+        content,
+        !attachments.is_empty(),
+    )
+    .await?;
 
     let message_id = Uuid::now_v7();
     sqlx::query(
@@ -1672,6 +1708,21 @@ pub(crate) async fn append_message_command_with(
         message_id,
         &mentioned_actor_ids,
         &work_item_references,
+    )
+    .await?;
+    let attached = crate::files::attach_to_message(
+        &mut transaction,
+        conversation.id,
+        message_id,
+        actor.actor_id,
+        attachments,
+    )
+    .await?;
+    crate::link_previews::add_for_message(
+        &mut transaction,
+        conversation.project_id,
+        message_id,
+        &plain_text,
     )
     .await?;
     let sequence = allocate_conversation_sequence(&mut transaction, conversation.id).await?;
@@ -1765,6 +1816,8 @@ pub(crate) async fn append_message_command_with(
         edited_at: None,
         removed: None,
         reactions: Vec::new(),
+        attachments: attached,
+        link_previews: Vec::new(),
         forwarded: None,
         saved: None,
     };
@@ -1879,6 +1932,17 @@ pub(crate) async fn resolve_message_content(
     project_id: Uuid,
     content: MessageContent,
 ) -> Result<ResolvedContent, AppError> {
+    resolve_message_content_with(transaction, project_id, content, false).await
+}
+
+/// `resolve_message_content`, allowing blank text when `allow_blank` (a
+/// message that carries files).
+pub(crate) async fn resolve_message_content_with(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    content: MessageContent,
+    allow_blank: bool,
+) -> Result<ResolvedContent, AppError> {
     let mention_ids = content.mentioned_actor_ids();
     let mention_rows = if mention_ids.is_empty() {
         Vec::new()
@@ -1931,13 +1995,15 @@ pub(crate) async fn resolve_message_content(
         .iter()
         .map(|row| (row.0, row.1.clone()))
         .collect::<HashMap<_, _>>();
-    let (content, plain_text, mentioned_actor_ids) = content
-        .validate_with_resources(
-            |actor_id| handles.get(&actor_id).cloned(),
-            |work_item_id| work_item_labels.get(&work_item_id).cloned(),
-        )
-        .map_err(message_content_error)?
-        .into_parts();
+    let resolve_handle = |actor_id| handles.get(&actor_id).cloned();
+    let resolve_label = |work_item_id| work_item_labels.get(&work_item_id).cloned();
+    let validated = if allow_blank {
+        content.validate_with_resources_allowing_blank(resolve_handle, resolve_label)
+    } else {
+        content.validate_with_resources(resolve_handle, resolve_label)
+    };
+    let (content, plain_text, mentioned_actor_ids) =
+        validated.map_err(message_content_error)?.into_parts();
     let content_json = serde_json::to_value(&content)
         .map_err(|_| AppError::Internal("serialize validated Message content"))?;
     Ok(ResolvedContent {
@@ -2205,6 +2271,8 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             message.plain_text,
             COALESCE(mentions.actors, '[]'::jsonb) AS mentioned_actors,
             COALESCE(work_item_references.items, '[]'::jsonb) AS referenced_work_items,
+            COALESCE(attachments.files, '[]'::jsonb) AS attachments,
+            COALESCE(link_previews.items, '[]'::jsonb) AS link_previews,
             via_client.client_name AS via,
             message.revision,
             message.edited_at::text AS edited_at,
@@ -2267,6 +2335,45 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             JOIN work_item_statuses status
               ON status.project_id = item.project_id AND status.id = item.status_id
         ) work_item_references ON true
+        LEFT JOIN LATERAL (
+            -- files::FILE_JSON, for the message's files (none once removed).
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', file.id,
+                    'name', file.name,
+                    'contentType', file.content_type,
+                    'size', file.byte_size,
+                    'width', file.image_width,
+                    'height', file.image_height,
+                    'commentId', file.comment_id,
+                    'uploadedBy', file.uploaded_by_actor_id,
+                    'createdAt', file.created_at::text
+                ) ORDER BY file.position, file.id
+            ) AS files
+            FROM files file
+            WHERE file.message_id = message.id
+              AND file.removed_at IS NULL
+              AND message.removed_at IS NULL
+        ) attachments ON true
+        LEFT JOIN LATERAL (
+            -- link_previews::LinkPreviewView, for previews ready and not hidden.
+            SELECT jsonb_agg(jsonb_build_object(
+                'id', preview.id,
+                'url', preview.url,
+                'title', preview.title,
+                'description', preview.description,
+                'siteName', preview.site_name,
+                'imageWidth', preview.image_width,
+                'imageHeight', preview.image_height
+            ) ORDER BY shown.position) AS items
+            FROM message_link_previews shown
+            JOIN link_previews preview ON preview.id = shown.link_preview_id
+            WHERE shown.message_id = message.id
+              AND shown.hidden_at IS NULL
+              AND preview.status = 'ready'
+              AND preview.title IS NOT NULL
+              AND message.removed_at IS NULL
+        ) link_previews ON true
         LEFT JOIN mcp_oauth_grants via_grant
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
@@ -3884,6 +3991,14 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 Vec<ConversationWorkItemReferenceView>,
             >(row.referenced_work_items)
             .map_err(|_| AppError::Internal("decode timeline Work Item references"))?;
+            let attachments =
+                serde_json::from_value::<Vec<crate::files::FileView>>(row.attachments)
+                    .map_err(|_| AppError::Internal("decode timeline Message files"))?;
+            let link_previews =
+                serde_json::from_value::<Vec<crate::link_previews::LinkPreviewView>>(
+                    row.link_previews,
+                )
+                .map_err(|_| AppError::Internal("decode timeline link previews"))?;
             let removed = match row.removed_at {
                 Some(removed_at) => Some(MessageRemovalView {
                     removed_at,
@@ -3937,6 +4052,8 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                 edited_at: row.edited_at,
                 removed,
                 reactions: Vec::new(),
+                attachments,
+                link_previews,
                 forwarded: row
                     .forwarded_message_id
                     .map(crate::forwarding::ForwardedView::unread),

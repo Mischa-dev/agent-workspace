@@ -24,6 +24,7 @@ pub mod execution_setup;
 pub mod external_agents;
 pub mod external_events;
 pub mod external_execution;
+pub mod files;
 pub mod forwarding;
 pub mod git_runtime;
 pub mod github;
@@ -36,6 +37,7 @@ pub mod invitations;
 pub mod jobs;
 pub mod later;
 pub mod launch;
+pub mod link_previews;
 pub mod mail;
 pub mod mcp;
 pub mod memberships;
@@ -141,6 +143,8 @@ pub fn router(state: AppState) -> Router {
         .merge(replies::router())
         .merge(message_edits::router())
         .merge(reactions::router())
+        .merge(files::http::router())
+        .merge(link_previews::router())
         .merge(notifications::router())
         .merge(usage::router())
         .merge(home::router())
