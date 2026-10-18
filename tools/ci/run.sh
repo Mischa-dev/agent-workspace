@@ -46,8 +46,9 @@ load_host() {
     nixos)
       transport=ssh target=aw-ci@100.84.251.51 work=/var/lib/aw-ci/agent-workspace
       database_base=postgres://aw_test@127.0.0.1:55433
-      # Each parallel rustc compiling the server's tests can take about 2 GB,
-      # so more than 4 jobs overrun the memory cap.
+      # Compiling the server's library or its unit tests takes about 5 GB
+      # (checks.sh builds them one after the other under a cap), so more than
+      # 4 jobs overrun the memory cap.
       memory_max=8G cpu_weight=20 jobs=4 probe=yes
       # Playwright's own Chromium builds don't run on NixOS; the system Chrome does.
       browser=/run/current-system/sw/bin/google-chrome-stable
