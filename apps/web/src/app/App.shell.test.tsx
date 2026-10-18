@@ -49,7 +49,7 @@ describe('App shell and Project navigation', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(searchButton).toHaveFocus())
 
-    const projectsButton = screen.getByRole('button', { name: 'Agent Workspace: open navigation' })
+    const projectsButton = screen.getByRole('button', { name: 'Home: open navigation' })
     fireEvent.click(projectsButton)
     expect(screen.getByRole('navigation', { name: 'Projects' })).toHaveAttribute(
       'data-mobile-open',
@@ -157,7 +157,7 @@ describe('App shell and Project navigation', () => {
       `/projects/${projectAId}/threads/${threadId}`,
     )
 
-    fireEvent.click(screen.getByRole('link', { name: 'Home' }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Projects' })).getByRole('link', { name: /^Home/ }))
     fireEvent.click(
       await within(screen.getByRole('navigation', { name: 'Projects' })).findByRole('link', {
         name: 'Beta Project',
@@ -168,7 +168,7 @@ describe('App shell and Project navigation', () => {
     ).toBeVisible()
     expect(window.location.pathname).toBe(`/projects/${projectBId}`)
 
-    fireEvent.click(screen.getByRole('link', { name: 'Home' }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Projects' })).getByRole('link', { name: /^Home/ }))
     fireEvent.click(
       await screen.findByRole('link', {
         name: 'Agent Workspace, 3 items need attention',

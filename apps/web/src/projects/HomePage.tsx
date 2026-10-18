@@ -73,7 +73,7 @@ export function HomePage() {
   ) : null
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-home">
         <PageHeader actions={createLink} title={`Welcome back, ${session.user.displayName}`}>
           {projects.isSuccess

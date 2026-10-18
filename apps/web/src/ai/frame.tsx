@@ -6,6 +6,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
+import { WorkTabs } from '../shell/ProjectTabs'
 import { PageTabs } from '../ui'
 import { useProjectAi } from './hooks'
 import { planningHref, type PlanningTab } from './links'
@@ -48,6 +49,7 @@ export function PlanningFrame({
   return (
     <AppShell project={project.data} user={session.user}>
       <div className={`aw-page ${wide ? 'aw-page--full' : 'aw-page--wide'} aw-ai-page`}>
+        <WorkTabs current="planning" projectId={projectId} />
         <PageTabs
           current={tab}
           label="Planning"

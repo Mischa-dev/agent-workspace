@@ -6,6 +6,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
+import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, Dialog, EmptyState, ErrorState, MessageSkeleton, PageHeader, SegmentedControl, TextArea, TextField } from '../ui'
 import { formatDateLabel } from '../ui/pickers'
 import { workItemsHref } from './links'
@@ -67,6 +68,7 @@ export function MilestonesPage() {
   return (
     <AppShell project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-milestones">
+        <WorkTabs current="milestones" projectId={project.data.id} />
         <PageHeader
           actions={
             readOnly ? null : (

@@ -1,7 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { SessionUser } from '../auth/session'
-import { DirectSidebar } from '../direct/DirectSidebar'
 import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { syncThemeColor } from '../theme/themeColor'
@@ -24,6 +23,8 @@ const drawerFocusableSelector = [
 ].join(', ')
 
 const PullToRefresh = lazy(() => loadShellLazy().then((module) => ({ default: module.PullToRefresh })))
+const HomeSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.HomeSidebar })))
+const DirectSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.DirectSidebar })))
 
 /** A home-screen app on a touch screen, where there's no reload button. */
 function isInstalledTouchApp() {
@@ -50,6 +51,7 @@ export function AppShell({
   context,
   contextKey,
   direct = false,
+  home = false,
   mainClassName,
   onContextDismiss,
   project = null,
@@ -67,6 +69,8 @@ export function AppShell({
   contextKey?: string
   /** Show the Messages sidebar (DMs and groups) instead of a Project's. */
   direct?: boolean
+  /** Show the Home sidebar (Inbox, My work, Later, Runs, Whiteboards). */
+  home?: boolean
   mainClassName?: string
   /**
    * Called when the person closes the details drawer on a narrow screen, so the
@@ -108,7 +112,7 @@ export function AppShell({
     }
   }
   const realtime = useOptionalRealtime()
-  const hasSidebar = Boolean(project) || direct
+  const hasSidebar = Boolean(project) || direct || home
 
   const closeDrawers = useCallback(() => {
     setNavOpen(false)
@@ -267,8 +271,15 @@ export function AppShell({
             selectedChannelId={selectedChannelId}
             thread={thread}
           />
-        ) : direct ? (
-          <DirectSidebar mobileOpen={navOpen} onNavigate={closeDrawers} />
+        ) : direct || home ? (
+          // These load just after the first paint; the empty column holds the layout still.
+          <Suspense fallback={<div className="aw-sidebar" />}>
+            {direct ? (
+              <DirectSidebar mobileOpen={navOpen} onNavigate={closeDrawers} />
+            ) : (
+              <HomeSidebar mobileOpen={navOpen} onNavigate={closeDrawers} />
+            )}
+          </Suspense>
         ) : null}
         <main
           className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
@@ -286,7 +297,7 @@ export function AppShell({
           ) : null}
           {conversationLayout ? null : (
             <div className="aw-mobilebar">
-              <MenuButton label={project ? project.name : direct ? 'Messages' : 'Agent Workspace'} />
+              <MenuButton label={project ? project.name : direct ? 'Messages' : home ? 'Home' : 'Agent Workspace'} />
             </div>
           )}
           {realtime?.connection === 'retrying' && (

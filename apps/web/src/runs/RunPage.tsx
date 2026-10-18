@@ -41,7 +41,7 @@ export function RunPage() {
   const notFound = run.isError && isApiError(run.error) && run.error.status === 404
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-runs">
         <Link className="aw-runs__back" to="/runs">
           All runs

@@ -92,7 +92,7 @@ export function LaterPage() {
   const failed = tab === 'scheduled' ? scheduled.isError : saved.isError
 
   return (
-    <AppShell mainClassName="aw-main--page" user={session.user}>
+    <AppShell home mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-later">
         <PageHeader
           actions={

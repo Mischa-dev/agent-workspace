@@ -7,6 +7,7 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
+import { WorkTabs } from '../shell/ProjectTabs'
 import { Banner, Button, ErrorState, MessageSkeleton, PageHeader, SegmentedControl } from '../ui'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
@@ -156,6 +157,7 @@ export function WorkItemsPage() {
     <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-workpage">
         <NavigationSyncAlert {...navigationSync} />
+        <WorkTabs current="items" projectId={projectId} />
         <PageHeader actions={headerActions} icon="work" title="Work items">
           Everything that needs doing in {project.data.name}.
         </PageHeader>

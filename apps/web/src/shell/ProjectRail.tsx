@@ -11,6 +11,7 @@ import type { Project } from '../projects/types'
 import { Avatar, Badge, Icon, Menu, Tooltip, swatchFor, type IconName } from '../ui'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { openCommandMenu, useCommandState } from './commandStore'
+import { inHomeSpace, inboxUnreadCount } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
 
 // Loaded after the first paint: whether you've paused notifications.
@@ -79,7 +80,10 @@ function UtilityTile({
   )
 }
 
-/** The far-left column: Home, Messages, each Project, and the account. */
+/**
+ * The far-left column: Home, Messages, each Project, and the account. Home's
+ * own pages (Inbox, My work, Later...) live in its sidebar, so Projects get the room.
+ */
 export function ProjectRail({
   currentProjectId,
   mobileOpen,
@@ -91,7 +95,7 @@ export function ProjectRail({
   mobileOpen: boolean
   onNavigate: () => void
   /**
-   * Called instead of onNavigate when a Project or Messages is chosen. On phones
+   * Called instead of onNavigate when Home, Messages or a Project is chosen. On phones
    * the drawer stays open so its sidebar can show that space's channels.
    */
   onSpaceSelected?: () => void
@@ -110,8 +114,7 @@ export function ProjectRail({
   const commandMenuOpen = useCommandState().open === 'commands'
   const [status, setStatus] = useState<string | null>(null)
   const projects = (projectsQuery.data?.projects ?? []).filter((project) => !project.archivedAt)
-  // Every notification belongs to a project, so the inbox's unread count is the sum.
-  const inboxUnread = (projectsQuery.data?.projects ?? []).reduce((sum, project) => sum + project.attentionCount, 0)
+  const inboxUnread = inboxUnreadCount(projectsQuery.data?.projects)
   const pinned = projects.filter((project) => project.navigation.pinned)
   const recent = projects
     .filter((project) => !project.navigation.pinned)
@@ -165,24 +168,13 @@ export function ProjectRail({
   return (
     <>
       <nav aria-label="Projects" className="aw-rail" data-mobile-open={mobileOpen} data-region="rail" id="project-rail">
-        <UtilityTile active={location.pathname === '/home'} icon="home" label="Home" onClick={onNavigate} to="/home" />
         <UtilityTile
-          active={location.pathname === '/inbox'}
+          active={inHomeSpace(location.pathname)}
           badge={inboxUnread}
-          icon="inbox"
-          label="Inbox"
-          onClick={onNavigate}
-          to="/inbox"
-        />
-        <UtilityTile active={location.pathname === '/my-work'} icon="checklist" label="My work" onClick={onNavigate} to="/my-work" />
-        <UtilityTile active={location.pathname === '/later'} icon="bookmark" label="Later" onClick={onNavigate} to="/later" />
-        <UtilityTile active={location.pathname.startsWith('/runs')} icon="activity" label="Runs" onClick={onNavigate} to="/runs" />
-        <UtilityTile
-          active={location.pathname.startsWith('/whiteboards')}
-          icon="whiteboard"
-          label="Whiteboards"
-          onClick={onNavigate}
-          to="/whiteboards"
+          icon="home"
+          label="Home"
+          onClick={onSpaceSelected}
+          to="/home"
         />
         <UtilityTile
           active={inMessages}
