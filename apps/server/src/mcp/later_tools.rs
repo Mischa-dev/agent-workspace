@@ -260,6 +260,7 @@ pub(super) async fn later_save(
             } else {
                 Some(principal.project_id)
             },
+            connection_id: principal.external_agent_connection_id,
         };
         match later::save(
             state,

@@ -934,11 +934,12 @@ async fn draft_job(context: JobContext) -> Result<(), JobError> {
 
 async fn draft_from_text(state: &AppState, import: &Drafting) -> Result<Draft, AiError> {
     // The person who asked must still see the project.
-    let allowed = sqlx::query_scalar::<_, bool>("SELECT actor_can_access_project($1, NULL, $2)")
-        .bind(import.created_by_actor_id)
-        .bind(import.project_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let allowed = super::detect::actor_can_access(
+        &state.pool,
+        import.created_by_actor_id,
+        import.project_id,
+    )
+    .await?;
     if !allowed {
         return Err(AiError::NotConfigured(
             "The person who asked can no longer see this project.".to_owned(),

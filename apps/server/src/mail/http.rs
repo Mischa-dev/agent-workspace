@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -204,6 +205,20 @@ async fn save_http(
     let config =
         serde_json::to_value(&request.smtp).map_err(|_| AppError::Internal("mail settings"))?;
     let mut transaction = state.pool.begin().await?;
+    let previous = sqlx::query_scalar::<_, Value>(
+        "SELECT provider_config FROM workspace_mail_settings WHERE organization_id = $1 FOR UPDATE",
+    )
+    .bind(organization_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    // The stored password only ever goes to the server it was typed for:
+    // pointing the settings at another host, port or account without
+    // typing it again forgets it.
+    let moved = previous.is_some_and(|previous| {
+        ["host", "port", "username"]
+            .iter()
+            .any(|field| previous.get(field) != config.get(field))
+    });
     sqlx::query(
         r#"
         INSERT INTO workspace_mail_settings (
@@ -243,7 +258,7 @@ async fn save_http(
             },
         )
         .await?;
-    } else if request.clear_password
+    } else if (request.clear_password || moved)
         && let Some(id) = secrets::find(&mut *transaction, owner, SMTP_PASSWORD_SECRET).await?
     {
         secrets::delete(&mut *transaction, id).await?;
