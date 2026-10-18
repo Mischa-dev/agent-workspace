@@ -1,6 +1,7 @@
 /**
- * The app's keyboard shortcuts. One list drives both the key handling and the
- * shortcut sheet, so the sheet can't drift from what the keys do.
+ * The app's keyboard shortcuts: turning key presses into actions. Their
+ * labels live in shortcutSheet.ts, loaded with the command menu; a test
+ * presses every key the sheet shows, so the two can't drift apart.
  */
 
 export type ShortcutAction =
@@ -8,6 +9,11 @@ export type ShortcutAction =
   | 'shortcut-sheet'
   | 'create-task'
   | 'search'
+  | 'mark-all-read'
+  | 'previous-conversation'
+  | 'next-conversation'
+  | 'previous-unread'
+  | 'next-unread'
   | 'go-home'
   | 'go-messages'
   | 'go-inbox'
@@ -20,33 +26,20 @@ export type ShortcutAction =
   | 'go-settings'
   | 'go-appearance'
 
-export type Shortcut = {
-  action: ShortcutAction
-  /** The keys as shown: ["⌘", "K"], or ["G", "I"] for a sequence. */
-  keys: string[]
-  label: string
-  group: 'General' | 'Go to'
-  /** Needs a Project open. */
-  inProject?: boolean
+/** G then a letter. The shortcut sheet (shortcutSheet.ts) lists these with labels. */
+const G_SEQUENCES: Record<string, ShortcutAction> = {
+  h: 'go-home',
+  i: 'go-inbox',
+  w: 'go-my-work',
+  l: 'go-later',
+  m: 'go-messages',
+  t: 'go-tasks',
+  b: 'go-board',
+  p: 'go-pages',
+  d: 'go-decisions',
+  s: 'go-settings',
+  a: 'go-appearance',
 }
-
-export const SHORTCUTS: Shortcut[] = [
-  { action: 'command-menu', keys: ['⌘', 'K'], label: 'Search and run commands', group: 'General' },
-  { action: 'shortcut-sheet', keys: ['?'], label: 'Show keyboard shortcuts', group: 'General' },
-  { action: 'create-task', keys: ['C'], label: 'Create a task', group: 'General' },
-  { action: 'search', keys: ['/'], label: 'Search messages and pages', group: 'General' },
-  { action: 'go-home', keys: ['G', 'H'], label: 'Home', group: 'Go to' },
-  { action: 'go-inbox', keys: ['G', 'I'], label: 'Inbox', group: 'Go to' },
-  { action: 'go-my-work', keys: ['G', 'W'], label: 'My work', group: 'Go to' },
-  { action: 'go-later', keys: ['G', 'L'], label: 'Later', group: 'Go to' },
-  { action: 'go-messages', keys: ['G', 'M'], label: 'Messages', group: 'Go to' },
-  { action: 'go-tasks', keys: ['G', 'T'], label: 'Tasks', group: 'Go to', inProject: true },
-  { action: 'go-board', keys: ['G', 'B'], label: 'Board', group: 'Go to', inProject: true },
-  { action: 'go-pages', keys: ['G', 'P'], label: 'Pages', group: 'Go to', inProject: true },
-  { action: 'go-decisions', keys: ['G', 'D'], label: 'Decisions', group: 'Go to', inProject: true },
-  { action: 'go-settings', keys: ['G', 'S'], label: 'Project settings', group: 'Go to', inProject: true },
-  { action: 'go-appearance', keys: ['G', 'A'], label: 'Appearance', group: 'Go to' },
-]
 
 const SEQUENCE_TIMEOUT_MS = 1_200
 
@@ -60,9 +53,15 @@ export function isTypingTarget(target: EventTarget | null) {
   return Boolean(target.closest('[role="dialog"], [role="menu"], [role="listbox"]'))
 }
 
+/** A menu, listbox or dialog that has its own keys. */
+function inOwnKeysRegion(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest('[role="dialog"], [role="menu"], [role="listbox"]'))
+}
+
 /**
  * Turns key presses into shortcut actions. Single letters only count outside
- * text fields; ⌘K works everywhere. Call `press` for each keydown.
+ * text fields; ⌘K works everywhere, and the conversation keys (⌥↑, ⇧Esc)
+ * work in the composer too, as in Slack. Call `press` for each keydown.
  */
 export function createShortcutMatcher(now: () => number = Date.now) {
   let pending: { key: string; at: number } | null = null
@@ -74,6 +73,18 @@ export function createShortcutMatcher(now: () => number = Date.now) {
       pending = null
       return 'command-menu'
     }
+    if (!event.metaKey && !event.ctrlKey && !inOwnKeysRegion(event.target)) {
+      if (event.altKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
+        pending = null
+        const up = key === 'ArrowUp'
+        if (event.shiftKey) return up ? 'previous-unread' : 'next-unread'
+        return up ? 'previous-conversation' : 'next-conversation'
+      }
+      if (!event.altKey && event.shiftKey && key === 'Escape') {
+        pending = null
+        return 'mark-all-read'
+      }
+    }
     if (event.metaKey || event.ctrlKey || event.altKey) return null
     if (isTypingTarget(event.target)) {
       pending = null
@@ -83,8 +94,8 @@ export function createShortcutMatcher(now: () => number = Date.now) {
     if (pending && now() - pending.at <= SEQUENCE_TIMEOUT_MS) {
       const first = pending.key
       pending = null
-      const match = SHORTCUTS.find((shortcut) => shortcut.keys.length === 2 && shortcut.keys[0].toLowerCase() === first && shortcut.keys[1].toLowerCase() === key)
-      if (match) return match.action
+      const match = first === 'g' ? G_SEQUENCES[key] : undefined
+      if (match) return match
     }
     pending = null
 

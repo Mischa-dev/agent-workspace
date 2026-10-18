@@ -12,7 +12,7 @@ import type { CommandItem } from '../ui'
 export type PageCommand = Omit<CommandItem, 'group'> & { group?: string }
 
 type State = {
-  open: 'commands' | 'shortcuts' | null
+  open: 'commands' | 'shortcuts' | 'mark-all-read' | null
   /** The text the menu opens with, such as "Create task". */
   initialQuery: string
   page: Record<string, PageCommand[]>
@@ -41,6 +41,11 @@ export function openCommandMenu(initialQuery = '') {
 
 export function openShortcutSheet() {
   set({ open: 'shortcuts', initialQuery: '' })
+}
+
+/** Ask before marking every conversation read. */
+export function openMarkAllRead() {
+  set({ open: 'mark-all-read', initialQuery: '' })
 }
 
 export function closeCommandMenu() {

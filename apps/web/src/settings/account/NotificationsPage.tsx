@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
+import { pauseChoices, pausedUntilLabel, useNotificationPause } from '../../shell/notificationPause'
 import {
   Banner,
   Button,
@@ -293,9 +294,10 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
     save.mutate()
   }
   return (
-    <Section description="Pushes wait until quiet hours end. The inbox still collects everything." id="quiet-heading" title="Quiet hours">
+    <Section description="Pause now, or hold pushes every night. Pushes wait until the pause or quiet hours end; the inbox still collects everything." id="quiet-heading" title="Pause and quiet hours">
       <form className="aw-card aw-formcard aw-form aw-usage__form" onSubmit={submit}>
         {save.isError ? <Banner tone="danger">{describeError(save.error).message}</Banner> : null}
+        <PauseControls />
         <Switch checked={enabled} label="Hold pushes during quiet hours" onChange={setEnabled} />
         <div className="aw-form__grid">
           <TextField disabled={!enabled} error={startMinute == null ? 'Use a time such as 22:00.' : null} label="From" onChange={(event) => setStart(event.target.value)} type="time" value={start} />
@@ -309,6 +311,37 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
         </div>
       </form>
     </Section>
+  )
+}
+
+/** Pause by hand, the same as from your avatar menu. */
+function PauseControls() {
+  const pause = useNotificationPause()
+  const failed = (reason: unknown) => toastError('Couldn’t change notifications.', reason)
+  if (!pause.available) return null
+  if (pause.until) {
+    return (
+      <Banner
+        action={
+          <Button onClick={() => void pause.resume().catch(failed)} size="sm">
+            Resume
+          </Button>
+        }
+        tone="info"
+      >
+        Notifications are paused until {pausedUntilLabel(pause.until, new Date())}. Pushes wait until then and emails aren’t sent.
+      </Banner>
+    )
+  }
+  return (
+    <div className="aw-form__actions" role="group" aria-label="Pause notifications">
+      {pauseChoices(new Date()).map((choice) => (
+        <Button icon="moon" key={choice.id} onClick={() => void pause.pause(choice.until).catch(failed)} size="sm">
+          Pause {choice.label.charAt(0).toLowerCase()}
+          {choice.label.slice(1)}
+        </Button>
+      ))}
+    </div>
   )
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { SessionUser } from '../auth/session'
 import { DirectSidebar } from '../direct/DirectSidebar'
@@ -6,6 +6,7 @@ import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { syncThemeColor } from '../theme/themeColor'
 import { Banner, Icon } from '../ui'
+import { loadShellLazy } from './loadShellLazy'
 import { MenuButton } from './MenuButton'
 import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useMobileNavigation } from './mobileNavigation'
 import { ProjectRail } from './ProjectRail'
@@ -21,6 +22,15 @@ const drawerFocusableSelector = [
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ')
+
+const PullToRefresh = lazy(() => loadShellLazy().then((module) => ({ default: module.PullToRefresh })))
+
+/** A home-screen app on a touch screen, where there's no reload button. */
+function isInstalledTouchApp() {
+  if (typeof window.matchMedia !== 'function') return false
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
+  return standalone && window.matchMedia('(pointer: coarse)').matches
+}
 
 function setInert(element: HTMLElement | null, inert: boolean) {
   if (inert) {
@@ -76,6 +86,7 @@ export function AppShell({
   // A panel closed from inside (a thread's close button) closes its drawer too.
   const contextOpen = contextOpenState && Boolean(context)
   const shellRef = useRef<HTMLDivElement>(null)
+  const mainRef = useRef<HTMLElement>(null)
   const navTriggerRef = useRef<HTMLElement | null>(null)
   const contextCloseButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -83,6 +94,7 @@ export function AppShell({
   const anyDrawerOpen = navOpen || contextOpen
   // Conversations bring their own header, which carries the menu button on phones.
   const conversationLayout = mainClassName === 'aw-main--conversation'
+  const [installedTouchApp] = useState(isInstalledTouchApp)
 
   // When the page asks to show something new in the panel (a thread), open
   // the drawer on narrow screens. Adjusting state while rendering, not in an
@@ -263,8 +275,15 @@ export function AppShell({
           data-region="content"
           id="main-workspace"
           inert={anyDrawerOpen}
+          ref={mainRef}
           tabIndex={-1}
         >
+          {installedTouchApp ? (
+            <Suspense fallback={null}>
+              {/* Conversations scroll up for older messages, so pulling there means that. */}
+              <PullToRefresh enabled={!conversationLayout && !anyDrawerOpen} target={mainRef} />
+            </Suspense>
+          ) : null}
           {conversationLayout ? null : (
             <div className="aw-mobilebar">
               <MenuButton label={project ? project.name : direct ? 'Messages' : 'Agent Workspace'} />
