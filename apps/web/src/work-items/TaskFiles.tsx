@@ -65,6 +65,7 @@ export function TaskFiles({ disabled, item }: { disabled: boolean; item: WorkIte
               Add files
             </Button>
             <input
+              aria-label="Choose files to attach"
               className="visually-hidden"
               multiple
               onChange={(event) => {

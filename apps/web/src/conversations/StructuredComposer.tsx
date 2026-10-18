@@ -698,6 +698,7 @@ function ComposerBox({
               <>
                 <IconButton disabled={disabled || busy} icon={Paperclip} label="Attach files" onClick={() => fileInputRef.current?.click()} size="sm" />
                 <input
+                  aria-label="Choose files to attach"
                   className="visually-hidden"
                   multiple
                   onChange={(event) => {

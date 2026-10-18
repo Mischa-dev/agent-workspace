@@ -182,6 +182,7 @@ export function CreateWorkItemDialog({
           Attach files
         </Button>
         <input
+          aria-label="Choose files to attach"
           className="visually-hidden"
           multiple
           onChange={(event) => {
