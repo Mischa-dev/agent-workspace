@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import {
@@ -49,10 +49,13 @@ export function useWorkItemWorkflow(projectId: string) {
   })
 }
 
+/** A task's timeline, newest first, a page at a time; `fetchNextPage` reaches older entries. */
 export function useWorkItemTimeline(projectId: string, workItemId: string) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: queryKeys.workItemTimeline(projectId, workItemId),
-    queryFn: () => getWorkItemTimeline(projectId, workItemId),
+    queryFn: ({ pageParam }) => getWorkItemTimeline(projectId, workItemId, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
     enabled: Boolean(projectId && workItemId),
   })
 }
@@ -141,6 +144,12 @@ function useWorkItemChildMutation<TInput, TResult>(
       void queryClient.invalidateQueries({
         queryKey: queryKeys.workItemTimeline(scoped.projectId, scoped.workItemId),
       })
+    },
+    // A failed change (often a stale version) refetches the task, so the
+    // "try again" the error offers runs against what's there now.
+    onError: (_error, input) => {
+      const scoped = input as { projectId: string; workItemId: string }
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workItem(scoped.projectId, scoped.workItemId) })
     },
   })
 }

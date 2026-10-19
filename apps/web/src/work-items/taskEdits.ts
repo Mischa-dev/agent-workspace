@@ -1,6 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
+import { describeError } from '../ui'
 import { normalizeWorkItem, updateWorkItem } from './api'
 import type { PickResult } from './FieldPicker'
 import { bulkUpdateWorkItems } from './planningApi'
@@ -72,7 +73,7 @@ export function editErrorMessage(error: unknown, subject = 'That change'): strin
     return `Nothing was changed. ${first}${problems.length > 3 ? ` And ${problems.length - 3} more.` : ''}`
   }
   if (isApiError(error)) return error.message || `${subject} didn’t save. Try again.`
-  return `${subject} didn’t save. Check your connection and try again.`
+  return `${subject} didn’t save. ${describeError(error).message}`
 }
 
 export type EditTarget = { id: string; projectId: string; version: number; key: string }

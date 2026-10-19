@@ -16,7 +16,7 @@ test('draws on a whiteboard and the other tab sees it live', async ({ browser, p
   await page.getByRole('button', { name: 'New whiteboard' }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New whiteboard' })
   await dialog.getByLabel('Title').fill(title)
-  await dialog.getByRole('button', { name: 'Create board' }).click()
+  await dialog.getByRole('button', { name: 'Create whiteboard' }).click()
   await expect(page).toHaveURL(/\/whiteboards\/[^/]+$/)
   const boardId = page.url().split('/').at(-1) ?? ''
   await expect(canvas(page)).toBeVisible()

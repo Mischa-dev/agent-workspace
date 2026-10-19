@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
 import { applyMove, dropAnchor, fieldMove, lanesFor, orderedIndex, runOptimisticMove } from './boardModel'
+import { formatDateLabel } from '../ui/dateModel'
 import { changeSentence, formatChanges } from './historyFormat'
 import type { WorkItemBoardResponse, WorkItemCard, WorkItemWorkflow } from './types'
 import { addStatus, draftFromWorkflow, draftProblem, removeStatus, setAllowAny, togglePair, workflowUpdate } from './workflowModel'
@@ -58,7 +59,7 @@ describe('history changes', () => {
       },
       'hours',
     ).map(changeSentence)
-    expect(lines).toEqual(['Priority High → Urgent', 'Assignee Ada → Unassigned', 'Parent No parent → AW-7', 'Due date No date → Nov 3, 2026', 'Estimate 1 hour → 3 hours'])
+    expect(lines).toEqual(['Priority High → Urgent', 'Assignee Ada → Unassigned', 'Parent No parent → AW-7', `Due date No date → ${formatDateLabel('2026-11-03')}`, 'Estimate 1 hour → 3 hours'])
   })
 
   it('turns a description diff into added, removed and unchanged lines', () => {

@@ -107,7 +107,7 @@ function FieldNote({ error, hint, id }: { error?: ReactNode; hint?: ReactNode; i
   return (
     <p className="aw-field__note" id={`${id}-note`} role={error ? 'alert' : undefined}>
       {error ? <Icon name="circle-alert" size={14} /> : null}
-      {error || hint}
+      <span>{error || hint}</span>
     </p>
   )
 }

@@ -38,13 +38,13 @@ export function BulkBar({
   if (count === 0) return null
   const tooMany = count > MAX_BULK
   return (
-    <div aria-label="Change selected work items" className="aw-bulkbar" role="toolbar">
+    <div aria-label="Change selected tasks" className="aw-bulkbar" role="toolbar">
       <span aria-live="polite" className="aw-bulkbar__count">
         {count} selected
       </span>
       <div className="aw-bulkbar__actions">
         {tooMany ? (
-          <span className="aw-bulkbar__count">Bulk changes take up to {MAX_BULK} work items at a time.</span>
+          <span className="aw-bulkbar__count">Bulk changes take up to {MAX_BULK} tasks at a time.</span>
         ) : archived ? (
           <Button busy={busy} icon="archive" onClick={onRestore} size="sm" variant="ghost">
             Restore

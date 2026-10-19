@@ -269,7 +269,8 @@ beforeEach(() => {
     isSuccess: true,
   } as unknown as ReturnType<typeof useTaskFiles>)
   vi.mocked(useWorkItemTimeline).mockReturnValue({
-    data: [],
+    data: { pages: [{ entries: [], nextCursor: null }], pageParams: [null] },
+    hasNextPage: false,
     isPending: false,
     isError: false,
     isSuccess: true,
@@ -339,11 +340,11 @@ describe('Work Items list', () => {
     } as unknown as ReturnType<typeof useCreateWorkItem>)
     renderPage()
 
-    fireEvent.click(screen.getByRole('button', { name: 'New work item' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'First durable task' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create work item' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create task' }))
 
     expect(mutate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -357,10 +358,10 @@ describe('Work Items list', () => {
 
   it('keeps the creation dialog modal to keyboard users and restores focus', async () => {
     renderPage()
-    const trigger = screen.getByRole('button', { name: 'New work item' })
+    const trigger = screen.getByRole('button', { name: 'New task' })
     fireEvent.click(trigger)
 
-    const dialog = screen.getByRole('dialog', { name: 'New work item' })
+    const dialog = screen.getByRole('dialog', { name: 'New task' })
     const title = screen.getByLabelText('Title')
     const close = screen.getByRole('button', { name: 'Close' })
     const cancel = screen.getByRole('button', { name: 'Cancel' })
@@ -429,13 +430,13 @@ describe('Work Item detail', () => {
       'Use the Agent Workspace MCP server.',
       `Project ID: ${projectId}`,
       `Project URL: http://127.0.0.1:3100/projects/${projectId}`,
-      `Work Item ID: ${workItemId}`,
-      `Work Item URL: http://127.0.0.1:3100/projects/${projectId}/work-items/${workItemId}`,
-      'Work Item key: AW-1',
-      'Load the Work Item and related Project instructions through MCP before changing anything.',
-      'Work in the repository matched by this Git origin. Set the Work Item to In Progress only when meaningful work begins.',
+      `Task ID: ${workItemId}`,
+      `Task URL: http://127.0.0.1:3100/projects/${projectId}/work-items/${workItemId}`,
+      'Task key: AW-1',
+      'Load the task and its project instructions through MCP before changing anything.',
+      'Work in the repository matched by this Git origin. Set the task to In Progress only when meaningful work begins.',
       'Post only useful progress or blocker updates. Respect the current version; refetch and make an informed retry after a version conflict.',
-      'When complete, link the canonical pull request through MCP and mark the Work Item ready for review.',
+      'When complete, link the canonical pull request through MCP and mark the task ready for review.',
     ].join('\n')
     expect(result.href).toBe(
       `codex://new?originUrl=${encodeURIComponent(ready.linkedRepositories[0].cloneUrl)}&prompt=${encodeURIComponent(prompt)}`,
@@ -455,7 +456,7 @@ describe('Work Item detail', () => {
     ['untrusted', [{ id: 'repository-a', trusted: false, available: false, archivedAt: null, cloneUrl: 'https://github.com/a/a.git' }], 'must be trusted'],
     ['archived', [{ id: 'repository-a', trusted: true, available: false, archivedAt: '2026-07-31T00:00:00Z', cloneUrl: 'https://github.com/a/a.git' }], 'Restore the linked repository'],
     ['unsupported', [{ id: 'repository-a', trusted: true, available: true, archivedAt: null, cloneUrl: 'ssh://git@github.com/a/a.git' }], 'supported canonical Git origin URL'],
-  ])('disables Open in Codex for a %s repository selection with an accessible reason', (_case, repositories, reason) => {
+  ])('hides Open locally for a %s repository selection, and says why in the model', (_case, repositories, reason) => {
     const linkedRepositories = repositories.map((repository) => ({
       owner: 'owner',
       name: repository.id,
@@ -477,9 +478,8 @@ describe('Work Item detail', () => {
       </QueryClientProvider>,
     )
 
-    const button = screen.getByRole('button', { name: 'Open in Codex' })
-    expect(button).toBeDisabled()
-    expect(screen.getByText(new RegExp(reason))).toHaveAttribute('id', button.getAttribute('aria-describedby'))
+    expect(screen.queryByRole('link', { name: 'Open locally' })).toBeNull()
+    expect(buildOpenInCodexLink({ ...workItem, linkedRepositories } as WorkItem, 'http://127.0.0.1:3100').reason).toContain(reason)
   })
 
   it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', async () => {
@@ -561,7 +561,7 @@ describe('Work Item detail', () => {
       }),
       expect.any(Object),
     )
-    expect(screen.getByText('A newer version exists.')).toBeVisible()
-    expect(screen.getByText(/your change to title wasn’t saved/)).toBeVisible()
+    expect(screen.getByText('Someone else changed this task')).toBeVisible()
+    expect(screen.getByText(/Your change to the title wasn’t saved/)).toBeVisible()
   })
 })

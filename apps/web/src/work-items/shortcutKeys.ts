@@ -11,7 +11,7 @@ export const LIST_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
   { keys: ['M'], label: 'Set milestone' },
   { keys: ['Enter'], label: 'Open in the side panel' },
   { keys: ['Esc'], label: 'Close the panel, then clear the selection' },
-  { keys: ['?'], label: 'Show these shortcuts' },
+  { keys: ['?'], label: 'All keyboard shortcuts' },
 ]
 
 export const BOARD_SHORTCUTS: Array<{ keys: string[]; label: string }> = [

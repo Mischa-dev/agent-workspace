@@ -1,6 +1,7 @@
 /* My work */
 
 .aw-mywork__list {
+  min-width: 0;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -9,12 +10,25 @@
 }
 
 .aw-mywork__row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
   min-height: 40px;
   padding: var(--space-1) var(--space-3);
   border-top: 1px solid var(--content-border);
+}
+
+.aw-mywork__row:hover {
+  background: var(--content-hover);
+}
+
+/* The whole row opens the task. */
+.aw-mywork__title::after {
+  position: absolute;
+  inset: 0;
+  content: '';
 }
 
 .aw-mywork__row:first-child {
@@ -31,8 +45,13 @@
   white-space: nowrap;
 }
 
-.aw-mywork__title:hover {
-  text-decoration: underline;
+.aw-mywork__title:focus-visible {
+  outline: none;
+}
+
+.aw-mywork__title:focus-visible::after {
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
 }
 
 .aw-mywork__key,
@@ -44,6 +63,7 @@
 .aw-mywork__meta {
   display: flex;
   flex: none;
+  min-width: 0;
   align-items: center;
   gap: var(--space-2);
   color: var(--content-fg-muted);
@@ -137,9 +157,17 @@
 
 .aw-timeline__month {
   position: absolute;
-  top: var(--space-2);
-  padding-left: var(--space-1);
+  top: 0;
+  bottom: 0;
   border-left: 1px solid var(--content-border);
+}
+
+/* Sticks just past the row labels, so the month in view always has its name. */
+.aw-timeline__monthname {
+  position: sticky;
+  display: inline-block;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-2);
   color: var(--content-fg-muted);
   font: var(--t-small);
   white-space: nowrap;
@@ -205,16 +233,30 @@
   left: 0;
   z-index: 2;
   display: flex;
+  flex: none;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
+  box-sizing: border-box;
   height: 100%;
   overflow: hidden;
   padding: 0 var(--space-3);
   border-right: 1px solid var(--content-border);
   background: var(--content-bg);
   font: var(--t-small);
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The part of a label that gives way, with an ellipsis, so the key and date stay whole. */
+.aw-timeline__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aw-timeline__key,
+.aw-timeline__date {
+  flex: none;
 }
 
 .aw-timeline__row--milestone .aw-timeline__label,
@@ -223,7 +265,6 @@
 }
 
 .aw-timeline__date {
-  margin-left: auto;
   color: var(--content-fg-muted);
   font: var(--t-small);
 }
@@ -239,7 +280,8 @@
 .aw-timeline__bar {
   top: 7px;
   height: 20px;
-  overflow: hidden;
+  /* clip, not hidden: hidden would make the bar a scroller and stop its text sticking. */
+  overflow: clip;
   padding: 0 var(--space-1);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
@@ -272,7 +314,10 @@
 }
 
 .aw-timeline__bartext {
-  display: block;
+  position: sticky;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

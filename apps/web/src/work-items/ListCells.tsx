@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-import { Avatar, Icon, actorKind } from '../ui'
+import { Avatar, Icon, actorKind, countLabel } from '../ui'
 import { formatDateLabel } from '../ui/pickers'
 import type { PickerField } from './FieldPicker'
 import type { ListRow } from './listRows'
@@ -16,14 +16,18 @@ export function TaskBadges({ card, compact = false }: { card: WorkItemCard; comp
   return (
     <span className="aw-taskmeta">
       {blocked ? (
-        <span className="aw-taskmeta__item is-blocked" title={card.blockedReason ?? `${card.openBlockerCount} open blocker${card.openBlockerCount === 1 ? '' : 's'}`}>
+        <span className="aw-taskmeta__item is-blocked" title={card.blockedReason ?? `Waiting on ${countLabel(card.openBlockerCount, 'open task')}`}>
           <TaskGlyph name="blocked" />
-          <span className="aw-taskmeta__text">{card.blockedReason ? 'Blocked' : `Blocked by ${card.openBlockerCount}`}</span>
+          <span className="aw-taskmeta__text">{card.blockedReason || compact ? 'Blocked' : `Blocked by ${card.openBlockerCount}`}</span>
         </span>
       ) : null}
       {card.claimedBy ? (
-        <span className="aw-taskmeta__item is-claimed" title={`${card.claimedBy.displayName} is working on this`}>
-          <Icon name="bot" size={14} />
+        <span className={actorKind(card.claimedBy.kind) === 'person' ? 'aw-taskmeta__item' : 'aw-taskmeta__item is-claimed'} title={`${card.claimedBy.displayName} is working on this`}>
+          {actorKind(card.claimedBy.kind) === 'person' ? (
+            <Avatar kind="person" name={card.claimedBy.displayName} seed={card.claimedBy.id} size={14} />
+          ) : (
+            <Icon name="bot" size={14} />
+          )}
           <span className="visually-hidden">Claimed by {card.claimedBy.displayName}</span>
         </span>
       ) : null}
@@ -41,7 +45,7 @@ export function TaskBadges({ card, compact = false }: { card: WorkItemCard; comp
           <span className="aw-taskmeta__text aw-taskmeta__name">{card.milestone.name}</span>
         </span>
       ) : null}
-      <WorkItemLabels labels={card.labels} max={compact ? 2 : 2} />
+      <WorkItemLabels fit labels={card.labels} />
     </span>
   )
 }
@@ -49,10 +53,11 @@ export function TaskBadges({ card, compact = false }: { card: WorkItemCard; comp
 export function DueDate({ card }: { card: Pick<WorkItemCard, 'dueDate' | 'status'> }) {
   if (!card.dueDate) return null
   const overdue = isOverdue(card)
+  const full = formatDateLabel(card.dueDate, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
   return (
-    <span className={overdue ? 'aw-due is-overdue' : 'aw-due'} title={overdue ? 'Overdue' : 'Due'}>
+    <span className={overdue ? 'aw-due is-overdue' : 'aw-due'} title={overdue ? `Overdue since ${full}` : `Due ${full}`}>
       {overdue ? <span className="visually-hidden">Overdue, </span> : null}
-      {formatDateLabel(card.dueDate, { month: 'short', day: 'numeric' })}
+      {formatDateLabel(card.dueDate)}
     </span>
   )
 }

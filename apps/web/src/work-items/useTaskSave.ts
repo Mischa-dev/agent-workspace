@@ -16,7 +16,7 @@ export function problemFor(error: unknown, field: string): SaveProblem {
     return {
       field,
       conflict: true,
-      message: `Someone else changed this work item, so your change to ${field.toLocaleLowerCase()} wasn’t saved. It now shows the latest version; make the change again if it still applies.`,
+      message: `Your change to the ${field.toLocaleLowerCase()} wasn’t saved. The task now shows the latest version; make the change again if it still applies.`,
     }
   }
   if (isApiError(error) && error.code === 'dependency_cycle') {

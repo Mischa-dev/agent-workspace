@@ -2066,7 +2066,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Ask the project's AI to look for dependencies, blockers and duplicates across the project now (it reads what you can see; suggestions from things only you can see are shown to you alone), or with taskId to triage one task (labels, priority, type, parent, duplicates), or with taskId and criteria: true to draft acceptance criteria. Uses the AI provider set in AI and models settings, and counts toward the workspace's budget.",
+        description = "Ask the project's AI to look for dependencies, blockers and duplicates across the project now (it reads what you can see; suggestions from things only you can see are shown to you alone), or with taskId to triage one task (labels, priority, type, parent, duplicates), or with taskId and criteria: true to draft acceptance criteria. Uses the AI provider set in Models settings, and counts toward the workspace's budget.",
         annotations(
             title = "Run AI analysis",
             read_only_hint = false,

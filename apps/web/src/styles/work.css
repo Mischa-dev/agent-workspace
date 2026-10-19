@@ -528,6 +528,28 @@
   box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
+@media (max-width: 640px) {
+  .aw-workitem__title,
+  .aw-workitem__heading {
+    font-size: calc(22px * var(--text-scale));
+    line-height: calc(28px * var(--text-scale));
+  }
+}
+
+/* Touch screens force fields to 16px so iOS doesn't zoom on focus (base.css).
+   The title is already bigger than that, so it keeps its size and line height match. */
+@media (pointer: coarse) {
+  .aw-workitem__title {
+    font-size: calc(28px * var(--text-scale)) !important;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) {
+  .aw-workitem__title {
+    font-size: calc(22px * var(--text-scale)) !important;
+  }
+}
+
 .aw-workitem__desc .aw-field__control {
   margin: 0 -8px;
   padding: 6px 8px;
@@ -769,6 +791,14 @@
 .aw-links .aw-row {
   min-height: 48px;
   padding: 8px var(--space-3);
+}
+
+.aw-activity__older {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .aw-activity {

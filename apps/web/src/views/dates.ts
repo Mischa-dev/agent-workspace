@@ -1,3 +1,5 @@
+import { formatDateLabel } from '../ui/dateModel'
+
 /** Calendar days as YYYY-MM-DD, worked out in UTC so no time zone shifts a day. */
 
 const DAY_MS = 86_400_000
@@ -20,9 +22,7 @@ export function today() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-/** "Oct 20", with the year only when it isn't this year. */
+/** "Oct 20", with the year only when it isn't this year: the kit's date label. */
 export function dayLabel(iso: string) {
-  const date = new Date(dayNumber(iso) * DAY_MS)
-  const thisYear = new Date().getFullYear() === date.getUTCFullYear()
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC', ...(thisYear ? {} : { year: 'numeric' }) })
+  return formatDateLabel(iso) || iso
 }

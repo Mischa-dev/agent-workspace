@@ -585,6 +585,8 @@
 
 .aw-dialog__body {
   display: grid;
+  /* Rows take their content's height, so a scrolling body never squeezes a banner. */
+  grid-auto-rows: max-content;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-5);
   overflow: auto;
@@ -694,6 +696,7 @@
 
 /* Compact fields: toolbars, rows and inline forms. */
 .aw-field--inline .aw-field__control,
+.aw-field--compact .aw-field__control,
 .aw-worktools .aw-field__control,
 .aw-inline-add .aw-field__control {
   min-height: var(--size-control);
@@ -702,6 +705,8 @@
 
 .aw-field--inline .aw-field__control input,
 .aw-field--inline .aw-field__control select,
+.aw-field--compact .aw-field__control input,
+.aw-field--compact .aw-field__control select,
 .aw-worktools .aw-field__control input,
 .aw-worktools .aw-field__control select,
 .aw-inline-add .aw-field__control input,
@@ -711,24 +716,17 @@
 }
 
 .aw-field--inline .aw-field__control--select select,
+.aw-field--compact .aw-field__control--select select,
 .aw-worktools .aw-field__control--select select,
 .aw-inline-add .aw-field__control--select select {
   padding-right: var(--space-5);
 }
 
 .aw-field--inline .aw-field__control--select > .aw-icon,
+.aw-field--compact .aw-field__control--select > .aw-icon,
 .aw-worktools .aw-field__control--select > .aw-icon,
 .aw-inline-add .aw-field__control--select > .aw-icon {
   right: 10px;
-}
-
-.aw-field--compact .aw-field__control {
-  min-height: var(--size-control);
-}
-
-.aw-field--compact .aw-field__control input,
-.aw-field--compact .aw-field__control--select select {
-  height: calc(var(--size-control) - 2px);
 }
 
 .aw-field__note {
@@ -875,6 +873,22 @@
 
 .aw-banner__text strong {
   font-weight: 700;
+}
+
+/* On a phone the action drops under the text instead of squeezing it. */
+@media (max-width: 640px) {
+  .aw-banner {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+
+  .aw-banner__text {
+    flex-basis: calc(100% - 26px);
+  }
+
+  .aw-banner__text ~ * {
+    margin-left: 26px;
+  }
 }
 
 .aw-banner--info {

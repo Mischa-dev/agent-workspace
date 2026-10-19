@@ -5,29 +5,26 @@ import { useQuery } from '@tanstack/react-query'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { humanize } from '../projects/format'
 import { listRepositories } from '../repositories/api'
-import { Banner, Button, Icon, Row, RowList, SelectField } from '../ui'
+import { Banner, Button, Icon, Row, RowList, SelectField, describeError } from '../ui'
 import { useSetWorkItemPrimaryRepository, useSetWorkItemRepositoryLink, useSetWorkItemThreadLink } from './hooks'
 import type { WorkItem } from './types'
 
+const CHECKS: Record<string, string> = { success: 'checks passed', failure: 'checks failing', pending: 'checks running' }
+const REVIEW: Record<string, string> = { approved: 'approved', changes_requested: 'changes requested', pending: 'waiting for review' }
+const MERGE: Record<string, string> = { ready: 'ready to merge', blocked: 'can’t merge yet' }
+
+/** One plain line, like "Open · checks failing · approved"; states nobody knows yet are left out. */
 function pullRequestSummary(pullRequest: WorkItem['linkedPullRequests'][number]) {
+  const open = !pullRequest.draft && pullRequest.state === 'open'
   const parts = [
     pullRequest.draft ? 'Draft' : humanize(pullRequest.state),
-    `checks ${humanize(pullRequest.checksState).toLocaleLowerCase()}`,
-    `review ${humanize(pullRequest.reviewState).toLocaleLowerCase()}`,
-    humanize(pullRequest.mergeabilityState).toLocaleLowerCase(),
+    CHECKS[pullRequest.checksState],
+    REVIEW[pullRequest.reviewState],
+    open ? MERGE[pullRequest.mergeabilityState] : undefined,
+    pullRequest.confirmed ? undefined : 'not confirmed yet',
+    pullRequest.syncState === 'failed' ? 'couldn’t refresh' : undefined,
   ]
-  if (!pullRequest.confirmed) parts.push('needs confirmation')
-  if (pullRequest.syncState === 'failed') {
-    parts.push(`sync failed: ${humanize(pullRequest.syncFailureCategory ?? 'unknown').toLocaleLowerCase()}`)
-  }
-  if (pullRequest.automationState !== 'not_evaluated') {
-    parts.push(
-      `automation ${humanize(pullRequest.automationState).toLocaleLowerCase()}${
-        pullRequest.automationReason ? `: ${humanize(pullRequest.automationReason).toLocaleLowerCase()}` : ''
-      }`,
-    )
-  }
-  return parts.join(' · ')
+  return parts.filter(Boolean).join(' · ')
 }
 
 export function TaskLinks({
@@ -58,6 +55,7 @@ export function TaskLinks({
     (repository) => !repository.archivedAt && !item.linkedRepositories.some((link) => link.id === repository.id),
   )
   const busy = threadMutation.isPending || repositoryMutation.isPending || primaryMutation.isPending
+  const failure = threadMutation.error ?? repositoryMutation.error ?? primaryMutation.error
   const ids = { projectId: item.projectId, workItemId: item.id }
 
   return (
@@ -267,8 +265,12 @@ export function TaskLinks({
           )}
         </div>
       </div>
-      {threadMutation.isError || repositoryMutation.isError || primaryMutation.isError ? (
-        <Banner tone="warning">The links changed before that finished. They’re up to date now, so try again.</Banner>
+      {failure ? (
+        describeError(failure).stale ? (
+          <Banner tone="warning">The links changed before that finished. They’re up to date now, so try again.</Banner>
+        ) : (
+          <Banner tone="danger">The link wasn’t saved. {describeError(failure).message}</Banner>
+        )
       ) : null}
     </section>
   )

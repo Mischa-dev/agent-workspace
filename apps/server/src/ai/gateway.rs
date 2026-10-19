@@ -108,7 +108,7 @@ impl AiError {
         match self {
             Self::NotConfigured(message) => message.clone(),
             Self::OverBudget { budget_usd } => format!(
-                "This workspace has spent its AI budget for the month (${budget_usd}). An admin can raise it in AI and models settings."
+                "This workspace has spent its AI budget for the month (${budget_usd}). An admin can raise it in Models settings."
             ),
             Self::Provider(error) => format!("The AI call failed: {}.", error.category()),
             Self::InvalidOutput => {
@@ -195,18 +195,18 @@ pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<Resol
     drop(connection);
     let Some(provider_id) = effective.string("ai.provider") else {
         return Err(AiError::NotConfigured(
-            "Choose an AI provider in AI and models settings first.".to_owned(),
+            "Choose an AI provider in Models settings first.".to_owned(),
         ));
     };
     let provider = ProviderId::parse(&provider_id).ok_or_else(|| {
         AiError::NotConfigured(format!(
-            "The AI provider \"{provider_id}\" isn't one this server knows. Choose another in AI and models settings."
+            "The AI provider \"{provider_id}\" isn't one this server knows. Choose another in Models settings."
         ))
     })?;
     let manifest = provider.manifest();
     if manifest.testing_only && state.config.environment == Environment::Production {
         return Err(AiError::NotConfigured(
-            "The test provider isn't available on this server. Choose a real provider in AI and models settings.".to_owned(),
+            "The test provider isn't available on this server. Choose a real provider in Models settings.".to_owned(),
         ));
     }
     let model = match tier {
@@ -227,7 +227,7 @@ pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<Resol
         .filter(|address| !address.trim().is_empty());
     if manifest.needs_base_url && base_url.is_none() {
         return Err(AiError::NotConfigured(format!(
-            "Set the address of your {} in AI and models settings.",
+            "Set the address of your {} in Models settings.",
             manifest.display_name
         )));
     }
@@ -260,7 +260,7 @@ pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<Resol
     }
     if manifest.needs_key && key.is_none() {
         return Err(AiError::NotConfigured(format!(
-            "Add your {} API key in AI and models settings.",
+            "Add your {} API key in Models settings.",
             manifest.display_name
         )));
     }

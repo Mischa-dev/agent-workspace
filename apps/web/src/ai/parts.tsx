@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 
-import { Banner, Button, Icon, StatusChip, Tooltip, formatRelative } from '../ui'
+import { Banner, Button, ButtonLink, Icon, StatusChip, Tooltip, formatRelative } from '../ui'
+import { priorityLabel } from '../work-items/constants'
+import type { WorkItemPriority } from '../work-items/types'
 import type { ProjectAi, Readiness, Suggestion, TaskRef } from './api'
 import { projectAiSettingsHref } from './links'
 import './ai.css'
@@ -60,7 +62,7 @@ export function SuggestionSentence({ suggestion }: { suggestion: Suggestion }) {
     case 'priority':
       return (
         <>
-          Set <TaskLink task={task} /> to <strong>{text('priority')}</strong> priority
+          Set <TaskLink task={task} /> to <strong>{priorityLabel(text('priority') as WorkItemPriority)}</strong> priority
         </>
       )
     case 'type':
@@ -158,9 +160,25 @@ export function SuggestionCard({
   )
 }
 
-/** The checks that decide whether a task can start, for a person and for an agent. */
+/**
+ * The checks that decide whether a task can start, for a person and for an
+ * agent. Compact, for lists: only what's missing, on one line, and no "Ready
+ * to start" where the list already says so.
+ */
 export function ReadinessChecks({ readiness, compact = false }: { readiness: Readiness; compact?: boolean }) {
   const checks = compact ? readiness.checks.filter((check) => !check.ok) : readiness.checks
+  if (compact) {
+    if (readiness.ready && readiness.readyForAgents) return null
+    return (
+      <p className="aw-ai-readiness aw-ai-readiness--compact">
+        <Icon name={readiness.ready ? 'bot' : 'clock'} size={14} />
+        <span>
+          <strong>{readiness.ready ? 'Not ready for an agent' : 'Not ready'}</strong>
+          {checks.length ? `: ${checks.map((check) => check.label.charAt(0).toLocaleLowerCase() + check.label.slice(1)).join(' · ')}` : ''}
+        </span>
+      </p>
+    )
+  }
   return (
     <div className="aw-ai-readiness">
       <div className="aw-ai-readiness__chips">
@@ -185,22 +203,23 @@ export function ReadinessChecks({ readiness, compact = false }: { readiness: Rea
   )
 }
 
-/** Says why AI features are off and where to turn them on. */
+/** Says why suggestions and summaries are off and where to turn them on. */
 export function AiNotConfigured({ projectId, status }: { projectId: string; status: ProjectAi }) {
   if (status.configured) return null
   return (
     <Banner
       action={
-        <Link className="aw-btn aw-btn--secondary aw-btn--sm" to={projectAiSettingsHref(projectId)}>
-          Set up AI
-        </Link>
+        <ButtonLink size="sm" to={projectAiSettingsHref(projectId)} variant="secondary">
+          Choose a model
+        </ButtonLink>
       }
+      className="aw-page__banner"
       icon="bot"
       role="note"
-      title="AI isn’t set up for this project yet."
+      title="No model is set up for this project yet"
       tone="info"
     >
-      {status.problem ?? 'Choose a provider and add its key in settings.'} Readiness and the graph still work without it.
+      {status.problem ?? 'Choose a provider and add its key in settings.'} Readiness and the graph still work without one.
     </Banner>
   )
 }

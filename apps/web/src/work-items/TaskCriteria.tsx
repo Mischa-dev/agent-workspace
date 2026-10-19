@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 
-import { Banner, Button, Checkbox, Icon, IconButton, TextField } from '../ui'
+import { Banner, Button, Checkbox, Icon, IconButton, TextField, describeError } from '../ui'
 import { useCreateAcceptanceCriterion, useRemoveAcceptanceCriterion, useUpdateAcceptanceCriterion } from './hooks'
 import type { WorkItem } from './types'
 
@@ -14,6 +14,7 @@ export function AcceptanceCriteria({
   const create = useCreateAcceptanceCriterion()
   const update = useUpdateAcceptanceCriterion()
   const remove = useRemoveAcceptanceCriterion()
+  const failure = create.error ?? update.error ?? remove.error
   const [text, setText] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState('')
@@ -169,8 +170,12 @@ export function AcceptanceCriteria({
           </Button>
         </form>
       ) : null}
-      {create.isError || update.isError || remove.isError ? (
-        <Banner tone="warning">The checklist changed before that finished. It’s up to date now, so try again.</Banner>
+      {failure ? (
+        describeError(failure).stale ? (
+          <Banner tone="warning">The checklist changed before that finished. It’s up to date now, so try again.</Banner>
+        ) : (
+          <Banner tone="danger">The checklist wasn’t saved. {describeError(failure).message}</Banner>
+        )
       ) : null}
     </section>
   )

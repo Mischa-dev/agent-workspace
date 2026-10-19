@@ -1,10 +1,11 @@
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 
+import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession } from '../auth/session'
-import { formatFullDate } from '../conversations/timeFormat'
 import { LaunchCard } from '../launch/LaunchCard'
-import { Banner, Button, ErrorState, IconButton, MessageSkeleton, StatusChip } from '../ui'
+import { Banner, Button, DocumentSkeleton, ErrorState, IconButton, StatusChip, actorKind, formatDateTime, formatFullDate, showToast } from '../ui'
 import { useSetWorkItemArchived, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { LabelManager } from './LabelManager'
 import { workItemHref } from './links'
@@ -23,7 +24,7 @@ import { useTaskSave } from './useTaskSave'
 
 export type TaskLayout = 'panel' | 'page'
 
-// Readiness, AI suggestions and summaries load in their own chunk.
+// Readiness, suggestions and summaries load in their own chunk.
 const TaskAiPanel = lazy(() => import('../ai/TaskAiPanel'))
 // The boards on this task load in the whiteboards' own small chunk.
 const LinkedWhiteboards = lazy(() =>
@@ -55,7 +56,7 @@ export function TaskDetail({
     return (
       <div className={`aw-taskdetail aw-taskdetail--${layout}`}>
         {onClose ? <PanelBar onClose={onClose} /> : null}
-        <MessageSkeleton label="Loading work item" rows={3} />
+        <DocumentSkeleton label="Loading task" />
       </div>
     )
   }
@@ -64,11 +65,10 @@ export function TaskDetail({
       <div className={`aw-taskdetail aw-taskdetail--${layout}`}>
         {onClose ? <PanelBar onClose={onClose} /> : null}
         <ErrorState
-          action={<Button onClick={() => void Promise.all([item.refetch(), workflow.refetch()])}>Try again</Button>}
-          title="This work item isn’t available"
-        >
-          It may have been removed, or your access may have changed. If your connection dropped, try again.
-        </ErrorState>
+          error={item.error ?? workflow.error}
+          onRetry={() => void Promise.all([item.refetch(), workflow.refetch()])}
+          title="This task didn’t load"
+        />
       </div>
     )
   }
@@ -124,12 +124,12 @@ function TaskDetailBody({
             Open full page
           </Link>
         </PanelBar>
-      ) : (
+      ) : item.archivedAt ? (
+        // The page's breadcrumb already names the key.
         <div className="aw-workitem__top">
-          <span className="aw-workitem__key">{item.key}</span>
-          {item.archivedAt ? <StatusChip icon="archive">Archived</StatusChip> : null}
+          <StatusChip icon="archive">Archived</StatusChip>
         </div>
-      )}
+      ) : null}
       <h1 className="visually-hidden" id={layout === 'page' ? 'workspace-heading' : undefined}>
         {item.key}: {item.title}
       </h1>
@@ -137,7 +137,7 @@ function TaskDetailBody({
       <DescriptionField disabled={disabled} onSave={(description) => save.save('Description', { description })} value={item.description} />
       <ClaimStatus item={item} projectArchived={projectArchived} />
       {item.archivedAt ? (
-        <Banner icon="archive" title="This work item is archived.">
+        <Banner icon="archive" title="This task is archived">
           It’s hidden from lists and can’t change until it’s restored.
         </Banner>
       ) : null}
@@ -145,7 +145,7 @@ function TaskDetailBody({
         <Banner
           action={<IconButton icon="x" label="Dismiss" onClick={save.clearProblem} size="sm" tooltip={false} />}
           role="alert"
-          title={save.problem.conflict ? 'A newer version exists.' : 'That didn’t save.'}
+          title={save.problem.conflict ? 'Someone else changed this task' : `The ${save.problem.field.toLocaleLowerCase()} wasn’t saved`}
           tone="warning"
         >
           {save.problem.message}
@@ -158,7 +158,7 @@ function TaskDetailBody({
   )
 
   const side = (
-    <aside aria-label="Work item details" className="aw-workitem__side">
+    <aside aria-label="Task details" className="aw-workitem__side">
       <TaskProperties
         disabled={disabled}
         item={item}
@@ -203,6 +203,7 @@ function ClaimStatus({ item, projectArchived }: { item: WorkItem; projectArchive
   const release = useReleaseClaim()
   const claim = item.claim
   if (!claim) return null
+  const agent = actorKind(claim.actor.kind) !== 'person'
   // Releasing is a task write: it needs edit rights and a project that isn't archived.
   const canRelease =
     !projectArchived && item.capabilities.edit && (item.capabilities.archive || claim.actor.id === session.user.actorId)
@@ -219,11 +220,15 @@ function ClaimStatus({ item, projectArchived }: { item: WorkItem; projectArchive
           </Button>
         ) : undefined
       }
-      icon={claim.actor.kind === 'external_agent' ? 'bot' : 'users'}
-      title={`${claim.actor.displayName} is working on this.`}
-      tone="agent"
+      icon={agent ? 'bot' : 'lock'}
+      title={`${claim.actor.displayName} is working on this`}
+      tone={agent ? 'agent' : 'info'}
     >
-      {claim.note ? `${claim.note} · ` : ''}Claimed until {formatFullDate(claim.expiresAt)}.
+      {claim.note ? `${claim.note} · ` : ''}Claimed until{' '}
+      <time dateTime={claim.expiresAt} title={formatFullDate(claim.expiresAt)}>
+        {formatDateTime(claim.expiresAt)}
+      </time>
+      .
       {release.isError ? ` ${editErrorMessage(release.error, 'Releasing the claim')}` : ''}
     </Banner>
   )
@@ -231,27 +236,43 @@ function ClaimStatus({ item, projectArchived }: { item: WorkItem; projectArchive
 
 function ArchiveControl({ item, projectArchived }: { item: WorkItem; projectArchived: boolean }) {
   const archive = useSetWorkItemArchived()
+  const queryClient = useQueryClient()
   if (!item.capabilities.archive || projectArchived) return null
   return (
     <div className="aw-sidecard aw-sidecard--quiet">
       <Button
         busy={archive.isPending}
         icon={item.archivedAt ? 'undo' : 'archive'}
-        onClick={() =>
-          archive.mutate({
-            projectId: item.projectId,
-            workItemId: item.id,
-            expectedVersion: item.version,
-            archived: !item.archivedAt,
-            idempotencyKey: crypto.randomUUID(),
-          })
-        }
+        onClick={() => {
+          const archived = !item.archivedAt
+          archive.mutate(
+            { projectId: item.projectId, workItemId: item.id, expectedVersion: item.version, archived, idempotencyKey: crypto.randomUUID() },
+            {
+              onSuccess: () => {
+                if (!archived) return
+                showToast({
+                  title: `Archived ${item.key}`,
+                  tone: 'success',
+                  onUndo: () =>
+                    archive.mutateAsync({
+                      projectId: item.projectId,
+                      workItemId: item.id,
+                      // The newest version by the time Undo is pressed.
+                      expectedVersion: queryClient.getQueryData<WorkItem>(queryKeys.workItem(item.projectId, item.id))?.version ?? item.version + 1,
+                      archived: false,
+                      idempotencyKey: crypto.randomUUID(),
+                    }),
+                })
+              },
+            },
+          )
+        }}
         size="sm"
         variant="ghost"
       >
-        {item.archivedAt ? 'Restore work item' : 'Archive work item'}
+        {item.archivedAt ? 'Restore task' : 'Archive task'}
       </Button>
-      {archive.isError ? <Banner tone="danger">{editErrorMessage(archive.error, 'Archiving')}</Banner> : null}
+      {archive.isError ? <Banner tone="danger">{editErrorMessage(archive.error, item.archivedAt ? 'Restoring the task' : 'Archiving the task')}</Banner> : null}
     </div>
   )
 }

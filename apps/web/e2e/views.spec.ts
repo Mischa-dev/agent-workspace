@@ -21,7 +21,7 @@ test('opens Ready for agents from the sidebar, then My work and the timeline', a
   await page.screenshot({ path: `${screenshotDir}/my-work.png`, fullPage: true })
 
   await page.goto(`/projects/${projectId}/work-items`)
-  await page.getByRole('navigation', { name: 'Work items' }).getByRole('link', { name: 'Timeline' }).click()
+  await page.getByRole('navigation', { name: 'Tasks' }).getByRole('link', { name: 'Timeline' }).click()
   await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible()
 })
 

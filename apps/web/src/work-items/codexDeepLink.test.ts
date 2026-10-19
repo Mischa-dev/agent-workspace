@@ -26,11 +26,11 @@ describe('buildOpenInCodexLink', () => {
     expect(url.protocol).toBe('codex:')
     expect(url.searchParams.get('originUrl')).toBe('https://github.com/owner/repo.git')
     expect(url.searchParams.get('prompt')).toContain('Project URL: https://workspace.example/projects/project%20id')
-    expect(url.searchParams.get('prompt')).toContain('Work Item URL: https://workspace.example/projects/project%20id/work-items/item%2Fid')
+    expect(url.searchParams.get('prompt')).toContain('Task URL: https://workspace.example/projects/project%20id/work-items/item%2Fid')
   })
 
   it.each([
-    ['an archived item', workItem({ archivedAt: 'now' }), 'Restore this work item'],
+    ['an archived item', workItem({ archivedAt: 'now' }), 'Restore this task'],
     ['no repository', workItem({ linkedRepositories: [] }), 'Link one trusted repository'],
     ['multiple repositories', workItem({ linkedRepositories: [workItem().linkedRepositories[0], workItem().linkedRepositories[0]] }), 'exactly one'],
     ['an untrusted repository', repositoryOverride({ trusted: false }), 'must be trusted'],

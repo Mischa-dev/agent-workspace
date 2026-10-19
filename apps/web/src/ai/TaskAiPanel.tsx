@@ -10,7 +10,7 @@ import { aiErrorMessage, planningHref } from './links'
 import { SummaryView } from './SummaryView'
 
 /**
- * The AI side of a task: whether it can start (for a person and for an
+ * The planning side of a task: whether it can start (for a person and for an
  * agent), suggestions about it to accept or dismiss, and on-demand triage,
  * criteria and a catch-up summary.
  */
@@ -37,7 +37,16 @@ export default function TaskAiPanel({
     onSuccess: (result) => setSummary(result.summary),
   })
   const [notice, setNotice] = useState<string | null>(null)
-  const error = decide.error ?? triage.error ?? criteria.error ?? summarize.error
+  // Names what failed, so the message isn't a bare "That didn't work".
+  const failed: [string, unknown] | null = decide.error
+    ? ['Deciding on the suggestion', decide.error]
+    : triage.error
+      ? ['Suggesting labels and links', triage.error]
+      : criteria.error
+        ? ['Drafting criteria', criteria.error]
+        : summarize.error
+          ? ['Catching up', summarize.error]
+          : null
   const configured = status.data?.configured ?? false
   const canAct = configured && !disabled && (status.data?.canEdit ?? false)
   const pending = suggestions.data?.suggestions ?? []
@@ -45,7 +54,16 @@ export default function TaskAiPanel({
   return (
     <div className="aw-sidecard aw-ai-taskpanel">
       <h2 className="aw-sidecard__title">Readiness</h2>
-      {readiness.data ? <ReadinessChecks readiness={readiness.data} /> : readiness.isError ? <p className="aw-quiet">Readiness didn’t load.</p> : null}
+      {readiness.data ? (
+        <ReadinessChecks readiness={readiness.data} />
+      ) : readiness.isError ? (
+        <p className="aw-quiet">
+          Readiness didn’t load.{' '}
+          <button className="aw-linkbtn" onClick={() => void readiness.refetch()} type="button">
+            Try again
+          </button>
+        </p>
+      ) : null}
       {pending.length ? (
         <>
           <h2 className="aw-sidecard__title">
@@ -87,7 +105,7 @@ export default function TaskAiPanel({
         </div>
       ) : status.isSuccess ? (
         <p className="aw-quiet">
-          AI isn’t set up for this project. <Link to={planningHref(projectId, 'next')}>Up next</Link> still shows what can start.
+          No model is set up for this project. <Link to={planningHref(projectId, 'next')}>Up next</Link> still shows what can start.
         </p>
       ) : null}
       {notice ? (
@@ -95,7 +113,7 @@ export default function TaskAiPanel({
           {notice}
         </p>
       ) : null}
-      {error ? <Banner tone="danger">{aiErrorMessage(error)}</Banner> : null}
+      {failed ? <Banner tone="danger">{aiErrorMessage(failed[1], failed[0])}</Banner> : null}
       {summary ? <SummaryView summary={summary} /> : null}
     </div>
   )

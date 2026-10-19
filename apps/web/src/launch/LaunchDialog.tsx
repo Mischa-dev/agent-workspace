@@ -1,11 +1,16 @@
 import { useState, type FormEvent, type RefObject } from 'react'
+import { Link } from 'react-router-dom'
 
 import { useProfiles } from '../agents/hooks'
 import { isApiError } from '../api/errors'
-import { Banner, Button, Dialog, MessageSkeleton, SelectField, TextArea, TextField } from '../ui'
+import { humanize } from '../projects/format'
+import { accountSettingsHref, projectSettingsHref } from '../settings/paths'
+import { Banner, Button, Dialog, SelectField, SettingsSkeleton, TextArea, TextField, countLabel, describeError, describeLoadError } from '../ui'
 import type { HarnessPlan, Launch, LaunchInput, LaunchPlan, LaunchTask, SettingSource, StartWhen } from './api'
 import { useCreateLaunches, useLaunchPlan } from './hooks'
 import { MAX_TASKS_PER_LAUNCH, sourceLabel } from './launchModel'
+// Opened from the task list too, where nothing else has loaded these.
+import './launch.css'
 
 type Choice = { environmentId?: string; harness?: string }
 
@@ -92,7 +97,9 @@ export function LaunchDialog({
   const blocked = (data?.blockers.length ?? 0) > 0
   const scheduledWithoutTime = startWhen === 'at' && !startAt
   const queueing = !single || startWhen !== 'now'
-  const title = single && first ? `Launch ${first.key}` : `Launch ${tasks.length} tasks`
+  const title = single && first ? `Launch ${first.key}` : `Launch ${countLabel(tasks.length, 'task')}`
+  // Something chosen or typed: a stray click outside shouldn't throw it away.
+  const dirty = prompt !== null || Boolean(profileId || accountId || model || reasoning || speed || attempts || startAt || choice.environmentId || choice.harness) || startWhen !== 'now'
 
   return (
     <Dialog
@@ -103,7 +110,7 @@ export function LaunchDialog({
       }
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button
@@ -117,6 +124,7 @@ export function LaunchDialog({
           </Button>
         </>
       }
+      dirty={dirty}
       onClose={onClose}
       onSubmit={submit}
       open
@@ -125,25 +133,18 @@ export function LaunchDialog({
       width={620}
     >
       {tooMany ? (
-        <Banner tone="warning">Launch takes up to {MAX_TASKS_PER_LAUNCH} tasks at a time. Select fewer and try again.</Banner>
+        <Banner className="aw-launch__banner" tone="warning">Launch takes up to {MAX_TASKS_PER_LAUNCH} tasks at a time. Select fewer and try again.</Banner>
       ) : null}
-      {plan.isPending ? <MessageSkeleton label="Loading launch options" rows={4} /> : null}
+      {plan.isPending ? <SettingsSkeleton label="Loading launch options" /> : null}
       {plan.isError ? (
-        <Banner
-          action={
-            <Button onClick={() => void plan.refetch()} size="sm">
-              Retry
-            </Button>
-          }
-          tone="danger"
-        >
-          {isApiError(plan.error) ? plan.error.message : 'The launch options didn’t load.'}
+        <Banner className="aw-launch__banner" onRetry={() => void plan.refetch()} title="The launch options didn’t load" tone="danger">
+          {isApiError(plan.error) && plan.error.message ? plan.error.message : describeLoadError(plan.error)}
         </Banner>
       ) : null}
       {data ? (
         <>
           {single && blocked ? (
-            <Banner icon="triangle-alert" tone="warning" title="This task is waiting on other work.">
+            <Banner className="aw-launch__banner" icon="triangle-alert" tone="warning" title="This task is waiting on other work">
               Open blockers: {data.blockers.map((blocker) => blocker.key).join(', ')}. You can still launch it now, or start it
               when they finish.
             </Banner>
@@ -167,7 +168,7 @@ export function LaunchDialog({
             ) : null}
             <SelectField
               data-autofocus
-              hint={environmentHint(data)}
+              hint={environmentHint(data, projectId)}
               id="launch-environment"
               label="Environment"
               onChange={(event) => setChoice({ environmentId: event.target.value || undefined, harness: choice.harness })}
@@ -185,7 +186,7 @@ export function LaunchDialog({
               disabled={Boolean(data.environmentId)}
               hint={data.environmentId ? 'Set by the environment.' : runner ? runnerHint(harnessPlan) : undefined}
               id="launch-harness"
-              label="Harness"
+              label="Runs on"
               onChange={(event) => {
                 setModel('')
                 setReasoning('')
@@ -195,7 +196,7 @@ export function LaunchDialog({
               }}
               value={data.harness ?? ''}
             >
-              {data.harness ? null : <option value="">Choose a harness</option>}
+              {data.harness ? null : <option value="">Choose where it runs</option>}
               {data.harnesses.map((harness) => (
                 <option key={harness.kind} value={harness.kind}>
                   {harness.displayName}
@@ -205,7 +206,14 @@ export function LaunchDialog({
             </SelectField>
             {runner ? null : (
               <SelectField
-                hint={accounts.length === 0 ? 'Connect an account for this harness in Settings › Provider accounts first.' : undefined}
+                hint={
+                  accounts.length === 0 ? (
+                    // One span, so the note's flex layout keeps the sentence and its link on one line.
+                    <span>
+                      Connect an account for {harnessPlan?.displayName ?? 'it'} first, in <Link to={accountSettingsHref('provider-accounts')}>Provider accounts</Link>.
+                    </span>
+                  ) : undefined
+                }
                 id="launch-account"
                 label="Account"
                 onChange={(event) => setAccountId(event.target.value)}
@@ -232,7 +240,7 @@ export function LaunchDialog({
                 <option value="">{defaultLabel(data.settings['run.reasoning']?.value, data.settings['run.reasoning']?.source)}</option>
                 {chosenModel.reasoningLevels.map((level) => (
                   <option key={level} value={level}>
-                    {level}
+                    {humanize(level)}
                   </option>
                 ))}
               </SelectField>
@@ -242,7 +250,7 @@ export function LaunchDialog({
                 <option value="">{defaultLabel(data.settings['run.speed']?.value, data.settings['run.speed']?.source)}</option>
                 {chosenModel.speeds.map((level) => (
                   <option key={level} value={level}>
-                    {level}
+                    {humanize(level)}
                   </option>
                 ))}
               </SelectField>
@@ -287,8 +295,8 @@ export function LaunchDialog({
         </>
       ) : null}
       {create.isError ? (
-        <Banner role="alert" tone="danger">
-          {isApiError(create.error) ? create.error.message : 'The launch didn’t go through. Try again.'}
+        <Banner className="aw-launch__banner" role="alert" tone="danger">
+          {isApiError(create.error) && create.error.message ? create.error.message : `The launch didn’t go through. ${describeError(create.error).message}`}
         </Banner>
       ) : null}
     </Dialog>
@@ -299,15 +307,21 @@ function runnerHint(harness: HarnessPlan | undefined) {
   return `Hands off to ${harness?.runnerName ?? 'its runner'}, which works with its own access. No account needed.`
 }
 
-function environmentHint(plan: LaunchPlan) {
+function environmentHint(plan: LaunchPlan, projectId: string) {
   const chosen = plan.environments.find((environment) => environment.id === plan.environmentId)
   if (chosen?.lastCheckOk === false) return chosen.lastCheckMessage ?? 'The last check of this environment failed.'
-  if (plan.environments.length === 0) return 'Add environments in Settings › Project › Environments and defaults.'
+  if (plan.environments.length === 0) {
+    return (
+      <span>
+        Add one in <Link to={projectSettingsHref(projectId, 'environments')}>Environments and defaults</Link>.
+      </span>
+    )
+  }
   return undefined
 }
 
 function defaultLabel(value: unknown, source: SettingSource | undefined, models: { id: string; displayName: string }[] = []) {
   if (value === null || value === undefined || value === '' || value === 'default') return 'Agent’s default'
-  const shown = models.find((candidate) => candidate.id === value)?.displayName ?? String(value)
+  const shown = models.find((candidate) => candidate.id === value)?.displayName ?? humanize(String(value))
   return `${shown} (${sourceLabel(source ?? 'default')} default)`
 }

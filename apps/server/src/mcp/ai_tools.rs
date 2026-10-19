@@ -272,12 +272,14 @@ pub(super) async fn ai_analyze(
             Err(refusal) => return Ok(refusal),
         };
         let mut transaction = state.pool.begin().await?;
-        if let Some(refusal) = access_refusal(check_write_access(&mut transaction, principal).await?)
+        if let Some(refusal) =
+            access_refusal(check_write_access(&mut transaction, principal).await?)
         {
             return Ok(refusal);
         }
         transaction.commit().await?;
-        if let Err(error) = gateway::resolve(state, scope(principal, organization_id), Tier::Quick).await
+        if let Err(error) =
+            gateway::resolve(state, scope(principal, organization_id), Tier::Quick).await
         {
             return Ok(ai_refusal(error));
         }
@@ -290,7 +292,10 @@ pub(super) async fn ai_analyze(
         };
         if arguments.criteria == Some(true) {
             let Some(task_id) = task_id else {
-                return Ok(ToolResult::invalid("taskId", "Name the task to draft criteria for."));
+                return Ok(ToolResult::invalid(
+                    "taskId",
+                    "Name the task to draft criteria for.",
+                ));
             };
             return Ok(
                 match draft_criteria(
@@ -314,7 +319,7 @@ pub(super) async fn ai_analyze(
                         value(json!({"suggestion": view}))
                     }
                     Err(_) => ToolResult::conflict(
-                        "The criteria couldn't be drafted. Check AI and models settings, then try again.",
+                        "The criteria couldn't be drafted. Check Models settings, then try again.",
                     ),
                 },
             );
@@ -323,7 +328,11 @@ pub(super) async fn ai_analyze(
             &state.pool,
             organization_id,
             principal.project_id,
-            if task_id.is_some() { Mode::Triage } else { Mode::Analyze },
+            if task_id.is_some() {
+                Mode::Triage
+            } else {
+                Mode::Analyze
+            },
             Some(principal.actor_id),
             task_id.into_iter().collect(),
         )

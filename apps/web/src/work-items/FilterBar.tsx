@@ -1,7 +1,8 @@
 import { useState } from 'react'
+import { ListFilter } from 'lucide-react'
 
 import { Avatar, Button, Icon, SegmentedControl, SelectField, TextField, actorKind } from '../ui'
-import { Calendar, ComboboxList, Popover } from '../ui/pickers'
+import { Calendar, ComboboxList, Popover, formatDateLabel } from '../ui/pickers'
 import { workItemPriorities } from './constants'
 import { CATEGORY_LABELS, FILTER_FIELDS, TOGGLE_FIELDS, chipText, type FilterField } from './filterModel'
 import { useAssignableActors, useWorkItem } from './hooks'
@@ -74,10 +75,11 @@ export function FilterBar({
 
   return (
     <div className="aw-filterbar">
-      <div aria-label="Filter work items" className="aw-filterbar__row" role="search">
+      <div aria-label="Filter tasks" className="aw-filterbar__row" role="search">
         <TextField
-          aria-label="Search work items"
+          aria-label="Search tasks"
           className="aw-filterbar__search"
+          compact
           maxLength={120}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search by title or key"
@@ -85,8 +87,7 @@ export function FilterBar({
           type="search"
           value={search}
         />
-        <Button aria-haspopup="dialog" onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} size="sm" variant="secondary">
-          <TaskGlyph name="filter" />
+        <Button aria-haspopup="dialog" icon={ListFilter} onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} variant="secondary">
           Filter
         </Button>
         <span className="aw-filterbar__spacer" />
@@ -95,6 +96,7 @@ export function FilterBar({
             <SelectField
               aria-label="Sort"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => update((current) => ({ ...current, sort: event.target.value as WorkItemSort }))}
               prefix={<TaskGlyph name="sort" />}
               value={state.sort}
@@ -108,6 +110,7 @@ export function FilterBar({
             <SelectField
               aria-label="Group by"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => update((current) => ({ ...current, groupBy: (event.target.value || null) as WorkItemGroupBy | null }))}
               prefix={<TaskGlyph name="group" />}
               value={state.groupBy ?? ''}
@@ -125,6 +128,7 @@ export function FilterBar({
             <SelectField
               aria-label="Columns"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => {
                 const columnsBy = event.target.value as BoardColumnsBy
                 // Lanes by the same field as the columns would leave only the diagonal.
@@ -142,6 +146,7 @@ export function FilterBar({
             <SelectField
               aria-label="Swimlanes"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => update((current) => ({ ...current, lanes: event.target.value as ListState['lanes'] }))}
               prefix={<TaskGlyph name="lanes" />}
               value={state.lanes}
@@ -278,7 +283,7 @@ function FilterValueChooser({
     case 'milestone':
       return one(
         'Milestone',
-        [{ value: 'none', label: 'No milestone' }, ...milestones.map((milestone) => ({ value: milestone.id, label: milestone.name, description: milestone.targetDate ?? undefined }))],
+        [{ value: 'none', label: 'No milestone' }, ...milestones.map((milestone) => ({ value: milestone.id, label: milestone.name, description: milestone.targetDate ? `Target ${formatDateLabel(milestone.targetDate)}` : undefined }))],
         filters.milestoneId,
         (value) => ({ milestoneId: value }),
       )
@@ -296,7 +301,7 @@ function FilterValueChooser({
       return one(
         'Claimed',
         [
-          { value: 'true', label: 'Claimed by an agent' },
+          { value: 'true', label: 'Claimed' },
           { value: 'false', label: 'Not claimed' },
         ],
         filters.claimed,

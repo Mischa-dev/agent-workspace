@@ -113,7 +113,7 @@ export function TaskSubtasks({ disabled, item, onOpen }: { disabled: boolean; it
 
 type Adding = { kind: 'blockedBy' | 'blocks' | 'relates_to' | 'duplicates'; anchor: HTMLElement }
 
-/** What this work item waits on, what waits on it, and other links between tasks. */
+/** What this task waits on, what waits on it, and other links between tasks. */
 export function TaskDependencies({ disabled, item, onOpen, save }: { disabled: boolean; item: WorkItem; onOpen: OpenTask; save: TaskSave }) {
   const dependencies = useSetDependencies()
   const relations = useSetRelation()
@@ -132,7 +132,7 @@ export function TaskDependencies({ disabled, item, onOpen, save }: { disabled: b
   const changeRelation = (kind: 'relates_to' | 'duplicates', target: string, options: { remove?: boolean; close?: boolean } = {}) =>
     relations.mutate(
       { ...base, kind, target, ...options, idempotencyKey: crypto.randomUUID() },
-      { onError: (error) => save.fail('Related work items', error) },
+      { onError: (error) => save.fail('Related tasks', error) },
     )
 
   const remove = (label: string, run: () => void) => (
@@ -167,7 +167,7 @@ export function TaskDependencies({ disabled, item, onOpen, save }: { disabled: b
         </DependencyGroup>
         <DependencyGroup
           add={!disabled ? (anchor) => setAdding({ kind: 'blocks', anchor }) : undefined}
-          addLabel="Add a work item this blocks"
+          addLabel="Add a task this blocks"
           empty="This doesn’t block anything."
           title="Blocks"
         >
@@ -182,8 +182,8 @@ export function TaskDependencies({ disabled, item, onOpen, save }: { disabled: b
         </DependencyGroup>
         <DependencyGroup
           add={!disabled ? (anchor) => setAdding({ kind: 'relates_to', anchor }) : undefined}
-          addLabel="Relate to another work item"
-          empty="No related work items."
+          addLabel="Relate to another task"
+          empty="No related tasks."
           extra={
             !disabled ? (
               <Button onClick={(event) => setAdding({ kind: 'duplicates', anchor: event.currentTarget })} size="sm" variant="ghost">
@@ -233,7 +233,7 @@ export function TaskDependencies({ disabled, item, onOpen, save }: { disabled: b
           adding?.kind === 'blockedBy'
             ? 'Add a blocker'
             : adding?.kind === 'blocks'
-              ? 'Add a work item this blocks'
+              ? 'Add a task this blocks'
               : adding?.kind === 'duplicates'
                 ? 'Duplicate of'
                 : 'Relate to'

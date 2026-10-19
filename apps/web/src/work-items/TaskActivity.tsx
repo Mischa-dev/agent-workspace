@@ -6,7 +6,7 @@ import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
-import { ActorTag, Avatar, Banner, Icon, MessageSkeleton, actorKind, formatDateTime, formatFullDate } from '../ui'
+import { ActorTag, Avatar, Banner, Button, Icon, ListSkeleton, actorKind, describeLoadError, formatDateTime, formatFullDate } from '../ui'
 import { searchWorkItemReferences } from './api'
 import { formatChanges, type FormattedChange } from './historyFormat'
 import { taskFilesKey, useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
@@ -60,6 +60,8 @@ function DescriptionDiff({ change }: { change: Extract<FormattedChange, { kind: 
 
 export function TaskActivity({ disabled, item }: { disabled: boolean; item: WorkItem }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
+  // Pages come newest first; the list reads oldest to newest, so older pages go on top.
+  const entries = (timeline.data?.pages ?? []).flatMap((page) => page.entries).reverse()
   const createComment = useCreateWorkItemComment()
   const queryClient = useQueryClient()
   const files = useTaskFiles(item.projectId, item.id)
@@ -75,11 +77,23 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
           Activity
         </h2>
       </header>
-      {timeline.isPending ? <MessageSkeleton label="Loading activity" rows={2} /> : null}
-      {timeline.isError ? <Banner tone="danger">Activity didn’t load.</Banner> : null}
-      {timeline.data?.length ? (
+      {timeline.isPending ? <ListSkeleton avatars label="Loading activity" rows={3} /> : null}
+      {timeline.isError && !timeline.isFetchNextPageError ? (
+        <Banner onRetry={() => void timeline.refetch()} title="Activity didn’t load" tone="danger">
+          {describeLoadError(timeline.error)}
+        </Banner>
+      ) : null}
+      {timeline.hasNextPage ? (
+        <div className="aw-activity__older">
+          <Button busy={timeline.isFetchingNextPage} icon="arrow-up" onClick={() => void timeline.fetchNextPage()} size="sm" variant="ghost">
+            Show older activity
+          </Button>
+          {timeline.isFetchNextPageError ? <span className="aw-prop__error">Older activity didn’t load. Try again.</span> : null}
+        </div>
+      ) : null}
+      {entries.length ? (
         <ol className="aw-activity">
-          {[...timeline.data].reverse().map((entry) => {
+          {entries.map((entry) => {
             const actor = entry.comment?.author ?? entry.activity?.actor
             const name = actor?.displayName ?? 'Someone'
             const kind = actorKind(actor?.kind ?? 'human')
@@ -157,7 +171,7 @@ export function TaskActivity({ disabled, item }: { disabled: boolean; item: Work
             await createComment.mutateAsync({ projectId: item.projectId, workItemId: item.id, content: words, idempotencyKey, attachments })
             if (attachments?.length) void queryClient.invalidateQueries({ queryKey: taskFilesKey(item.projectId, item.id) })
           }}
-          placeholder="Add a comment. @mention someone or reference a work item."
+          placeholder="Add a comment. @mention someone or reference a task."
           searchActors={async (query) => (await searchMentionableActors(item.projectId, query)).actors}
           searchWorkItems={(query) => searchWorkItemReferences(item.projectId, query)}
           submitLabel="Comment"

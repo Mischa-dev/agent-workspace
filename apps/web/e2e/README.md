@@ -10,14 +10,14 @@ be a test matrix. Unit and component tests stay in `src/` with Vitest.
 - `smoke.spec.ts`
   - signing in with a password lands on Home with the seeded Project in the rail
   - a wrong password shows an error and stays on the sign-in page
-  - creating a Task from the Work items page (it opens in the task panel),
+  - creating a task from the Tasks page (it opens in the task panel),
     then moving it on the board: Backlog → Ready with the keyboard (Space,
     an arrow, Space), Ready → In Progress by dragging, and checking it's still
     there after a reload
 - `whiteboards.spec.ts`: creating a whiteboard, drawing a rectangle on it,
   seeing a second tab on the same board pull the change from the live stream,
   and finding it still there after a reload
-- `screenshots.spec.ts`: Home, Whiteboards, a Project channel, the work item list and
+- `screenshots.spec.ts`: Home, Whiteboards, a Project channel, the task list and
   board, Appearance, Webhooks, API reference and Automation rules settings, each in light and dark ("Match system" with
   the browser's color scheme). Each page must render without uncaught errors
   and resolve to the expected theme. The PNGs land in
@@ -61,7 +61,7 @@ from `apps/web` opens the report.
 3. starts the server from an empty temp directory (so no `.env` leaks in) in
    `development` mode on its own ports, with only the variables it needs;
 4. through the public API, signs in, creates a Project with a `#general`
-   channel, a message and a work item, and saves the signed-in session for
+   channel, a message and a task, and saves the signed-in session for
    the screenshot spec.
 
 Playwright starts Vite's dev server itself, with
@@ -76,7 +76,7 @@ PostgreSQL or a Chromium for Playwright isn't available on the machine.
 
 Flows from the roadmap item that wait for other work to land:
 
-- [ ] Start a run on the demo adapter from a work item and watch it finish
+- [ ] Start a run on the demo adapter from a task and watch it finish
       (needs the demo adapter; the server must then run with
       `AGENT_WORKSPACE_DEMO_EXECUTOR=true`, which is development-only, as here).
 - [ ] Read the inbox: something addressed to the seeded User shows up, opens,

@@ -108,13 +108,13 @@ for (const device of [
       const errors: string[] = []
       page.on('pageerror', (error) => errors.push(error.message))
       await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/work-items`)
-      await page.getByRole('button', { name: 'New work item' }).first().click()
-      const dialog = page.getByRole('dialog', { name: 'New work item' })
+      await page.getByRole('button', { name: 'New task' }).first().click()
+      const dialog = page.getByRole('dialog', { name: 'New task' })
       await dialog.getByLabel('Title').fill(`Files on ${device.name}`)
       await dialog.locator('input[type="file"]').setInputFiles([{ name: 'spec.png', mimeType: 'image/png', buffer: PNG }])
       await expect(dialog.getByRole('list', { name: 'Files to attach' }).getByText('spec.png')).toBeVisible()
       await page.screenshot({ path: path.join(screenshotDir, `task-files-new-${device.name}.png`) })
-      await dialog.getByRole('button', { name: 'Create work item' }).click()
+      await dialog.getByRole('button', { name: 'Create task' }).click()
       await expect(dialog).toBeHidden()
 
       const filesSection = page.locator('section.aw-worksection', { has: page.getByRole('heading', { name: 'Files' }) })

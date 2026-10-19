@@ -919,6 +919,30 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     assert_eq!(trimmed["value"]["overdue"], false);
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
+
+    // A canceled task leaves the milestone's scope instead of counting as
+    // done: one done and one canceled reads "1 of 1 done", not "2 of 2".
+    for (key, category) in [(1_i64, "completed"), (2_i64, "canceled")] {
+        sqlx::query(
+            "UPDATE work_items item SET status_id = status.id \
+             FROM work_item_statuses status \
+             WHERE item.project_id = $1 AND item.number = $2 \
+               AND status.project_id = item.project_id AND status.semantic_category = $3",
+        )
+        .bind(work.parse::<Uuid>().expect("project id"))
+        .bind(key)
+        .bind(category)
+        .execute(&setup.pool)
+        .await
+        .expect("set the status");
+    }
+    let progress = call("milestone_list", json!({"projectId": "PLAN"})).await;
+    let v1 = &progress["value"]["milestones"][0];
+    assert_eq!(v1["total"], 1, "{progress}");
+    assert_eq!(v1["finished"], 1, "{progress}");
+    assert_eq!(v1["canceled"], 1, "{progress}");
+    assert_eq!(v1["open"], 0, "{progress}");
+    assert_eq!(v1["progress"], 1.0, "{progress}");
 }
 
 #[tokio::test]

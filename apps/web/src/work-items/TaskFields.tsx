@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 
-import { Button, TextArea } from '../ui'
+import { Button, TextArea, formatShortcut } from '../ui'
 import { formatEstimate } from './historyFormat'
 import type { EstimateUnit } from './types'
 
@@ -59,7 +59,7 @@ export function TitleField({ disabled, onSave, value }: { disabled: boolean; onS
       onChange={(event) => setDraft(event.target.value)}
       onFocus={() => setEditing(true)}
       onKeyDown={onKeyDown}
-      placeholder="Work item title"
+      placeholder="Task title"
       ref={ref}
       rows={1}
       value={draft}
@@ -110,7 +110,7 @@ export function DescriptionField({ disabled, onSave, value }: { disabled: boolea
       />
       {editing ? (
         <div className="aw-taskdesc__actions">
-          <span className="aw-taskdesc__hint">Saves when you click away · Ctrl+Enter</span>
+          <span className="aw-taskdesc__hint">Saves when you click away · {formatShortcut('mod+enter')}</span>
           <Button
             data-cancel="description"
             onClick={() => {

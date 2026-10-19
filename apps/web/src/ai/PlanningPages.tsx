@@ -3,9 +3,12 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { useMilestoneList } from '../work-items/planningHooks'
-import { Banner, Button, Dots, EmptyState, ErrorState, Icon, Kbd, ListSkeleton, PageHeader, SegmentedControl, SelectField, StatusChip, formatRelative } from '../ui'
+import { Banner, Button, ButtonLink, Dots, EmptyState, ErrorState, Icon, Kbd, ListSkeleton, SegmentedControl, SelectField, StatusChip, countLabel, formatRelative } from '../ui'
+import { priorityLabel } from '../work-items/constants'
+import { workItemsHref } from '../work-items/links'
+import type { WorkItemPriority } from '../work-items/types'
 import { aiKeys, listSuggestions, type AiRun, type ProjectAi, type RankScope, type SuggestionStatus } from './api'
-import { PlanningFrame } from './frame'
+import { PlanningFrame, PlanningIntro } from './frame'
 import { useAnalyze, useDecideSuggestion, useProjectAi, useRanking } from './hooks'
 import { AiNotConfigured, ReadinessChecks, SuggestionCard } from './parts'
 import { aiErrorMessage, planningHref } from './links'
@@ -25,17 +28,23 @@ function moveFocus(event: KeyboardEvent<HTMLElement>, selector: string) {
   return true
 }
 
-function AnalyzeButton({ projectId, status }: { projectId: string; status: ProjectAi | undefined }) {
-  const analyze = useAnalyze(projectId)
+function AnalyzeButton({ analyze, status }: { analyze: ReturnType<typeof useAnalyze>; status: ProjectAi | undefined }) {
   if (!status?.canEdit || !status.configured) return null
   const running = status.runs.some((run) => run.mine && run.kind === 'analyze' && (run.state === 'queued' || run.state === 'running'))
   return (
-    <>
-      <Button busy={analyze.isPending || running} icon="bot" onClick={() => analyze.mutate()} variant="primary">
-        {running ? 'Analyzing' : 'Analyze project'}
-      </Button>
-      {analyze.isError ? <span className="visually-hidden" role="alert">{aiErrorMessage(analyze.error, 'Analyzing')}</span> : null}
-    </>
+    <Button busy={analyze.isPending || running} icon="bot" onClick={() => analyze.mutate()} variant="primary">
+      {running ? 'Analyzing' : 'Analyze project'}
+    </Button>
+  )
+}
+
+/** Why Analyze didn't start, where everyone can see it. */
+function AnalyzeProblem({ analyze }: { analyze: ReturnType<typeof useAnalyze> }) {
+  if (!analyze.isError) return null
+  return (
+    <Banner className="aw-page__banner" onRetry={() => analyze.mutate()} title="The analysis didn’t start" tone="danger">
+      {aiErrorMessage(analyze.error, 'Analyzing')}
+    </Banner>
   )
 }
 
@@ -44,7 +53,7 @@ function runSentence(run: AiRun) {
   if (run.state === 'failed') return run.error ?? 'The last run failed.'
   const found = run.suggestionsCreated
   const applied = run.suggestionsApplied ? `, ${run.suggestionsApplied} applied automatically` : ''
-  return `Checked ${run.tasksConsidered} ${run.tasksConsidered === 1 ? 'task' : 'tasks'} ${formatRelative(run.finishedAt ?? run.createdAt)}: ${found ? `${found} ${found === 1 ? 'suggestion' : 'suggestions'}` : 'nothing new'}${applied}.`
+  return `Checked ${countLabel(run.tasksConsidered, 'task')} ${formatRelative(run.finishedAt ?? run.createdAt)}: ${found ? countLabel(found, 'suggestion') : 'nothing new'}${applied}.`
 }
 
 function LatestRun({ status }: { status: ProjectAi | undefined }) {
@@ -68,7 +77,7 @@ const SCOPES: { value: RankScope; label: string }[] = [
   { value: 'all', label: 'All open' },
 ]
 
-/** AI5: the open tasks that can start now, best first, and why. */
+/** The open tasks that can start now, best first, and why. */
 export function NextPage() {
   return <PlanningFrame label="Loading what’s next" tab="next">{(project) => <NextBody projectId={project.id} />}</PlanningFrame>
 }
@@ -78,20 +87,22 @@ function NextBody({ projectId }: { projectId: string }) {
   const [milestoneId, setMilestoneId] = useState('')
   const [limit, setLimit] = useState(PAGE)
   const status = useProjectAi(projectId)
+  const analyze = useAnalyze(projectId)
   const milestones = useMilestoneList(projectId)
   const ranking = useRanking(projectId, { scope, milestoneId: milestoneId || null, limit })
   const tasks = ranking.data?.tasks ?? []
 
   return (
     <>
-      <PageHeader actions={<AnalyzeButton projectId={projectId} status={status.data} />} icon="play" title="Up next">
+      <PlanningIntro actions={<AnalyzeButton analyze={analyze} status={status.data} />}>
         Open tasks whose blockers are done, ranked by priority, how much they unblock and how soon they’re due.
-      </PageHeader>
+      </PlanningIntro>
+      <AnalyzeProblem analyze={analyze} />
       {status.data ? <AiNotConfigured projectId={projectId} status={status.data} /> : null}
       <div className="aw-ai-toolbar">
         <SegmentedControl<RankScope> label="Which tasks" onChange={(value) => (setScope(value), setLimit(PAGE))} options={SCOPES} value={scope} />
         {milestones.data?.milestones.length ? (
-          <SelectField className="aw-ai-toolbar__select" label="Milestone" onChange={(event) => (setMilestoneId(event.target.value), setLimit(PAGE))} value={milestoneId}>
+          <SelectField aria-label="Milestone" className="aw-ai-toolbar__select" compact onChange={(event) => (setMilestoneId(event.target.value), setLimit(PAGE))} value={milestoneId}>
             <option value="">All milestones</option>
             {milestones.data.milestones.map((milestone) => (
               <option key={milestone.id} value={milestone.id}>
@@ -102,13 +113,21 @@ function NextBody({ projectId }: { projectId: string }) {
         ) : null}
       </div>
       {ranking.isPending ? <ListSkeleton label="Ranking tasks" rows={5} /> : null}
-      {ranking.isError ? (
-        <ErrorState action={<Button onClick={() => void ranking.refetch()}>Try again</Button>} title="The ranking didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {ranking.isError ? <ErrorState error={ranking.error} onRetry={() => void ranking.refetch()} title="The ranking didn’t load" /> : null}
       {ranking.isSuccess && !tasks.length ? (
-        <EmptyState icon="circle-check" title={scope === 'all' ? 'No open tasks' : 'Nothing is ready to start'}>
+        <EmptyState
+          action={
+            scope === 'ready' ? (
+              <ButtonLink to={planningHref(projectId, 'graph')}>Open the graph</ButtonLink>
+            ) : scope === 'all' ? (
+              <ButtonLink to={`${workItemsHref(projectId)}?create=task`}>New task</ButtonLink>
+            ) : (
+              <ButtonLink to={workItemsHref(projectId)}>Open the task list</ButtonLink>
+            )
+          }
+          icon="circle-check"
+          title={scope === 'all' ? 'No open tasks' : 'Nothing is ready to start'}
+        >
           {scope === 'agents'
             ? 'Tasks become ready for agents once they have acceptance criteria, a description and a repository.'
             : scope === 'ready'
@@ -129,10 +148,13 @@ function NextBody({ projectId }: { projectId: string }) {
                 </Link>
                 <div className="aw-ai-rank__meta">
                   <StatusChip>{task.statusName}</StatusChip>
-                  {task.priority !== 'no_priority' ? <span className={`aw-ai-priority aw-ai-priority--${task.priority}`}>{task.priority}</span> : null}
+                  {/* The reasons already say "High priority" when priority helped its rank. */}
+                  {task.priority !== 'no_priority' && !task.reasons.some((reason) => /priority/i.test(reason)) ? (
+                    <span className={`aw-ai-priority aw-ai-priority--${task.priority}`}>{priorityLabel(task.priority as WorkItemPriority)}</span>
+                  ) : null}
                   {task.milestoneName ? <span>{task.milestoneName}</span> : null}
                   {task.assigneeName ? <span>{task.assigneeName}</span> : null}
-                  {task.claimed ? <StatusChip icon="bot" tone="agent">Claimed</StatusChip> : null}
+                  {task.claimed ? <StatusChip icon="lock" tone="agent">Claimed</StatusChip> : null}
                 </div>
                 {task.reasons.length ? <p className="aw-ai-rank__why">{task.reasons.join(' · ')}</p> : null}
                 {scope === 'all' || !task.readiness.readyForAgents ? <ReadinessChecks compact readiness={task.readiness} /> : null}
@@ -143,7 +165,7 @@ function NextBody({ projectId }: { projectId: string }) {
       ) : null}
       {ranking.data?.nextOffset != null ? (
         <Button busy={ranking.isFetching} className="aw-ai-more" onClick={() => setLimit((current) => current + PAGE)}>
-          Show more ({ranking.data.total - tasks.length} left)
+          Show more ({ranking.data.total - tasks.length} more)
         </Button>
       ) : null}
     </>
@@ -158,11 +180,11 @@ type Shown = SuggestionStatus | 'all'
 const SHOWN: { value: Shown; label: string }[] = [
   { value: 'pending', label: 'To review' },
   { value: 'accepted', label: 'Accepted' },
-  { value: 'applied', label: 'Applied' },
+  { value: 'applied', label: 'Auto-applied' },
   { value: 'dismissed', label: 'Dismissed' },
 ]
 
-/** AI2 and AI4: what the AI found, to accept or dismiss. A for accept, D for dismiss. */
+/** What the model found, to accept or dismiss. A for accept, D for dismiss. */
 export function SuggestionsPage() {
   return <PlanningFrame label="Loading suggestions" tab="suggestions">{(project) => <SuggestionsBody projectId={project.id} />}</PlanningFrame>
 }
@@ -170,6 +192,7 @@ export function SuggestionsPage() {
 function SuggestionsBody({ projectId }: { projectId: string }) {
   const [shown, setShown] = useState<Shown>('pending')
   const status = useProjectAi(projectId)
+  const analyze = useAnalyze(projectId)
   const decide = useDecideSuggestion(projectId)
   const [problem, setProblem] = useState<string | null>(null)
   const page = useInfiniteQuery({
@@ -201,10 +224,11 @@ function SuggestionsBody({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <PageHeader actions={<AnalyzeButton projectId={projectId} status={status.data} />} icon="bot" title="Suggestions">
-        Dependencies, blockers, labels, priorities and criteria the AI found. Nothing changes until someone accepts it, unless the
-        project turned on applying sure ones automatically.
-      </PageHeader>
+      <PlanningIntro actions={<AnalyzeButton analyze={analyze} status={status.data} />}>
+        Dependencies, blockers, labels, priorities and criteria the model found. Nothing changes until someone accepts one, unless the
+        project applies the most confident ones automatically.
+      </PlanningIntro>
+      <AnalyzeProblem analyze={analyze} />
       {status.data ? <AiNotConfigured projectId={projectId} status={status.data} /> : null}
       <LatestRun status={status.data} />
       <div className="aw-ai-toolbar">
@@ -222,17 +246,13 @@ function SuggestionsBody({ projectId }: { projectId: string }) {
         </Banner>
       ) : null}
       {page.isPending ? <ListSkeleton label="Loading suggestions" rows={4} /> : null}
-      {page.isError ? (
-        <ErrorState action={<Button onClick={() => void page.refetch()}>Try again</Button>} title="Suggestions didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {page.isError ? <ErrorState error={page.error} onRetry={() => void page.refetch()} title="Suggestions didn’t load" /> : null}
       {page.isSuccess && !suggestions.length ? (
         <EmptyState icon="circle-check" title={shown === 'pending' ? 'Nothing to review' : 'None here yet'}>
           {shown === 'pending'
             ? status.data?.configured
               ? 'New suggestions show up here as tasks change, after each nightly check, or when someone analyzes the project.'
-              : 'Once AI is set up, it looks for dependencies and blockers as tasks change.'
+              : 'Once a model is set up, it looks for dependencies and blockers as tasks change.'
             : 'Suggestions move here once someone decides on them.'}
         </EmptyState>
       ) : null}

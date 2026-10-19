@@ -7,27 +7,28 @@ import { listPages, memoryKeys } from '../memory/api'
 import {
   Banner,
   Button,
+  ButtonLink,
   Dots,
   EmptyState,
   ErrorState,
   IconButton,
   ListSkeleton,
-  PageHeader,
   SegmentedControl,
   SelectField,
   StatusChip,
   TextArea,
   TextField,
+  countLabel,
   formatRelative,
 } from '../ui'
+import { priorityLabel, workItemPriorities } from '../work-items/constants'
+import type { WorkItemPriority } from '../work-items/types'
 import type { Draft, DraftTask, PlanImport, PlanSource } from './api'
-import { PlanningFrame } from './frame'
+import { PlanningFrame, PlanningIntro } from './frame'
 import { useCommitPlan, useCreatePlan, usePlan, usePlans, useProjectAi, useSavePlan } from './hooks'
 import { aiErrorMessage, planningHref } from './links'
 
 type SourceKind = PlanSource['kind']
-
-const PRIORITIES = ['no_priority', 'low', 'medium', 'high', 'urgent']
 
 const STATE_LABELS: Record<PlanImport['state'], string> = {
   drafting: 'Reading',
@@ -37,7 +38,7 @@ const STATE_LABELS: Record<PlanImport['state'], string> = {
   failed: 'Failed',
 }
 
-/** AI3: a plan (pasted text, a page, or JSON) turned into milestones, tasks and dependencies after a review. */
+/** A plan (pasted text, a page, or JSON) turned into milestones, tasks and dependencies after a review. */
 export function PlanImportPage() {
   return (
     <PlanningFrame label="Loading plan import" tab="plan-import">
@@ -63,6 +64,7 @@ function PlanStart({ archived, projectId }: { archived: boolean; projectId: stri
   const [pageId, setPageId] = useState('')
   const [json, setJson] = useState<{ name: string; value: unknown } | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
   const pages = useQuery({ queryKey: memoryKeys.pages(projectId), queryFn: () => listPages(projectId), enabled: kind === 'page' })
   const canEdit = plans.data?.canEdit ?? false
   const needsAi = kind !== 'structured'
@@ -96,9 +98,9 @@ function PlanStart({ archived, projectId }: { archived: boolean; projectId: stri
 
   return (
     <>
-      <PageHeader icon="list" title="Import a plan">
+      <PlanningIntro>
         Turn a plan into milestones, tasks and the dependencies between them. You review and edit everything before any task is created.
-      </PageHeader>
+      </PlanningIntro>
       {plans.isSuccess && canEdit && !archived ? (
         <form className="aw-ai-planform" onSubmit={submit}>
           <SegmentedControl<SourceKind>
@@ -131,17 +133,36 @@ function PlanStart({ archived, projectId }: { archived: boolean; projectId: stri
               ))}
             </SelectField>
           ) : (
-            <TextField
-              accept="application/json,.json"
-              hint="A roadmap.json like this repository’s, or a draft with milestones and tasks. Read without AI."
-              label="File"
-              onChange={(event) => void readFile(event.target.files?.[0])}
-              type="file"
-            />
+            <div className="aw-field">
+              <span className="aw-field__label" id="plan-file-label">
+                File
+              </span>
+              <div className="aw-ai-file">
+                <Button aria-describedby="plan-file-hint" aria-labelledby="plan-file-label plan-file-button" icon="plus" id="plan-file-button" onClick={() => fileInput.current?.click()} type="button">
+                  {json ? 'Choose another file' : 'Choose a JSON file'}
+                </Button>
+                {json ? <span className="aw-ai-file__name">{json.name}</span> : null}
+              </div>
+              <input
+                accept="application/json,.json"
+                aria-hidden="true"
+                className="visually-hidden"
+                onChange={(event) => {
+                  void readFile(event.target.files?.[0])
+                  event.target.value = ''
+                }}
+                ref={fileInput}
+                tabIndex={-1}
+                type="file"
+              />
+              <span className="aw-field__note" id="plan-file-hint">
+                A roadmap in JSON, or a draft with milestones and tasks. No model needed.
+              </span>
+            </div>
           )}
           {needsAi && status.isSuccess && !aiReady ? (
             <Banner role="note" tone="info">
-              Reading text needs AI, which isn’t set up for this project. {status.data.problem ?? ''} A JSON file works without it.
+              Reading text needs a model, and none is set up for this project. {status.data.problem ?? ''} A JSON file works without one.
             </Banner>
           ) : null}
           {problem ? <Banner tone="danger">{problem}</Banner> : null}
@@ -158,11 +179,7 @@ function PlanStart({ archived, projectId }: { archived: boolean; projectId: stri
       ) : null}
       <h2 className="aw-worksection__title">Earlier imports</h2>
       {plans.isPending ? <ListSkeleton label="Loading imports" rows={2} /> : null}
-      {plans.isError ? (
-        <ErrorState action={<Button onClick={() => void plans.refetch()}>Try again</Button>} title="Imports didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {plans.isError ? <ErrorState error={plans.error} onRetry={() => void plans.refetch()} title="Imports didn’t load" /> : null}
       {plans.isSuccess && !plans.data.plans.length ? (
         <EmptyState icon="list" title="No imports yet">
           Imports you start show up here, so you can come back to a draft.
@@ -175,7 +192,7 @@ function PlanStart({ archived, projectId }: { archived: boolean; projectId: stri
               <Link to={`${planningHref(projectId, 'plan-import')}?plan=${encodeURIComponent(plan.id)}`}>{plan.title}</Link>
               <StatusChip tone={plan.state === 'committed' ? 'success' : plan.state === 'failed' ? 'danger' : 'muted'}>{STATE_LABELS[plan.state]}</StatusChip>
               <span className="aw-quiet">
-                {plan.draft.tasks.length} tasks · {formatRelative(plan.createdAt)}
+                {countLabel(plan.draft.tasks.length, 'task')} · {formatRelative(plan.createdAt)}
               </span>
             </li>
           ))}
@@ -205,19 +222,13 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
   )
   if (loaded.isPending) return <ListSkeleton label="Loading the plan" rows={4} />
   if (loaded.isError) {
-    return (
-      <ErrorState action={<Button onClick={() => void loaded.refetch()}>Try again</Button>} title="This plan didn’t load">
-        It may have been removed, or your access may have changed. {back}
-      </ErrorState>
-    )
+    return <ErrorState action={<ButtonLink to={planningHref(projectId, 'plan-import')}>All imports</ButtonLink>} error={loaded.error} title="This plan didn’t load" />
   }
   const { plan, canEdit } = loaded.data
   if (plan.state === 'drafting') {
     return (
       <>
-        <PageHeader icon="list" title={plan.title}>
-          {back}
-        </PageHeader>
+        <PlanningIntro title={plan.title}>{back}</PlanningIntro>
         <p aria-live="polite" className="aw-ai-run aw-ai-run--running">
           <Dots /> Reading the plan and drafting milestones and tasks. This page updates when it’s done.
         </p>
@@ -227,12 +238,10 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
   if (plan.state === 'failed') {
     return (
       <>
-        <PageHeader icon="list" title={plan.title}>
-          {back}
-        </PageHeader>
-        <Banner title="This import stopped." tone="danger">
+        <PlanningIntro title={plan.title}>{back}</PlanningIntro>
+        <Banner title="This import stopped" tone="danger">
           {plan.error ?? 'Something went wrong.'}{' '}
-          {plan.createdTasks ? `${plan.createdTasks} tasks were created before it stopped.` : ''}
+          {plan.createdTasks ? `${countLabel(plan.createdTasks, 'task was', 'tasks were')} created before it stopped.` : ''}
         </Banner>
       </>
     )
@@ -242,13 +251,12 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
     const done = plan.state === 'committed'
     return (
       <>
-        <PageHeader icon="list" title={plan.title}>
-          {back}
-        </PageHeader>
+        <PlanningIntro title={plan.title}>{back}</PlanningIntro>
         <div aria-live="polite" className="aw-ai-progress">
           {done ? (
-            <Banner icon="circle-check" title="Your plan is now tasks." tone="success">
-              Created {plan.createdMilestones} milestones, {plan.createdTasks} tasks and {plan.createdDependencies} dependencies.
+            <Banner icon="circle-check" title="Your plan is now tasks" tone="success">
+              Created {countLabel(plan.createdMilestones, 'milestone')}, {countLabel(plan.createdTasks, 'task')} and{' '}
+              {countLabel(plan.createdDependencies, 'dependency', 'dependencies')}.
             </Banner>
           ) : (
             <p className="aw-ai-run aw-ai-run--running">
@@ -259,12 +267,10 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
         </div>
         {done ? (
           <div className="aw-ai-planform__actions">
-            <Link className="aw-btn aw-btn--primary aw-btn--md" to={`/projects/${encodeURIComponent(projectId)}/work-items`}>
+            <ButtonLink to={`/projects/${encodeURIComponent(projectId)}/work-items`} variant="primary">
               Open tasks
-            </Link>
-            <Link className="aw-btn aw-btn--secondary aw-btn--md" to={planningHref(projectId, 'graph')}>
-              See the graph
-            </Link>
+            </ButtonLink>
+            <ButtonLink to={planningHref(projectId, 'graph')}>See the graph</ButtonLink>
           </div>
         ) : null}
       </>
@@ -313,10 +319,17 @@ function DraftEditor({ canEdit, plan, projectId }: { canEdit: boolean; plan: Pla
     else go(plan)
   }
   const readOnly = !canEdit
+  // Unsaved edits to the draft live only on this page; the browser asks before closing it.
+  useEffect(() => {
+    if (!dirty) return undefined
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   return (
     <>
-      <PageHeader
+      <PlanningIntro
         actions={
           readOnly ? null : (
             <>
@@ -324,18 +337,21 @@ function DraftEditor({ canEdit, plan, projectId }: { canEdit: boolean; plan: Pla
                 Save draft
               </Button>
               <Button busy={commit.isPending} disabled={!draft.tasks.length} onClick={onCommit} variant="primary">
-                Create {draft.tasks.length} {draft.tasks.length === 1 ? 'task' : 'tasks'}
+                Create {countLabel(draft.tasks.length, 'task')}
               </Button>
             </>
           )
         }
-        icon="list"
         title={plan.title}
       >
         Review the draft: rename, reprioritize or remove anything before it becomes tasks.{' '}
         <Link to={planningHref(projectId, 'plan-import')}>All imports</Link>
-      </PageHeader>
-      {problem ? <Banner tone="danger">{problem}</Banner> : null}
+      </PlanningIntro>
+      {problem ? (
+        <Banner className="aw-page__banner" tone="danger">
+          {problem}
+        </Banner>
+      ) : null}
       {readOnly ? null : <TextField label="Import name" maxLength={200} onChange={(event) => setTitle(event.target.value)} value={title} />}
       <section aria-labelledby="plan-milestones" className="aw-ai-draft">
         <h2 className="aw-worksection__title" id="plan-milestones">
@@ -352,7 +368,7 @@ function DraftEditor({ canEdit, plan, projectId }: { canEdit: boolean; plan: Pla
                   onChange={(event) => renameMilestone(milestone.ref, event.target.value)}
                   value={milestone.name}
                 />
-                <span className="aw-quiet">{draft.tasks.filter((task) => task.milestone === milestone.ref).length} tasks</span>
+                <span className="aw-quiet">{countLabel(draft.tasks.filter((task) => task.milestone === milestone.ref).length, 'task')}</span>
                 {readOnly ? null : <IconButton icon="trash" label={`Remove ${milestone.name}`} onClick={() => removeMilestone(milestone.ref)} size="sm" />}
               </li>
             ))}
@@ -377,9 +393,9 @@ function DraftEditor({ canEdit, plan, projectId }: { canEdit: boolean; plan: Pla
                   value={task.title}
                 />
                 <SelectField aria-label={`Priority of ${task.ref}`} disabled={readOnly} onChange={(event) => updateTask(task.ref, { priority: event.target.value })} value={task.priority}>
-                  {PRIORITIES.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {priority === 'no_priority' ? 'No priority' : priority}
+                  {workItemPriorities.map((priority) => (
+                    <option key={priority.value} value={priority.value}>
+                      {priorityLabel(priority.value as WorkItemPriority)}
                     </option>
                   ))}
                 </SelectField>
@@ -404,7 +420,7 @@ function DraftEditor({ canEdit, plan, projectId }: { canEdit: boolean; plan: Pla
                 {task.parent ? <span>Subtask of {titles.get(task.parent) ?? task.parent}</span> : null}
                 {task.blockedBy.length ? <span>Blocked by {task.blockedBy.map((ref) => titles.get(ref) ?? ref).join(', ')}</span> : null}
                 {task.labels.length ? <span>{task.labels.join(', ')}</span> : null}
-                {task.criteria.length ? <span>{task.criteria.length} criteria</span> : null}
+                {task.criteria.length ? <span>{countLabel(task.criteria.length, 'criterion', 'criteria')}</span> : null}
               </div>
               {task.description ? (
                 <details className="aw-ai-draft__details">

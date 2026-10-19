@@ -1,6 +1,7 @@
+import { Eye, EyeOff } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
-import { Avatar, AvatarStack, Button, Icon, TextArea, actorKind } from '../ui'
+import { Avatar, AvatarStack, Button, Icon, TextArea, actorKind, countLabel } from '../ui'
 import { DatePicker, Popover } from '../ui/pickers'
 import { priorityLabel } from './constants'
 import { FieldPicker, type PickerField } from './FieldPicker'
@@ -215,7 +216,7 @@ function BlockedField({ disabled, item, save }: { disabled: boolean; item: WorkI
         </>
       ) : (
         <>
-          <span className="aw-prop__empty">{openBlockers ? `Waiting on ${openBlockers} work item${openBlockers === 1 ? '' : 's'}` : item.ready ? 'Ready' : 'No'}</span>
+          <span className="aw-prop__empty">{openBlockers ? `Waiting on ${countLabel(openBlockers, 'task')}` : item.ready ? 'Ready' : 'No'}</span>
           {!disabled ? (
             <Button
               onClick={(event) => {
@@ -275,15 +276,15 @@ function WatchField({ item, readOnly }: { item: WorkItem; readOnly: boolean }) {
         <Button
           aria-pressed={item.watching}
           busy={watch.isPending}
+          icon={item.watching ? EyeOff : Eye}
           onClick={() => watch.mutate({ projectId: item.projectId, workItemId: item.id, watching: !item.watching, idempotencyKey: crypto.randomUUID() })}
           size="sm"
           variant="ghost"
         >
-          <TaskGlyph name={item.watching ? 'unwatch' : 'watch'} />
           {item.watching ? 'Unwatch' : 'Watch'}
         </Button>
       )}
-      {watch.isError ? <span role="alert" className="aw-prop__error">That didn’t save. Try again.</span> : null}
+      {watch.isError ? <span role="alert" className="aw-prop__error">{item.watching ? 'Unwatching' : 'Watching'} didn’t save. Try again.</span> : null}
     </span>
   )
 }
