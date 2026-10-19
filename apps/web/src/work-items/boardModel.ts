@@ -1,7 +1,7 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
 import { priorityLabel } from './constants'
-import type { LaneBy } from './listModel'
+import type { FilterValues, LaneBy } from './listModel'
 import type { BoardColumn, BoardColumnsBy, WorkItemBoardResponse, WorkItemCard, WorkItemPatch, WorkItemPriority } from './types'
 
 /**
@@ -213,4 +213,65 @@ export async function runOptimisticMove<T>(
  */
 export function orderedIndex(items: WorkItemCard[], card: WorkItemCard): number {
   return items.filter((item) => item.id !== card.id && item.boardOrder < card.boardOrder).length
+}
+
+/** What a task added in a board column starts with. */
+export type NewTaskValues = {
+  statusId?: string
+  priority: WorkItemPriority
+  assigneeActorId?: string
+  milestoneId?: string
+  typeId?: string
+  labelIds?: string[]
+}
+
+/** The one value a filter names, when it names exactly one a task can have. */
+function pinned(value: string | undefined): string | undefined {
+  const values = value ? value.split(',') : []
+  return values.length === 1 && values[0] !== 'none' && values[0] !== 'me' ? values[0] : undefined
+}
+
+/**
+ * A task added in a column takes the column's value, and whatever the
+ * filters pin to a single value, so it lands where it was typed.
+ */
+export function newTaskValues(columnsBy: BoardColumnsBy, columnKey: string, filters: FilterValues): NewTaskValues {
+  const values: NewTaskValues = { priority: (pinned(filters.priority) as WorkItemPriority | undefined) ?? 'no_priority' }
+  const status = pinned(filters.statusId)
+  const assignee = pinned(filters.assigneeActorId)
+  const milestone = pinned(filters.milestoneId)
+  const type = pinned(filters.typeId)
+  if (status) values.statusId = status
+  if (assignee) values.assigneeActorId = assignee
+  if (milestone) values.milestoneId = milestone
+  if (type) values.typeId = type
+  const labels = new Set(filters.labelIds && filters.labelIds !== 'none' ? filters.labelIds.split(',') : [])
+  const anyLabel = pinned(filters.anyLabelIds)
+  if (anyLabel) labels.add(anyLabel)
+  const none = columnKey === 'none'
+  switch (columnsBy) {
+    case 'status':
+      values.statusId = columnKey
+      break
+    case 'assignee':
+      if (none) delete values.assigneeActorId
+      else values.assigneeActorId = columnKey
+      break
+    case 'priority':
+      values.priority = none ? 'no_priority' : (columnKey as WorkItemPriority)
+      break
+    case 'milestone':
+      if (none) delete values.milestoneId
+      else values.milestoneId = columnKey
+      break
+    case 'type':
+      values.typeId = columnKey
+      break
+    case 'label':
+      if (none) labels.clear()
+      else labels.add(columnKey)
+      break
+  }
+  if (labels.size) values.labelIds = [...labels]
+  return values
 }

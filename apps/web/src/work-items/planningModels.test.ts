@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 
-import { applyMove, dropAnchor, fieldMove, lanesFor, orderedIndex, runOptimisticMove } from './boardModel'
+import { applyMove, dropAnchor, fieldMove, lanesFor, newTaskValues, orderedIndex, runOptimisticMove } from './boardModel'
 import { formatDateLabel } from '../ui/dateModel'
 import { changeSentence, formatChanges } from './historyFormat'
 import type { WorkItemBoardResponse, WorkItemCard, WorkItemWorkflow } from './types'
@@ -164,6 +164,19 @@ describe('board moves', () => {
 
     await runOptimisticMove(queryClient, key, (current) => applyMove(current, '1', 'doing', 0), async () => 'ok')
     expect(ids(queryClient.getQueryData<WorkItemBoardResponse>(key)!)).toEqual(['2,3', '1,4'])
+  })
+
+  it('starts a task added in a column with the column value and the filters it pins', () => {
+    expect(newTaskValues('status', 'ready', { priority: 'high', assigneeActorId: 'ann', milestoneId: 'm1,m2' })).toEqual({
+      statusId: 'ready',
+      priority: 'high',
+      assigneeActorId: 'ann',
+    })
+    // The column wins over a filter on the same field, and "none" clears it.
+    expect(newTaskValues('assignee', 'none', { assigneeActorId: 'ann' })).toEqual({ priority: 'no_priority' })
+    expect(newTaskValues('priority', 'none', { priority: 'urgent' })).toEqual({ priority: 'no_priority' })
+    expect(newTaskValues('label', 'b', { labelIds: 'a', anyLabelIds: 'c' }).labelIds?.sort()).toEqual(['a', 'b', 'c'])
+    expect(newTaskValues('label', 'none', { labelIds: 'a' })).toEqual({ priority: 'no_priority' })
   })
 })
 

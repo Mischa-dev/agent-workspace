@@ -554,6 +554,47 @@
   padding-bottom: var(--space-3);
   outline: none;
   overscroll-behavior-x: contain;
+  /* Cards scrolled to with the keyboard stop below the column headings. */
+  scroll-padding: 56px 0 var(--space-3);
+}
+
+/* On a wide screen the board fills the rest of the page and scrolls itself,
+   so the column headings stay in view. Phones scroll the page instead. */
+@media (min-width: 641px) {
+  .aw-workpage--board {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+    padding-bottom: var(--space-4);
+  }
+
+  .aw-workpage--board > .aw-tboard-wrap {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    min-height: 360px;
+  }
+
+  .aw-workpage--board .aw-tboard {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* Without lanes the columns run to the bottom of the board, so an empty
+     one is as easy to drop on as a full one. */
+  .aw-workpage--board .aw-tboard__body {
+    min-height: 100%;
+  }
+
+  .aw-workpage--board .aw-tboard__grid--fill {
+    grid-template-rows: auto 1fr;
+  }
+
+  .aw-workpage--board .aw-tboard__grid--fill > .aw-tboard__cell {
+    align-self: stretch;
+  }
 }
 
 .aw-tboard__body {
@@ -595,12 +636,61 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-md);
   background: var(--content-bg);
+}
+
+.aw-tboard__headrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-tboard__headrow > .aw-tboard__count {
+  margin-right: auto;
+}
+
+.aw-tboard__add {
+  margin: -4px;
+  color: var(--content-fg-muted);
+}
+
+/* A new task being written looks like the card it becomes. */
+.aw-tcomposer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-tcomposer__input {
+  width: 100%;
+  min-height: 60px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--content-fg);
+  font: var(--t-ui);
+  font-weight: 600;
+  resize: none;
+}
+
+.aw-tcomposer__input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.aw-tcomposer__input::placeholder {
+  color: var(--content-fg-muted);
+  font-weight: 400;
+}
+
+.aw-tcomposer__actions {
+  display: flex;
+  gap: var(--space-1);
 }
 
 .aw-tboard__title {
@@ -667,6 +757,7 @@
 }
 
 .aw-tcard {
+  position: relative;
   display: grid;
   gap: 6px;
   padding: var(--space-2) var(--space-3);
@@ -697,6 +788,67 @@
   border-color: var(--accent);
 }
 
+.aw-tcard.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 9%, var(--surface-raised));
+}
+
+/* A task just added from its column shows where it landed. */
+.aw-tcard.is-fresh {
+  animation: aw-tcard-fresh 1.6s var(--ease-out);
+}
+
+@keyframes aw-tcard-fresh {
+  from {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+}
+
+/* The selection box sits on the card's left edge, so it takes no room from
+   the card. It shows on hover, once anything is selected, and always on touch. */
+.aw-tcard__check {
+  position: absolute;
+  top: 3px;
+  left: -14px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.aw-tcard__check .aw-check__input {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.aw-tcard__check .aw-check__box {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.aw-tcard:hover .aw-tcard__check,
+.aw-tcard:focus-visible .aw-tcard__check,
+.aw-tcard.is-selected .aw-tcard__check,
+.aw-tboard.has-selection .aw-tcard__check {
+  opacity: 1;
+}
+
+.aw-tboard.is-dragging .aw-tcard__check {
+  opacity: 0;
+}
+
+@media (hover: none) {
+  .aw-tcard__check {
+    opacity: 1;
+  }
+}
+
 .aw-tcard.is-held {
   box-shadow:
     0 0 0 2px var(--accent),
@@ -723,6 +875,7 @@
 }
 
 .aw-tcard__title {
+  outline: none;
   color: var(--content-fg);
   font: var(--t-ui);
   font-weight: 600;

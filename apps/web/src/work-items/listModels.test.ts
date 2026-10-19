@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { listQuery, parametersFromRemembered, readListState, rememberedState, withFilter, writeListState } from './listModel'
 import { buildListRows, visibleTaskIds, type ListRow } from './listRows'
-import { emptySelection, keepLoaded, MAX_BULK, pick, selectAll } from './selectionModel'
+import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll } from './selectionModel'
 import type { WorkItemCard } from './types'
 
 function card(id: string, group?: string): WorkItemCard {
@@ -149,5 +149,25 @@ describe('bulk selection', () => {
     expect(keepLoaded(kept, new Set(order))).toBe(kept)
     const many = Array.from({ length: MAX_BULK + 50 }, (_, index) => `t${index}`)
     expect(selectAll(many).ids.size).toBe(MAX_BULK)
+  })
+
+  it('changes the selection from a selected card, only that card from another, and never what can’t change', () => {
+    const [a, b, c] = [card('a'), card('b'), card('c')]
+    const locked = { ...card('d'), capabilities: { view: true, edit: false, archive: false } }
+    const archived = { ...card('e'), archivedAt: '2026-10-19T00:00:00Z' }
+    const ids = (cards: WorkItemCard[]) => cards.map((entry) => entry.id)
+    expect(ids(pickerTargets([a, b, locked, archived], a))).toEqual(['a', 'b'])
+    expect(ids(pickerTargets([a, b], c))).toEqual(['c'])
+    expect(ids(pickerTargets([a, b]))).toEqual(['a', 'b'])
+    expect(pickerTargets([], locked)).toEqual([])
+  })
+
+  it('shows the values of one task, and only the labels every selected task has', () => {
+    const red = { id: 'red', name: 'Red', color: '#f00' }
+    const blue = { id: 'blue', name: 'Blue', color: '#00f' }
+    const a = { ...card('a'), labels: [red, blue] }
+    const b = { ...card('b'), labels: [blue] }
+    expect(pickerCurrent([a, b])).toEqual({ labelIds: ['blue'] })
+    expect(pickerCurrent([a])).toMatchObject({ statusId: 's', priority: 'medium', assigneeId: null, labelIds: ['red', 'blue'] })
   })
 })

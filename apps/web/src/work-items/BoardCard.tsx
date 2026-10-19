@@ -1,12 +1,16 @@
 import { memo, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 
+import { Icon } from '../ui'
 import { AssigneeMark, DueDate, TaskBadges } from './ListCells'
 import type { PickerField } from './FieldPicker'
 import { workItemHref } from './links'
 import type { WorkItemCard } from './types'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
 
-/** One card on the board. The whole card is the drag handle and opens the task on click or Enter. */
+/**
+ * One card on the board. The whole card is the drag handle and opens the task
+ * on click or Enter; Cmd/Ctrl-click, Shift-click or its box selects it.
+ */
 export const BoardCard = memo(function BoardCard({
   card,
   dragId,
@@ -18,7 +22,9 @@ export const BoardCard = memo(function BoardCard({
   onOpen,
   onPick,
   onPointerDown,
+  onSelect,
   open,
+  selected,
   showStatus,
 }: {
   card: WorkItemCard
@@ -32,18 +38,27 @@ export const BoardCard = memo(function BoardCard({
   onOpen: (card: WorkItemCard, event: MouseEvent<HTMLElement>) => void
   onPick: (card: WorkItemCard, field: PickerField, anchor: HTMLElement) => void
   onPointerDown: (event: PointerEvent<HTMLElement>, cardId: string) => void
+  /** Left out where nothing can change, so there's nothing to select for. */
+  onSelect?: (card: WorkItemCard, range: boolean) => void
   open: boolean
+  selected: boolean
   showStatus: boolean
 }) {
   const editable = draggable && card.capabilities.edit && !card.archivedAt
   return (
     <li
       aria-describedby="board-drag-help"
-      aria-label={`${card.key} ${card.title}`}
-      className={['aw-tcard', held ? 'is-held' : '', open ? 'is-open' : '', draggable ? 'is-draggable' : ''].filter(Boolean).join(' ')}
+      aria-label={`${card.key} ${card.title}${selected ? ', selected' : ''}`}
+      className={['aw-tcard', held ? 'is-held' : '', open ? 'is-open' : '', selected ? 'is-selected' : '', draggable ? 'is-draggable' : ''].filter(Boolean).join(' ')}
       data-drag-id={dragId}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest('button')) return
+        if ((event.target as HTMLElement).closest('button, label')) return
+        // A click on the title lands on its link; the card is what J, K and X go on from.
+        if (document.activeElement !== event.currentTarget) event.currentTarget.focus({ preventScroll: true })
+        if (onSelect && (event.metaKey || event.ctrlKey || event.shiftKey)) {
+          onSelect(card, event.shiftKey)
+          return
+        }
         onOpen(card, event)
       }}
       onContextMenu={(event) => {
@@ -55,6 +70,23 @@ export const BoardCard = memo(function BoardCard({
       onPointerDown={(event) => onPointerDown(event, dragId)}
       tabIndex={focused ? 0 : -1}
     >
+      {onSelect ? (
+        // The box sits on the card's corner, so it takes no room from the card.
+        <label className="aw-tcard__check">
+          <input
+            aria-label={`Select ${card.key}`}
+            checked={selected}
+            className="aw-check__input"
+            onChange={() => undefined}
+            onClick={(event) => onSelect(card, event.shiftKey)}
+            tabIndex={-1}
+            type="checkbox"
+          />
+          <span aria-hidden="true" className="aw-check__box">
+            <Icon name="check" size={12} />
+          </span>
+        </label>
+      ) : null}
       <div className="aw-tcard__top">
         {showStatus ? <StatusIcon category={card.status.semanticCategory} label={card.status.name} /> : null}
         <span className="aw-tcard__key">{card.key}</span>
