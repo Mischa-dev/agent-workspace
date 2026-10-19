@@ -33,6 +33,14 @@ export default async function globalSetup() {
       `No server binary at ${serverBinary}. Run \`cargo build -p agent-workspace-server\` or set E2E_SERVER_BINARY.`,
     )
   }
+  // A server left running by an earlier run would answer the health check and
+  // every request after it, and turn down this run's password.
+  if (await answers(`${serverOrigin}/health/ready`)) {
+    throw new Error(
+      `A server is already listening at ${serverOrigin}, probably left running by an earlier run. ` +
+        'Stop it, or set E2E_SERVER_PORT to another port.',
+    )
+  }
   const databaseName = process.env.E2E_DATABASE_NAME ?? 'aw_e2e'
   if (!/^aw_e2e[a-z0-9_]*$/.test(databaseName)) {
     throw new Error('E2E_DATABASE_NAME must start with aw_e2e and use only a-z, 0-9 and _')
@@ -119,6 +127,15 @@ function run(command: string, args: string[]) {
   if (result.status !== 0) {
     // stderr from the PostgreSQL tools never includes the password.
     throw new Error(`${command} ${args.at(-1)} failed: ${result.error?.message ?? result.stderr}`)
+  }
+}
+
+async function answers(url: string) {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(2_000) })
+    return true
+  } catch {
+    return false
   }
 }
 
