@@ -333,8 +333,8 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     assert_eq!(none["label"], "No account");
     assert!(none["inputTokens"].as_i64().unwrap_or(0) >= 120, "{none}");
     assert!(
-        rows.iter().all(|row| row["key"] != "others"
-            || row["label"] == "Other people's accounts"),
+        rows.iter()
+            .all(|row| row["key"] != "others" || row["label"] == "Other people's accounts"),
         "{}",
         usage.1
     );
