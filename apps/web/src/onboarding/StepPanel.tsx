@@ -1,4 +1,4 @@
-import { Suspense, useState, type FormEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -23,7 +23,7 @@ const INTRO: Record<OnboardingStepId, string> = {
   github: 'Install the GitHub App so agents can read the code and open pull requests. It ticks as soon as GitHub reports the install.',
   repository: 'Pick the repository agents work in for this project.',
   account: 'Sign in a provider account to run agents on. Any harness works: each run uses the account its project points at.',
-  environment: 'Choose where runs happen and the defaults they start with: harness, model, thinking level and speed.',
+  environment: 'Choose where runs happen and the defaults they start with: harness, model, reasoning and speed.',
   tasks: 'Write the first things you want done. A description and a few acceptance criteria make a task ready for an agent.',
   agent: 'Connect an agent of your own, such as a harness you run elsewhere, so it can pick up tasks too. You can skip this.',
   launch: 'Start an agent on a ready task. It runs in the environment you chose, on the provider account you connected.',
@@ -75,7 +75,7 @@ function Body({ onboarding, project, projects, step }: PanelProps & { step: Onbo
     case 'account':
       return <Embedded group="account" id="provider-accounts" onboarding={onboarding} project={project} projects={projects} />
     case 'environment':
-      return <Embedded group="project" id="environments" onboarding={onboarding} project={project} projects={projects} />
+      return <RunSetupStep onboarding={onboarding} project={project} projects={projects} />
     case 'tasks':
       return <TasksStep onboarding={onboarding} project={project as Project} />
     case 'agent':
@@ -98,6 +98,21 @@ function Embedded({ group, id, onboarding, project, projects, after }: PanelProp
         <Page project={group === 'project' ? project : null} projects={projects} session={session} workspace={workspace} />
       </Suspense>
       {after}
+    </div>
+  )
+}
+
+const RunSetup = lazy(() => import('../settings/project/RunsPage').then((module) => ({ default: module.RunSetup })))
+
+/** Where runs work and the defaults they start with: the setup part of the project's Runs and models settings. */
+function RunSetupStep({ onboarding, project, projects }: PanelProps) {
+  const session = useAuthenticatedSession()
+  const workspace = session.organizations.find((organization) => organization.id === onboarding.organizationId) ?? null
+  return (
+    <div className="aw-onboarding__embed">
+      <Suspense fallback={<SettingsSkeleton label="Loading run settings" sections={2} />}>
+        <RunSetup project={project} projects={projects} session={session} workspace={workspace} />
+      </Suspense>
     </div>
   )
 }

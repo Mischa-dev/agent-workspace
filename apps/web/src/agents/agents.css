@@ -138,8 +138,7 @@
   gap: var(--space-4);
 }
 
-.aw-agentform__pair,
-.aw-agentform__triple {
+.aw-agentform__pair {
   display: grid;
   gap: var(--space-3);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));

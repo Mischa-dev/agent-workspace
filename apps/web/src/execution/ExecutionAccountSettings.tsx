@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
-import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField, formatShortDate } from '../ui'
+import { projectSettingsHref } from '../settings/paths'
+import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField } from '../ui'
 import {
   cancelAccountLogin,
   createProviderAccount,
@@ -14,18 +16,16 @@ import {
   loginWithApiKey,
   logoutAccount,
   pickableModels,
-  refreshCatalog,
-  saveModel,
   startAccountLogin,
   updateProviderAccount,
   useProviderAccount as setAccountInUse,
   type AccountStatus,
   type Harness,
   type LoginCeremony,
-  type ModelOverrides,
   type ProviderAccount,
   type RunSettings,
 } from './api'
+import { RunSettingsFields } from './RunSettingsFields'
 
 /** Your provider accounts: the sign-ins your runs use. An account is yours
  * alone and works in every project you choose to use it in, so you sign in
@@ -102,11 +102,6 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
       )}
       {accounts.data.length > 0 ? addForm : null}
       {add.isError && <Banner tone="danger">{errorMessage(add.error)}</Banner>}
-      {harnesses.data
-        .filter((harness) => harness.canEditCatalog && (harness.catalog.models.length > 0 || harness.features.modelListing))
-        .map((harness) => (
-          <ModelCatalog harness={harness} key={harness.kind} projectId={projectId} />
-        ))}
     </div>
   )
 }
@@ -345,7 +340,13 @@ function AccountRunDefaults({
 
   return (
     <div className="aw-profile__facts">
-      <RunSettingsFields harness={harness} idPrefix={`defaults-${account.id}`} onChange={setDraft} value={draft} />
+      <RunSettingsFields harnesses={[harness]} idPrefix={`defaults-${account.id}`} onChange={setDraft} value={draft} />
+      {pickableModels(harness).length > 0 ? (
+        <p className="aw-quiet">
+          Used only where the launch, the agent and the{' '}
+          <Link to={projectSettingsHref(projectId, 'runs')}>project’s and workspace’s settings</Link> leave a value unset.
+        </p>
+      ) : null}
       {harness.features.concurrentRuns ? (
         <SelectField
           id={`limit-${account.id}`}
@@ -367,143 +368,6 @@ function AccountRunDefaults({
         </Button>
       ) : null}
     </div>
-  )
-}
-
-/** Model, reasoning and speed pickers for one harness, drawn from its
- * catalog. An empty choice means "use the default". */
-export function RunSettingsFields({
-  harness,
-  idPrefix,
-  onChange,
-  value,
-}: {
-  harness: Harness
-  idPrefix: string
-  onChange: (value: RunSettings) => void
-  value: RunSettings
-}) {
-  const models = pickableModels(harness)
-  const model = models.find((candidate) => candidate.id === value.model) ?? models.find((candidate) => candidate.isDefault)
-  if (!models.length) return null
-  return (
-    <div className="aw-inline-form">
-      <SelectField
-        id={`${idPrefix}-model`}
-        label="Model"
-        onChange={(event) => onChange({ ...value, model: event.target.value || undefined, reasoning: undefined, speed: undefined })}
-        value={value.model ?? ''}
-      >
-        <option value="">Default ({models.find((candidate) => candidate.isDefault)?.displayName ?? models[0].displayName})</option>
-        {models.map((candidate) => (
-          <option key={candidate.id} value={candidate.id}>
-            {candidate.displayName}
-          </option>
-        ))}
-      </SelectField>
-      {model && model.reasoningLevels.length > 0 ? (
-        <SelectField
-          id={`${idPrefix}-reasoning`}
-          label="Reasoning"
-          onChange={(event) => onChange({ ...value, reasoning: event.target.value || undefined })}
-          value={value.reasoning ?? ''}
-        >
-          <option value="">Default{model.defaultReasoning ? ` (${humanize(model.defaultReasoning)})` : ''}</option>
-          {model.reasoningLevels.map((level) => (
-            <option key={level} value={level}>
-              {humanize(level)}
-            </option>
-          ))}
-        </SelectField>
-      ) : null}
-      {model && model.speeds.length > 1 ? (
-        <SelectField
-          id={`${idPrefix}-speed`}
-          label="Speed"
-          onChange={(event) => onChange({ ...value, speed: event.target.value || undefined })}
-          value={value.speed ?? ''}
-        >
-          <option value="">Default</option>
-          {model.speeds.map((speed) => (
-            <option key={speed.id} value={speed.id}>
-              {speed.name}
-            </option>
-          ))}
-        </SelectField>
-      ) : null}
-    </div>
-  )
-}
-
-/** The workspace's model list for one harness. Admins hide models nobody
- * should pick, choose the default, and pull the provider's latest list. */
-function ModelCatalog({ harness, projectId }: { harness: Harness; projectId: string }) {
-  const queryClient = useQueryClient()
-  const saved = (updated: Harness) =>
-    queryClient.setQueryData<Harness[]>(queryKeys.harnesses(projectId), (current) =>
-      current?.map((entry) => (entry.kind === updated.kind ? updated : entry)),
-    )
-  const edit = useMutation({
-    mutationFn: ({ modelId, change }: { modelId: string; change: ModelOverrides }) =>
-      saveModel(projectId, harness.kind, modelId, change, crypto.randomUUID()),
-    onSuccess: saved,
-  })
-  const refresh = useMutation({
-    mutationFn: () => refreshCatalog(projectId, harness.kind, crypto.randomUUID()),
-    onSuccess: saved,
-  })
-  const failure = edit.error ?? refresh.error
-
-  return (
-    <section aria-labelledby={`catalog-${harness.kind}`} className="aw-card aw-profile">
-      <header className="aw-profile__head">
-        <div className="aw-profile__titles">
-          <h3 className="aw-profile__name" id={`catalog-${harness.kind}`}>
-            {harness.displayName} models
-          </h3>
-          <p className="aw-profile__sub">
-            Everyone in this workspace picks from this list.
-            {harness.catalog.refreshedAt ? ` Updated ${formatShortDate(harness.catalog.refreshedAt)}.` : ''}
-          </p>
-        </div>
-        {harness.features.modelListing ? (
-          <Button busy={refresh.isPending} icon="retry" onClick={() => refresh.mutate()} size="sm" variant="secondary">
-            Refresh list
-          </Button>
-        ) : null}
-      </header>
-      {failure ? <Banner tone="danger">{errorMessage(failure)}</Banner> : null}
-      {harness.catalog.models.length === 0 ? (
-        <p className="aw-quiet">No models listed yet. Refresh the list to fetch them from the provider with your signed-in account.</p>
-      ) : null}
-      {harness.catalog.models.length > 0 ? (
-      <ul className="aw-rows">
-        {harness.catalog.models.map((model) => (
-          <li className="aw-row" key={model.id}>
-            <span className="aw-row__main">
-              <span className="aw-row__title">{model.displayName}</span>
-              <span className="aw-quiet">
-                {[model.isDefault && 'Default', model.hidden && 'Hidden', model.source === 'manual' && 'Added by hand'].filter(Boolean).join(' · ') || model.id}
-              </span>
-            </span>
-            {!model.isDefault && !model.hidden ? (
-              <Button disabled={edit.isPending} onClick={() => edit.mutate({ modelId: model.id, change: { ...model.overrides, isDefault: true } })} size="sm" variant="ghost">
-                Make default
-              </Button>
-            ) : null}
-            <Button
-              disabled={edit.isPending || (model.isDefault && !model.hidden)}
-              onClick={() => edit.mutate({ modelId: model.id, change: { ...model.overrides, hidden: !model.hidden } })}
-              size="sm"
-              variant="ghost"
-            >
-              {model.hidden ? `Show ${model.displayName}` : `Hide ${model.displayName}`}
-            </Button>
-          </li>
-        ))}
-      </ul>
-      ) : null}
-    </section>
   )
 }
 

@@ -292,7 +292,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.harness",
         label: "Harness",
-        description: "The harness new runs use, such as Codex or Claude Code. Unset, the first one connected.",
+        description: "The harness new runs use. Unset, one you've signed in to.",
         kind: SettingType::Identifier { optional: true },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -312,7 +312,9 @@ pub const REGISTRY: &[SettingDef] = &[
         label: "Reasoning",
         description: "How hard the model thinks before answering, where the harness supports it.",
         kind: SettingType::Choice {
-            options: &["default", "minimal", "low", "medium", "high", "max"],
+            options: &[
+                "default", "minimal", "low", "medium", "high", "xhigh", "max",
+            ],
         },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -332,7 +334,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.attempts",
         label: "Attempts",
-        description: "How many attempts a run makes, where the harness can try several and keep the best (such as Codex Cloud).",
+        description: "How many attempts a run makes, where the harness can try several and keep the best.",
         kind: SettingType::Integer { min: 1, max: 8 },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -341,9 +343,10 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.environment",
         label: "Environment",
-        description: "Where new runs execute, such as a provider's cloud environment. Unset, this host.",
+        description: "Where new runs work, such as a cloud environment set up with the repository. Unset, this server.",
         kind: SettingType::Identifier { optional: true },
-        scopes: TEAM_SCOPES,
+        // Environments belong to a project, so only a project can pick one.
+        scopes: &[Scope::Project],
         launch_override: true,
         default: "null",
     },
@@ -367,8 +370,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.auto_apply_suggestions",
-        label: "Apply AI suggestions automatically",
-        description: "Accept the AI's suggested dependencies and fields without review.",
+        label: "Apply suggestions automatically",
+        description: "Accept suggested dependencies and fields without review.",
         kind: SettingType::Bool,
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -376,8 +379,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.provider",
-        label: "AI provider",
-        description: "Which provider the server's short AI jobs (like dependency detection) use.",
+        label: "Provider",
+        description: "Which provider suggestions and summaries use.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -385,8 +388,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.model",
-        label: "AI model",
-        description: "The model the server's short AI jobs use. Unset, the provider's default.",
+        label: "Model for quick jobs",
+        description: "The model short jobs, like dependency detection, use. Unset, the provider's default.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -394,8 +397,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.deep_model",
-        label: "AI model for deep jobs",
-        description: "The model longer AI jobs (like turning a plan into tasks) use. Unset, the provider's default.",
+        label: "Model for deep jobs",
+        description: "The model longer jobs, like turning a plan into tasks, use. Unset, the provider's default.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -403,7 +406,7 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.base_url",
-        label: "AI provider address",
+        label: "Provider address",
         description: "The address of an OpenAI-compatible server (OpenRouter, Ollama, vLLM), or another address for a provider's API.",
         kind: SettingType::Text {
             max_chars: 300,
@@ -415,8 +418,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.monthly_budget_usd",
-        label: "Monthly AI budget (USD)",
-        description: "AI jobs stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
+        label: "Monthly budget (USD)",
+        description: "Suggestions and summaries stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
         kind: SettingType::Integer {
             min: 0,
             max: 100_000,
