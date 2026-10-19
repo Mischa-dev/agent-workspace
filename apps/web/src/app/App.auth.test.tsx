@@ -29,9 +29,9 @@ describe('App sign-in and session boundary', () => {
     const { container } = render(<App />)
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
-    expect(
-      screen.getByText(/link WorkOS from Account settings/i),
-    ).toBeVisible()
+    expect(screen.getByLabelText('Username')).toBeVisible()
+    // Without single sign-on there's nothing to link, so the footer doesn't mention it.
+    expect(screen.queryByText(/single sign-on/i)).not.toBeInTheDocument()
     expect(
       (
         await axe.run(container, {
@@ -58,7 +58,7 @@ describe('App sign-in and session boundary', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    fireEvent.change(await screen.findByLabelText('Login name'), {
+    fireEvent.change(await screen.findByLabelText('Username'), {
       target: { value: 'mischa' },
     })
     fireEvent.change(screen.getByLabelText('Password'), {
@@ -67,7 +67,7 @@ describe('App sign-in and session boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
     expect(
-      await screen.findByRole('heading', { name: /Welcome back/ }),
+      await screen.findByRole('heading', { name: /^(Welcome|Good (morning|afternoon|evening)), / }),
     ).toBeVisible()
     const loginCall = fetchMock.mock.calls.find(([path]) =>
       String(path).endsWith('/auth/login'),
@@ -159,12 +159,12 @@ describe('App sign-in and session boundary', () => {
 
     fireEvent.click(
       await screen.findByRole('link', {
-        name: 'Agent Workspace, 3 items need attention',
+        name: 'Agent Workspace, 3 unread',
       }),
     )
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
 
-    fireEvent.change(screen.getByLabelText('Login name'), {
+    fireEvent.change(screen.getByLabelText('Username'), {
       target: { value: 'next' },
     })
     fireEvent.change(screen.getByLabelText('Password'), {
@@ -172,17 +172,15 @@ describe('App sign-in and session boundary', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
+    // Signing in returns to Home or to Agent Workspace (the tile opens it at once); either way only the next person's projects show.
     expect(
-      await screen.findByRole('heading', { name: /Welcome back, Next Actor/ }),
-    ).toBeVisible()
-    expect(
-      await within(await screen.findByRole('navigation', { name: 'Projects' })).findByRole('link', {
+      await within(await screen.findByRole('navigation', { name: 'Spaces' })).findByRole('link', {
         name: 'Beta Project',
       }),
     ).toBeVisible()
     expect(
       screen.queryByRole('link', {
-        name: 'Agent Workspace, 3 items need attention',
+        name: 'Agent Workspace, 3 unread',
       }),
     ).not.toBeInTheDocument()
     expect(projectListReads).toBeGreaterThanOrEqual(2)
@@ -211,7 +209,7 @@ describe('App sign-in and session boundary', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    fireEvent.change(await screen.findByLabelText('Login name'), { target: { value: 'mischa' } })
+    fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'mischa' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse battery staple' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
@@ -226,7 +224,7 @@ describe('App sign-in and session boundary', () => {
     // A recovery code works in the same field.
     fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'abcde-12345' } })
     fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
-    expect(await screen.findByRole('heading', { name: /Welcome back/ })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /^(Welcome|Good (morning|afternoon|evening)), / })).toBeVisible()
     const second = fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/auth/login/two-factor'))
     expect(JSON.parse(String(second[1]?.[1]?.body))).toEqual({ challenge: 'challenge-abc', code: 'abcde-12345' })
   })

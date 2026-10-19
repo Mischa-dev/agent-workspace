@@ -4,7 +4,11 @@ import { reportError } from '../telemetry/reportErrors'
 import { Button } from '../ui'
 import { failingComponent } from './failingComponent'
 
-type Props = { children: ReactNode }
+type Props = {
+  children: ReactNode
+  /** The page's address: going somewhere else clears the error, so Back and links work again. */
+  resetKey?: string
+}
 type State = { failed: boolean }
 
 export class AppErrorBoundary extends Component<Props, State> {
@@ -19,6 +23,10 @@ export class AppErrorBoundary extends Component<Props, State> {
     // component that threw and the route path. No props, state or bodies.
     const component = failingComponent(info.componentStack)
     reportError(error.message || error.name, component ? `react:${component}` : 'react')
+  }
+
+  componentDidUpdate(previous: Props) {
+    if (this.state.failed && previous.resetKey !== this.props.resetKey) this.setState({ failed: false })
   }
 
   private readonly retry = () => {
@@ -38,6 +46,9 @@ export class AppErrorBoundary extends Component<Props, State> {
               Try again
             </Button>
             <Button onClick={() => window.location.reload()}>Reload workspace</Button>
+            <Button onClick={() => window.location.assign('/home')} variant="ghost">
+              Go to Home
+            </Button>
           </div>
         </main>
       )

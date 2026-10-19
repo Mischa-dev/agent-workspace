@@ -7,7 +7,7 @@ import { Link, useLocation } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
-import { Banner, Button, TextField } from '../ui'
+import { Banner, Button, ButtonLink, TextField, describeError, describeLoadError } from '../ui'
 import { AuthLayout } from './AuthLayout'
 
 type ResetInspection = { loginName: string; twoFactorRequired: boolean }
@@ -69,7 +69,7 @@ export function ForgotPasswordPage() {
       await requestReset(login.trim())
       setSent(true)
     } catch (reason) {
-      setError(rateLimited(reason) ? 'Too many requests. Wait a while, then try again.' : 'That didn’t go through. Try again.')
+      setError(rateLimited(reason) ? 'Too many requests. Wait a while, then try again.' : `The link wasn’t sent. ${describeError(reason).message}`)
     } finally {
       setSubmitting(false)
     }
@@ -78,7 +78,7 @@ export function ForgotPasswordPage() {
   if (available.data && !available.data.available) {
     return (
       <AuthLayout footer={<Link to="/sign-in">Back to sign in</Link>} title="Forgot your password?" titleId="forgot-heading">
-        <p>This server can’t send email yet, so whoever runs it resets passwords. Ask them to run the password reset command for your login name.</p>
+        <p>This server can’t send email yet, so whoever runs it resets passwords. Ask them to run the password reset command for your username.</p>
       </AuthLayout>
     )
   }
@@ -96,13 +96,13 @@ export function ForgotPasswordPage() {
   return (
     <AuthLayout
       footer={<Link to="/sign-in">Back to sign in</Link>}
-      intro="Enter your login name or your confirmed email address, and we’ll email you a link to choose a new password."
+      intro="Enter your username or your confirmed email address. A link to choose a new password goes to that account’s email."
       title="Forgot your password?"
       titleId="forgot-heading"
     >
       <ErrorBanner message={error} />
       <form className="aw-auth__form" onSubmit={submit}>
-        <TextField autoComplete="username" autoFocus disabled={submitting} id="reset-login" label="Login name or email" maxLength={254} onChange={(event) => setLogin(event.target.value)} required value={login} />
+        <TextField autoComplete="username" autoFocus disabled={submitting} id="reset-login" label="Username or email" maxLength={254} onChange={(event) => setLogin(event.target.value)} required value={login} />
         <Button busy={submitting} className="aw-auth__submit" disabled={!login.trim()} size="lg" type="submit" variant="primary">
           {submitting ? 'Sending…' : 'Email me a link'}
         </Button>
@@ -128,13 +128,26 @@ export function ResetPasswordPage() {
   const [expired, setExpired] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  if (!token || expired || inspection.isError) {
+  // Only the server saying no means the link is bad; a dropped connection or a server fault can be tried again.
+  const linkRefused =
+    isApiError(inspection.error) && inspection.error.status >= 400 && inspection.error.status < 500 && inspection.error.status !== 429
+  if (!token || expired || linkRefused) {
     return (
       <AuthLayout footer={<Link to="/sign-in">Back to sign in</Link>} title="This link doesn’t work" titleId="reset-heading">
         <p>Reset links work once, for 30 minutes, and stop working when the password changes some other way.</p>
-        <Link className="aw-btn aw-btn--primary aw-btn--md aw-auth__submit" to="/forgot-password">
+        <ButtonLink className="aw-auth__submit" to="/forgot-password" variant="primary">
           Get a new link
-        </Link>
+        </ButtonLink>
+      </AuthLayout>
+    )
+  }
+  if (inspection.isError) {
+    return (
+      <AuthLayout footer={<Link to="/sign-in">Back to sign in</Link>} title="Your link wasn’t checked" titleId="reset-heading">
+        <p>{describeLoadError(inspection.error)}</p>
+        <Button className="aw-auth__submit" icon="retry" onClick={() => void inspection.refetch()} variant="primary">
+          Try again
+        </Button>
       </AuthLayout>
     )
   }
@@ -142,9 +155,9 @@ export function ResetPasswordPage() {
     return (
       <AuthLayout title="Password changed" titleId="reset-heading">
         <p>You’re signed out everywhere. Sign in with your new password.</p>
-        <Link className="aw-btn aw-btn--primary aw-btn--md aw-auth__submit" to="/sign-in">
+        <ButtonLink className="aw-auth__submit" to="/sign-in" variant="primary">
           Sign in
-        </Link>
+        </ButtonLink>
       </AuthLayout>
     )
   }
@@ -157,7 +170,8 @@ export function ResetPasswordPage() {
   }
 
   const twoFactor = inspection.data.twoFactorRequired
-  const mismatch = confirm.length > 0 && confirm !== password
+  // Only once the second one is as long as the first, so it doesn't complain while you're still typing.
+  const mismatch = confirm.length > 0 && confirm.length >= password.length && confirm !== password
   const ready = password.length >= 12 && password === confirm && (!twoFactor || code.trim().length > 0)
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -174,7 +188,7 @@ export function ResetPasswordPage() {
       if (isApiError(reason) && reason.status === 404) setExpired(true)
       else if (isApiError(reason) && reason.code === 'invalid_credentials') setError('That code didn’t work. Check your authenticator app and try again.')
       else if (rateLimited(reason)) setError('Too many attempts. Wait a moment, then try again.')
-      else setError(isApiError(reason) ? reason.message : 'That didn’t go through. Try again.')
+      else setError(`The password wasn’t changed. ${describeError(reason).message}`)
     } finally {
       setSubmitting(false)
     }
@@ -217,9 +231,9 @@ export function VerifyEmailPage() {
     return (
       <AuthLayout title="Email confirmed" titleId="verify-heading">
         <p>Password resets and the notifications you choose to get by email now go to {result.data.address}.</p>
-        <Link className="aw-btn aw-btn--primary aw-btn--md aw-auth__submit" to="/settings/account/notifications">
+        <ButtonLink className="aw-auth__submit" to="/settings/account/notifications" variant="primary">
           Choose email notifications
-        </Link>
+        </ButtonLink>
       </AuthLayout>
     )
   }
@@ -231,9 +245,9 @@ export function VerifyEmailPage() {
           ? 'Another account already confirmed this address.'
           : 'Confirmation links work for 24 hours, and only the newest one works. Send a new one from your profile.'}
       </p>
-      <Link className="aw-btn aw-btn--primary aw-btn--md aw-auth__submit" to="/settings/account/profile">
+      <ButtonLink className="aw-auth__submit" to="/settings/account/profile" variant="primary">
         Open your profile
-      </Link>
+      </ButtonLink>
     </AuthLayout>
   )
 }

@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { defaultWorkspace } from '../settings/workspaceChoice'
 import { AppShell } from '../shell/AppShell'
-import { Button, EmptyState, ErrorState, Icon, PageHeader, SettingsSkeleton } from '../ui'
+import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SettingsSkeleton } from '../ui'
 import { getOnboarding, onboardingKeys, progressText, STEP_TITLES, type Onboarding, type OnboardingStepId } from './api'
 import { StepPanel } from './StepPanel'
 import '../settings/settings.css'
@@ -14,9 +13,9 @@ import './onboarding.css'
 
 /**
  * /welcome: the first-run path (P5). A new workspace goes from its name to
- * its first launched run here: each step shows the settings it needs right
- * in the path, and ticks itself when the server sees it done, wherever it
- * was done.
+ * its first run here: each step shows just the settings it needs right in
+ * the path, and ticks itself when the server sees it done, wherever it was
+ * done.
  */
 export function OnboardingPage() {
   const session = useAuthenticatedSession()
@@ -46,11 +45,7 @@ function OnboardingFor({ organizationId }: { organizationId: string }) {
   })
   if (onboarding.isPending) return <SettingsSkeleton label="Loading setup" sections={2} />
   if (onboarding.isError) {
-    return (
-      <ErrorState action={<Button onClick={() => void onboarding.refetch()}>Try again</Button>} title="Setup didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
+    return <ErrorState error={onboarding.error} onRetry={() => void onboarding.refetch()} title="Setup didn’t load" />
   }
   return <Path onboarding={onboarding.data} />
 }
@@ -67,16 +62,28 @@ function Path({ onboarding }: { onboarding: Onboarding }) {
     <>
       <PageHeader
         actions={
-          <Link className="aw-btn aw-btn--ghost aw-btn--md" to="/home">
-            <span className="aw-btn__label">{onboarding.complete ? 'Go to Home' : 'Finish later'}</span>
-          </Link>
+          onboarding.complete ? (
+            <ButtonLink to="/home" variant="primary">
+              Go to Home
+            </ButtonLink>
+          ) : (
+            <ButtonLink title="Setup waits on Home until it’s done" to="/home">
+              Finish later
+            </ButtonLink>
+          )
         }
         icon="home"
-        title={onboarding.complete ? `${onboarding.organizationName} is set up` : `Set up ${onboarding.organizationName}`}
+        title={
+          onboarding.complete
+            ? `${onboarding.organizationName} is set up`
+            : onboarding.canManageWorkspace
+              ? `Set up ${onboarding.organizationName}`
+              : `Get started in ${onboarding.organizationName}`
+        }
       >
         {onboarding.complete
-          ? 'Everything’s in place. Launch more from any task, or from the usage page before a plan resets.'
-          : `From a name to your first launched run. ${progressText(onboarding)}.`}
+          ? 'Everything’s in place. Start agents from any task’s page.'
+          : `From a name to your first run. ${progressText(onboarding)}.`}
       </PageHeader>
       <div className="aw-onboarding__layout">
         <nav aria-label="Setup steps" className="aw-onboarding__steps">
@@ -106,7 +113,13 @@ function Path({ onboarding }: { onboarding: Onboarding }) {
           </ol>
         </nav>
         <section aria-labelledby="onboarding-step-title" className="aw-onboarding__panel">
-          <StepPanel onboarding={onboarding} project={project} projects={projects.data?.projects ?? []} step={active} />
+          <StepPanel
+            onGoTo={(id) => setChosen({ id, wasDone: isDone(id) })}
+            onboarding={onboarding}
+            project={project}
+            projects={projects.data?.projects ?? []}
+            step={active}
+          />
         </section>
       </div>
     </>

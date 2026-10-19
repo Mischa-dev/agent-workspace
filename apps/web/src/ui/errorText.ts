@@ -3,9 +3,12 @@ import { isApiError } from '../api/errors'
 /** A plain sentence for a failed change, and whether fresh data would fix it. */
 export function describeError(error: unknown): { message: string; stale: boolean } {
   if (isApiError(error)) {
-    if (error.status === 409 || error.code.includes('conflict')) {
+    // Only a version clash means the screen is out of date; other 409s
+    // (for example "interrupt active runs first") explain themselves.
+    if (error.code.includes('conflict')) {
       return { message: 'Someone changed this first. You’re now looking at the latest version.', stale: true }
     }
+    if (error.status === 409) return { message: error.message, stale: false }
     if (error.status === 403) return { message: 'You don’t have permission to do that here.', stale: false }
     if (error.status === 404) return { message: 'It’s no longer there. It may have been removed.', stale: true }
     if (error.status === 429) return { message: 'That’s a lot at once. Wait a moment and try again.', stale: false }

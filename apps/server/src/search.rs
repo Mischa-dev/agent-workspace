@@ -72,6 +72,8 @@ pub struct SearchHit {
     pub kind: String,
     pub id: Uuid,
     pub title: String,
+    /// A thread's or task's status, or "superseded" for a replaced decision.
+    pub status: Option<String>,
     pub snippet: String,
     pub project_id: Uuid,
     pub project_name: String,
@@ -148,6 +150,7 @@ const MESSAGES_SQL: &str = r#"
     SELECT 'message' AS kind, message.id,
            COALESCE(author.display_name, 'Someone') || ' in ' ||
                CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END AS title,
+           NULL::text AS status,
            ts_headline('english', message.plain_text, query.q,
                        'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
            message.project_id,
@@ -182,7 +185,7 @@ const MESSAGES_SQL: &str = r#"
 const THREADS_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
     SELECT 'thread' AS kind, thread.id,
-           thread.name || ' (' || thread.thread_status || ')' AS title,
+           thread.name AS title, thread.thread_status AS status,
            COALESCE(thread.thread_outcome, '') AS snippet,
            thread.project_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
@@ -213,8 +216,8 @@ const THREADS_SQL: &str = r#"
 const TASKS_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
     SELECT 'task' AS kind, item.id,
-           project.project_key || '-' || item.number::text || ' ' || item.title
-               || ' (' || status.name || ')' AS title,
+           project.project_key || '-' || item.number::text || ' ' || item.title AS title,
+           status.name AS status,
            ts_headline('english', item.description, query.q,
                        'MaxWords=30, MinWords=8, StartSel=**, StopSel=**') AS snippet,
            item.project_id, project.name AS project_name,
@@ -240,7 +243,7 @@ const TASKS_SQL: &str = r#"
 
 const PAGES_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
-    SELECT 'page' AS kind, page.id, page.title,
+    SELECT 'page' AS kind, page.id, page.title, NULL::text AS status,
            ts_headline('english', page.body, query.q,
                        'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
            page.project_id, project.name AS project_name,
@@ -267,8 +270,8 @@ const PAGES_SQL: &str = r#"
 const DECISIONS_SQL: &str = r#"
     WITH query AS (SELECT websearch_to_tsquery('english', $3) AS q)
     SELECT 'decision' AS kind, decision.id,
-           decision.title || CASE WHEN decision.status = 'superseded' THEN ' (superseded)' ELSE '' END
-               AS title,
+           decision.title AS title,
+           CASE WHEN decision.status = 'superseded' THEN 'superseded' END AS status,
            left(decision.detail, 400) AS snippet,
            decision.project_id,
            CASE WHEN project.kind = 'direct' THEN 'Messages' ELSE project.name END AS project_name,
@@ -301,7 +304,7 @@ const FILES_SQL: &str = r#"
                '%' || replace(replace(replace($3, '\', '\\'), '%', '\%'), '_', '\_') || '%'
                    AS pattern
     )
-    SELECT 'file' AS kind, file.id, file.name AS title,
+    SELECT 'file' AS kind, file.id, file.name AS title, NULL::text AS status,
            CASE WHEN file.message_id IS NOT NULL THEN
                     'In ' || CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END
                 ELSE 'On ' || project.project_key || '-' || item.number::text || ' ' || item.title

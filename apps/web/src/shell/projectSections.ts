@@ -1,4 +1,4 @@
-/** Pages that sit under Work items in a Project's sidebar, shown as tabs on each. */
+/** Pages that sit under Tasks in a project's sidebar, shown as tabs on each. */
 const workPages = ['work-items', 'milestones', 'timeline', 'next', 'suggestions', 'graph', 'plan-import']
 /** Pages that sit under Pages. */
 const memoryPages = ['pages', 'decisions']

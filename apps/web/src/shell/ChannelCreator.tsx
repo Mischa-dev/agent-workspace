@@ -43,7 +43,7 @@ export default function ChannelCreator({
 
   return (
     <Dialog
-      description="Channels are where a Project’s conversations happen. Everyone in the Project can read and post."
+      description="Channels are where a project’s conversations happen. Everyone in the project can read and post."
       onClose={onClose}
       open={open}
       title="New channel"

@@ -1,10 +1,13 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 
 import type { SessionUser } from '../auth/session'
+import { useProjects } from '../projects/hooks'
 import type { Project } from '../projects/types'
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { syncThemeColor } from '../theme/themeColor'
 import { Banner, Icon } from '../ui'
+import { staticPageTitle } from './documentTitleModel'
 import { loadShellLazy } from './loadShellLazy'
 import { MenuButton } from './MenuButton'
 import { MOBILE_QUERY, ShellHeaderContext, isMobileWidth, useMobileNavigation } from './mobileNavigation'
@@ -25,6 +28,20 @@ const drawerFocusableSelector = [
 const PullToRefresh = lazy(() => loadShellLazy().then((module) => ({ default: module.PullToRefresh })))
 const HomeSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.HomeSidebar })))
 const DirectSidebar = lazy(() => loadShellLazy().then((module) => ({ default: module.DirectSidebar })))
+
+/**
+ * The listed project a /projects/… address belongs to, so a project page
+ * that's still loading (or failed) keeps its sidebar instead of jumping.
+ */
+function useAddressProject(enabled: boolean): Project | null {
+  const location = useLocation()
+  const projects = useProjects()
+  if (!enabled) return null
+  const match = /^\/projects\/([^/]+)/.exec(location.pathname)
+  if (!match || match[1] === 'new') return null
+  const id = decodeURIComponent(match[1])
+  return projects.data?.projects.find((candidate) => candidate.id === id && !candidate.archivedAt) ?? null
+}
 
 /** A home-screen app on a touch screen, where there's no reload button. */
 function isInstalledTouchApp() {
@@ -54,7 +71,7 @@ export function AppShell({
   home = false,
   mainClassName,
   onContextDismiss,
-  project = null,
+  project: givenProject = null,
   selectedChannelId,
   thread = null,
   user,
@@ -67,7 +84,7 @@ export function AppShell({
    * thread. On narrow screens the panel is a drawer, so it opens then.
    */
   contextKey?: string
-  /** Show the Messages sidebar (DMs and groups) instead of a Project's. */
+  /** Show the Messages sidebar (DMs and groups) instead of a project's. */
   direct?: boolean
   /** Show the Home sidebar (Inbox, My work, Later, Runs, Whiteboards). */
   home?: boolean
@@ -83,6 +100,9 @@ export function AppShell({
   user: SessionUser
 }) {
   useKeyboardViewport()
+  const location = useLocation()
+  const addressProject = useAddressProject(!givenProject && !home && !direct)
+  const project = givenProject ?? addressProject
   const navigation = useMobileNavigation()
   const navOpen = navigation.open
   const setNavOpen = navigation.setOpen
@@ -280,6 +300,14 @@ export function AppShell({
               <HomeSidebar mobileOpen={navOpen} onNavigate={closeDrawers} />
             )}
           </Suspense>
+        ) : navOpen ? (
+          // A page with no sidebar of its own (Search, Settings) still gets a
+          // useful drawer on a phone: Home's places beside the rail.
+          <div className="aw-shell__drawer-sidebar">
+            <Suspense fallback={null}>
+              <HomeSidebar mobileOpen={navOpen} onNavigate={closeDrawers} />
+            </Suspense>
+          </div>
         ) : null}
         <main
           className={`aw-main ${mainClassName ?? 'aw-main--page'}`}
@@ -297,7 +325,7 @@ export function AppShell({
           ) : null}
           {conversationLayout ? null : (
             <div className="aw-mobilebar">
-              <MenuButton label={project ? project.name : direct ? 'Messages' : home ? 'Home' : 'Agent Workspace'} />
+              <MenuButton label={project ? project.name : direct ? 'Messages' : home ? 'Home' : staticPageTitle(location.pathname) || 'Agent Workspace'} />
             </div>
           )}
           {realtime?.connection === 'retrying' && (
@@ -320,7 +348,7 @@ export function AppShell({
           >
             {contextOpen && (
               <button
-                aria-label="Close Details"
+                aria-label="Close details"
                 className="aw-iconbtn aw-panel__close"
                 onClick={dismiss}
                 ref={contextCloseButtonRef}
@@ -334,7 +362,7 @@ export function AppShell({
         )}
         {anyDrawerOpen && (
           <button
-            aria-label={contextOpen ? 'Dismiss Details' : 'Close navigation'}
+            aria-label={contextOpen ? 'Dismiss details' : 'Close navigation'}
             className="aw-drawer-backdrop"
             onClick={dismiss}
             ref={closeButtonRef}

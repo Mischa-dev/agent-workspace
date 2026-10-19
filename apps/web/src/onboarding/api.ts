@@ -53,11 +53,11 @@ export const STEP_TITLES: Record<OnboardingStepId, string> = {
   project: 'Create a project',
   github: 'Connect GitHub',
   repository: 'Pick a repository',
-  account: 'Connect a provider account',
+  account: 'Connect an account for runs',
   environment: 'Choose an environment and defaults',
   tasks: 'Add your first tasks',
   agent: 'Add an agent',
-  launch: 'Launch your first run',
+  launch: 'Start your first run',
 }
 
 /** "4 of 8 done", counting skipped optional steps as out of the way. */

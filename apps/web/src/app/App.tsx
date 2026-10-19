@@ -15,6 +15,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useProjects } from '../projects/hooks'
 import { BrandMark } from '../auth/AuthLayout'
 import { AppShell } from '../shell/AppShell'
+import { inHomeSpace } from '../shell/homeSpace'
 import { MobileNavigationProvider } from '../shell/MobileNavigationProvider'
 import { ThemeProvider } from '../theme/ThemeProvider'
 import { Button, EmptyState, PageSkeleton, ToastViewport } from '../ui'
@@ -27,6 +28,7 @@ const ResetPasswordPage = lazy(() => import('../auth/PasswordResetPages').then((
 const VerifyEmailPage = lazy(() => import('../auth/PasswordResetPages').then((module) => ({ default: module.VerifyEmailPage })))
 const JoinPage = lazy(() => import('../invitations/JoinPage').then((module) => ({ default: module.JoinPage })))
 const CreateProjectPage = lazy(() => import('../projects/CreateProjectPage').then((module) => ({ default: module.CreateProjectPage })))
+const ProjectsPage = lazy(() => import('../projects/ProjectsPage').then((module) => ({ default: module.ProjectsPage })))
 const ChannelPage = lazy(() => import('../conversations/ChannelPage').then((module) => ({ default: module.ChannelPage })))
 const ConversationArchivePage = lazy(() => import('../conversations/ConversationArchivePage').then((module) => ({ default: module.ConversationArchivePage })))
 const MessagesPage = lazy(() => import('../direct/MessagesPage').then((module) => ({ default: module.MessagesPage })))
@@ -83,7 +85,7 @@ export function App() {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <AppErrorBoundary>
+          <RoutedErrorBoundary>
             <MobileNavigationProvider>
               <Routes>
                 <Route
@@ -220,6 +222,7 @@ export function App() {
                     }
                     path="/messages/:conversationId"
                   />
+                  <Route element={<AuthenticatedRouteBoundary><ProjectsPage /></AuthenticatedRouteBoundary>} path="/projects" />
                   <Route
                     element={
                       <AuthenticatedRouteBoundary>
@@ -346,11 +349,17 @@ export function App() {
               </Routes>
             </MobileNavigationProvider>
             <ToastViewport />
-          </AppErrorBoundary>
+          </RoutedErrorBoundary>
         </BrowserRouter>
       </QueryClientProvider>
     </ThemeProvider>
   )
+}
+
+/** A crash screen lasts only until you go somewhere else. */
+function RoutedErrorBoundary({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation()
+  return <AppErrorBoundary resetKey={pathname}>{children}</AppErrorBoundary>
 }
 
 function PublicRouteBoundary({ children }: { children: ReactNode }) {
@@ -381,13 +390,18 @@ function PublicRouteFallback() {
 function AuthenticatedRouteFallback() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
+  const { pathname } = useLocation()
   const projects = useProjects()
   const project =
     projects.data?.projects.find((candidate) => candidate.id === projectId) ??
     null
+  // The same sidebar the page will have, so nothing jumps when it arrives. A
+  // whiteboard's canvas has none.
+  const home = inHomeSpace(pathname) && !pathname.startsWith('/whiteboards/')
+  const direct = pathname === '/messages' || pathname.startsWith('/messages/')
 
   return (
-    <AppShell mainClassName="aw-main--page" project={project} user={session.user}>
+    <AppShell direct={direct} home={home} mainClassName="aw-main--page" project={project} user={session.user}>
       <div aria-busy="true" className="aw-page">
         <p className="visually-hidden" role="status">
           Loading workspace view.

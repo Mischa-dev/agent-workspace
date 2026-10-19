@@ -11,13 +11,15 @@ import type { ConversationKind } from '../conversations/types'
 import { conversationTitle, useDirectOverview } from '../direct/api'
 import type { Project } from '../projects/types'
 import type { FileAttachment } from '../files/api'
-import { Banner, Button, SelectField, TextArea, TextField } from '../ui'
+import { Banner, Button, ButtonLink, SelectField, TextArea, TextField, describeError } from '../ui'
 import { useCreateWorkItem } from '../work-items/hooks'
 import { useTaskDraft } from '../work-items/taskDraft'
 import { messageFromShare, taskFromShare, type SharedContent } from './sharedContent'
 import { uploadShared } from './sharedFiles'
 
 const LAST_PROJECT = 'quick-add:project'
+/** One draft for quick add, whichever project it's going to, so changing the project keeps what's typed. */
+const QUICK_DRAFT = 'quick-add'
 const LAST_PLACE = 'quick-share:place'
 const DIRECT = 'direct'
 const NO_FILES: File[] = []
@@ -25,7 +27,7 @@ const NO_FILES: File[] = []
 function OfflineNote({ what }: { what: string }) {
   return (
     <Banner tone="offline">
-      No connection. Your {what} is saved on this phone and goes out by itself when you’re back online.
+      No connection. Your {what} is saved on this device and goes out by itself when you’re back online.
     </Banner>
   )
 }
@@ -39,12 +41,23 @@ export function QuickTaskForm({ files = NO_FILES, projects, shared }: { files?: 
     () => (shared ? taskFromShare(shared) : files.length ? { title: files[0].name.slice(0, 240), description: '' } : undefined),
     [files, shared],
   )
-  const { draft, update, clear } = useTaskDraft(projectId, start)
+  const { draft, update, clear } = useTaskDraft(QUICK_DRAFT, start)
   const [offline, setOffline] = useState(false)
-  const [attaching, setAttaching] = useState<string | null>(null)
+  const [attaching, setAttaching] = useState(false)
+  // A task made whose files didn't go up: it's kept here so it can be opened, not made twice.
+  const [stranded, setStranded] = useState<{ key: string; href: string; reason: string } | null>(null)
+
+  // The text moves with the project; a fresh request key goes with it, so it can't land in the old one.
+  const changeProject = (next: string) => {
+    const { title, description } = draft
+    clear()
+    update({ title, description })
+    setChosen(next)
+  }
 
   const send = () => {
-    if (!projectId || !draft.title.trim() || create.isPending) return
+    if (!projectId || !draft.title.trim() || create.isPending || attaching) return
+    setStranded(null)
     create.mutate(
       {
         projectId,
@@ -58,17 +71,17 @@ export function QuickTaskForm({ files = NO_FILES, projects, shared }: { files?: 
           setOffline(false)
           clear()
           writeLocal(LAST_PROJECT, projectId)
-          const open = () =>
-            navigate(`/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`, { replace: true })
+          const href = `/projects/${encodeURIComponent(item.projectId)}/work-items/${encodeURIComponent(item.id)}`
           if (!files.length) {
-            open()
+            navigate(href, { replace: true })
             return
           }
-          // The task exists; its files go up next, and the task opens either way.
-          setAttaching('Attaching files…')
+          // The task exists; its files go up next. If they don't, the task is one tap away.
+          setAttaching(true)
           uploadShared(files, { kind: 'task', projectId: item.projectId, workItemId: item.id })
-            .then(open)
-            .catch((reason: unknown) => setAttaching(`The task was created, but the files weren’t attached: ${reason instanceof Error ? reason.message : 'try again from the task'}`))
+            .then(() => navigate(href, { replace: true }))
+            .catch((reason: unknown) => setStranded({ key: item.key, href, reason: describeError(reason).message }))
+            .finally(() => setAttaching(false))
         },
         onError: (reason) => setOffline(isConnectionError(reason)),
       },
@@ -83,7 +96,7 @@ export function QuickTaskForm({ files = NO_FILES, projects, shared }: { files?: 
 
   return (
     <form className="aw-form aw-card aw-formcard aw-quick__form" noValidate onSubmit={submit}>
-      <SelectField id="quick-task-project" label="Project" onChange={(event) => setChosen(event.target.value)} value={projectId}>
+      <SelectField id="quick-task-project" label="Project" onChange={(event) => changeProject(event.target.value)} value={projectId}>
         {projects.map((project) => (
           <option key={project.id} value={project.id}>
             {project.name}
@@ -103,18 +116,34 @@ export function QuickTaskForm({ files = NO_FILES, projects, shared }: { files?: 
       />
       <TextArea
         id="quick-task-description"
-        label="Notes"
+        label="Description"
         maxLength={100000}
         onChange={(event) => update({ description: event.target.value })}
         placeholder="Links, details, what done looks like"
         rows={4}
         value={draft.description}
       />
-      {offline ? <OfflineNote what="task" /> : create.isError ? <Banner tone="danger">{create.error.message}</Banner> : null}
-      {attaching ? <Banner tone={attaching.startsWith('The task') ? 'danger' : 'info'}>{attaching}</Banner> : null}
+      {offline ? (
+        <OfflineNote what="task" />
+      ) : create.isError ? (
+        <Banner tone="danger">The task wasn’t created. {describeError(create.error).message}</Banner>
+      ) : null}
+      {attaching ? <Banner tone="info">Attaching files…</Banner> : null}
+      {stranded ? (
+        <Banner
+          action={
+            <ButtonLink size="sm" to={stranded.href} variant="primary">
+              Open {stranded.key}
+            </ButtonLink>
+          }
+          tone="danger"
+        >
+          {stranded.key} was created, but the files weren’t attached. {stranded.reason} Attach them from the task.
+        </Banner>
+      ) : null}
       <div className="aw-quick__actions">
         <Button
-          busy={create.isPending}
+          busy={create.isPending || attaching}
           disabled={!draft.title.trim() || !projectId}
           icon="plus"
           size="lg"
@@ -257,7 +286,11 @@ export function QuickMessageForm({
         rows={5}
         value={text}
       />
-      {offline ? <OfflineNote what="message" /> : post.isError ? <Banner tone="danger">{post.error.message}</Banner> : null}
+      {offline ? (
+        <OfflineNote what="message" />
+      ) : post.isError ? (
+        <Banner tone="danger">The message wasn’t posted. {describeError(post.error).message}</Banner>
+      ) : null}
       <div className="aw-quick__actions">
         <Button busy={post.isPending} disabled={!place || !content} icon="send" size="lg" type="submit" variant="primary">
           Post

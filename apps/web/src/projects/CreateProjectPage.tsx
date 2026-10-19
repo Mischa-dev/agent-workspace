@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
-import { Banner, Button, ErrorState, PageHeader, SelectField, TextField } from '../ui'
+import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError } from '../ui'
 import { listProjectTemplates, viewKeys } from '../views/api'
 import { useCreateProject, useSwitchProject } from './hooks'
 import { projectKeyPattern, suggestKey } from './projectKey'
@@ -40,13 +40,13 @@ export function CreateProjectPage() {
   const normalizedKey = key.trim().toLocaleUpperCase()
   const keyValid = projectKeyPattern.test(normalizedKey)
   const validation = !name.trim()
-    ? 'Give the Project a name.'
+    ? 'Give the project a name.'
     : name.trim().length > 120
       ? 'Project names can be up to 120 characters.'
       : !keyValid
         ? 'Use 2–10 letters or numbers for the key, starting with a letter.'
         : !organizationId
-          ? 'There’s no organization to create this Project in.'
+          ? 'There’s no workspace to create this project in.'
           : null
   const canCreate = session.user.capabilities.createProject && creatableOrganizations.length > 0
 
@@ -56,14 +56,13 @@ export function CreateProjectPage() {
         <div className="aw-page aw-page--narrow">
           <ErrorState
             action={
-              <Link className="aw-btn aw-btn--secondary aw-btn--md" to="/home">
-                <span className="aw-btn__label">Back to Home</span>
-              </Link>
+              <ButtonLink to="/home" variant="primary">
+                Go to Home
+              </ButtonLink>
             }
-            title="Project creation unavailable"
+            title="You can’t create projects here"
           >
-            Only owners and admins of an organization can create Projects. Ask one of them to create it, or to change
-            your role.
+            Only workspace owners and admins can create projects. Ask one of them to create it, or to change your role.
           </ErrorState>
         </div>
       </AppShell>
@@ -99,7 +98,7 @@ export function CreateProjectPage() {
         navigate(`/projects/${encodeURIComponent(project.id)}`, { replace: true })
       }
     } catch (reason) {
-      setError(isApiError(reason) ? reason.message : 'The Project wasn’t created. Try again.')
+      setError(isApiError(reason) ? reason.message : `The project wasn’t created. ${describeError(reason).message}`)
       focusError()
     }
   }
@@ -108,8 +107,8 @@ export function CreateProjectPage() {
   return (
     <AppShell mainClassName="aw-main--page" user={session.user}>
       <div className="aw-page aw-page--form">
-        <PageHeader icon="plus" title="Create a Project">
-          A Project holds its own channels, threads, work items, repositories and agents.
+        <PageHeader icon="plus" title="New project">
+          A project holds its own channels, threads, tasks, repositories and agents.
           {creatableOrganizations.length === 1 && organizationName ? ` It will belong to ${organizationName}.` : ''}
         </PageHeader>
         {error && (
@@ -121,7 +120,7 @@ export function CreateProjectPage() {
           {creatableOrganizations.length > 1 && (
             <SelectField
               id="project-organization"
-              label="Organization"
+              label="Workspace"
               onChange={(event) => setOrganizationId(event.target.value)}
               value={organizationId}
             >
@@ -146,8 +145,8 @@ export function CreateProjectPage() {
             error={key && !keyValid ? 'Use 2–10 letters or numbers, starting with a letter.' : undefined}
             hint={
               keyValid
-                ? `Work items will be numbered ${normalizedKey}-1, ${normalizedKey}-2 and so on.`
-                : 'A short code for work items, like TRI for Trident.'
+                ? `Tasks will be numbered ${normalizedKey}-1, ${normalizedKey}-2 and so on.`
+                : 'A short code for tasks, like TRI for Trident.'
             }
             id="project-key"
             label="Project key"
@@ -173,7 +172,7 @@ export function CreateProjectPage() {
                       .filter(Boolean)
                       .join(', ')
                       .replace(/, ([^,]*)$/, ' and $1')}.`
-                  : 'Start from the default workflow, or from a setup saved from another Project.'
+                  : 'Start from the default workflow, or from a setup saved from another project.'
               }
               id="project-template"
               label="Template"
@@ -189,11 +188,11 @@ export function CreateProjectPage() {
             </SelectField>
           ) : null}
           <div className="aw-form__actions">
-            <Button onClick={() => navigate('/home')} variant="ghost">
+            <Button onClick={() => navigate('/home')} variant="secondary">
               Cancel
             </Button>
-            <Button busy={createProject.isPending} disabled={Boolean(validation)} icon="plus" type="submit" variant="primary">
-              Create Project
+            <Button busy={createProject.isPending} disabled={Boolean(validation)} type="submit" variant="primary">
+              Create project
             </Button>
           </div>
         </form>

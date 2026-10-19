@@ -63,6 +63,8 @@
     },
     {
       "name": "Messages",
+      "short_name": "Messages",
+      "description": "Direct messages with people and agents.",
       "url": "/messages",
       "icons": [
         {
