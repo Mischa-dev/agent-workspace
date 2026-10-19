@@ -346,6 +346,7 @@ struct WorkItemRow {
     relations: serde_json::Value,
     subtasks: serde_json::Value,
     claim: Option<serde_json::Value>,
+    handoff: Option<serde_json::Value>,
     watchers: serde_json::Value,
     watching: bool,
     estimate_unit: String,
@@ -462,8 +463,9 @@ pub struct WorkItemView {
 }
 
 /// A task's place in the plan: parent, milestone, dates, estimate,
-/// dependencies, links, subtasks, claim and watchers. Other tasks appear as
-/// `TaskRef`s and only when the viewer can see their project.
+/// dependencies, links, subtasks, claim, the last handoff note and watchers.
+/// Other tasks appear as `TaskRef`s and only when the viewer can see their
+/// project.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 struct TaskPlanningView {
@@ -479,6 +481,9 @@ struct TaskPlanningView {
     relations: Vec<serde_json::Value>,
     subtasks: Vec<serde_json::Value>,
     claim: Option<serde_json::Value>,
+    /// The last note left when a claim was released (W22): where the work
+    /// got to and what's left, for whoever picks the task up next.
+    handoff: Option<serde_json::Value>,
     watchers: Vec<serde_json::Value>,
     watching: bool,
     estimate_unit: String,
@@ -3756,6 +3761,22 @@ const WORK_ITEM_SELECT: &str = concat!(
             AND claimer_membership.actor_id = claim.actor_id
           WHERE claim.work_item_id = item.id AND claim.expires_at > now()
         ) AS claim,
+        (SELECT jsonb_build_object('actor', "#,
+    actor_json!("handoff_actor", "handoff_membership"),
+    r#", 'note', handoff.note, 'at', handoff.created_at::text,
+                                   'via', via_client.client_name)
+           FROM work_item_handoffs handoff
+           JOIN actors handoff_actor ON handoff_actor.id = handoff.actor_id
+           LEFT JOIN project_memberships handoff_membership
+             ON handoff_membership.project_id = item.project_id
+            AND handoff_membership.actor_id = handoff.actor_id
+           LEFT JOIN mcp_oauth_grants via_grant
+             ON via_grant.id = handoff.via_oauth_grant_id AND via_grant.show_via
+           LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
+          WHERE handoff.project_id = item.project_id AND handoff.work_item_id = item.id
+          ORDER BY handoff.created_at DESC, handoff.id DESC
+          LIMIT 1
+        ) AS handoff,
         COALESCE((
             SELECT jsonb_agg("#,
     actor_json!("watcher_actor", "watcher"),
@@ -3876,6 +3897,7 @@ fn work_item_view(
             relations: json_list(row.relations)?,
             subtasks: json_list(row.subtasks)?,
             claim: row.claim,
+            handoff: row.handoff,
             watchers: json_list(row.watchers)?,
             watching: row.watching,
             estimate_unit: row.estimate_unit,

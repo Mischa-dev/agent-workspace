@@ -99,6 +99,7 @@ export function DatePicker({
   label,
   onChange,
   placeholder = 'No date',
+  prefix,
   value,
 }: {
   className?: string
@@ -106,6 +107,8 @@ export function DatePicker({
   label: string
   onChange: (value: string | null) => void
   placeholder?: string
+  /** A word before a set date, such as "Due", where the label isn't next to it. */
+  prefix?: string
   value: string | null
 }) {
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null)
@@ -130,7 +133,7 @@ export function DatePicker({
         type="button"
       >
         <Icon name="clock" size={14} />
-        <span>{value ? formatDateLabel(value) : placeholder}</span>
+        <span>{value ? `${prefix ? `${prefix} ` : ''}${formatDateLabel(value)}` : placeholder}</span>
       </button>
       <Popover anchor={anchor} className="aw-datepicker__panel" label={label} onClose={close} open={anchor !== null}>
         <form

@@ -63,6 +63,8 @@ export type WorkItem = {
   relations: TaskRelation[]
   subtasks: Array<TaskRef & { assignee: ActorRef | null }>
   claim: TaskClaim | null
+  /** The last note left when someone stopped working on it: where it got to and what's left. */
+  handoff: TaskHandoff | null
   watchers: ActorRef[]
   watching: boolean
   estimateUnit: EstimateUnit
@@ -98,6 +100,8 @@ export type TaskRelationKind = 'relates_to' | 'duplicates' | 'duplicated_by'
 export type TaskRelation = { kind: TaskRelationKind; task: TaskRef }
 
 export type TaskClaim = { actor: ActorRef; note: string | null; claimedAt: string; expiresAt: string }
+
+export type TaskHandoff = { actor: ActorRef; note: string; at: string; via: string | null }
 
 export type LinkedThread = {
   id: string

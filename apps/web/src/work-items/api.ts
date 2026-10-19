@@ -11,6 +11,7 @@ import {
   color,
   date,
   estimateUnit,
+  handoff,
   list,
   milestoneRef,
   nullableNumber,
@@ -184,6 +185,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
       return task ? [{ ...task, assignee: actorRef(record(value).assignee) }] : []
     }),
     claim: claim(item.claim),
+    handoff: handoff(item.handoff),
     watchers: actorRefs(item.watchers),
     watching: boolean(item.watching),
     estimateUnit: estimateUnit(item.estimateUnit),

@@ -15,6 +15,7 @@ export const EMPTY_PLANNING: Pick<
   | 'relations'
   | 'subtasks'
   | 'claim'
+  | 'handoff'
   | 'watchers'
   | 'watching'
   | 'estimateUnit'
@@ -31,6 +32,7 @@ export const EMPTY_PLANNING: Pick<
   relations: [],
   subtasks: [],
   claim: null,
+  handoff: null,
   watchers: [],
   watching: false,
   estimateUnit: 'points',
