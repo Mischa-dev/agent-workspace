@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { ExternalAgentSettings } from '../external-agents/ExternalAgentSettings'
@@ -10,6 +10,7 @@ import {
   Avatar,
   Banner,
   Button,
+  ButtonLink,
   EmptyState,
   ErrorState,
   Icon,
@@ -17,6 +18,7 @@ import {
   PageHeader,
   TextField,
   actorKind,
+  describeError,
 } from '../ui'
 import { createGroup, directQueryKey, openDm, useDirectOverview } from './api'
 
@@ -57,7 +59,7 @@ export function MessagesPage() {
         await queryClient.invalidateQueries({ queryKey: directQueryKey })
         navigate(`/messages/${encodeURIComponent(conversationId)}`)
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The conversation didn’t start. Try again.'))
+      .catch((reason: unknown) => setError(`The conversation didn’t start. ${describeError(reason).message}`))
       .finally(() => setBusy(false))
   }
 
@@ -76,24 +78,23 @@ export function MessagesPage() {
         </PageHeader>
         {overview.isPending ? <ListSkeleton label="Loading people" rows={2} avatars /> : null}
         {overview.isError ? (
-          <ErrorState action={<Button onClick={() => void overview.refetch()}>Try again</Button>} title="Messages didn’t load">
-            Check your connection and try again.
-          </ErrorState>
+          <ErrorState error={overview.error} onRetry={() => void overview.refetch()} title="Messages didn’t load" />
         ) : null}
         {overview.data && people.length === 0 ? (
           <EmptyState
             action={
               overview.data.capabilities.manageAgents ? (
-                <Link className="aw-btn aw-btn--primary aw-btn--md" to="/messages/agents">
-                  <Icon name="bot" />
+                <ButtonLink icon="bot" to="/messages/agents" variant="primary">
                   Connect an agent
-                </Link>
+                </ButtonLink>
               ) : undefined
             }
             icon="users"
             title="No one to message yet"
           >
-            Connect an agent first. Each one gets its own identity and shows up here.
+            {overview.data.capabilities.manageAgents
+              ? 'Connect an agent to start. Each one gets its own identity and shows up here.'
+              : 'Ask your workspace owner to connect an agent. Each one gets its own identity and shows up here.'}
           </EmptyState>
         ) : null}
         {people.length > 0 ? (

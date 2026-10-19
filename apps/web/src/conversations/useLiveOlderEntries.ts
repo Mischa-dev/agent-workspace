@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useOptionalRealtime } from '../realtime/realtimeContext'
+import { describeLoadError } from '../ui'
 import { getConversationMessage } from './api'
 import {
   applyLiveMessages,
@@ -283,7 +284,7 @@ export function useLiveOlderEntries({
       }))
     } catch (reason) {
       if (visit.current !== started) return
-      setError(reason instanceof Error ? reason.message : 'Earlier messages didn’t load.')
+      setError(describeLoadError(reason))
     } finally {
       if (visit.current === started) setLoading(false)
     }

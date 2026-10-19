@@ -26,44 +26,36 @@ import {
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import { StructuredComposer } from '../conversations/StructuredComposer'
-import type { ComposerSubmission } from '../conversations/composerModel'
 import { ConversationHeader } from '../conversations/ConversationHeader'
-import { ThreadStatusButton } from '../conversations/threadBoard'
+import { ThreadStatusButton, ThreadStatusDialog } from '../conversations/threadBoard'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import { useMessageActions } from '../conversations/MessageActions'
+import { OriginMessage } from '../conversations/OriginMessage'
 import { useConversationTools } from '../later/useConversationTools'
+import { PinnedBar } from '../memory/ConversationMemory'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
-import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from '../conversations/Timeline'
+import {
+  ConversationTimeline,
+  OlderMessagesButton,
+  PendingMessages,
+  StreamingMessageRow,
+  TimelineEntries,
+} from '../conversations/Timeline'
 import { useAutoMarkSeen } from '../conversations/useAutoMarkSeen'
-import { useArchiveConversation } from '../conversations/useArchiveConversation'
+import { useArchiveConversation, useRestoreConversation } from '../conversations/useArchiveConversation'
+import { useFirstUnread } from '../conversations/useFirstUnread'
+import { useMessageSender } from '../conversations/useMessageSender'
 import { SessionLinks } from '../launch/SessionLinks'
 import { useLiveOlderEntries } from '../conversations/useLiveOlderEntries'
 import { usePageTitle } from '../shell/documentTitleModel'
-import {
-  retryReplyRequest,
-  searchMentionableActors,
-  sendConversationMessage,
-  stopReplyRequest,
-} from '../conversations/api'
+import { retryReplyRequest, searchMentionableActors, stopReplyRequest } from '../conversations/api'
 import type { ConversationTimelineEntry } from '../conversations/types'
 import { useConversationRealtime } from '../realtime/realtimeContext'
 import { useSetWorkItemThreadLink } from '../work-items/hooks'
 import { searchWorkItemReferences } from '../work-items/api'
 import { uploadFile } from '../files/api'
-import {
-  ActorTag,
-  Avatar,
-  Banner,
-  Button,
-  ConversationIntro,
-  Dialog,
-  Dots,
-  ErrorState,
-  IconButton,
-  MessageSkeleton,
-  SegmentedControl,
-} from '../ui'
+import { Banner, Button, ConversationIntro, ErrorState, IconButton, MessageSkeleton, SegmentedControl } from '../ui'
 import { ApprovalCard, RunBadge, RunCard, ThreadDetails } from './ThreadPresentation'
 import { RunCardActions, RunCardNotes, RunComposer } from './ThreadRunControls'
 import { runAgent } from './runAgent'
@@ -88,10 +80,15 @@ export function ThreadPage() {
   usePageTitle(verifiedTimeline?.conversation.name ?? null)
   const activeRun = verifiedTimeline?.activeRun ?? null
   const latestTerminalRun = verifiedTimeline?.latestTerminalRun ?? null
-  const [detailsOpen, setDetailsOpen] = useState(false)
-  const [pendingSends, setPendingSends] = useState<{ key: string; text?: string }[]>([])
-  const [archiveOpen, setArchiveOpen] = useState(false)
-  const [composerMode, setComposerMode] = useState<'message' | 'run'>('message')
+  const viewer = { actorId: session.user.actorId, displayName: session.user.displayName }
+  // Kept per thread: the page stays mounted from one thread to the next.
+  const [detailsFor, setDetailsFor] = useState<string | null>(null)
+  const detailsOpen = detailsFor === threadId
+  const setDetailsOpen = (open: boolean) => setDetailsFor(open ? threadId : null)
+  const [statusFor, setStatusFor] = useState<string | null>(null)
+  const [modeFor, setModeFor] = useState<{ threadId: string; mode: 'message' | 'run' }>({ threadId, mode: 'message' })
+  const composerMode = modeFor.threadId === threadId ? modeFor.mode : 'message'
+  const setComposerMode = (mode: 'message' | 'run') => setModeFor({ threadId, mode })
   const parentSidebar = useProjectConversationSidebar(projectId, verifiedTimeline?.conversation.parentChannelId ?? '')
   const navigationSync = useRememberProjectLocation(
     projectId,
@@ -129,7 +126,7 @@ export function ThreadPage() {
         result.conversation.projectId !== projectId ||
         result.conversation.kind !== 'thread'
       ) {
-        throw new Error('Older timeline page crossed its Project boundary.')
+        throw new Error('Older timeline page crossed its project boundary.')
       }
       return result
     },
@@ -143,11 +140,19 @@ export function ThreadPage() {
     const shown = new Set(entries.flatMap((entry) => (entry.message ? [entry.message.id] : [])))
     return (replyRequests ?? []).filter((request) => !shown.has(request.messageId))
   }, [entries, replyRequests])
-  const retryAgent = (requestId: string) => void retryReplyRequest(requestId).then(() => thread.timeline.refetch())
+  const retryAgent = (requestId: string) => retryReplyRequest(requestId).then(() => thread.timeline.refetch())
   const stopAgent = verifiedTimeline?.capabilities.sendMessage
     ? (requestId: string) => stopReplyRequest(requestId).then(() => thread.timeline.refetch())
     : undefined
   const olderCursor = older.cursor
+  const unread = useFirstUnread({
+    conversationId: threadId,
+    entries,
+    fresh: thread.timeline.isFetchedAfterMount,
+    hasOlder: Boolean(olderCursor),
+    page: verifiedTimeline,
+    viewerId: viewer.actorId,
+  })
 
   const onSeen = useCallback(
     () =>
@@ -181,6 +186,12 @@ export function ThreadPage() {
       : `/projects/${encodeURIComponent(projectId)}`,
     projectId,
   })
+  const restoreThread = useRestoreConversation({
+    conversationId: threadId,
+    kind: 'thread',
+    label: `“${verifiedTimeline?.conversation.name ?? 'thread'}”`,
+    projectId,
+  })
 
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
@@ -197,21 +208,15 @@ export function ThreadPage() {
       older.replaceEntry(entry)
       void thread.timeline.refetch()
     },
+    onMarkedUnread: (entry) => unread.markUnreadFrom(entry.sequence),
   })
 
-  const sendMessage = async (submission: ComposerSubmission) => {
-    setPendingSends((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
-    try {
-      await sendConversationMessage({
-        conversationId: threadId,
-        kind: 'thread',
-        ...submission,
-      })
-      await thread.timeline.refetch()
-    } finally {
-      setPendingSends((current) => current.filter((item) => item.key !== submission.idempotencyKey))
-    }
-  }
+  const sender = useMessageSender({
+    conversationId: threadId,
+    kind: 'thread',
+    onSent: () => void onSeen(),
+    queryKey: queryKeys.timeline(projectId, threadId, includeArchived),
+  })
 
   const tools = useConversationTools({
     canPost: Boolean(verifiedTimeline?.capabilities.sendMessage && !verifiedTimeline.conversation.archivedAt),
@@ -254,7 +259,7 @@ export function ThreadPage() {
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
@@ -291,7 +296,6 @@ export function ThreadPage() {
         }
         projectName={project.data.name}
         run={activeRun ?? latestTerminalRun}
-        threadId={threadId}
         unlinking={workItemLink.isPending}
         workItems={verifiedTimeline.linkedWorkItems}
       />
@@ -317,6 +321,16 @@ export function ThreadPage() {
       />
     ) : null
 
+  const threadStatus = verifiedTimeline?.conversation.threadStatus ?? 'Open'
+  const statusThread = { id: threadId, name: threadName, status: threadStatus, outcome: verifiedTimeline?.conversation.threadOutcome ?? null }
+  const canArchive = Boolean(verifiedTimeline?.capabilities.archive)
+  const canRestore = Boolean(verifiedTimeline?.capabilities.restore)
+  const restore = () => {
+    if (verifiedTimeline && !restoreThread.isPending) restoreThread.mutate(verifiedTimeline.conversation.version ?? 1)
+  }
+  const streaming = Object.entries(realtime.streaming)
+  const originId = verifiedTimeline?.conversation.originMessageId ?? null
+
   return (
     <AppShell
       context={details}
@@ -334,15 +348,10 @@ export function ThreadPage() {
           verifiedTimeline ? (
             <>
               <SessionLinks conversationId={threadId} projectId={projectId} />
-              <ThreadStatusButton
-                onSaved={() => void thread.timeline.refetch()}
-                thread={{
-                  id: threadId,
-                  name: threadName,
-                  status: verifiedTimeline.conversation.threadStatus ?? 'Open',
-                  outcome: verifiedTimeline.conversation.threadOutcome,
-                }}
-              />
+              {/* Open is the usual state: the chip shows only once it says something. */}
+              {threadStatus.toLowerCase() !== 'open' ? (
+                <ThreadStatusButton onSaved={() => void thread.timeline.refetch()} thread={statusThread} />
+              ) : null}
               <CatchUpButton conversationId={threadId} name={threadName} />
               <IconButton
                 icon="panel-right"
@@ -360,10 +369,23 @@ export function ThreadPage() {
           verifiedTimeline
             ? [
                 { label: parentChannel ? `Back to #${parentChannel.name}` : 'Back to the channel', icon: 'arrow-left', onSelect: () => navigate(channelRoute) },
+                ...(verifiedTimeline.capabilities.sendMessage && !archived
+                  ? [{ label: 'Rename or set status…', icon: 'pencil' as const, onSelect: () => setStatusFor(threadId) }]
+                  : []),
                 { separator: true },
                 ...tools.levelMenu,
-                ...(verifiedTimeline.capabilities.archive && !archived
-                  ? [{ separator: true as const }, { label: 'Archive thread', icon: 'archive' as const, danger: true, onSelect: () => setArchiveOpen(true) }]
+                ...(canRestore ? [{ separator: true as const }, { label: 'Restore thread', icon: 'undo' as const, onSelect: restore }] : []),
+                ...(canArchive && !archived
+                  ? [
+                      { separator: true as const },
+                      // Archiving can be undone (from the toast, or Restore later), so it happens at once.
+                      {
+                        label: 'Archive thread',
+                        icon: 'archive' as const,
+                        danger: true,
+                        onSelect: () => archiveThread.mutate(verifiedTimeline.conversation.version ?? 1),
+                      },
+                    ]
                   : []),
               ]
             : undefined
@@ -378,36 +400,53 @@ export function ThreadPage() {
         }
         title={threadName}
       />
-      {archived ? (
-        <Banner className="aw-conv__banner" icon="archive" title="This thread is archived." tone="offline">
-          You can read it, but no one can post or run work here.
-        </Banner>
-      ) : null}
+      {verifiedTimeline ? <PinnedBar canEdit={canMessage} conversationId={threadId} projectId={projectId} /> : null}
 
       <ConversationTimeline
-        busy={thread.timeline.isPending}
+        busy={thread.timeline.isPending || older.loading}
+        hasOlder={Boolean(olderCursor)}
+        key={threadId}
         label={`Messages in ${threadName}`}
-        revision={`${verifiedTimeline?.highestSequence ?? 0}:${pendingSends.length}:${Object.values(realtime.streaming).join('').length}:${pendingApproval?.id ?? ''}:${runForCard?.state ?? ''}`}
+        olderKey={older.olderCount}
+        onLoadOlder={() => void older.loadOlder()}
+        revision={`${verifiedTimeline?.highestSequence ?? 0}:${sender.pending.length}:${streaming.map(([, text]) => text).join('').length}:${pendingApproval?.id ?? ''}:${runForCard?.state ?? ''}`}
+        stickKey={sender.sent}
+        unread={unread.unread}
       >
         {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
-        {older.error ? <Banner tone="danger">{older.error}</Banner> : null}
+        {older.error ? (
+          <Banner onRetry={() => void older.loadOlder()} title="Earlier messages didn’t load." tone="danger">
+            {older.error}
+          </Banner>
+        ) : null}
         {thread.timeline.isPending ? <MessageSkeleton label="Loading thread" /> : null}
         {thread.timeline.isError ? (
-          <ErrorState action={<Button onClick={() => void thread.timeline.refetch()}>Try again</Button>} title="This thread didn’t load">
-            It may have been removed from this Project, or it couldn’t be reached.
-          </ErrorState>
+          <ErrorState error={thread.timeline.error} onRetry={() => void thread.timeline.refetch()} title="This thread didn’t load" />
         ) : null}
         {verifiedTimeline && !olderCursor ? (
-          <ConversationIntro icon="messages" title={threadName}>
-            {verifiedTimeline.capabilities.workerInvoke
-              ? 'A focused conversation. Ask an agent to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
-              : 'A focused conversation inside the channel. Everything said here stays with this thread.'}
-          </ConversationIntro>
+          originId ? (
+            <OriginMessage
+              channelHref={channelRoute}
+              channelName={parentChannel ? `#${parentChannel.name}` : null}
+              direct={verifiedTimeline.conversation.parentKind !== 'channel'}
+              originId={originId}
+              parentId={parentId}
+              projectId={projectId}
+              viewerId={viewer.actorId}
+            />
+          ) : (
+            <ConversationIntro icon="messages" title={threadName}>
+              {verifiedTimeline.capabilities.workerInvoke
+                ? 'Ask an agent to make a change here and it runs in its own workspace, with every step, approval and result kept in this thread.'
+                : 'Everything said here stays with this thread.'}
+            </ConversationIntro>
+          )
         ) : null}
         <TimelineEntries
           conversationId={threadId}
           agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
           entries={entries}
+          firstUnreadSequence={unread.firstUnreadSequence}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
           renderExtras={(entry) =>
@@ -417,36 +456,16 @@ export function ThreadPage() {
           }
           renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
-          viewerId={session.user.actorId}
+          viewerId={viewer.actorId}
         />
         {trailingRequests.length ? (
           <div className="aw-replies--trailing">
             <ReplyStatusList onRetry={retryAgent} onStop={stopAgent} requests={trailingRequests} />
           </div>
         ) : null}
-        {pendingSends.map((item, index) => (
-          <PendingMessageRow
-            continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}
-            key={item.key}
-            name={session.user.displayName}
-            seed={session.user.actorId}
-            text={item.text}
-          />
-        ))}
-        {Object.entries(realtime.streaming).map(([messageId, text]) => (
-          <article aria-label={`${writer.name} is writing`} className="aw-msg is-streaming" key={messageId}>
-            <div className="aw-msg__gutter">
-              <Avatar kind="worker" name={writer.name} seed={writer.seed} size={36} working />
-            </div>
-            <div className="aw-msg__main">
-              <div className="aw-msg__meta">
-                <span className="aw-msg__author">{writer.name}</span>
-                <ActorTag kind="worker" />
-                <Dots label="Writing" />
-              </div>
-              <div className="aw-msg__body">{text}</div>
-            </div>
-          </article>
+        <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
+        {streaming.map(([messageId, text]) => (
+          <StreamingMessageRow key={messageId} name={writer.name} seed={writer.seed} text={text} />
         ))}
         {runForCard ? (
           <div className="aw-timeline__card">
@@ -470,43 +489,40 @@ export function ThreadPage() {
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}
           draftKey={threadId}
-          upload={uploadFile({ kind: 'conversation', conversationId: threadId })}
+          focusOnOpen
           label={`Message ${threadName}`}
-          onSubmit={sendMessage}
+          onEditLast={() => messageActions.editLast(entries)}
+          onSubmit={sender.send}
           placeholder={`Reply in ${threadName}`}
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}
           toolbar={modeSwitch}
+          upload={uploadFile({ kind: 'conversation', conversationId: threadId })}
           {...tools.composer}
         />
       ) : null}
       {mode === 'run' && showRunComposer ? <RunComposer actions={runActions} activeRun={activeRun} modeSwitch={modeSwitch} /> : null}
       {verifiedTimeline && archived ? (
-        <StructuredComposer disabledReason="This thread is archived. Nobody can post here." onSubmit={async () => undefined} searchActors={async () => []} />
+        <StructuredComposer
+          disabledReason={
+            <>
+              This thread is archived. You can read it, but no one can post or start runs.
+              {canRestore ? (
+                <Button busy={restoreThread.isPending} icon="undo" onClick={restore} size="sm">
+                  Restore thread
+                </Button>
+              ) : null}
+            </>
+          }
+          onSubmit={async () => undefined}
+          searchActors={async () => []}
+        />
       ) : null}
 
       {messageActions.dialogs}
-      <Dialog
-        description="People can still read it from Archived conversations, but no one can post or start runs."
-        footer={
-          <>
-            <Button onClick={() => setArchiveOpen(false)}>Cancel</Button>
-            <Button
-              busy={archiveThread.isPending}
-              onClick={() => {
-                if (!verifiedTimeline) return
-                archiveThread.mutate(verifiedTimeline.conversation.version ?? 1, { onSettled: () => setArchiveOpen(false) })
-              }}
-              variant="danger"
-            >
-              Archive thread
-            </Button>
-          </>
-        }
-        onClose={() => setArchiveOpen(false)}
-        open={archiveOpen}
-        title={`Archive “${threadName}”?`}
-      />
+      {statusFor === threadId && verifiedTimeline ? (
+        <ThreadStatusDialog onClose={() => setStatusFor(null)} onSaved={() => void thread.timeline.refetch()} thread={statusThread} />
+      ) : null}
     </AppShell>
   )
 }

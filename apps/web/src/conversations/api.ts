@@ -320,6 +320,7 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       view: capability(root.capabilities, 'view'),
       sendMessage: capability(root.capabilities, 'sendMessage'),
       archive: capability(root.capabilities, 'archive'),
+      restore: capability(root.capabilities, 'restore'),
       markSeen: capability(root.capabilities, 'markSeen'),
       editMessages: capability(root.capabilities, 'editMessages'),
       removeOwnMessages: capability(root.capabilities, 'removeOwnMessages'),
@@ -433,6 +434,14 @@ export async function sendConversationMessage(input: {
       json: { content: input.content, attachments: input.attachments?.map((file) => file.id) },
     },
   )
+}
+
+/** The entry a send returns, when it's for this conversation: shown at once, before any refetch. */
+export function sentEntryFrom(response: unknown, conversationId: string): ConversationTimelineEntry | null {
+  const root = asRecord(response)
+  if (typeof root.conversationId === 'string' && root.conversationId !== conversationId) return null
+  const entry = normalizeTimelineEntry(root.entry)
+  return entry?.message ? entry : null
 }
 
 function messagePath(conversationId: string, messageId: string) {
@@ -742,6 +751,7 @@ function normalizeSidebarChannel(value: unknown): SidebarChannel | null {
       : [],
     hasMoreThreads:
       item.hasMoreThreads === true || integer(item.hiddenThreadCount) > 0,
+    hiddenThreadCount: Math.max(0, integer(item.hiddenThreadCount)),
   }
 }
 

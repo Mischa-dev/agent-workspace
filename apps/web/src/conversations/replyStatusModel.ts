@@ -1,9 +1,8 @@
 import { formatRelative, type IconName } from '../ui'
 import type { ReplyRequest } from './types'
 
-function timeAgo(iso: string) {
-  return formatRelative(iso) || 'a while ago'
-}
+/** An agent seen this recently is online; its wait needs no time stamp. */
+const RECENTLY_SEEN_MS = 5 * 60 * 1000
 
 export const REPLY_ICONS: Partial<Record<ReplyRequest['status'], IconName>> = {
   pending: 'clock',
@@ -14,18 +13,21 @@ export const REPLY_ICONS: Partial<Record<ReplyRequest['status'], IconName>> = {
 }
 
 /** What a status line says about one agent and one request. */
-export function describeReplyRequest(request: ReplyRequest) {
+export function describeReplyRequest(request: ReplyRequest, now = Date.now()) {
   const name = request.agent.displayName
   switch (request.status) {
-    case 'claimed':
-      return request.progress
-        ? `${name} is working · ${request.progress}${request.progressAt ? ` · updated ${timeAgo(request.progressAt)}` : ''}`
-        : `${name} is working on it…`
-    case 'pending':
+    case 'claimed': {
+      if (!request.progress) return `${name} is writing a reply…`
+      const updated = request.progressAt ? formatRelative(request.progressAt) : ''
+      return `${name} is working · ${request.progress}${updated ? ` · updated ${updated}` : ''}`
+    }
+    case 'pending': {
       if (request.followsRequestId) return `${name} will pick this up after what it’s working on`
-      return request.agentLastSeenAt
-        ? `Waiting for ${name} to pick this up · last checked in ${timeAgo(request.agentLastSeenAt)}`
-        : `Waiting for ${name} to connect`
+      if (!request.agentLastSeenAt) return `Waiting for ${name} to connect`
+      const seen = Date.parse(request.agentLastSeenAt)
+      if (Number.isNaN(seen) || now - seen < RECENTLY_SEEN_MS) return `Waiting for ${name} to reply`
+      return `Waiting for ${name} · last seen ${formatRelative(request.agentLastSeenAt)}`
+    }
     case 'passed':
       return `${name} passed`
     case 'released':

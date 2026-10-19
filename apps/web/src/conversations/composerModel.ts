@@ -13,6 +13,9 @@ export type ComposerSubmission = {
   text?: string
   /** Files uploaded with it, sent by id. */
   attachments?: FileAttachment[]
+  /** The people and tasks it names, for showing it formatted while it sends. */
+  mentions?: ConversationActor[]
+  workItems?: ConversationWorkItemReference[]
 }
 
 /** The content of a message that is only files. */
@@ -35,8 +38,9 @@ const BEFORE = /[\s([{"'“‘*_~]/
 const WORD = /[\p{L}\p{N}_.-]/u
 
 /**
- * Turn composer text into content nodes. Only mentions and work items the person picked from
- * a list become nodes; typing "@name" by hand stays plain text.
+ * Turn composer text into content nodes. Only mentions and tasks in the lists
+ * become nodes; the composer adds a hand-typed "@handle" to them when it
+ * matches someone (see `typedHandles`).
  */
 export function buildMessageContent(
   text: string,
@@ -132,4 +136,36 @@ export function activeTrigger(text: string, caret: number, allowWork: boolean): 
   const kind = match[2] === '@' ? 'mention' : 'work'
   if (kind === 'work' && !allowWork) return null
   return { kind, query: match[3], start: before.length - match[3].length - 1 }
+}
+
+/** A hand-typed "@handle" that wasn't picked from the list. */
+const TYPED_HANDLE = /(^|[\s([{"'“‘])@([\p{L}\p{N}_][\p{L}\p{N}_.-]{0,39})/gu
+
+/** Words after @ that notify everyone rather than naming someone. */
+const BROADCASTS = new Set(['everyone', 'here', 'channel'])
+
+/**
+ * The handles typed by hand with "@" that no picked mention covers, such as
+ * "@muse can you look" typed without stopping at the list. The composer looks
+ * each one up before sending, so the agent is still asked.
+ */
+export function typedHandles(text: string, mentions: ConversationActor[]) {
+  const picked = new Set(mentions.map((actor) => actor.handle.toLowerCase()))
+  const handles = new Map<string, string>()
+  for (const match of text.matchAll(TYPED_HANDLE)) {
+    // A trailing dot ends the sentence, not the handle.
+    const handle = match[2].replace(/[.-]+$/, '')
+    const lower = handle.toLowerCase()
+    if (handle && !picked.has(lower) && !BROADCASTS.has(lower) && !handles.has(lower)) handles.set(lower, handle)
+  }
+  return [...handles.values()]
+}
+
+/** The text with each hand-typed handle in `canonical` (keyed in lower case) spelled the way it's stored. */
+export function renameHandles(text: string, canonical: Map<string, string>) {
+  return text.replace(TYPED_HANDLE, (whole: string, before: string, raw: string) => {
+    const handle = raw.replace(/[.-]+$/, '')
+    const name = canonical.get(handle.toLowerCase())
+    return name ? `${before}@${name}${raw.slice(handle.length)}` : whole
+  })
 }

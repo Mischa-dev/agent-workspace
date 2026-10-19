@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
@@ -10,51 +10,40 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
-import { Banner, Button, ConversationIntro, Dialog, ErrorState, Icon, IconButton, MessageSkeleton } from '../ui'
+import { Banner, Button, ConversationIntro, ErrorState, IconButton, MessageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
-import {
-  getConversationTimeline,
-  retryReplyRequest,
-  searchMentionableActors,
-  sendConversationMessage,
-  stopReplyRequest,
-} from './api'
-import { useArchiveConversation } from './useArchiveConversation'
+import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopReplyRequest } from './api'
+import { useArchiveConversation, useRestoreConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ConversationHeader } from './ConversationHeader'
-import type { ComposerSubmission } from './composerModel'
 import { useConversationTimeline, useProjectConversationSidebar } from './hooks'
 import { ReplyStatusList } from './ReplyStatus'
 import { groupReplyRequests } from './replyStatusModel'
-import { MessageMemoryActions, PinnedBar } from '../memory/ConversationMemory'
+import { PinnedBar } from '../memory/ConversationMemory'
 import { useConversationTools } from '../later/useConversationTools'
 import { useMessageActions } from './MessageActions'
 import { StructuredComposer } from './StructuredComposer'
-import { ThreadBoard, ThreadStatusChip } from './threadBoard'
+import { ThreadBoard } from './threadBoard'
+import { ThreadChip } from './ThreadChip'
+import { threadChipFacts } from './threadChipModel'
 import { useThreads } from './threadModel'
 import { ThreadDialog } from './ThreadDialog'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { uploadFile } from '../files/api'
-import { ConversationTimeline, OlderMessagesButton, PendingMessageRow, TimelineEntries } from './Timeline'
+import { ConversationTimeline, OlderMessagesButton, PendingMessages, TimelineEntries } from './Timeline'
 import type { ConversationTimelineEntry, SidebarThread } from './types'
+import { useFirstUnread } from './useFirstUnread'
 import { useLiveOlderEntries } from './useLiveOlderEntries'
+import { useMessageSender } from './useMessageSender'
 
 const NO_ENTRIES: ConversationTimelineEntry[] = []
 
 type ThreadOrigin = { messageId: string; text: string; author: string }
 
-const THREAD_STATE: Record<SidebarThread['attention'], string> = {
-  response_required: 'Needs you',
-  active: 'Working',
-  failed: 'Run failed',
-  completed: 'Done',
-  unread: 'New replies',
-  settled: '',
-}
-
 export function ChannelPage() {
   const session = useAuthenticatedSession()
+  const viewer = { actorId: session.user.actorId, displayName: session.user.displayName }
   const { projectId = '', channelId = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const includeArchived = searchParams.get('includeArchived') === 'true'
@@ -83,37 +72,38 @@ export function ChannelPage() {
   const project = useProject(projectId)
   const timeline = useConversationTimeline(projectId, channelId, includeArchived)
   const linkedThreadSidebar = useProjectConversationSidebar(projectId, channelId, { expandedChannelId: channelId })
-  const [pending, setPending] = useState<{ key: string; text?: string }[]>([])
-  const [threadDialog, setThreadDialog] = useState<{ origin: ThreadOrigin | null } | null>(null)
-  const [archiveOpen, setArchiveOpen] = useState(false)
-  const [firstUnread, setFirstUnread] = useState<{ channelId: string; sequence: number | null }>({ channelId: '', sequence: null })
+  // Kept per channel: the page stays mounted from one channel to the next.
+  const [threadDialog, setThreadDialog] = useState<{ channelId: string; origin: ThreadOrigin | null } | null>(null)
+  const startThread = (origin: ThreadOrigin | null) => setThreadDialog({ channelId, origin })
   const page = timeline.data
   const requestsByMessage = useMemo(() => groupReplyRequests(page?.replyRequests ?? []), [page?.replyRequests])
   const validBoundary =
     page?.conversation.projectId === projectId && page.conversation.id === channelId && page.conversation.kind === 'channel'
 
-  // Remember where unread started when the channel opened, so the New line doesn't jump as it's marked seen.
-  if (validBoundary && page && firstUnread.channelId !== channelId) {
-    setFirstUnread({
-      channelId,
-      sequence: page.highestSequence > page.readState.highestSeenSequence ? page.readState.highestSeenSequence + 1 : null,
-    })
-  }
-
   const older = useLiveOlderEntries({
     conversationId: channelId,
     newestEntries: validBoundary && page ? page.entries : NO_ENTRIES,
-    newestCursor: validBoundary ? page?.nextCursor ?? null : null,
+    newestCursor: validBoundary ? (page?.nextCursor ?? null) : null,
     loadPage: async (cursor) => {
       const result = await getConversationTimeline(channelId, cursor, 50, includeArchived)
       if (result.conversation.id !== channelId || result.conversation.projectId !== projectId || result.conversation.kind !== 'channel') {
-        throw new Error('Older timeline page crossed its Project boundary.')
+        throw new Error('Older timeline page crossed its project boundary.')
       }
       return result
     },
   })
   const entries = older.entries
   const olderCursor = older.cursor
+  const loadOlder = older.loadOlder
+
+  const unread = useFirstUnread({
+    conversationId: channelId,
+    entries,
+    fresh: timeline.isFetchedAfterMount,
+    hasOlder: Boolean(olderCursor),
+    page: validBoundary ? page : null,
+    viewerId: viewer.actorId,
+  })
 
   const statusByThread = useMemo(
     () => new Map((threadStatuses.data ?? []).map((thread) => [thread.id, thread])),
@@ -130,7 +120,7 @@ export function ChannelPage() {
     return linked
   }, [channelId, linkedThreadSidebar.data])
 
-  const onSeen = useCallback(
+  const refreshSidebar = useCallback(
     () => queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) }),
     [projectId, queryClient],
   )
@@ -140,11 +130,9 @@ export function ChannelPage() {
       highestSequence: page?.highestSequence ?? 0,
       highestSeenSequence: page?.readState.highestSeenSequence ?? 0,
       // Only once the newest entry is on screen.
-      ready: Boolean(
-        validBoundary && page?.capabilities.markSeen && entries.at(-1)?.sequence === page.highestSequence,
-      ),
+      ready: Boolean(validBoundary && page?.capabilities.markSeen && entries.at(-1)?.sequence === page.highestSequence),
     },
-    onSeen,
+    refreshSidebar,
   )
 
   const navigationSync = useRememberProjectLocation(
@@ -158,7 +146,7 @@ export function ChannelPage() {
     project.data?.navigation,
   )
 
-  const name = validBoundary ? page?.conversation.name ?? 'Channel' : 'Channel'
+  const name = validBoundary ? (page?.conversation.name ?? 'Channel') : 'Channel'
   usePageTitle(validBoundary ? `#${name}` : null)
   const archived = Boolean(page?.conversation.archivedAt)
   const canPost = Boolean(validBoundary && page?.capabilities.sendMessage && !archived)
@@ -166,10 +154,17 @@ export function ChannelPage() {
   const searchActors = async (query: string) => (await searchMentionableActors(projectId, query)).actors
   const searchWorkItems = (query: string) => searchWorkItemReferences(projectId, query)
 
+  const sender = useMessageSender({
+    conversationId: channelId,
+    kind: 'channel',
+    onSent: () => void refreshSidebar(),
+    queryKey: queryKeys.timeline(projectId, channelId, includeArchived),
+  })
+
   const messageActions = useMessageActions({
     projectId,
     conversationId: channelId,
-    viewerId: session.user.actorId,
+    viewerId: viewer.actorId,
     capabilities: validBoundary ? page?.capabilities : null,
     searchActors,
     searchWorkItems,
@@ -179,28 +174,20 @@ export function ChannelPage() {
       older.replaceEntry(entry)
       void timeline.refetch()
     },
-    actionsFor: (message) => {
+    onMarkedUnread: (entry) => unread.markUnreadFrom(entry.sequence),
+    primaryFor: (message) => {
       const threads = linkedThreadsByMessage.get(message.id) ?? []
-      const memory = canPost ? <MessageMemoryActions conversationId={channelId} message={message} projectId={projectId} /> : null
       if (threads.length) {
-        return (
-          <>
-            <IconButton icon="messages" label="Open thread" onClick={() => openThread(threads[0].id)} size="sm" />
-            {memory}
-          </>
-        )
+        return <IconButton icon="messages" label="Open thread" onClick={() => openThread(threads[0].id)} size="sm" />
       }
       if (!canPost) return null
       return (
-        <>
-          <IconButton
-            icon="messages"
-            label="Start a thread"
-            onClick={() => setThreadDialog({ origin: { messageId: message.id, text: message.plainText, author: message.author.displayName } })}
-            size="sm"
-          />
-          {memory}
-        </>
+        <IconButton
+          icon="messages"
+          label="Start a thread"
+          onClick={() => startThread({ messageId: message.id, text: message.plainText, author: message.author.displayName })}
+          size="sm"
+        />
       )
     },
   })
@@ -213,17 +200,6 @@ export function ChannelPage() {
     projectId,
   })
 
-  const sendMessage = async (submission: ComposerSubmission) => {
-    setPending((current) => [...current, { key: submission.idempotencyKey, text: submission.text }])
-    try {
-      await sendConversationMessage({ conversationId: channelId, kind: 'channel', ...submission })
-      await timeline.refetch()
-      void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
-    } finally {
-      setPending((current) => current.filter((item) => item.key !== submission.idempotencyKey))
-    }
-  }
-
   const archiveChannel = useArchiveConversation({
     conversationId: channelId,
     kind: 'channel',
@@ -231,9 +207,11 @@ export function ChannelPage() {
     leaveTo: `/projects/${encodeURIComponent(projectId)}`,
     projectId,
   })
-  const archive = () => {
-    if (!page) return
-    archiveChannel.mutate(page.conversation.version, { onSettled: () => setArchiveOpen(false) })
+  const restoreChannel = useRestoreConversation({ conversationId: channelId, kind: 'channel', label: `#${name}`, projectId })
+  const canArchive = Boolean(validBoundary && page?.capabilities.archive)
+  const canRestore = Boolean(validBoundary && page?.capabilities.restore)
+  const restore = () => {
+    if (page && !restoreChannel.isPending) restoreChannel.mutate(page.conversation.version)
   }
 
   if (isApiError(timeline.error) && timeline.error.status === 404) {
@@ -252,10 +230,12 @@ export function ChannelPage() {
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
+
+  const dialog = threadDialog?.channelId === channelId ? threadDialog : null
 
   return (
     <AppShell
@@ -266,17 +246,19 @@ export function ChannelPage() {
             key={openThreadId}
             onClose={() => openThread(null)}
             parentId={channelId}
+            parentName={`#${name}`}
             projectId={projectId}
             searchActors={searchActors}
             searchWorkItems={searchWorkItems}
             threadId={openThreadId}
-            viewer={{ actorId: session.user.actorId, displayName: session.user.displayName }}
+            viewer={viewer}
           />
         ) : boardOpen ? (
           <ThreadBoard
             conversationId={channelId}
             onClose={() => setBoardOpen(false)}
             onOpen={(thread) => openThread(thread.id)}
+            onStart={canPost ? () => startThread(null) : undefined}
             projectId={projectId}
           />
         ) : undefined
@@ -299,12 +281,12 @@ export function ChannelPage() {
               pressed={boardOpen}
               side="bottom"
             />
-            {canPost ? <IconButton icon="messages" label="Start a thread" onClick={() => setThreadDialog({ origin: null })} side="bottom" /> : null}
+            {canPost ? <IconButton icon="messages" label="Start a thread" onClick={() => startThread(null)} side="bottom" /> : null}
           </>
         }
         icon="hash"
         menu={[
-          ...(canPost ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => setThreadDialog({ origin: null }) }] : []),
+          ...(canPost ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
           ...tools.levelMenu,
           { separator: true as const },
           {
@@ -312,8 +294,13 @@ export function ChannelPage() {
             icon: 'archive' as const,
             onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/conversations/archived`),
           },
-          ...(page?.capabilities.archive && !archived
-            ? [{ separator: true as const }, { label: 'Archive channel', icon: 'archive' as const, danger: true, onSelect: () => setArchiveOpen(true) }]
+          ...(canRestore ? [{ label: 'Restore channel', icon: 'undo' as const, onSelect: restore }] : []),
+          ...(canArchive && !archived && page
+            ? [
+                { separator: true as const },
+                // Archiving can be undone (from the toast, or Restore later), so it happens at once.
+                { label: 'Archive channel', icon: 'archive' as const, danger: true, onSelect: () => archiveChannel.mutate(page.conversation.version) },
+              ]
             : []),
         ]}
         tag={tools.levelMark}
@@ -321,26 +308,31 @@ export function ChannelPage() {
       />
       {tools.banner}
       {validBoundary ? <PinnedBar canEdit={canPost} conversationId={channelId} projectId={projectId} /> : null}
-      {archived ? (
-        <Banner className="aw-conv__banner" icon="archive" title="This channel is archived." tone="offline">
-          You can read it, but no one can post.
-        </Banner>
-      ) : null}
 
-      <ConversationTimeline busy={timeline.isPending} label={`Messages in ${name}`} revision={`${page?.highestSequence ?? 0}:${pending.length}:${older.olderCount}`}>
-        {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void older.loadOlder()} /> : null}
-        {older.error ? <Banner tone="danger">{older.error}</Banner> : null}
-        {timeline.isPending ? <MessageSkeleton /> : null}
-        {timeline.isError ? (
-          <ErrorState action={<Button onClick={() => void timeline.refetch()}>Try again</Button>} title="This channel didn’t load">
-            It may have been removed, or you may no longer have access.
-          </ErrorState>
+      <ConversationTimeline
+        busy={timeline.isPending || older.loading}
+        hasOlder={Boolean(olderCursor)}
+        key={channelId}
+        label={`Messages in ${name}`}
+        olderKey={older.olderCount}
+        onLoadOlder={() => void loadOlder()}
+        revision={`${page?.highestSequence ?? 0}:${sender.pending.length}`}
+        stickKey={sender.sent}
+        unread={unread.unread}
+      >
+        {olderCursor ? <OlderMessagesButton busy={older.loading} onClick={() => void loadOlder()} /> : null}
+        {older.error ? (
+          <Banner onRetry={() => void loadOlder()} title="Earlier messages didn’t load." tone="danger">
+            {older.error}
+          </Banner>
         ) : null}
+        {timeline.isPending ? <MessageSkeleton /> : null}
+        {timeline.isError ? <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} title="This channel didn’t load" /> : null}
         {validBoundary && !olderCursor ? (
           <ConversationIntro
             actions={
               canPost ? (
-                <Button icon="messages" onClick={() => setThreadDialog({ origin: null })} size="sm">
+                <Button icon="messages" onClick={() => startThread(null)} size="sm">
                   Start a thread
                 </Button>
               ) : undefined
@@ -351,116 +343,92 @@ export function ChannelPage() {
               </>
             }
           >
-            {archived
-              ? 'This channel is archived. Its history stays here to read.'
-              : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
+            {archived ? null : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
           </ConversationIntro>
         ) : null}
         <TimelineEntries
           conversationId={channelId}
           entries={entries}
-          firstUnreadSequence={firstUnread.channelId === channelId ? firstUnread.sequence : null}
+          firstUnreadSequence={unread.firstUnreadSequence}
           renderExtras={(entry) => {
-            const threads = entry.message ? linkedThreadsByMessage.get(entry.message.id) ?? [] : []
-            const requests = entry.message && !entry.message.removed ? requestsByMessage.get(entry.message.id) ?? [] : []
+            const threads = entry.message ? (linkedThreadsByMessage.get(entry.message.id) ?? []) : []
+            const requests = entry.message && !entry.message.removed ? (requestsByMessage.get(entry.message.id) ?? []) : []
             return [
               requests.length ? (
                 <ReplyStatusList
                   key="replies"
-                  onRetry={(requestId) => void retryReplyRequest(requestId).then(() => timeline.refetch())}
+                  onRetry={(requestId) => retryReplyRequest(requestId).then(() => timeline.refetch())}
                   onStop={page?.capabilities.sendMessage ? (requestId) => stopReplyRequest(requestId).then(() => timeline.refetch()) : undefined}
                   requests={requests}
                 />
               ) : null,
-              ...threads.map((thread) => (
-              <Link
-                aria-current={thread.id === openThreadId ? 'true' : undefined}
-                className="aw-threadlink"
-                key={thread.id}
-                onClick={(event) => {
-                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
-                  event.preventDefault()
-                  openThread(thread.id)
-                }}
-                to={threadRoute(thread.id)}
-              >
-                <Icon name="messages" size={14} />
-                <span className="aw-threadlink__name">{thread.name}</span>
-                {statusByThread.get(thread.id) ? <ThreadStatusChip status={statusByThread.get(thread.id)?.status ?? 'Open'} /> : null}
-                {THREAD_STATE[thread.attention] ? <span className="aw-threadlink__state">{THREAD_STATE[thread.attention]}</span> : null}
-                {statusByThread.get(thread.id)?.outcome ? (
-                  <span className="aw-threadlink__state">{statusByThread.get(thread.id)?.outcome}</span>
-                ) : null}
-                <Icon className="aw-threadlink__chev" name="chevron-right" size={14} />
-                <span className="visually-hidden">, open thread</span>
-              </Link>
-              )),
+              ...threads.map((thread) => {
+                const facts = threadChipFacts(statusByThread.get(thread.id), thread)
+                return facts ? (
+                  <ThreadChip
+                    current={thread.id === openThreadId}
+                    href={threadRoute(thread.id)}
+                    key={thread.id}
+                    onOpen={() => openThread(thread.id)}
+                    thread={facts}
+                  />
+                ) : null
+              }),
             ]
           }}
           onOpenHistory={messageActions.openHistory}
           renderEditor={messageActions.editorFor}
           renderReactions={messageActions.reactionsFor}
           renderToolbar={messageActions.toolbarFor}
-          viewerId={session.user.actorId}
+          viewerId={viewer.actorId}
         />
-        {pending.map((item, index) => (
-          <PendingMessageRow
-            continued={index > 0 || entries.at(-1)?.message?.author.id === session.user.actorId}
-            key={item.key}
-            name={session.user.displayName}
-            seed={session.user.actorId}
-            text={item.text}
-          />
-        ))}
+        <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
       </ConversationTimeline>
 
       {canPost ? (
         <StructuredComposer
           autoFocus={searchParams.get('compose') === '1'}
           draftKey={channelId}
-          upload={uploadFile({ kind: 'conversation', conversationId: channelId })}
+          focusOnOpen={!openThreadId}
           label={`Message #${name}`}
-          onSubmit={sendMessage}
+          onEditLast={() => messageActions.editLast(entries)}
+          onSubmit={sender.send}
           placeholder={`Message #${name}`}
           searchActors={searchActors}
           searchWorkItems={searchWorkItems}
+          upload={uploadFile({ kind: 'conversation', conversationId: channelId })}
           {...tools.composer}
         />
       ) : validBoundary && archived ? (
         <StructuredComposer
-          disabledReason="This channel is archived. Nobody can post here."
+          disabledReason={
+            <>
+              This channel is archived. You can read it, but no one can post.
+              {canRestore ? (
+                <Button busy={restoreChannel.isPending} icon="undo" onClick={restore} size="sm">
+                  Restore channel
+                </Button>
+              ) : null}
+            </>
+          }
           onSubmit={async () => undefined}
           searchActors={async () => []}
         />
       ) : null}
 
-      {threadDialog ? (
+      {dialog ? (
         <ThreadDialog
           channelId={channelId}
           onClose={() => setThreadDialog(null)}
           onCreated={(threadId) => {
-            void queryClient.invalidateQueries({ queryKey: queryKeys.conversationSidebarRoot(projectId) })
+            void refreshSidebar()
             openThread(threadId)
           }}
           open
-          origin={threadDialog.origin}
+          origin={dialog.origin}
         />
       ) : null}
       {messageActions.dialogs}
-      <Dialog
-        description="People can still read it from Archived conversations, but no one can post."
-        footer={
-          <>
-            <Button onClick={() => setArchiveOpen(false)}>Cancel</Button>
-            <Button busy={archiveChannel.isPending} onClick={archive} variant="danger">
-              Archive channel
-            </Button>
-          </>
-        }
-        onClose={() => setArchiveOpen(false)}
-        open={archiveOpen}
-        title={`Archive #${name}?`}
-      />
     </AppShell>
   )
 }

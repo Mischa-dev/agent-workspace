@@ -725,6 +725,32 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         "each independently advanced read cursor emits a durable invalidation"
     );
 
+    // Restore is offered on the archived channel, but not on its archived
+    // thread until the channel is back.
+    let capabilities = |conversation_id: Uuid| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let response = app
+                .oneshot(request(
+                    "GET",
+                    &format!(
+                        "/api/v1/conversations/{conversation_id}/timeline?includeArchived=true"
+                    ),
+                    &[("cookie", cookie.as_str())],
+                    Value::Null,
+                ))
+                .await
+                .expect("read archived Conversation");
+            assert_eq!(response.status(), StatusCode::OK);
+            response_json(response).await["capabilities"].clone()
+        }
+    };
+    let channel_capabilities = capabilities(channel_id).await;
+    assert_eq!(channel_capabilities["restore"], true);
+    assert_eq!(channel_capabilities["archive"], false);
+    assert_eq!(capabilities(thread_id).await["restore"], false);
+
     // Undo for archive: a thread can't come back while its channel is
     // archived, a stale version is refused, and the channel itself restores.
     let restore = |path: String, version: i64| {
@@ -758,6 +784,10 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     let restored = response_json(restored).await;
     assert_eq!(restored["conversation"]["archivedAt"], Value::Null);
     assert_eq!(restored["conversation"]["version"], 3);
+    let channel_capabilities = capabilities(channel_id).await;
+    assert_eq!(channel_capabilities["restore"], false);
+    assert_eq!(channel_capabilities["archive"], true);
+    assert_eq!(capabilities(thread_id).await["restore"], true);
 
     administrative_pool
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())

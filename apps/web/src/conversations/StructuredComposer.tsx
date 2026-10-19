@@ -18,7 +18,21 @@ import { useUploads } from '../files/useUploads'
 import { matchSlashCommand, suggestSlashCommands, type SlashCommand, type SlashOutcome } from '../later/slashCommands'
 import { TimeDialog } from '../later/TimeDialog'
 import { whenChoices } from '../later/when'
-import { ActorTag, Avatar, Button, Icon, IconButton, Kbd, Menu, actorKind, type IconGlyph, type IconName } from '../ui'
+import {
+  ActorTag,
+  Avatar,
+  Button,
+  Icon,
+  IconButton,
+  Kbd,
+  Menu,
+  actorKind,
+  countLabel,
+  describeError,
+  formatShortcut,
+  type IconGlyph,
+  type IconName,
+} from '../ui'
 import { applyEdit, formatEdit, type FormatAction } from '../ui/markdown/editing'
 import {
   activeTrigger,
@@ -27,12 +41,15 @@ import {
   composerScalarValues,
   createIdempotencyKey,
   MAX_MESSAGE_SCALAR_VALUES,
+  renameHandles,
+  typedHandles,
   type ComposerDraft,
   type ComposerSubmission,
   type Trigger,
 } from './composerModel'
 import type { ConversationActor, ConversationWorkItemReference, MessageContentV1 } from './types'
 import { Bold, Code, Italic, Paperclip, SquareCode, TextQuote, Type } from '../files/icons'
+import { useToastOffset } from './toastOffset'
 
 type StructuredComposerProps = {
   disabled?: boolean
@@ -78,6 +95,14 @@ type StructuredComposerProps = {
   ) => Promise<SlashOutcome>
   /** Shows Schedule next to Send: send this message at a later time. */
   onSchedule?: (content: MessageContentV1, at: Date) => Promise<void>
+  /** Up arrow in an empty box: edit your newest message. True when there was one. */
+  onEditLast?: () => boolean
+  /**
+   * Put the cursor here when the conversation opens, so typing goes into the
+   * message rather than setting off shortcuts. Only with a mouse or trackpad:
+   * on a touch screen it would pop the keyboard up.
+   */
+  focusOnOpen?: boolean
 }
 
 /**
@@ -86,15 +111,37 @@ type StructuredComposerProps = {
  */
 type QueuedSend = ComposerSubmission & { text: string } & Partial<Pick<ComposerDraft, 'mentions' | 'workItems'>>
 
-/** The formatting row, and Slack's shortcuts for it (Ctrl or ⌘). */
+/** The formatting row, and Slack's shortcuts for it (Ctrl, or ⌘ on a Mac). */
 const FORMATS: { action: FormatAction; icon: IconGlyph; label: string; shortcut: string }[] = [
-  { action: 'bold', icon: Bold, label: 'Bold', shortcut: 'B' },
-  { action: 'italic', icon: Italic, label: 'Italic', shortcut: 'I' },
-  { action: 'code', icon: Code, label: 'Code', shortcut: 'E' },
-  { action: 'codeblock', icon: SquareCode, label: 'Code block', shortcut: 'Alt+Shift+C' },
-  { action: 'bullet', icon: 'list', label: 'Bulleted list', shortcut: 'Shift+8' },
-  { action: 'quote', icon: TextQuote, label: 'Quote', shortcut: 'Shift+9' },
+  { action: 'bold', icon: Bold, label: 'Bold', shortcut: 'mod+B' },
+  { action: 'italic', icon: Italic, label: 'Italic', shortcut: 'mod+I' },
+  { action: 'code', icon: Code, label: 'Code', shortcut: 'mod+E' },
+  { action: 'codeblock', icon: SquareCode, label: 'Code block', shortcut: 'mod+alt+shift+C' },
+  { action: 'bullet', icon: 'list', label: 'Bulleted list', shortcut: 'mod+shift+8' },
+  { action: 'quote', icon: TextQuote, label: 'Quote', shortcut: 'mod+shift+9' },
 ]
+
+/** A touch screen, where Enter makes a new line and the button sends. */
+function coarsePointer() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+}
+
+/** A reason as the end of a sentence. */
+function sentence(text: string) {
+  const trimmed = text.trim()
+  return /[.!?…]["”’)]*$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
+
+/** What a refused send says: the server's own words when it gave some. */
+function sendFailure(reason: unknown) {
+  return reason instanceof Error && reason.message ? reason.message : describeError(reason).message
+}
+
+/**
+ * The line under the box. A failed send says how to send again; a note (a
+ * file that can't be attached, a command that didn't run) says only itself.
+ */
+type ComposerError = { kind: 'send' | 'note'; text: string }
 
 function shortcutAction(event: KeyboardEvent<HTMLTextAreaElement>): FormatAction | null {
   if (!(event.metaKey || event.ctrlKey)) return null
@@ -121,7 +168,7 @@ type Suggestion =
   | { kind: 'mention'; actor: ConversationActor }
   | { kind: 'work'; item: ConversationWorkItemReference }
 
-/** One rounded box: type, @mention people and agents inline, reference work items with #, Enter to send. */
+/** One rounded box: type, @mention people and agents inline, reference tasks with #, Enter to send. */
 export function StructuredComposer(props: StructuredComposerProps) {
   // A new conversation is a new draft.
   return <ComposerBox key={props.draftKey ?? ''} {...props} />
@@ -149,8 +196,13 @@ function ComposerBox({
   commands,
   onCommand,
   onSchedule,
+  onEditLast,
+  focusOnOpen = false,
 }: StructuredComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const wrapRef = useRef<HTMLDivElement & HTMLFormElement>(null)
+  // A conversation's own composer (it keeps a draft) lifts the toasts above it.
+  useToastOffset(wrapRef, Boolean(draftKey), Boolean(disabledReason))
   const fileInputRef = useRef<HTMLInputElement>(null)
   const uploads = useUploads(upload)
   const [dragging, setDragging] = useState(false)
@@ -179,7 +231,12 @@ function ComposerBox({
   const [sending, setBusy] = useState(false)
   const [scheduling, setScheduling] = useState(false)
   const busy = sending || scheduling
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ComposerError | null>(null)
+  const showNote = (text: string | null) => setError(text ? { kind: 'note', text } : null)
+  const [resolving, setResolving] = useState(false)
+  // Text whose unknown @handles were pointed out once: the next send goes as typed.
+  const [plainText, setPlainText] = useState<string | null>(null)
+  const textRef = useRef('')
   const [slashActive, setSlashActive] = useState(0)
   const [slashClosed, setSlashClosed] = useState(false)
   const [customSchedule, setCustomSchedule] = useState(false)
@@ -228,7 +285,7 @@ function ComposerBox({
           if (isConnectionError(reason)) break
           // Refused for good: back into the box to change or copy.
           restoreQueued(item)
-          setError(reason instanceof Error ? reason.message : 'Your message wasn’t sent.')
+          setError({ kind: 'send', text: sendFailure(reason) })
         }
       }
     } finally {
@@ -256,7 +313,10 @@ function ComposerBox({
   const typed = overLimit ? null : buildMessageContent(text, mentions, workItems)
   // A message can be only files.
   const content = typed ?? (!overLimit && uploads.ready.length > 0 ? BLANK_MESSAGE_CONTENT : null)
-  const canSend = Boolean(content) && !disabled && !uploads.uploading
+  const canSend = Boolean(content) && !disabled && !uploads.uploading && !resolving
+  useEffect(() => {
+    textRef.current = text
+  })
   const slashMatches = commands && onCommand && !trigger && !slashClosed ? suggestSlashCommands(text, commands) : []
 
   useLayoutEffect(() => {
@@ -266,9 +326,10 @@ function ComposerBox({
     element.style.height = `${Math.min(element.scrollHeight, 280)}px`
   }, [text])
 
-  // An editor opens with the caret after the text.
+  // An editor opens with the caret after the text; a conversation, with the
+  // cursor in its box (with a mouse or trackpad).
   useEffect(() => {
-    if (!autoFocus) return
+    if (!autoFocus && !(focusOnOpen && !coarsePointer())) return
     const element = textareaRef.current
     if (!element) return
     element.focus()
@@ -297,7 +358,7 @@ function ComposerBox({
         .catch((reason: unknown) => {
           if (searchGeneration.current !== generation) return
           setSuggestions([])
-          setSearchError(reason instanceof Error ? reason.message : 'Search didn’t work. Keep typing to try again.')
+          setSearchError(`Results didn’t load. ${sentence(describeError(reason).message)} Keep typing to try again.`)
         })
         .finally(() => {
           if (searchGeneration.current === generation) setSearching(false)
@@ -376,8 +437,7 @@ function ComposerBox({
   }
 
   const attach = (files: Iterable<File>) => {
-    const warning = uploads.add(files)
-    setError(warning)
+    showNote(uploads.add(files))
   }
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -438,7 +498,7 @@ function ComposerBox({
           clearDraft()
         }
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'That command didn’t work.'))
+      .catch((reason: unknown) => showNote(`That command didn’t run. ${sentence(describeError(reason).message)}`))
       .finally(() => setBusy(false))
   }
 
@@ -456,42 +516,43 @@ function ComposerBox({
     }
   }
 
-  const submit = (event?: FormEvent<HTMLFormElement>) => {
-    event?.preventDefault()
-    const command = onCommand && commands ? matchSlashCommand(text, commands) : null
-    if (command && !busy && !disabled) {
-      runCommand(command.command, command.args)
-      return
-    }
-    if (!content || !canSend || scheduling || (keepDraftWhileSaving && busy)) return
-    // Clear right away so it feels instant. A failed send puts the draft back and keeps its
-    // idempotency key, so retrying can't post it twice; the next message gets a fresh key.
-    const draft = { text, mentions, workItems }
+  // Send this draft. The box clears at once so it feels instant; a failed send
+  // puts the draft back and keeps its idempotency key, so sending again can't
+  // post it twice. The next message gets a fresh key.
+  const send = (draft: ComposerDraft) => {
+    const built = buildMessageContent(draft.text, draft.mentions, draft.workItems)
+    const message = built ?? (uploads.ready.length > 0 ? BLANK_MESSAGE_CONTENT : null)
+    if (!message) return
     const attachments = uploads.ready.length ? uploads.ready : undefined
     const key = idempotencyKeyRef.current
     idempotencyKeyRef.current = createIdempotencyKey()
     setBusy(true)
     setError(null)
-    if (!keepDraftWhileSaving) {
+    setPlainText(null)
+    if (keepDraftWhileSaving) {
+      setText(draft.text)
+      setMentions(draft.mentions)
+    } else {
       setText('')
       setMentions([])
       setWorkItems([])
       uploads.clear()
     }
-    void onSubmit({ content, idempotencyKey: key, text: draft.text.trim(), attachments })
+    const sentText = draft.text.trim()
+    void onSubmit({ content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems })
       .catch((reason: unknown) => {
         if (draftKey && !keepDraftWhileSaving && isConnectionError(reason)) {
           // Kept and sent again when the connection is back; never dropped.
           queue((current) => [
             ...current,
-            { content, idempotencyKey: key, text: draft.text.trim(), attachments, mentions: draft.mentions, workItems: draft.workItems },
+            { content: message, idempotencyKey: key, text: sentText, attachments, mentions: draft.mentions, workItems: draft.workItems },
           ])
           return
         }
         if (!mounted.current) {
           // The box is gone (they moved on while it sent): keep the text as
           // this conversation's draft so it's there when they come back.
-          if (draftKey && !keepDraftWhileSaving && draft.text.trim()) {
+          if (draftKey && !keepDraftWhileSaving && sentText) {
             const left = readLocal<ComposerDraft>(`draft:${draftKey}`)
             writeLocal<ComposerDraft>(`draft:${draftKey}`, {
               text: left?.text.trim() ? `${draft.text}\n${left.text}` : draft.text,
@@ -506,12 +567,72 @@ function ComposerBox({
         setText((current) => (current.trim() ? current : draft.text))
         setMentions((current) => [...draft.mentions, ...current.filter((actor) => !draft.mentions.some((m) => m.id === actor.id))])
         setWorkItems((current) => [...draft.workItems, ...current.filter((item) => !draft.workItems.some((w) => w.id === item.id))])
-        setError(reason instanceof Error ? reason.message : 'Your message wasn’t sent.')
+        setError({ kind: 'send', text: sendFailure(reason) })
       })
       .finally(() => {
         setBusy(false)
         queueMicrotask(() => textareaRef.current?.focus())
       })
+  }
+
+  // "@muse can you look", typed without stopping at the list, still asks
+  // Muse: each hand-typed handle is looked up, and one that matches someone
+  // exactly becomes a mention. One that matches nobody is pointed out before
+  // sending, and sending again sends it as plain text.
+  const resolveAndSend = async (draft: ComposerDraft, handles: string[]) => {
+    setResolving(true)
+    setError(null)
+    const looked = await Promise.all(
+      handles.map((handle) =>
+        searchers.current
+          .searchActors(handle)
+          .then((actors) => ({ handle, actor: actors.find((actor) => actor.handle.toLowerCase() === handle.toLowerCase()) ?? null, failed: false }))
+          .catch(() => ({ handle, actor: null, failed: true })),
+      ),
+    )
+    if (!mounted.current) return
+    setResolving(false)
+    // They kept typing: the next Enter looks again.
+    if (textRef.current !== draft.text) return
+    const found = looked.flatMap((entry) => (entry.actor ? [entry.actor] : []))
+    const canonical = new Map(found.map((actor) => [actor.handle.toLowerCase(), actor.handle]))
+    const next: ComposerDraft = {
+      text: canonical.size ? renameHandles(draft.text, canonical) : draft.text,
+      mentions: [...draft.mentions, ...found.filter((actor) => !draft.mentions.some((m) => m.id === actor.id))],
+      workItems: draft.workItems,
+    }
+    // A lookup that failed can't say who's there, so that handle goes as typed.
+    const unknown = looked.filter((entry) => !entry.actor && !entry.failed).map((entry) => `@${entry.handle}`)
+    if (!unknown.length) {
+      send(next)
+      return
+    }
+    setText(next.text)
+    setMentions(next.mentions)
+    setPlainText(next.text)
+    const names = unknown.length === 1 ? unknown[0] : `${unknown.slice(0, -1).join(', ')} and ${unknown[unknown.length - 1]}`
+    const again = coarsePointer() ? 'Tap send again' : 'Press Enter again'
+    showNote(`${names} ${unknown.length === 1 ? 'isn’t' : 'aren’t'} anyone here. ${again} to send it as plain text.`)
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  const submit = (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault()
+    const command = onCommand && commands ? matchSlashCommand(text, commands) : null
+    if (command && !busy && !disabled) {
+      runCommand(command.command, command.args)
+      return
+    }
+    if (!content || !canSend || scheduling || (keepDraftWhileSaving && busy)) return
+    // A picked mention typed over in other letters is still that mention.
+    const picked = new Map(mentions.map((actor) => [actor.handle.toLowerCase(), actor.handle]))
+    const draft = { text: picked.size ? renameHandles(text, picked) : text, mentions, workItems }
+    const handles = plainText === text ? [] : typedHandles(text, mentions)
+    if (handles.length) {
+      void resolveAndSend(draft, handles)
+      return
+    }
+    send(draft)
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -569,7 +690,12 @@ function ComposerBox({
       onCancel()
       return
     }
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === 'ArrowUp' && onEditLast && !text && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      if (onEditLast()) event.preventDefault()
+      return
+    }
+    // On a touch screen Enter makes a new line, as in Slack's apps; the button sends.
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && !coarsePointer()) {
       event.preventDefault()
       submit()
     }
@@ -577,7 +703,7 @@ function ComposerBox({
 
   if (disabledReason) {
     return (
-      <div className="aw-composer-wrap">
+      <div className="aw-composer-wrap" ref={wrapRef}>
         <div className="aw-composer is-disabled">
           <Icon name="lock" />
           <span>{disabledReason}</span>
@@ -593,12 +719,14 @@ function ComposerBox({
     <>
     <form
       className={className ? `aw-composer-wrap ${className}` : 'aw-composer-wrap'}
+      data-composer={draftKey ? 'conversation' : undefined}
       onDragLeave={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
       }}
       onDragOver={onDragOver}
       onDrop={onDrop}
       onSubmit={submit}
+      ref={wrapRef}
     >
       {queued.length ? (
         <div aria-label="Waiting to send" className="aw-composer__queued" role="list">
@@ -606,7 +734,7 @@ function ComposerBox({
             <div className="aw-composer__queued-item" key={item.idempotencyKey} role="listitem">
               <Icon name="clock" size={14} />
               <span className="aw-composer__queued-text">
-                {item.text || (item.attachments?.length ? `${item.attachments.length} ${item.attachments.length === 1 ? 'file' : 'files'}` : '')}
+                {item.text || (item.attachments?.length ? countLabel(item.attachments.length, 'file') : '')}
               </span>
               <Button onClick={() => editQueued(item)} size="sm" variant="ghost">
                 Edit
@@ -614,7 +742,7 @@ function ComposerBox({
             </div>
           ))}
           <p aria-live="polite" className="aw-composer__queued-note">
-            {queued.length === 1 ? 'Not sent yet.' : `${queued.length} messages not sent yet.`} No connection; this sends when you’re back online with this conversation open.{' '}
+            {queued.length === 1 ? 'Not sent yet.' : `${countLabel(queued.length, 'message')} not sent yet.`} No connection. {queued.length === 1 ? 'It sends' : 'They send'} when you’re back online with this conversation open.{' '}
             <Button onClick={() => void flush()} size="sm" variant="ghost">
               Try now
             </Button>
@@ -639,7 +767,7 @@ function ComposerBox({
                 label={format.label}
                 onClick={() => applyFormat(format.action)}
                 onMouseDown={(event) => event.preventDefault()}
-                shortcut={`Ctrl+${format.shortcut}`}
+                shortcut={formatShortcut(format.shortcut)}
                 size="sm"
               />
             ))}
@@ -669,9 +797,9 @@ function ComposerBox({
           </div>
         ) : null}
         {trigger ? (
-          <div className="aw-mentions" id={listId} role="listbox" aria-label={trigger.kind === 'mention' ? 'People and agents' : 'Work items'}>
+          <div className="aw-mentions" id={listId} role="listbox" aria-label={trigger.kind === 'mention' ? 'People and agents' : 'Tasks'}>
             <div className="aw-mentions__head">
-              {trigger.kind === 'mention' ? 'People and agents' : 'Work items'}
+              {trigger.kind === 'mention' ? 'People and agents' : 'Tasks'}
               {trigger.query ? ` matching “${trigger.query}”` : ''}
             </div>
             {searchError ? <div className="aw-mentions__empty" role="alert">{searchError}</div> : null}
@@ -762,7 +890,7 @@ function ComposerBox({
             ) : null}
             <IconButton disabled={disabled || busy} icon="at-sign" label="Mention someone" onClick={() => insertTrigger('@')} size="sm" />
             {searchWorkItems ? (
-              <IconButton disabled={disabled || busy} icon="work" label="Reference a work item" onClick={() => insertTrigger('#')} size="sm" />
+              <IconButton disabled={disabled || busy} icon="work" label="Reference a task" onClick={() => insertTrigger('#')} size="sm" />
             ) : null}
             <IconButton
               disabled={disabled}
@@ -795,18 +923,25 @@ function ComposerBox({
                     // The time is worked out when it's picked, not when the menu was drawn.
                     onSelect: () =>
                       void schedule(whenChoices().find((now) => now.id === choice.id)?.at ?? choice.at).catch((reason: unknown) =>
-                        setError(reason instanceof Error ? reason.message : 'It wasn’t scheduled.'),
+                        showNote(`Not scheduled. ${sentence(describeError(reason).message)}`),
                       ),
                   })),
                   { label: 'Custom time…', icon: 'clock' as const, onSelect: () => setCustomSchedule(true) },
                 ]}
                 label="Schedule message"
                 placement="bottom-end"
-                trigger={<IconButton disabled={!canSend || busy || uploads.items.length > 0 || Boolean(matchSlashCommand(text, commands))} icon="clock" label="Schedule message" size="sm" />}
+                trigger={
+                  <IconButton
+                    disabled={!canSend || busy || uploads.items.length > 0 || Boolean(matchSlashCommand(text, commands))}
+                    icon="clock"
+                    label={uploads.items.length > 0 ? 'Files can’t be scheduled yet' : 'Schedule message'}
+                    size="sm"
+                  />
+                }
               />
             ) : null}
             <button aria-label={submitLabel} className="aw-composer__send" disabled={!canSend || scheduling || (keepDraftWhileSaving && busy)} type="submit">
-              <Icon className={busy ? 'aw-spin' : undefined} name={busy ? 'loader' : submitIcon} />
+              <Icon className={busy || resolving ? 'aw-spin' : undefined} name={busy || resolving ? 'loader' : submitIcon} />
             </button>
           </div>
         </div>
@@ -819,17 +954,22 @@ function ComposerBox({
       ) : error ? (
         <p className="aw-composer__error" role="alert">
           <Icon name="circle-alert" size={14} />
-          {error} {keepDraftWhileSaving ? 'Your text is still here.' : 'Your draft is still here. Press Enter to try again.'}
+          {error.kind !== 'send'
+            ? error.text
+            : keepDraftWhileSaving
+              ? // An edit's reasons say what to do next themselves.
+                `Not saved. ${sentence(error.text)}`
+              : `Not sent. ${sentence(error.text)} ${coarsePointer() ? 'Tap send to try again.' : 'Press Enter to try again.'}`}
         </p>
       ) : note ? (
         <p className="aw-composer__note">{note}</p>
       ) : text.startsWith('/') && commands && matchSlashCommand(text, commands) ? (
         <p className="aw-composer__hint is-visible">
-          <Kbd>Enter</Kbd> to run /{matchSlashCommand(text, commands)?.command.name} · {matchSlashCommand(text, commands)?.command.usage || matchSlashCommand(text, commands)?.command.description}
+          <Kbd>{formatShortcut('enter')}</Kbd> to run /{matchSlashCommand(text, commands)?.command.name} · {matchSlashCommand(text, commands)?.command.usage || matchSlashCommand(text, commands)?.command.description}
         </p>
-      ) : (
+      ) : coarsePointer() ? null : (
         <p aria-hidden={!text} className={text ? 'aw-composer__hint is-visible' : 'aw-composer__hint'}>
-          <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> + <Kbd>Enter</Kbd> for a new line
+          <Kbd>{formatShortcut('enter')}</Kbd> to send · <Kbd>{formatShortcut('shift+enter')}</Kbd> for a new line
         </p>
       )}
     </form>
