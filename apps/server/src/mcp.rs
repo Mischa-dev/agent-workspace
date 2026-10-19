@@ -1105,7 +1105,7 @@ impl McpServer {
     // -- Tasks ---------------------------------------------------------------
 
     #[tool(
-        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them), type, priority, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), words, or parent. Done and canceled tasks are left out unless includeDone, and archived ones unless includeArchived. total counts every match; for the next page, pass the nextCursor you got as cursor.",
+        description = "List tasks, in board order by default (the order people set; boardPosition 1 is the top of its column). Filter by project (projectId, or several with projectIds), status, assignee (me, none, @handle), labels (tasks with all of them; anyLabels for any of them), type, priority, milestone, createdBy, updatedSince (a date, a timestamp, or 24h/7d), blocked, claimed (yes, no, me, @handle), due dates, words, or parent. Status, assignee, type, priority and milestone take several values (any of them), and notStatus, notAssignee, notLabels, notType, notPriority and notMilestone leave tasks out. Done and canceled tasks are left out unless includeDone or you name their status, and archived ones unless includeArchived. view lists a saved view's tasks (view_list). total counts every match; for the next page, pass the nextCursor you got as cursor.",
         annotations(title = "List tasks", read_only_hint = true, open_world_hint = false)
     )]
     async fn task_list(
@@ -4292,6 +4292,43 @@ mod tests {
         ] {
             assert!(properties.get(field).is_some(), "no {field}: {schema}");
         }
+        // Filters that take several values are plain lists of strings, read
+        // leniently so a single string still works.
+        for field in [
+            "status",
+            "notStatus",
+            "assignee",
+            "notAssignee",
+            "labels",
+            "anyLabels",
+            "notLabels",
+            "type",
+            "notType",
+            "priority",
+            "notPriority",
+            "milestone",
+            "notMilestone",
+        ] {
+            let property = &properties[field];
+            assert!(property.get("anyOf").is_none(), "{field}: {property}");
+            assert!(property.get("oneOf").is_none(), "{field}: {property}");
+            assert!(
+                property.to_string().contains("array"),
+                "{field}: {property}"
+            );
+        }
+        let read = |arguments: serde_json::Value| {
+            serde_json::from_value::<super::tasks::TaskListArguments>(arguments).expect("arguments")
+        };
+        assert_eq!(
+            read(serde_json::json!({"status": "Done"})).status,
+            Some(vec!["Done".to_owned()])
+        );
+        assert_eq!(
+            read(serde_json::json!({"notStatus": ["Done", "Canceled"]})).not_status,
+            Some(vec!["Done".to_owned(), "Canceled".to_owned()])
+        );
+        assert_eq!(read(serde_json::json!({})).assignee, None);
     }
 
     /// A criterion is named by an ID or a position, read by a deserializer,

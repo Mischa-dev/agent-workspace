@@ -1,3 +1,6 @@
+import type { PickerCurrent } from './FieldPicker'
+import type { WorkItemCard } from './types'
+
 /**
  * Which tasks are selected for a bulk change. Selection is by task id, so a
  * task shown twice (grouped by label) is one selection. Shift extends a range
@@ -57,4 +60,31 @@ export function keepLoaded(selection: Selection, loaded: ReadonlySet<string>): S
   }
   if (!changed) return selection
   return { ids, anchor: selection.anchor && loaded.has(selection.anchor) ? selection.anchor : null }
+}
+
+/**
+ * The tasks a picker changes: the selection when the picked task is part of
+ * it (or none is picked), otherwise just that task. Archived tasks and ones
+ * the person can't edit are left out.
+ */
+export function pickerTargets(selected: readonly WorkItemCard[], card?: WorkItemCard): WorkItemCard[] {
+  const targets = card && !selected.some((entry) => entry.id === card.id) ? [card] : selected.length ? selected : card ? [card] : []
+  return targets.filter((target) => target.capabilities.edit && !target.archivedAt)
+}
+
+/** What a picker shows as already chosen: the task's values when there's one, and the labels every target has. */
+export function pickerCurrent(targets: readonly WorkItemCard[]): PickerCurrent {
+  const [first] = targets
+  if (!first) return { labelIds: [] }
+  const labelIds = first.labels.filter((label) => targets.every((target) => target.labels.some((entry) => entry.id === label.id))).map((label) => label.id)
+  if (targets.length > 1) return { labelIds }
+  return {
+    statusId: first.status.id,
+    priority: first.priority,
+    assigneeId: first.assignee?.actorId ?? null,
+    assignee: first.assignee ? { id: first.assignee.actorId, displayName: first.assignee.displayName, handle: first.assignee.handle, kind: first.assignee.kind } : null,
+    labelIds,
+    milestoneId: first.milestone?.id ?? null,
+    typeId: first.itemType.id,
+  }
 }

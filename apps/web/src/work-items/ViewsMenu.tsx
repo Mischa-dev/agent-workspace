@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { Button, ConfirmDialog, Dialog, Menu, describeError, showToast, Switch, TextField, type MenuEntry } from '../ui'
 import { createView, deleteView, listViews, pinView, updateView, viewKeys, type SavedView, type ViewDraft } from '../views/api'
-import { VIEW_FIELDS, writeListState, type ListState } from './listModel'
+import { VIEW_FIELDS, readListState, writeListState, type ListState } from './listModel'
 import type { UpdateListState } from './useListState'
 
 const FIELD_LABELS: Record<string, string> = {
@@ -21,14 +21,20 @@ function draftFrom(state: ListState, actorId: string): Omit<ViewDraft, 'name' | 
   const parameters = writeListState({ ...state, task: null, savedView: null, fields: null, view: 'list', showDone: false })
   const query = Object.fromEntries(parameters.entries())
   // "Me" follows whoever opens the view, so a shared "assigned to me" view works for everyone.
-  if (query.assigneeActorId === actorId) query.assigneeActorId = 'me'
+  for (const key of ['assigneeActorId', 'notAssigneeActorId']) {
+    if (query[key]) query[key] = query[key].split(',').map((id) => (id === actorId ? 'me' : id)).join(',')
+  }
   return { query, layout: state.view, fields: state.fields }
 }
 
+/** A query as the list reads it, so an older spelling of the same filters still matches. */
+function readQuery(query: Record<string, string>) {
+  const read = writeListState({ ...readListState(new URLSearchParams(query)), task: null, savedView: null, fields: null, view: 'list', showDone: false })
+  return [...read.entries()].sort().join('&')
+}
+
 function sameQuery(view: SavedView, draft: Omit<ViewDraft, 'name' | 'shared'>) {
-  const saved = Object.entries(view.query).sort().join('&')
-  const current = Object.entries(draft.query).sort().join('&')
-  return saved === current && view.layout === draft.layout && (view.fields ?? []).join(',') === (draft.fields ?? []).join(',')
+  return readQuery(view.query) === readQuery(draft.query) && view.layout === draft.layout && (view.fields ?? []).join(',') === (draft.fields ?? []).join(',')
 }
 
 /**

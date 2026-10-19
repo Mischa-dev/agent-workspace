@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
-import { Button, ErrorState, Icon, actorKind, Avatar } from '../ui'
+import { Button, ErrorState, Icon, IconButton, actorKind, Avatar, countLabel } from '../ui'
 import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
 import { BoardSkeleton } from './BoardSkeleton'
+import { ColumnComposer } from './ColumnComposer'
 import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
 import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
@@ -15,13 +16,16 @@ import type { Notice } from './notice'
 import { priorityLabel } from './constants'
 import { useAssignableActors } from './hooks'
 import { useBoard, useInvalidateWorkItems, useMilestones } from './planningHooks'
+import { SelectionBar } from './SelectionBar'
+import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
 import { useTaskShortcuts } from './shortcutKeys'
 import { useDoneCount } from './useDoneWork'
 import { TaskGlyph } from './TaskGlyph'
 import { editErrorMessage, useApplyPick } from './taskEdits'
-import type { BoardColumn, WorkItemBoardResponse, WorkItemCard, WorkItemPriority, WorkItemWorkflow } from './types'
+import type { BoardColumn, WorkItem, WorkItemBoardResponse, WorkItemCard, WorkItemPriority, WorkItemWorkflow } from './types'
 import { useBoardDrag, type DropTarget } from './useBoardDrag'
 import { PriorityIcon, StatusIcon } from './WorkItemIcons'
+import './board.css'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
 const PAGE = 50
@@ -39,7 +43,8 @@ function splitDragId(dragId: string) {
  * The board: a column per value of any field, optionally split into
  * swimlanes. Cards move by drag (mouse, or a long press on touch), or with the
  * keyboard: Space picks a card up, arrows move it, Space drops it. Moves show
- * at once and go back if the server refuses them.
+ * at once and go back if the server refuses them. Like the list, cards can be
+ * selected for bulk changes, browsed with J and K, and added in place.
  */
 export function WorkItemBoard({
   disabled,
@@ -82,8 +87,21 @@ export function WorkItemBoard({
   const [focusedId, setFocusedId] = useState<string | null>(null)
   const [held, setHeld] = useState<{ dragId: string; target: DropTarget } | null>(null)
   const [announcement, setAnnouncement] = useState('')
-  const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement; card: WorkItemCard } | null>(null)
+  const [picker, setPicker] = useState<{ field: PickerField; anchor: HTMLElement; targets: WorkItemCard[] } | null>(null)
   const [loadingColumn, setLoadingColumn] = useState<string | null>(null)
+  const [selectionState, setSelection] = useState<Selection>(emptySelection)
+  const [composing, setComposing] = useState<string | null>(null)
+  // The task just added from a column, until the board shows it (or can't).
+  const added = useRef<{ id: string; key: string; columnKey: string; at: number } | null>(null)
+
+  // Filters changed: the selection and the open add box belong to the old board.
+  const queryKey = JSON.stringify(query)
+  const [shownQuery, setShownQuery] = useState(queryKey)
+  if (shownQuery !== queryKey) {
+    setShownQuery(queryKey)
+    setSelection(emptySelection)
+    setComposing(null)
+  }
 
   const columnsBy = board.data?.columnsBy ?? state.columnsBy
   const statusColumns = useMemo(
@@ -135,6 +153,18 @@ export function WorkItemBoard({
       column.items.filter((card) => state.lanes === 'none' || laneOf(card, state.lanes).key === laneKey),
     [state.lanes],
   )
+
+  // Reading order, for J and K and Shift-click ranges: down each column, lane
+  // by lane, then the next column.
+  const readingOrder = useMemo(
+    () => columns.flatMap((column) => lanes.flatMap((lane) => cellCards(column, lane.key).map((card) => ({ card, dragId: dragIdFor(column.key, card.id) })))),
+    [cellCards, columns, lanes],
+  )
+  // A task shown in two label columns is one selection.
+  const order = useMemo(() => [...new Set(readingOrder.map((entry) => entry.card.id))], [readingOrder])
+  const cardsById = useMemo(() => new Map(readingOrder.map((entry) => [entry.card.id, entry.card])), [readingOrder])
+  const selection = useMemo(() => keepLoaded(selectionState, new Set(cardsById.keys())), [cardsById, selectionState])
+  const selectedCards = useMemo(() => [...selection.ids].flatMap((id) => cardsById.get(id) ?? []), [cardsById, selection])
 
   const performMove = useCallback(
     (dragId: string, target: DropTarget) => {
@@ -398,10 +428,7 @@ export function WorkItemBoard({
       return
     }
     const field = PICKER_KEYS[event.key.toLowerCase()]
-    if (field && canMove && card.capabilities.edit && !card.archivedAt) {
-      event.preventDefault()
-      setPicker({ field, anchor: event.currentTarget, card })
-    }
+    if (field && !event.shiftKey && openPicker(field, event.currentTarget, card)) event.preventDefault()
   }
 
   // While a card is held its element moves between columns, so keys are read from the window.
@@ -431,22 +458,112 @@ export function WorkItemBoard({
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  useTaskShortcuts(!picker && !held, (event) => {
-    if (event.key === 'Escape' && openTaskId) {
-      onClosePanel()
+  /** Opens a picker for the card, or for the selection it's part of. False when there's nothing it could change. */
+  const openPicker = (field: PickerField, anchor: HTMLElement, card?: WorkItemCard) => {
+    if (!canMove) return false
+    const targets = pickerTargets(selectedCards, card)
+    if (!targets.length) return false
+    if (targets.length > MAX_BULK) {
+      notify({ tone: 'info', title: `Bulk changes take up to ${countLabel(MAX_BULK, 'task')} at a time`, description: 'Select fewer and try again.' })
       return true
+    }
+    setPicker({ field, anchor, targets })
+    return true
+  }
+
+  const onSelect = (card: WorkItemCard, range: boolean) => setSelection(pick(selection, card.id, order, { shift: range, toggle: !range }))
+
+  // The card J, K, X and the picker letters act on: the focused one, or the last one focused.
+  const current = focusedId ? (readingOrder.find((entry) => entry.dragId === focusedId) ?? null) : null
+
+  useTaskShortcuts(!picker && !held, (event) => {
+    const key = event.key.toLowerCase()
+    if (canMove && (event.metaKey || event.ctrlKey) && key === 'a' && scrollerRef.current?.contains(document.activeElement)) {
+      setSelection(selectAll(order))
+      if (order.length > MAX_BULK) notify({ tone: 'info', title: `Selected the first ${countLabel(MAX_BULK, 'task')}`, description: `Bulk changes take up to ${MAX_BULK} at a time.` })
+      return true
+    }
+    if (event.metaKey || event.ctrlKey) return false
+    if (key === 'escape') {
+      if (openTaskId) onClosePanel()
+      else if (selection.ids.size) setSelection(emptySelection)
+      else return false
+      return true
+    }
+    if (key === 'j' || key === 'k') {
+      if (!readingOrder.length) return false
+      const index = current ? readingOrder.indexOf(current) : -1
+      const next = readingOrder[index < 0 ? 0 : Math.max(0, Math.min(readingOrder.length - 1, index + (key === 'j' ? 1 : -1)))]
+      focusCard(next.dragId)
+      // With a task open beside the board, the panel follows, the way it does on the list.
+      if (openTaskId && next.card.id !== openTaskId) onOpenTask(next.card.id)
+      return true
+    }
+    if (key === 'x' && current && canMove) {
+      setSelection(toggleOne(selection, current.card.id))
+      return true
+    }
+    const field = PICKER_KEYS[key]
+    if (field && !event.shiftKey) {
+      const element = current ? scrollerRef.current?.querySelector<HTMLElement>(`[data-drag-id="${CSS.escape(current.dragId)}"]`) : null
+      const anchor = element ?? document.querySelector<HTMLElement>('.aw-bulkbar') ?? scrollerRef.current
+      return anchor ? openPicker(field, anchor, current?.card) : false
     }
     return false
   })
 
   const onPickResult = (result: PickResult) => {
     if (!picker) return
-    const card = picker.card
+    const targets = picker.targets
     applyPick.mutate(
-      { projectId, result, targets: [{ id: card.id, projectId: card.projectId, version: card.version, key: card.key }] },
-      { onError: (error) => notify({ tone: 'danger', title: `${card.key} didn’t change`, description: editErrorMessage(error) }) },
+      { projectId, result, targets: targets.map((card) => ({ id: card.id, projectId: card.projectId, version: card.version, key: card.key })) },
+      {
+        onSuccess: () => {
+          if (targets.length > 1) notify({ tone: 'success', title: `Changed ${countLabel(targets.length, 'task')}` })
+        },
+        onError: (error) =>
+          notify({
+            tone: 'danger',
+            title: targets.length === 1 ? `${targets[0].key} didn’t change` : `${countLabel(targets.length, 'task')} didn’t change`,
+            description: editErrorMessage(error),
+          }),
+      },
     )
   }
+
+  const canAdd = (column: BoardColumn) => canMove && column.droppable
+
+  const closeComposer = (columnKey: string, refocus: boolean) => {
+    setComposing(null)
+    if (refocus) window.requestAnimationFrame(() => scrollerRef.current?.querySelector<HTMLElement>(`[data-add-column="${CSS.escape(columnKey)}"]`)?.focus())
+  }
+
+  const onCreated = (item: WorkItem, column: BoardColumn) => {
+    setAnnouncement(`Added ${item.key} to ${column.label || 'None'}.`)
+    added.current = { id: item.id, key: item.key, columnKey: column.key, at: Date.now() }
+  }
+
+  // Once the board has reloaded with a task just added, bring it into view,
+  // or say why it isn't there.
+  const { dataUpdatedAt, isFetching } = board
+  useEffect(() => {
+    const task = added.current
+    if (!task || isFetching || dataUpdatedAt < task.at) return
+    added.current = null
+    const element = scrollerRef.current?.querySelector<HTMLElement>(`[data-drag-id$="|${CSS.escape(task.id)}"]`)
+    if (element) {
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      element.classList.add('is-fresh')
+      return
+    }
+    const column = columns.find((entry) => entry.key === task.columnKey)
+    notify({
+      tone: 'info',
+      title: `Added ${task.key}`,
+      description: column?.hasMore ? `It’s further down ${column.label || 'the column'}.` : 'The filters on this board hide it.',
+      action: { label: 'Open', run: () => onOpenTask(task.id) },
+    })
+  }, [columns, dataUpdatedAt, isFetching, notify, onOpenTask])
 
   if (board.isPending) return <BoardSkeleton />
   if (board.isError && !board.data) return <ErrorState error={board.error} onRetry={() => void board.refetch()} title="The board didn’t load" />
@@ -466,26 +583,50 @@ export function WorkItemBoard({
   return (
     <div className="aw-tboard-wrap">
       <p className="visually-hidden" id="board-drag-help">
-        Press Space to pick up, arrow keys to move, Space to drop. Enter opens it.
+        Press Space to pick up, arrow keys to move, Space to drop. Enter opens it, X selects it.
       </p>
       <p aria-live="assertive" className="visually-hidden">
         {announcement}
       </p>
       <div
         aria-label="Task board"
-        className={drag.drag ? 'aw-tboard is-dragging' : 'aw-tboard'}
+        className={['aw-tboard', drag.drag ? 'is-dragging' : '', selection.ids.size ? 'has-selection' : ''].filter(Boolean).join(' ')}
         ref={scrollerRef}
         role="region"
         style={{ '--aw-board-columns': columnCount } as CSSProperties}
         tabIndex={-1}
       >
         <div className="aw-tboard__body">
-        <div className="aw-tboard__grid">
+        <div className={state.lanes === 'none' ? 'aw-tboard__grid aw-tboard__grid--fill' : 'aw-tboard__grid'}>
           {columns.map((column) => (
             <header className="aw-tboard__head" key={column.key}>
-              <ColumnMark assigneeKinds={assigneeKinds} column={column} columnsBy={columnsBy} />
-              <h2 className="aw-tboard__title">{column.label || 'None'}</h2>
-              <span className="aw-tboard__count">{column.total}</span>
+              <div className="aw-tboard__headrow">
+                <ColumnMark assigneeKinds={assigneeKinds} column={column} columnsBy={columnsBy} />
+                <h2 className="aw-tboard__title">{column.label || 'None'}</h2>
+                <span className="aw-tboard__count">{column.total}</span>
+                {canAdd(column) ? (
+                  <IconButton
+                    aria-expanded={composing === column.key}
+                    className="aw-tboard__add"
+                    data-add-column={column.key}
+                    icon="plus"
+                    label={`Add a task to ${column.label || 'None'}`}
+                    onClick={() => setComposing(composing === column.key ? null : column.key)}
+                    size="sm"
+                  />
+                ) : null}
+              </div>
+              {composing === column.key ? (
+                <ColumnComposer
+                  column={column}
+                  columnsBy={columnsBy}
+                  filters={state.filters}
+                  notify={notify}
+                  onClose={(refocus) => closeComposer(column.key, refocus)}
+                  onCreated={(item) => onCreated(item, column)}
+                  projectId={projectId}
+                />
+              ) : null}
             </header>
           ))}
           {lanes.map((lane) => (
@@ -516,13 +657,15 @@ export function WorkItemBoard({
                             key={entry.dragId}
                             onFocus={setFocusedId}
                             onKeyDown={onCardKeyDown}
-                            onOpen={(card, event: MouseEvent<HTMLElement>) => {
-                              if (drag.justDragged() || event.metaKey || event.ctrlKey) return
+                            onOpen={(card) => {
+                              if (drag.justDragged()) return
                               onOpenTask(card.id)
                             }}
-                            onPick={(card, field, anchor) => setPicker({ field, anchor, card })}
+                            onPick={(card, field, anchor) => openPicker(field, anchor, card)}
                             onPointerDown={drag.onPointerDown}
+                            onSelect={canMove ? onSelect : undefined}
                             open={entry.card.id === openTaskId}
+                            selected={selection.ids.has(entry.card.id)}
                             showStatus={columnsBy !== 'status'}
                           />
                         ),
@@ -555,20 +698,20 @@ export function WorkItemBoard({
           <span className="aw-tcard__title">{draggedCard.title}</span>
         </div>
       ) : null}
+      {canMove ? (
+        <SelectionBar
+          busy={applyPick.isPending}
+          notify={notify}
+          onClear={() => setSelection(emptySelection)}
+          onPick={(field, anchor) => openPicker(field, anchor)}
+          projectId={projectId}
+          selected={selectedCards}
+        />
+      ) : null}
       {picker ? (
         <FieldPicker
           anchor={picker.anchor}
-          current={{
-            statusId: picker.card.status.id,
-            priority: picker.card.priority,
-            assigneeId: picker.card.assignee?.actorId ?? null,
-            assignee: picker.card.assignee
-              ? { id: picker.card.assignee.actorId, displayName: picker.card.assignee.displayName, handle: picker.card.assignee.handle, kind: picker.card.assignee.kind }
-              : null,
-            labelIds: picker.card.labels.map((label) => label.id),
-            milestoneId: picker.card.milestone?.id ?? null,
-            typeId: picker.card.itemType.id,
-          }}
+          current={pickerCurrent(picker.targets)}
           field={picker.field}
           onClose={() => setPicker(null)}
           onManageLabels={onManageLabels}

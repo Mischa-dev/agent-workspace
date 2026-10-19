@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { listQuery, parametersFromRemembered, readListState, rememberedState, withFilter, writeListState } from './listModel'
 import { buildListRows, visibleTaskIds, type ListRow } from './listRows'
-import { emptySelection, keepLoaded, MAX_BULK, pick, selectAll } from './selectionModel'
+import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll } from './selectionModel'
 import type { WorkItemCard } from './types'
 
 function card(id: string, group?: string): WorkItemCard {
@@ -64,10 +64,20 @@ describe('list state in the URL', () => {
     expect(state.filters).toEqual({})
   })
 
-  it('keeps an assignee and "unassigned" from both applying', () => {
-    const state = readListState(new URLSearchParams('assigneeActorId=a1&unassigned=true'))
-    expect(state.filters).toEqual({ assigneeActorId: 'a1' })
-    expect(withFilter(state, 'unassigned', true).filters).toEqual({ unassigned: true })
+  it('reads older links as the server does: "unassigned" is one more assignee, "no labels" one more label choice', () => {
+    expect(readListState(new URLSearchParams('assigneeActorId=a1&unassigned=true')).filters).toEqual({ assigneeActorId: 'a1,none' })
+    expect(readListState(new URLSearchParams('unassigned=true')).filters).toEqual({ assigneeActorId: 'none' })
+    expect(readListState(new URLSearchParams('labelIds=none')).filters).toEqual({ anyLabelIds: 'none' })
+    expect(writeListState(readListState(new URLSearchParams('unassigned=true'))).toString()).toBe('assigneeActorId=none')
+  })
+
+  it('keeps each filter to one spelling and drops lists the server would refuse', () => {
+    const state = readListState(new URLSearchParams('statusId=s2,s1,s2&notAssigneeActorId=none,a1&priority=urgent,high&anyLabelIds=l1'))
+    expect(state.filters).toEqual({ statusId: 's1,s2', notAssigneeActorId: 'a1,none', priority: 'high,urgent', anyLabelIds: 'l1' })
+    expect(withFilter(state, 'statusId', undefined).filters).not.toHaveProperty('statusId')
+    for (const query of ['statusId=none', 'priority=high,whenever', 'labelIds=none,l1', `statusId=${Array.from({ length: 21 }, (_, n) => `s${n}`).join(',')}`]) {
+      expect(readListState(new URLSearchParams(query)).filters).toEqual({})
+    }
   })
 
   it('sends grouping and sort with the filters, and remembers everything but the open task', () => {
@@ -139,5 +149,25 @@ describe('bulk selection', () => {
     expect(keepLoaded(kept, new Set(order))).toBe(kept)
     const many = Array.from({ length: MAX_BULK + 50 }, (_, index) => `t${index}`)
     expect(selectAll(many).ids.size).toBe(MAX_BULK)
+  })
+
+  it('changes the selection from a selected card, only that card from another, and never what can’t change', () => {
+    const [a, b, c] = [card('a'), card('b'), card('c')]
+    const locked = { ...card('d'), capabilities: { view: true, edit: false, archive: false } }
+    const archived = { ...card('e'), archivedAt: '2026-10-19T00:00:00Z' }
+    const ids = (cards: WorkItemCard[]) => cards.map((entry) => entry.id)
+    expect(ids(pickerTargets([a, b, locked, archived], a))).toEqual(['a', 'b'])
+    expect(ids(pickerTargets([a, b], c))).toEqual(['c'])
+    expect(ids(pickerTargets([a, b]))).toEqual(['a', 'b'])
+    expect(pickerTargets([], locked)).toEqual([])
+  })
+
+  it('shows the values of one task, and only the labels every selected task has', () => {
+    const red = { id: 'red', name: 'Red', color: '#f00' }
+    const blue = { id: 'blue', name: 'Blue', color: '#00f' }
+    const a = { ...card('a'), labels: [red, blue] }
+    const b = { ...card('b'), labels: [blue] }
+    expect(pickerCurrent([a, b])).toEqual({ labelIds: ['blue'] })
+    expect(pickerCurrent([a])).toMatchObject({ statusId: 's', priority: 'medium', assigneeId: null, labelIds: ['red', 'blue'] })
   })
 })

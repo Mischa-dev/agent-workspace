@@ -12,7 +12,7 @@ export type ViewMode = 'list' | 'board'
 export type LaneBy = 'none' | 'assignee' | 'priority' | 'milestone' | 'type'
 
 /** Filters that go to the server unchanged, keyed by their query parameter. */
-export type FilterValues = Omit<WorkItemFilters, 'cursor' | 'limit' | 'sort' | 'groupBy'>
+export type FilterValues = Omit<WorkItemFilters, 'cursor' | 'limit' | 'sort' | 'groupBy' | 'unassigned'>
 
 export type ListState = {
   view: ViewMode
@@ -75,27 +75,46 @@ export const SEMANTIC_CATEGORIES = ['backlog', 'unstarted', 'started', 'review',
 
 const ID = /^[A-Za-z0-9_.:-]{1,100}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
+/** The most values one filter names, as the server allows. */
+export const MAX_FILTER_VALUES = 20
 
 type Rule = (value: string) => boolean
 
-const id: Rule = (value) => ID.test(value)
+const id: Rule = (value) => value !== 'none' && ID.test(value)
 const idOrNone: Rule = (value) => value === 'none' || ID.test(value)
+const isCategory: Rule = (value) => SEMANTIC_CATEGORIES.includes(value)
+const isPriority: Rule = (value) => workItemPriorities.some((priority) => priority.value === value)
 const isTrue: Rule = (value) => value === 'true'
 const isBoolean: Rule = (value) => value === 'true' || value === 'false'
 const isDate: Rule = (value) => DATE.test(value)
+/** Up to 20 values, comma separated, each passing `part`. */
+const several =
+  (part: Rule): Rule =>
+  (value) => {
+    const parts = value.split(',')
+    return parts.length <= MAX_FILTER_VALUES && parts.every(part)
+  }
 
 /** Every filter the URL can carry, in the order chips show them. */
 export const FILTER_RULES: Record<keyof FilterValues, Rule> = {
   q: (value) => value.trim().length > 0 && value.length <= 120,
-  statusId: id,
-  semanticCategory: (value) => SEMANTIC_CATEGORIES.includes(value),
-  priority: (value) => workItemPriorities.some((priority) => priority.value === value),
-  assigneeActorId: id,
-  unassigned: isTrue,
-  labelIds: (value) => value === 'none' || value.split(',').every((part) => ID.test(part)),
-  milestoneId: idOrNone,
+  statusId: several(id),
+  notStatusId: several(id),
+  semanticCategory: several(isCategory),
+  notSemanticCategory: several(isCategory),
+  priority: several(isPriority),
+  notPriority: several(isPriority),
+  assigneeActorId: several(idOrNone),
+  notAssigneeActorId: several(idOrNone),
+  // All of these labels; "none" only on its own.
+  labelIds: (value) => value === 'none' || several(id)(value),
+  anyLabelIds: several(idOrNone),
+  notLabelIds: several(idOrNone),
+  milestoneId: several(idOrNone),
+  notMilestoneId: several(idOrNone),
   parentId: idOrNone,
-  typeId: id,
+  typeId: several(id),
+  notTypeId: several(id),
   blocked: isBoolean,
   ready: isTrue,
   claimed: isBoolean,
@@ -108,6 +127,34 @@ export const FILTER_RULES: Record<keyof FilterValues, Rule> = {
 
 export const FILTER_KEYS = Object.keys(FILTER_RULES) as Array<keyof FilterValues>
 
+/** Filters that name several values; kept sorted so one filter has one URL. */
+const LIST_KEYS = new Set<keyof FilterValues>([
+  'statusId',
+  'notStatusId',
+  'semanticCategory',
+  'notSemanticCategory',
+  'priority',
+  'notPriority',
+  'assigneeActorId',
+  'notAssigneeActorId',
+  'labelIds',
+  'anyLabelIds',
+  'notLabelIds',
+  'milestoneId',
+  'notMilestoneId',
+  'typeId',
+  'notTypeId',
+])
+
+/** Each value once, sorted, "none" last: one URL for one filter. */
+export function canonicalValues(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((a, b) => (a === 'none' ? 1 : b === 'none' ? -1 : a < b ? -1 : a > b ? 1 : 0))
+}
+
+function canonicalList(value: string) {
+  return canonicalValues(value.split(',')).join(',')
+}
+
 function oneOf<T extends string>(value: string | null, options: Array<{ value: T }>, fallback: T): T {
   return options.some((option) => option.value === value) ? (value as T) : fallback
 }
@@ -117,10 +164,18 @@ export function readListState(parameters: URLSearchParams): ListState {
   for (const key of FILTER_KEYS) {
     const value = parameters.get(key)
     if (value === null || !FILTER_RULES[key](value)) continue
-    filters[key] = value === 'true' && key !== 'blocked' && key !== 'claimed' ? true : value
+    filters[key] = LIST_KEYS.has(key) ? canonicalList(value) : value === 'true' && key !== 'blocked' && key !== 'claimed' ? true : value
   }
-  // An assignee and "unassigned" contradict each other; the explicit person wins.
-  if (filters.assigneeActorId) delete filters.unassigned
+  // Older links: "unassigned" is the assignee "none", as the server reads it,
+  // and "no labels" is the one value of "any of these labels".
+  if (parameters.get('unassigned') === 'true') {
+    const assignees = typeof filters.assigneeActorId === 'string' ? `${filters.assigneeActorId},none` : 'none'
+    if (FILTER_RULES.assigneeActorId(assignees)) filters.assigneeActorId = canonicalList(assignees)
+  }
+  if (filters.labelIds === 'none') {
+    delete filters.labelIds
+    filters.anyLabelIds = typeof filters.anyLabelIds === 'string' ? canonicalList(`${filters.anyLabelIds},none`) : 'none'
+  }
   const groupBy = parameters.get('groupBy')
   const task = parameters.get('task')
   const savedView = parameters.get('savedView')
@@ -166,8 +221,6 @@ export function withFilter<K extends keyof FilterValues>(state: ListState, key: 
   const filters = { ...state.filters }
   if (value === undefined || value === '' || value === false) delete filters[key]
   else filters[key] = value
-  if (key === 'assigneeActorId' && filters.assigneeActorId) delete filters.unassigned
-  if (key === 'unassigned' && filters.unassigned) delete filters.assigneeActorId
   return { ...state, filters }
 }
 

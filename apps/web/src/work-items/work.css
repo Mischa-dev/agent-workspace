@@ -68,6 +68,11 @@
   list-style: none;
 }
 
+/* Wraps whichever choices the filter popover shows, without a box of its own. */
+.aw-filterbar__popover {
+  display: contents;
+}
+
 .aw-chipfilter {
   display: inline-flex;
   align-items: center;
@@ -91,7 +96,7 @@
 
 .aw-chipfilter__text {
   min-width: 0;
-  padding: 0 4px 0 10px;
+  padding: 0 8px 0 10px;
   overflow: hidden;
   border-radius: var(--radius-full) 0 0 var(--radius-full);
   text-overflow: ellipsis;
@@ -99,7 +104,6 @@
 }
 
 .aw-chipfilter__text:disabled {
-  padding-right: 6px;
   cursor: default;
 }
 
@@ -114,6 +118,69 @@
 .aw-chipfilter__text:hover:not(:disabled),
 .aw-chipfilter__remove:hover {
   background: var(--content-hover);
+}
+
+/* A list filter's chip reads "Status | is any of | Ready, Review | x": the
+   verb and the values each open what changes them. */
+.aw-chipfilter__field {
+  flex: none;
+  padding: 0 8px 0 10px;
+  white-space: nowrap;
+}
+
+.aw-chipfilter__op {
+  flex: none;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--content-fg-muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aw-chipfilter__op:hover,
+.aw-chipfilter__op[aria-expanded='true'] {
+  background: var(--content-hover);
+  color: var(--content-fg);
+}
+
+.aw-chipfilter__text.aw-chipfilter__values {
+  max-width: 240px;
+  padding: 0 8px;
+  border-radius: 0;
+}
+
+.aw-chipfilter__op,
+.aw-chipfilter__values,
+.aw-chipfilter__remove {
+  border-left: 1px solid var(--control-border);
+}
+
+.aw-chipfilter button:focus-visible {
+  outline-offset: -2px;
+}
+
+.aw-listfilter {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.aw-listfilter > .aw-seg {
+  display: flex;
+}
+
+.aw-listfilter .aw-seg__opt {
+  flex: 1;
+  justify-content: center;
+}
+
+.aw-listfilter__note {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--content-fg-muted);
+  font: var(--t-small);
 }
 
 .aw-duefilter {
@@ -474,248 +541,6 @@
 @media (max-width: 640px) {
   .aw-tboard-skel {
     grid-template-columns: 84vw 84vw;
-  }
-}
-
-.aw-tboard-wrap {
-  min-width: 0;
-}
-
-.aw-tboard {
-  max-width: 100%;
-  overflow-x: auto;
-  padding-bottom: var(--space-3);
-  outline: none;
-  overscroll-behavior-x: contain;
-}
-
-.aw-tboard__body {
-  display: flex;
-  align-items: stretch;
-  gap: var(--space-3);
-  min-width: min-content;
-}
-
-.aw-tboard__grid {
-  flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: repeat(var(--aw-board-columns), minmax(272px, 1fr));
-  gap: var(--space-2) var(--space-3);
-  align-items: start;
-  min-width: min-content;
-}
-
-/* The narrow column after the board that folds done and canceled work away. */
-.aw-tboard__done {
-  flex: 0 0 auto;
-  width: 44px;
-  border-radius: var(--radius-md);
-  background: var(--surface-sunken);
-}
-
-.aw-tboard__donebtn {
-  position: sticky;
-  top: 0;
-  width: 100%;
-  height: auto;
-  min-height: 160px;
-  padding: var(--space-3) 0;
-  writing-mode: vertical-rl;
-  white-space: nowrap;
-}
-
-.aw-tboard__head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--content-bg);
-}
-
-.aw-tboard__title {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  font: var(--t-ui-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-tboard__count {
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-}
-
-.aw-tboard__lane {
-  position: sticky;
-  left: 0;
-  display: flex;
-  grid-column: 1 / -1;
-  align-items: center;
-  gap: var(--space-2);
-  margin: var(--space-2) 0 0;
-  font: var(--t-ui-strong);
-  color: var(--content-fg-muted);
-}
-
-.aw-tboard__cell {
-  min-width: 0;
-  min-height: 72px;
-  padding: var(--space-2);
-  border-radius: var(--radius-lg);
-  background: var(--surface-sunken);
-  transition:
-    background-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
-}
-
-.aw-tboard__cell.is-target {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.aw-tboard__cards {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.aw-tboard__empty {
-  margin: 0;
-  padding: var(--space-3) var(--space-2);
-  font: var(--t-small);
-  color: var(--content-fg-muted);
-  text-align: center;
-}
-
-.aw-tboard__more {
-  display: flex;
-  justify-content: center;
-}
-
-.aw-tcard {
-  display: grid;
-  gap: 6px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--content-border);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  outline: none;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
-}
-
-.aw-tcard.is-draggable {
-  -webkit-touch-callout: none;
-  user-select: none;
-}
-
-.aw-tcard:hover {
-  border-color: var(--control-border);
-}
-
-.aw-tcard:focus-visible {
-  box-shadow: 0 0 0 2px var(--focus-ring);
-}
-
-.aw-tcard.is-open {
-  border-color: var(--accent);
-}
-
-.aw-tcard.is-held {
-  box-shadow:
-    0 0 0 2px var(--accent),
-    var(--shadow-popover);
-  transform: rotate(-1deg);
-}
-
-.aw-tcard__top,
-.aw-tcard__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.aw-tcard__key {
-  font: var(--t-code);
-  font-size: calc(12px * var(--text-scale));
-  color: var(--content-fg-muted);
-}
-
-.aw-tcard__due {
-  margin-left: auto;
-}
-
-.aw-tcard__title {
-  color: var(--content-fg);
-  font: var(--t-ui);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-}
-
-.aw-tcard__meta .aw-taskmeta {
-  flex: 1;
-  justify-content: flex-start;
-}
-
-.aw-tcard__assignee {
-  margin-left: auto;
-}
-
-.aw-tcard-slot {
-  height: 56px;
-  border: 2px dashed var(--accent);
-  border-radius: var(--radius-md);
-  background: var(--accent-soft);
-}
-
-.aw-tcard-ghost {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: var(--layer-tooltip);
-  display: grid;
-  gap: 4px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-dialog);
-  pointer-events: none;
-  rotate: 2deg;
-}
-
-.aw-tboard.is-dragging,
-.aw-tboard.is-dragging * {
-  cursor: grabbing;
-}
-
-@media (max-width: 640px) {
-  .aw-tboard {
-    scroll-snap-type: x mandatory;
-  }
-
-  .aw-tboard__grid {
-    grid-template-columns: repeat(var(--aw-board-columns), 84vw);
-  }
-
-  .aw-tboard__cell,
-  .aw-tboard__head {
-    scroll-snap-align: start;
-  }
-
-  .aw-tboard__done {
-    scroll-snap-align: end;
   }
 }
 
@@ -2000,14 +1825,9 @@ span.aw-taskstart__fix {
 
 @media (prefers-reduced-motion: reduce) {
   .aw-bulkbar,
-  .aw-tasks__chevron,
-  .aw-tcard {
+  .aw-tasks__chevron {
     animation: none;
     transition: none;
-  }
-
-  .aw-tcard.is-held {
-    transform: none;
   }
 }
 

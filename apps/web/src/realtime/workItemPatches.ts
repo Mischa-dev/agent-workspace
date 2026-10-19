@@ -45,7 +45,10 @@ export function toCard(item: WorkItem, base?: WorkItemCard): WorkItemCard {
 /** Filters this module can't evaluate on a card; a view using any of them refetches. */
 const SERVER_ONLY_FILTERS = [
   'labelIds',
+  'anyLabelIds',
+  'notLabelIds',
   'milestoneId',
+  'notMilestoneId',
   'parentId',
   'blocked',
   'ready',
@@ -65,12 +68,20 @@ const SERVER_ONLY_FILTERS = [
 export function cardMatchesFilters(card: WorkItemCard, filters: WorkItemFilters): boolean | null {
   if (SERVER_ONLY_FILTERS.some((name) => filters[name as keyof WorkItemFilters] !== undefined)) return null
   if (Boolean(filters.archived) !== (card.archivedAt !== null)) return false
-  if (filters.typeId && card.itemType.id !== filters.typeId) return false
-  if (filters.statusId && card.status.id !== filters.statusId) return false
-  if (filters.semanticCategory && card.status.semanticCategory !== filters.semanticCategory) return false
-  if (filters.priority && card.priority !== filters.priority) return false
-  if (filters.assigneeActorId && card.assignee?.actorId !== filters.assigneeActorId) return false
-  if (filters.unassigned && card.assignee !== null) return false
+  // Each filter names values, comma separated: the card's must be among the
+  // first kind and not among the `not…` kind. "none" is no value.
+  const fields: Array<[string | undefined, string | undefined, string | null]> = [
+    [filters.typeId, filters.notTypeId, card.itemType.id],
+    [filters.statusId, filters.notStatusId, card.status.id],
+    [filters.semanticCategory, filters.notSemanticCategory, card.status.semanticCategory],
+    [filters.priority, filters.notPriority, card.priority],
+    [filters.unassigned ? [filters.assigneeActorId, 'none'].filter(Boolean).join(',') : filters.assigneeActorId, filters.notAssigneeActorId, card.assignee?.actorId ?? null],
+  ]
+  for (const [any, not, value] of fields) {
+    const named = (list: string) => list.split(',').includes(value ?? 'none')
+    if (any && !named(any)) return false
+    if (not && named(not)) return false
+  }
   const search = filters.q?.trim()
   if (search) {
     if (/[%_\\]/.test(search)) return null

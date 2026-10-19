@@ -6,6 +6,12 @@
 //! the full sort, group included, so every sort and grouping pages without
 //! OFFSET and without ranking the whole project. A cursor remembers a
 //! fingerprint of the filters it was made for and is refused under others.
+//!
+//! Most filters take several values, comma separated: `statusId=a,b` lists
+//! tasks in either status and `notStatusId=a,b` leaves both out. "none"
+//! stands for no value where a field can be empty (`assigneeActorId=none,x`
+//! is unassigned or assigned to x). Labels have three: `labelIds` (all of
+//! them, as it always was), `anyLabelIds` and `notLabelIds`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -20,8 +26,7 @@ use uuid::Uuid;
 use super::{
     AssigneeView, WORK_ITEM_LABELS_COLUMN, WorkItemCapabilities, WorkItemLabelView,
     WorkItemStatusView, WorkItemTypeView, WorkflowStatusRow, authorize_work_item, capabilities,
-    normalize_search, project_membership, validate_list_filter_ids, validate_priority,
-    validate_priority_filter, validate_semantic_category,
+    normalize_search, project_membership, validate_priority, validate_semantic_category,
 };
 use crate::{
     AppState,
@@ -33,7 +38,8 @@ use crate::{
 
 const DEFAULT_LIMIT: u16 = 50;
 const MAX_LIMIT: u16 = 200;
-const MAX_LABEL_FILTER: usize = 20;
+/// The most values one filter names, such as 20 labels or 20 people.
+pub(crate) const MAX_FILTER_VALUES: usize = 20;
 const MAX_CURSOR_LENGTH: usize = 1_024;
 
 /// Sort rank of a priority: urgent first, no priority last.
@@ -47,15 +53,24 @@ const FINISHED: &str = "status.semantic_category IN ('completed', 'canceled')";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TaskListQuery {
     q: Option<String>,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
+    type_id: Option<String>,
+    not_type_id: Option<String>,
+    status_id: Option<String>,
+    not_status_id: Option<String>,
     semantic_category: Option<String>,
+    not_semantic_category: Option<String>,
     priority: Option<String>,
-    assignee_actor_id: Option<Uuid>,
+    not_priority: Option<String>,
+    assignee_actor_id: Option<String>,
+    not_assignee_actor_id: Option<String>,
+    /// Older links' way of saying `assigneeActorId=none`.
     unassigned: Option<bool>,
     archived: Option<bool>,
     label_ids: Option<String>,
+    any_label_ids: Option<String>,
+    not_label_ids: Option<String>,
     milestone_id: Option<String>,
+    not_milestone_id: Option<String>,
     parent_id: Option<String>,
     blocked: Option<bool>,
     ready: Option<bool>,
@@ -85,17 +100,160 @@ pub(super) enum LabelFilter {
     None,
 }
 
+/// The values one filter names, each once and in order, and whether it
+/// names "none": no value at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Values<T> {
+    values: Vec<T>,
+    none: bool,
+}
+
+impl<T> Default for Values<T> {
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            none: false,
+        }
+    }
+}
+
+impl<T: Ord> Values<T> {
+    /// `values`, each once and in order, and with `none` no value at all.
+    pub(crate) fn new(mut values: Vec<T>, none: bool) -> Self {
+        values.sort();
+        values.dedup();
+        Self { values, none }
+    }
+}
+
+impl<T: PartialEq> Values<T> {
+    /// Whether a task whose value is `value` (`None`: it has none) is named.
+    fn names(&self, value: Option<&T>) -> bool {
+        value.map_or(self.none, |value| self.values.contains(value))
+    }
+}
+
+impl<T: ToString> Values<T> {
+    /// As a query parameter: the values, then "none".
+    fn param(&self) -> String {
+        self.values
+            .iter()
+            .map(T::to_string)
+            .chain(self.none.then(|| "none".to_owned()))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// What one field must be: any of `any`, and none of `not`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FieldFilter<T> {
+    any: Option<Values<T>>,
+    not: Option<Values<T>>,
+}
+
+impl<T> Default for FieldFilter<T> {
+    fn default() -> Self {
+        Self {
+            any: None,
+            not: None,
+        }
+    }
+}
+
+impl<T> FieldFilter<T> {
+    pub(crate) fn new(any: Option<Values<T>>, not: Option<Values<T>>) -> Self {
+        Self { any, not }
+    }
+}
+
+impl<T: Ord> FieldFilter<T> {
+    fn parse(
+        any: Option<&str>,
+        not: Option<&str>,
+        fields: (&'static str, &'static str),
+        none_allowed: bool,
+        parse: impl Fn(&str) -> Option<T> + Copy,
+    ) -> Result<Self, AppError> {
+        Ok(Self {
+            any: parse_values(any, fields.0, none_allowed, parse)?,
+            not: parse_values(not, fields.1, none_allowed, parse)?,
+        })
+    }
+
+    /// Just `value` (`None`: no value), as a board column narrows its field.
+    fn only(value: Option<T>) -> Self {
+        Self {
+            any: Some(Values {
+                none: value.is_none(),
+                values: value.into_iter().collect(),
+            }),
+            not: None,
+        }
+    }
+
+    /// Whether a task whose value is `value` can match.
+    fn allows(&self, value: Option<&T>) -> bool {
+        self.any.as_ref().is_none_or(|any| any.names(value))
+            && !self.not.as_ref().is_some_and(|not| not.names(value))
+    }
+}
+
+impl<T: ToString> FieldFilter<T> {
+    fn put(&self, params: &mut BTreeMap<String, String>, keys: (&str, &str)) {
+        for (key, values) in [(keys.0, &self.any), (keys.1, &self.not)] {
+            if let Some(values) = values {
+                params.insert(key.to_owned(), values.param());
+            }
+        }
+    }
+}
+
+/// A comma-separated filter value: each part read by `parse`, or "none"
+/// where the field can be empty. At most 20, each kept once.
+fn parse_values<T: Ord>(
+    value: Option<&str>,
+    field: &'static str,
+    none_allowed: bool,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Option<Values<T>>, AppError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let mut values = Values::default();
+    for part in value.split(',').map(str::trim) {
+        if none_allowed && part == "none" {
+            values.none = true;
+        } else {
+            values
+                .values
+                .push(parse(part).ok_or(AppError::Validation(field))?);
+        }
+    }
+    values.values.sort();
+    values.values.dedup();
+    if values.values.len() + usize::from(values.none) > MAX_FILTER_VALUES {
+        return Err(AppError::Validation(field));
+    }
+    Ok(Some(values))
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct Filters {
     search: Option<String>,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
-    semantic_category: Option<String>,
-    priority: Option<String>,
-    assignee: Option<OneOrNone>,
+    types: FieldFilter<Uuid>,
+    statuses: FieldFilter<Uuid>,
+    categories: FieldFilter<String>,
+    priorities: FieldFilter<String>,
+    assignees: FieldFilter<Uuid>,
     archived: bool,
+    /// All of these labels (`labelIds`), or none at all.
     labels: Option<LabelFilter>,
-    milestone: Option<OneOrNone>,
+    /// At least one of these; "none" also lets in tasks with no labels.
+    any_labels: Option<Values<Uuid>>,
+    /// None of these; "none" leaves out tasks with no labels.
+    not_labels: Option<Values<Uuid>>,
+    milestones: FieldFilter<Uuid>,
     parent: Option<OneOrNone>,
     blocked: Option<bool>,
     ready: bool,
@@ -358,8 +516,27 @@ impl ListSpec {
 /// Board swimlanes a saved view can keep beside the list query.
 const LANES: [&str; 5] = ["none", "assignee", "priority", "milestone", "type"];
 
+/// A view's parameter with "me" (alone or among other assignees) replaced
+/// by `reader`, whoever opens the view.
+pub(super) fn resolve_me(key: &str, value: &str, reader: Uuid) -> String {
+    if !matches!(key, "assigneeActorId" | "notAssigneeActorId") {
+        return value.to_owned();
+    }
+    value
+        .split(',')
+        .map(|part| {
+            if part.trim() == "me" {
+                reader.to_string()
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// A saved view's list parameters (filters, sort, grouping, board columns
-/// and lanes), read exactly as a list request reads them. "me" as the
+/// and lanes), read exactly as a list request reads them. "me" as an
 /// assignee stands for `reader`, whoever opens the view.
 pub(super) fn saved_query_spec(
     params: &BTreeMap<String, String>,
@@ -374,11 +551,8 @@ pub(super) fn saved_query_spec(
             "lanes" if LANES.contains(&value.as_str()) => {}
             "lanes" => return Err(AppError::Validation("lanes")),
             "cursor" | "limit" => return Err(AppError::Validation("query")),
-            "assigneeActorId" if value == "me" => {
-                list.insert(key.clone(), reader.to_string());
-            }
             _ => {
-                list.insert(key.clone(), value.clone());
+                list.insert(key.clone(), resolve_me(key, value, reader));
             }
         }
     }
@@ -394,6 +568,46 @@ pub(super) fn saved_query_spec(
             .map(|value| Grouping::parse(value, false))
             .transpose()?,
     })
+}
+
+/// A saved view's filters as task_list applies them for agents: read
+/// exactly as the list page reads the view, so both see the same tasks.
+#[derive(Clone, Debug)]
+pub(crate) struct ViewFilters {
+    filters: Filters,
+    /// Whether the view decides archived tasks; not when the caller does.
+    archived_rule: bool,
+}
+
+impl ViewFilters {
+    /// `params` as the view keeps them, "me" read as `reader`.
+    pub(crate) fn parse(params: &BTreeMap<String, String>, reader: Uuid) -> Result<Self, AppError> {
+        Ok(Self {
+            filters: saved_query_spec(params, reader)?.filters,
+            archived_rule: true,
+        })
+    }
+
+    /// The caller says whether archived tasks are listed, not the view.
+    pub(crate) fn leave_archived_to_caller(&mut self) {
+        self.archived_rule = false;
+    }
+
+    /// The view lists only archived tasks.
+    pub(crate) fn archived_only(&self) -> bool {
+        self.archived_rule && self.filters.archived
+    }
+
+    /// The view's conditions on `item`, its `status` and `project`, each
+    /// starting with AND.
+    pub(crate) fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        self.filters.push_conditions(builder, self.archived_rule);
+    }
+
+    /// Changes whenever the tasks the view matches could.
+    pub(crate) fn fingerprint(&self) -> String {
+        format!("{:?} {}", self.filters.to_params(), self.archived_rule)
+    }
 }
 
 fn parse_date(value: Option<&str>, field: &'static str) -> Result<Option<NaiveDate>, AppError> {
@@ -419,14 +633,23 @@ fn parse_one_or_none(
 
 impl Filters {
     fn parse(query: &TaskListQuery) -> Result<Self, AppError> {
-        validate_priority_filter(query.priority.as_deref())?;
-        validate_semantic_category(query.semantic_category.as_deref())?;
-        let assignee = match (query.assignee_actor_id, query.unassigned) {
-            (Some(_), Some(true)) => return Err(AppError::Validation("assignee filter")),
-            (Some(id), _) => Some(OneOrNone::One(id)),
-            (None, Some(true)) => Some(OneOrNone::None),
-            (None, _) => None,
+        let id = |part: &str| Uuid::parse_str(part).ok();
+        let priority = |part: &str| validate_priority(part).is_ok().then(|| part.to_owned());
+        let category = |part: &str| {
+            validate_semantic_category(Some(part))
+                .is_ok()
+                .then(|| part.to_owned())
         };
+        let mut assignees = FieldFilter::parse(
+            query.assignee_actor_id.as_deref(),
+            query.not_assignee_actor_id.as_deref(),
+            ("assigneeActorId", "notAssigneeActorId"),
+            true,
+            id,
+        )?;
+        if query.unassigned == Some(true) {
+            assignees.any.get_or_insert_with(Values::default).none = true;
+        }
         let labels = match query.label_ids.as_deref().map(str::trim) {
             None | Some("") => None,
             Some("none") => Some(LabelFilter::None),
@@ -438,7 +661,7 @@ impl Filters {
                     .map_err(|_| AppError::Validation("labelIds"))?;
                 ids.sort();
                 ids.dedup();
-                if ids.len() > MAX_LABEL_FILTER {
+                if ids.len() > MAX_FILTER_VALUES {
                     return Err(AppError::Validation("labelIds"));
                 }
                 Some(LabelFilter::All(ids))
@@ -446,14 +669,46 @@ impl Filters {
         };
         Ok(Self {
             search: normalize_search(query.q.as_deref())?,
-            type_id: query.type_id,
-            status_id: query.status_id,
-            semantic_category: query.semantic_category.clone(),
-            priority: query.priority.clone(),
-            assignee,
+            types: FieldFilter::parse(
+                query.type_id.as_deref(),
+                query.not_type_id.as_deref(),
+                ("typeId", "notTypeId"),
+                false,
+                id,
+            )?,
+            statuses: FieldFilter::parse(
+                query.status_id.as_deref(),
+                query.not_status_id.as_deref(),
+                ("statusId", "notStatusId"),
+                false,
+                id,
+            )?,
+            categories: FieldFilter::parse(
+                query.semantic_category.as_deref(),
+                query.not_semantic_category.as_deref(),
+                ("semanticCategory", "notSemanticCategory"),
+                false,
+                category,
+            )?,
+            priorities: FieldFilter::parse(
+                query.priority.as_deref(),
+                query.not_priority.as_deref(),
+                ("priority", "notPriority"),
+                false,
+                priority,
+            )?,
+            assignees,
             archived: query.archived.unwrap_or(false),
             labels,
-            milestone: parse_one_or_none(query.milestone_id.as_deref(), "milestoneId")?,
+            any_labels: parse_values(query.any_label_ids.as_deref(), "anyLabelIds", true, id)?,
+            not_labels: parse_values(query.not_label_ids.as_deref(), "notLabelIds", true, id)?,
+            milestones: FieldFilter::parse(
+                query.milestone_id.as_deref(),
+                query.not_milestone_id.as_deref(),
+                ("milestoneId", "notMilestoneId"),
+                true,
+                id,
+            )?,
             parent: parse_one_or_none(query.parent_id.as_deref(), "parentId")?,
             blocked: query.blocked,
             ready: query.ready.unwrap_or(false),
@@ -469,29 +724,22 @@ impl Filters {
     /// web app the exact list request that pages it.
     fn to_params(&self) -> BTreeMap<String, String> {
         let mut params = BTreeMap::new();
+        if let Some(value) = &self.search {
+            params.insert("q".to_owned(), value.clone());
+        }
+        self.types.put(&mut params, ("typeId", "notTypeId"));
+        self.statuses.put(&mut params, ("statusId", "notStatusId"));
+        self.categories
+            .put(&mut params, ("semanticCategory", "notSemanticCategory"));
+        self.priorities
+            .put(&mut params, ("priority", "notPriority"));
+        self.assignees
+            .put(&mut params, ("assigneeActorId", "notAssigneeActorId"));
+        self.milestones
+            .put(&mut params, ("milestoneId", "notMilestoneId"));
         let mut put = |key: &str, value: String| {
             params.insert(key.to_owned(), value);
         };
-        if let Some(value) = &self.search {
-            put("q", value.clone());
-        }
-        if let Some(value) = self.type_id {
-            put("typeId", value.to_string());
-        }
-        if let Some(value) = self.status_id {
-            put("statusId", value.to_string());
-        }
-        if let Some(value) = &self.semantic_category {
-            put("semanticCategory", value.clone());
-        }
-        if let Some(value) = &self.priority {
-            put("priority", value.clone());
-        }
-        match self.assignee {
-            Some(OneOrNone::One(id)) => put("assigneeActorId", id.to_string()),
-            Some(OneOrNone::None) => put("unassigned", "true".into()),
-            None => {}
-        }
         if self.archived {
             put("archived", "true".into());
         }
@@ -506,12 +754,18 @@ impl Filters {
             Some(LabelFilter::None) => put("labelIds", "none".into()),
             None => {}
         }
-        for (key, value) in [("milestoneId", self.milestone), ("parentId", self.parent)] {
-            match value {
-                Some(OneOrNone::One(id)) => put(key, id.to_string()),
-                Some(OneOrNone::None) => put(key, "none".into()),
-                None => {}
+        for (key, values) in [
+            ("anyLabelIds", &self.any_labels),
+            ("notLabelIds", &self.not_labels),
+        ] {
+            if let Some(values) = values {
+                put(key, values.param());
             }
+        }
+        match self.parent {
+            Some(OneOrNone::One(id)) => put("parentId", id.to_string()),
+            Some(OneOrNone::None) => put("parentId", "none".into()),
+            None => {}
         }
         if let Some(value) = self.blocked {
             put("blocked", value.to_string());
@@ -537,39 +791,86 @@ impl Filters {
         params
     }
 
-    /// Narrows these filters to one board column or group.
-    fn with_group(&self, grouping: Grouping, key: &str) -> Result<Self, AppError> {
-        let mut filters = self.clone();
-        let id = || Uuid::parse_str(key).map_err(|_| AppError::Internal("group key"));
-        let one_or_none = || -> Result<OneOrNone, AppError> {
+    /// Whether a board column or group for `key` can hold tasks under these
+    /// filters. A column the filters rule out isn't shown, so narrowing to a
+    /// column (`with_group`) only ever narrows to a value the filters allow.
+    fn allows_group(&self, grouping: Grouping, key: &str) -> bool {
+        let id = Uuid::parse_str(key).ok();
+        let value = || {
             if key == "none" {
-                Ok(OneOrNone::None)
+                Ok(None)
             } else {
-                Ok(OneOrNone::One(id()?))
+                id.ok_or(()).map(Some)
             }
         };
         match grouping {
-            Grouping::Status => filters.status_id = Some(id()?),
-            Grouping::Type => filters.type_id = Some(id()?),
-            Grouping::Priority => filters.priority = Some(key.to_owned()),
-            Grouping::Assignee => filters.assignee = Some(one_or_none()?),
-            Grouping::Milestone => filters.milestone = Some(one_or_none()?),
-            Grouping::Parent => filters.parent = Some(one_or_none()?),
+            Grouping::Status => id.is_some_and(|id| self.statuses.allows(Some(&id))),
+            Grouping::Type => id.is_some_and(|id| self.types.allows(Some(&id))),
+            Grouping::Priority => self.priorities.allows(Some(&key.to_owned())),
+            Grouping::Assignee => value().is_ok_and(|value| self.assignees.allows(value.as_ref())),
+            Grouping::Milestone => {
+                value().is_ok_and(|value| self.milestones.allows(value.as_ref()))
+            }
+            Grouping::Parent => true,
+            // Labels other than the ones a filter names can sit beside them,
+            // so only "none of" rules a label out.
+            Grouping::Label if key == "none" => {
+                !matches!(self.labels, Some(LabelFilter::All(_)))
+                    && self.any_labels.as_ref().is_none_or(|any| any.none)
+                    && !self.not_labels.as_ref().is_some_and(|not| not.none)
+            }
+            Grouping::Label => {
+                !matches!(self.labels, Some(LabelFilter::None))
+                    && id.is_some_and(|id| {
+                        !self
+                            .not_labels
+                            .as_ref()
+                            .is_some_and(|not| not.values.contains(&id))
+                    })
+            }
+        }
+    }
+
+    /// Narrows these filters to one board column or group whose key
+    /// `allows_group` accepts: the column's own value, the other filters as
+    /// they are.
+    fn with_group(&self, grouping: Grouping, key: &str) -> Result<Self, AppError> {
+        let mut filters = self.clone();
+        let id = || Uuid::parse_str(key).map_err(|_| AppError::Internal("group key"));
+        let value = || -> Result<Option<Uuid>, AppError> {
+            if key == "none" {
+                Ok(None)
+            } else {
+                id().map(Some)
+            }
+        };
+        match grouping {
+            Grouping::Status => filters.statuses = FieldFilter::only(Some(id()?)),
+            Grouping::Type => filters.types = FieldFilter::only(Some(id()?)),
+            Grouping::Priority => filters.priorities = FieldFilter::only(Some(key.to_owned())),
+            Grouping::Assignee => filters.assignees = FieldFilter::only(value()?),
+            Grouping::Milestone => filters.milestones = FieldFilter::only(value()?),
+            Grouping::Parent => {
+                filters.parent = Some(value()?.map_or(OneOrNone::None, OneOrNone::One));
+            }
+            Grouping::Label if key == "none" => {
+                filters.labels = Some(LabelFilter::None);
+                filters.any_labels = None;
+                filters.not_labels = None;
+            }
             Grouping::Label => {
                 // A label column keeps the labels the filter already
-                // requires. Under such a filter the "No label" column counts
-                // zero, so its page is never read.
-                filters.labels = Some(match (key, filters.labels.take()) {
-                    ("none", _) => LabelFilter::None,
-                    (_, Some(LabelFilter::All(mut ids))) => {
-                        let column = id()?;
-                        if !ids.contains(&column) {
-                            ids.push(column);
-                        }
-                        LabelFilter::All(ids)
-                    }
-                    _ => LabelFilter::All(vec![id()?]),
-                });
+                // requires, and adds its own.
+                let column = id()?;
+                let mut ids = match filters.labels.take() {
+                    Some(LabelFilter::All(ids)) => ids,
+                    _ => Vec::new(),
+                };
+                if !ids.contains(&column) {
+                    ids.push(column);
+                    ids.sort();
+                }
+                filters.labels = Some(LabelFilter::All(ids));
             }
         }
         Ok(filters)
@@ -577,6 +878,13 @@ impl Filters {
 
     /// Appends ` AND ...` for every filter.
     fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        self.push_conditions(builder, true);
+    }
+
+    /// The filters as conditions on `item`, its `status` and `project`, each
+    /// starting with AND. `archived_rule` adds the one on archived tasks
+    /// (only them, or none of them).
+    fn push_conditions(&self, builder: &mut QueryBuilder<'_, Postgres>, archived_rule: bool) {
         if let Some(search) = &self.search {
             let escaped = search
                 .replace('\\', "\\\\")
@@ -597,36 +905,18 @@ impl Filters {
             }
             builder.push(")");
         }
-        if let Some(value) = self.type_id {
-            builder.push(" AND item.type_id = ").push_bind(value);
+        push_field(builder, "item.type_id", false, &self.types);
+        push_field(builder, "item.status_id", false, &self.statuses);
+        push_field(builder, "status.semantic_category", false, &self.categories);
+        push_field(builder, "item.priority", false, &self.priorities);
+        push_field(builder, "item.assignee_actor_id", true, &self.assignees);
+        if archived_rule {
+            builder.push(if self.archived {
+                " AND item.archived_at IS NOT NULL"
+            } else {
+                " AND item.archived_at IS NULL"
+            });
         }
-        if let Some(value) = self.status_id {
-            builder.push(" AND item.status_id = ").push_bind(value);
-        }
-        if let Some(value) = &self.semantic_category {
-            builder
-                .push(" AND status.semantic_category = ")
-                .push_bind(value.clone());
-        }
-        if let Some(value) = &self.priority {
-            builder
-                .push(" AND item.priority = ")
-                .push_bind(value.clone());
-        }
-        match self.assignee {
-            Some(OneOrNone::One(id)) => {
-                builder.push(" AND item.assignee_actor_id = ").push_bind(id);
-            }
-            Some(OneOrNone::None) => {
-                builder.push(" AND item.assignee_actor_id IS NULL");
-            }
-            None => {}
-        }
-        builder.push(if self.archived {
-            " AND item.archived_at IS NOT NULL"
-        } else {
-            " AND item.archived_at IS NULL"
-        });
         match &self.labels {
             Some(LabelFilter::All(ids)) => {
                 builder.push(
@@ -639,22 +929,33 @@ impl Filters {
                 builder.push_bind(ids.len() as i64);
             }
             Some(LabelFilter::None) => {
-                builder.push(
-                    " AND NOT EXISTS (SELECT 1 FROM work_item_active_labels has_label \
-                       WHERE has_label.project_id = item.project_id AND has_label.work_item_id = item.id)",
-                );
+                builder.push(format!(" AND NOT {HAS_SOME_LABEL}"));
             }
             None => {}
         }
-        match self.milestone {
-            Some(OneOrNone::One(id)) => {
-                builder.push(" AND item.milestone_id = ").push_bind(id);
+        if let Some(any) = &self.any_labels {
+            builder.push(" AND (false");
+            if !any.values.is_empty() {
+                builder.push(format!(" OR {HAS_LABEL_IN}"));
+                builder.push_bind(any.values.clone());
+                builder.push("))");
             }
-            Some(OneOrNone::None) => {
-                builder.push(" AND item.milestone_id IS NULL");
+            if any.none {
+                builder.push(format!(" OR NOT {HAS_SOME_LABEL}"));
             }
-            None => {}
+            builder.push(")");
         }
+        if let Some(not) = &self.not_labels {
+            if !not.values.is_empty() {
+                builder.push(format!(" AND NOT {HAS_LABEL_IN}"));
+                builder.push_bind(not.values.clone());
+                builder.push("))");
+            }
+            if not.none {
+                builder.push(format!(" AND {HAS_SOME_LABEL}"));
+            }
+        }
+        push_field(builder, "item.milestone_id", true, &self.milestones);
         match self.parent {
             Some(OneOrNone::One(id)) => {
                 builder
@@ -704,6 +1005,54 @@ impl Filters {
         }
         if self.hide_done {
             builder.push(format!(" AND NOT ({FINISHED})"));
+        }
+    }
+}
+
+/// The task has an active label (archived ones don't count)...
+const HAS_SOME_LABEL: &str = "EXISTS (SELECT 1 FROM work_item_active_labels has_label \
+     WHERE has_label.project_id = item.project_id AND has_label.work_item_id = item.id)";
+/// ...or one of those bound next, closed with `))`.
+const HAS_LABEL_IN: &str = "EXISTS (SELECT 1 FROM work_item_active_labels has_label \
+     WHERE has_label.project_id = item.project_id AND has_label.work_item_id = item.id \
+       AND has_label.label_id = ANY(";
+
+/// Appends a field filter on `column` (which may be null when `nullable`).
+/// "Is not" keeps tasks with no value: not assigned to Ana includes
+/// unassigned tasks, unless "none" is one of the values left out.
+pub(crate) fn push_field<'args, T>(
+    builder: &mut QueryBuilder<'args, Postgres>,
+    column: &str,
+    nullable: bool,
+    filter: &FieldFilter<T>,
+) where
+    T: Clone,
+    Vec<T>: 'args + sqlx::Encode<'args, Postgres> + sqlx::Type<Postgres>,
+{
+    if let Some(any) = &filter.any {
+        builder.push(" AND (false");
+        if !any.values.is_empty() {
+            builder.push(format!(" OR {column} = ANY("));
+            builder.push_bind(any.values.clone());
+            builder.push(")");
+        }
+        if any.none {
+            builder.push(format!(" OR {column} IS NULL"));
+        }
+        builder.push(")");
+    }
+    if let Some(not) = &filter.not {
+        if !not.values.is_empty() {
+            builder.push(if nullable && !not.none {
+                format!(" AND ({column} IS NULL OR {column} <> ALL(")
+            } else {
+                format!(" AND ({column} <> ALL(")
+            });
+            builder.push_bind(not.values.clone());
+            builder.push("))");
+        }
+        if not.none {
+            builder.push(format!(" AND {column} IS NOT NULL"));
         }
     }
 }
@@ -1037,26 +1386,38 @@ pub(super) async fn group_counts(
 }
 
 /// The values a board column can stand for, each with no tasks yet, in
-/// board order. A filter on the column's own field leaves just the columns
-/// that have tasks.
+/// board order. The board then keeps those its filters allow. A label filter
+/// that asks for labels keeps the columns to those, rather than every label.
 async fn column_values(
     pool: &PgPool,
     project_id: Uuid,
     grouping: Grouping,
     filters: &Filters,
 ) -> Result<Vec<GroupCount>, AppError> {
+    let named_labels = match (&filters.labels, &filters.any_labels) {
+        (None, None) => None,
+        (labels, any) => Some(
+            match labels {
+                Some(LabelFilter::All(ids)) => ids.clone(),
+                _ => Vec::new(),
+            }
+            .into_iter()
+            .chain(any.iter().flat_map(|any| any.values.iter().copied()))
+            .collect::<Vec<_>>(),
+        ),
+    };
     let sql = match grouping {
-        Grouping::Type if filters.type_id.is_none() => {
+        Grouping::Type => {
             "SELECT id::text AS key, name AS label, 0::bigint AS count, NULL::text AS color \
              FROM work_item_types WHERE project_id = $1 AND enabled ORDER BY position, id::text"
                 .to_owned()
         }
-        Grouping::Priority if filters.priority.is_none() => format!(
+        Grouping::Priority => format!(
             "SELECT item.priority AS key, {PRIORITY_LABEL} AS label, 0::bigint AS count, NULL::text AS color \
              FROM (VALUES ('urgent'), ('high'), ('medium'), ('low'), ('no_priority')) AS item(priority) \
              WHERE $1::uuid IS NOT NULL ORDER BY {PRIORITY_RANK}"
         ),
-        Grouping::Assignee if filters.assignee.is_none() => {
+        Grouping::Assignee => {
             "SELECT membership.actor_id::text AS key, membership.display_name AS label, \
                     0::bigint AS count, NULL::text AS color \
              FROM project_memberships membership JOIN actors actor ON actor.id = membership.actor_id \
@@ -1065,13 +1426,14 @@ async fn column_values(
              ORDER BY lower(membership.display_name), membership.actor_id::text"
                 .to_owned()
         }
-        Grouping::Label if filters.labels.is_none() => {
+        Grouping::Label => {
             "SELECT id::text AS key, name AS label, 0::bigint AS count, color \
              FROM project_labels WHERE project_id = $1 AND archived_at IS NULL \
+               AND ($2::uuid[] IS NULL OR id = ANY($2)) \
              ORDER BY lower(name), id::text"
                 .to_owned()
         }
-        Grouping::Milestone if filters.milestone.is_none() => {
+        Grouping::Milestone => {
             "SELECT id::text AS key, name AS label, 0::bigint AS count, NULL::text AS color \
              FROM project_milestones WHERE project_id = $1 AND archived_at IS NULL \
              ORDER BY COALESCE(target_date, 'infinity'::date), lower(name), id::text"
@@ -1079,10 +1441,13 @@ async fn column_values(
         }
         _ => return Ok(Vec::new()),
     };
-    Ok(sqlx::query_as::<_, GroupCount>(&sql)
-        .bind(project_id)
-        .fetch_all(pool)
-        .await?)
+    let query = sqlx::query_as::<_, GroupCount>(&sql).bind(project_id);
+    let query = if grouping == Grouping::Label {
+        query.bind(named_labels)
+    } else {
+        query
+    };
+    Ok(query.fetch_all(pool).await?)
 }
 
 /// A task as list rows and board cards show it.
@@ -1377,31 +1742,82 @@ pub(super) async fn validate_filter_ids(
     project_id: Uuid,
     filters: &Filters,
 ) -> Result<(), AppError> {
-    let assignee = match filters.assignee {
-        Some(OneOrNone::One(id)) => Some(id),
-        _ => None,
+    // (table, its ID column, the query parameter, the IDs)
+    let mut checks: Vec<(&'static str, &'static str, &'static str, Vec<Uuid>)> = Vec::new();
+    let mut check = |table, column, field, values: Option<&Values<Uuid>>| {
+        if let Some(values) = values.filter(|values| !values.values.is_empty()) {
+            checks.push((table, column, field, values.values.clone()));
+        }
     };
-    validate_list_filter_ids(
-        pool,
-        project_id,
-        filters.type_id,
-        filters.status_id,
-        assignee,
-    )
-    .await?;
-    let mut checks: Vec<(&'static str, &'static str, Vec<Uuid>)> = Vec::new();
+    check(
+        "work_item_types",
+        "id",
+        "typeId",
+        filters.types.any.as_ref(),
+    );
+    check(
+        "work_item_types",
+        "id",
+        "notTypeId",
+        filters.types.not.as_ref(),
+    );
+    check(
+        "work_item_statuses",
+        "id",
+        "statusId",
+        filters.statuses.any.as_ref(),
+    );
+    check(
+        "work_item_statuses",
+        "id",
+        "notStatusId",
+        filters.statuses.not.as_ref(),
+    );
+    check(
+        "project_memberships",
+        "actor_id",
+        "assigneeActorId",
+        filters.assignees.any.as_ref(),
+    );
+    check(
+        "project_memberships",
+        "actor_id",
+        "notAssigneeActorId",
+        filters.assignees.not.as_ref(),
+    );
+    check(
+        "project_labels",
+        "id",
+        "anyLabelIds",
+        filters.any_labels.as_ref(),
+    );
+    check(
+        "project_labels",
+        "id",
+        "notLabelIds",
+        filters.not_labels.as_ref(),
+    );
+    check(
+        "project_milestones",
+        "id",
+        "milestoneId",
+        filters.milestones.any.as_ref(),
+    );
+    check(
+        "project_milestones",
+        "id",
+        "notMilestoneId",
+        filters.milestones.not.as_ref(),
+    );
     if let Some(LabelFilter::All(ids)) = &filters.labels {
-        checks.push(("project_labels", "labelIds", ids.clone()));
-    }
-    if let Some(OneOrNone::One(id)) = filters.milestone {
-        checks.push(("project_milestones", "milestoneId", vec![id]));
+        checks.push(("project_labels", "id", "labelIds", ids.clone()));
     }
     if let Some(OneOrNone::One(id)) = filters.parent {
-        checks.push(("work_items", "parentId", vec![id]));
+        checks.push(("work_items", "id", "parentId", vec![id]));
     }
-    for (table, field, ids) in checks {
+    for (table, column, field, ids) in checks {
         let found = sqlx::query_scalar::<_, i64>(&format!(
-            "SELECT count(*) FROM {table} WHERE project_id = $1 AND id = ANY($2)"
+            "SELECT count(*) FROM {table} WHERE project_id = $1 AND {column} = ANY($2)"
         ))
         .bind(project_id)
         .bind(&ids)
@@ -1556,8 +1972,8 @@ pub(super) async fn get_work_item_board(
     let limit = limit(query.limit);
     let counts = group_counts(&state.pool, project_id, &filters, grouping).await?;
 
-    // Status columns are every enabled status, empty ones too; a status
-    // filter keeps only its own column.
+    // Status columns are every enabled status, empty ones too; a status or
+    // status group filter keeps only the columns it allows.
     let mut columns: Vec<(GroupCount, Option<WorkItemStatusView>)> = if grouping == Grouping::Status
     {
         let statuses = sqlx::query_as::<_, WorkflowStatusRow>(
@@ -1572,7 +1988,10 @@ pub(super) async fn get_work_item_board(
             .collect::<HashMap<_, _>>();
         statuses
             .into_iter()
-            .filter(|status| filters.status_id.is_none_or(|id| id == status.id))
+            .filter(|status| {
+                filters.statuses.allows(Some(&status.id))
+                    && filters.categories.allows(Some(&status.semantic_category))
+            })
             .map(|status| {
                 let key = status.id.to_string();
                 (
@@ -1591,9 +2010,9 @@ pub(super) async fn get_work_item_board(
             })
             .collect()
     } else {
-        // Every value a card can be dropped on gets a column, used or not;
-        // values only tasks still carry (an archived label, a removed
-        // member) follow them.
+        // Every value a card can be dropped on gets a column, used or not,
+        // unless the filters rule it out; values only tasks still carry (an
+        // archived label, a removed member) follow them.
         let mut count_of = counts
             .into_iter()
             .map(|group| (group.key.clone(), group))
@@ -1628,6 +2047,7 @@ pub(super) async fn get_work_item_board(
                 None,
             ));
         }
+        columns.retain(|(group, _)| filters.allows_group(grouping, &group.key));
         columns
     };
 
@@ -1759,7 +2179,10 @@ mod tests {
             .with_group(Grouping::Assignee, "none")
             .expect("test value");
         let params = column.to_params();
-        assert_eq!(params.get("unassigned").map(String::as_str), Some("true"));
+        assert_eq!(
+            params.get("assigneeActorId").map(String::as_str),
+            Some("none")
+        );
         assert_eq!(params.get("includeDone").map(String::as_str), Some("false"));
         let query: TaskListQuery =
             serde_urlencoded::from_str(&serde_urlencoded::to_string(&params).expect("test value"))

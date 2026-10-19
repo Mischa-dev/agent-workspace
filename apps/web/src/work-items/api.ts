@@ -563,7 +563,15 @@ export async function searchAssignableActors(
   projectId: string,
   query: string,
 ): Promise<AssignableActor[]> {
-  const parameters = new URLSearchParams({ q: query, limit: '20' })
+  return assignableActors(projectId, new URLSearchParams({ q: query, limit: '20' }))
+}
+
+/** The project's members (past ones too) with these IDs, such as the people a filter picks. */
+export async function namedAssignableActors(projectId: string, ids: readonly string[]): Promise<AssignableActor[]> {
+  return assignableActors(projectId, new URLSearchParams({ ids: ids.join(',') }))
+}
+
+async function assignableActors(projectId: string, parameters: URLSearchParams): Promise<AssignableActor[]> {
   const payload = record(
     await requestJson<unknown>(
       `/api/v1/projects/${encodeURIComponent(projectId)}/work-item-assignees?${parameters}`,

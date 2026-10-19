@@ -4,8 +4,8 @@ import { createPortal } from 'react-dom'
 import './pickers.css'
 import { popoverPosition, type PopoverPlacement } from './popoverModel'
 
-const focusable =
-  'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+const fields = 'input:not([disabled]), textarea:not([disabled]), select:not([disabled])'
+const focusable = `${fields}, button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])`
 
 /**
  * A small floating panel tied to an anchor, such as a picker. It isn't modal:
@@ -28,7 +28,7 @@ export function Popover({
   anchor: HTMLElement | null
   children: ReactNode
   className?: string
-  /** What takes focus on open; defaults to the first field or control inside. */
+  /** What takes focus on open; defaults to the first field inside, else the first control. */
   initialFocus?: RefObject<HTMLElement | null>
   label: string
   onClose: () => void
@@ -75,10 +75,19 @@ export function Popover({
     }
   }, [anchor, open, placement])
 
+  // Focus moves in once per opening, when the panel has its place: until then
+  // it's hidden, and a hidden panel can't take focus.
+  const placed = position !== null
+  useEffect(() => {
+    if (!open || !placed) return
+    const target = initialFocus?.current ?? panel.current?.querySelector<HTMLElement>(fields) ?? panel.current?.querySelector<HTMLElement>(focusable) ?? panel.current
+    target?.focus({ preventScroll: true })
+    // The focus target is read once, as the panel shows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, placed])
+
   useEffect(() => {
     if (!open) return undefined
-    const target = initialFocus?.current ?? panel.current?.querySelector<HTMLElement>(focusable) ?? panel.current
-    target?.focus({ preventScroll: true })
     const onPointer = (event: PointerEvent) => {
       const node = event.target as Node
       if (panel.current?.contains(node) || anchor?.contains(node)) return
@@ -87,9 +96,15 @@ export function Popover({
     document.addEventListener('pointerdown', onPointer)
     return () => {
       document.removeEventListener('pointerdown', onPointer)
-      if (returnFocus && anchor?.isConnected) window.requestAnimationFrame(() => anchor.focus({ preventScroll: true }))
+      if (!returnFocus) return
+      // Back to the anchor only when closing left focus nowhere: a click
+      // into another field keeps it there.
+      window.requestAnimationFrame(() => {
+        const active = document.activeElement
+        if (anchor?.isConnected && (!active || active === document.body)) anchor.focus({ preventScroll: true })
+      })
     }
-    // Focus moves once per opening; the anchor and focus target are read then.
+    // The anchor is read once per opening.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 

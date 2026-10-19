@@ -10,15 +10,16 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgConnection, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection, Postgres, QueryBuilder, Transaction};
 use uuid::Uuid;
 
 use super::{
     McpPrincipal,
     common::{
         ARCHIVED_PROJECT_MESSAGE, ToolResult, accessible_project_ids, archived_task_message,
-        flag_or_text, mark_via, parse_id, parse_message_id, parse_since, project_is_chosen,
-        public_url, scope_projects, snippet, string_or_number, version_conflict_message,
+        flag_or_text, mark_via, one_or_many, parse_id, parse_message_id, parse_since,
+        project_is_chosen, public_url, scope_projects, snippet, string_or_number,
+        version_conflict_message,
     },
     history, planning,
     reads::{self, ReadResult, WorkItemProjection},
@@ -37,7 +38,10 @@ use crate::{
     },
     work_item_labels::{self, echo},
     work_item_planning::{HAS_OPEN_BLOCKER, OPEN_BLOCKER_COUNT},
-    work_items::decode_work_item_timeline_cursor,
+    work_items::{
+        decode_work_item_timeline_cursor,
+        list::{FieldFilter, Values, ViewFilters, push_field},
+    },
 };
 
 const DEFAULT_CLAIM_MINUTES: i32 = 120;
@@ -49,6 +53,8 @@ const DEFAULT_CLAIM_MINUTES: i32 = 120;
 const MAX_LIST_PROJECTS: usize = 50;
 /// The most labels one task_list call filters by.
 const MAX_FILTER_LABELS: usize = 10;
+/// The most values any other list filter names, such as 20 statuses.
+const MAX_FILTER_VALUES: usize = 20;
 /// Status groups, in board order.
 const STATUS_GROUPS: [&str; 7] = [
     "backlog",
@@ -72,19 +78,56 @@ pub(super) struct TaskListArguments {
     /// Several projects at once (IDs, links, or keys), 1 to 50. Not together
     /// with projectId.
     pub project_ids: Option<Vec<String>>,
-    /// A status name (such as "In Progress") or group: backlog, unstarted,
-    /// started, review, verification, completed, canceled.
-    pub status: Option<String>,
-    /// "me", "none", an actor ID, or an @handle.
-    pub assignee: Option<String>,
+    /// Status names (such as "In Progress"), IDs, or groups: backlog,
+    /// unstarted, started, review, verification, completed, canceled. Tasks
+    /// in any of them, finished ones included when you name them.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub status: Option<Vec<String>>,
+    /// Leave out tasks in any of these statuses or groups.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub not_status: Option<Vec<String>>,
+    /// "me", "none", actor IDs, or @handles: tasks assigned to any of them.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub assignee: Option<Vec<String>>,
+    /// Leave out tasks assigned to any of these; unassigned ones stay
+    /// unless you list "none".
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub not_assignee: Option<Vec<String>>,
     /// Only tasks that have all of these labels, by name or ID (at most 10).
     /// Names match in each project you're looking at.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
     pub labels: Option<Vec<String>>,
-    /// A type name such as Bug (any case), or a type ID.
-    #[serde(rename = "type")]
-    pub task_type: Option<String>,
-    /// no_priority (or none), low, medium, high, or urgent.
-    pub priority: Option<String>,
+    /// Tasks with at least one of these labels; "none" lets in tasks with
+    /// no labels too.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub any_labels: Option<Vec<String>>,
+    /// Leave out tasks with any of these labels; "none" leaves out tasks
+    /// with no labels.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub not_labels: Option<Vec<String>>,
+    /// Type names such as Bug (any case), or type IDs: tasks of any of them.
+    #[serde(rename = "type", default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub task_type: Option<Vec<String>>,
+    /// Leave out tasks of any of these types.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub not_type: Option<Vec<String>>,
+    /// no_priority (or none), low, medium, high, urgent: any of them.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub priority: Option<Vec<String>>,
+    /// Leave out tasks with any of these priorities.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub not_priority: Option<Vec<String>>,
     /// Who created it: "me", an @handle, or an actor ID.
     pub created_by: Option<String>,
     /// Changed since: a date (YYYY-MM-DD), a timestamp such as
@@ -96,10 +139,20 @@ pub(super) struct TaskListArguments {
     /// true: only tasks ready to start (not finished, not blocked, nothing
     /// unfinished blocking them). false: the rest.
     pub ready: Option<bool>,
-    /// A milestone by name or ID, or "none" for tasks in no milestone.
-    pub milestone: Option<String>,
+    /// Milestones by name or ID, or "none" for tasks in no milestone: any
+    /// of them.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub milestone: Option<Vec<String>>,
+    /// Leave out tasks in any of these milestones; "none" leaves out tasks
+    /// in no milestone.
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub not_milestone: Option<Vec<String>>,
     /// Only tasks due on or before this date (YYYY-MM-DD).
     pub due_before: Option<String>,
+    /// Only tasks due on or after this date (YYYY-MM-DD).
+    pub due_after: Option<String>,
     /// true: only unfinished tasks past their due date. false: the rest.
     pub overdue: Option<bool>,
     /// yes (someone is working on it), no, me, or an @handle. true and false
@@ -109,7 +162,7 @@ pub(super) struct TaskListArguments {
     pub claimed: Option<String>,
     /// Words in the title or description, or a key such as AW-12.
     pub query: Option<String>,
-    /// Only subtasks of this task.
+    /// Only subtasks of this task, or "none" for top-level tasks.
     pub parent_id: Option<String>,
     /// board (the order people set, the default), priority, updated, or number.
     pub sort: Option<String>,
@@ -121,7 +174,8 @@ pub(super) struct TaskListArguments {
     pub limit: Option<u16>,
     pub cursor: Option<String>,
     /// A saved view by name or ID (see view_list), such as "Ready for
-    /// agents". Needs projectId. Its filters apply; ones you pass win.
+    /// agents". Needs projectId. Its filters apply as on the task list; a
+    /// field you pass replaces the view's filter on that field.
     pub view: Option<String>,
 }
 
@@ -234,33 +288,181 @@ pub(super) struct TaskListValue {
     pub next_cursor: Option<String>,
 }
 
-/// What a task_list call filters on, resolved: the same values bind as $1 to
-/// $21 in both the count and the page, so `total` and the page agree.
+/// What a task_list call filters on, resolved. `push_where` writes the same
+/// conditions for the count and the page, so `total` and the page agree.
 #[derive(Debug, Default)]
 struct ListFilters {
     projects: Vec<Uuid>,
     include_done: bool,
-    status: Option<String>,
-    assignee_mode: &'static str,
-    assignee_id: Option<Uuid>,
-    query: String,
-    parent_id: Option<Uuid>,
     include_archived: bool,
-    task_type: Option<String>,
-    priority: Option<String>,
+    /// The call names statuses to list: finished tasks in them count even
+    /// without includeDone.
+    names_statuses: bool,
+    statuses: FieldFilter<Uuid>,
+    assignees: FieldFilter<Uuid>,
+    query: String,
+    parent: Option<Parent>,
+    types: FieldFilter<Uuid>,
+    priorities: FieldFilter<String>,
     created_by: Option<Uuid>,
     updated_since: Option<DateTime<Utc>>,
     blocked: Option<bool>,
     claimed_mode: &'static str,
     claimed_id: Option<Uuid>,
-    /// Label names, lowercased and each once.
+    /// Label names, lowercased and each once: the task has all of them.
     labels: Vec<String>,
-    /// any, none, or one (in `milestone_ids`).
-    milestone_mode: &'static str,
-    milestone_ids: Vec<Uuid>,
+    /// At least one of these names, or no labels at all (true).
+    any_labels: Option<(Vec<String>, bool)>,
+    /// None of these names, nor no labels at all (true).
+    not_labels: Option<(Vec<String>, bool)>,
+    milestones: FieldFilter<Uuid>,
     ready: Option<bool>,
     due_before: Option<NaiveDate>,
+    due_after: Option<NaiveDate>,
     overdue: Option<bool>,
+    /// A saved view's own filters, applied as the task list applies them.
+    view: Option<ViewFilters>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Parent {
+    /// Subtasks of this task.
+    Of(Uuid),
+    /// Tasks with no parent.
+    TopLevel,
+}
+
+/// SQL for a task row aliased `item`: it has an active label...
+const HAS_SOME_LABEL: &str = "EXISTS (SELECT 1 FROM work_item_active_labels active \
+     WHERE active.project_id = item.project_id AND active.work_item_id = item.id)";
+/// ...or one of the lowercased names bound next, closed with `))`.
+const HAS_LABEL_NAMED: &str = "EXISTS (SELECT 1 FROM work_item_active_labels active \
+     WHERE active.project_id = item.project_id AND active.work_item_id = item.id \
+       AND lower(active.name) = ANY(";
+
+impl ListFilters {
+    /// Every filter, as the WHERE clause of a query over `TASK_FROM`.
+    /// Labels match by name through the active-labels view, so an archived
+    /// label never matches.
+    fn push_where(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        builder
+            .push(" WHERE item.project_id = ANY(")
+            .push_bind(self.projects.clone())
+            .push(")");
+        if !self.include_archived {
+            builder.push(" AND item.archived_at IS NULL");
+        }
+        if !self.include_done && !self.names_statuses {
+            builder.push(" AND status.semantic_category NOT IN ('completed', 'canceled')");
+        }
+        push_field(builder, "item.status_id", false, &self.statuses);
+        push_field(builder, "item.assignee_actor_id", true, &self.assignees);
+        if !self.query.is_empty() {
+            builder
+                .push(" AND (item.search_vector @@ websearch_to_tsquery('english', ")
+                .push_bind(self.query.clone())
+                .push(") OR item.title ILIKE '%' || ")
+                .push_bind(self.query.clone())
+                .push(" || '%' OR upper(project.project_key || '-' || item.number::text) = upper(")
+                .push_bind(self.query.clone())
+                .push("))");
+        }
+        match self.parent {
+            Some(Parent::Of(id)) => {
+                builder
+                    .push(" AND item.parent_work_item_id = ")
+                    .push_bind(id);
+            }
+            Some(Parent::TopLevel) => {
+                builder.push(" AND item.parent_work_item_id IS NULL");
+            }
+            None => {}
+        }
+        push_field(builder, "item.type_id", false, &self.types);
+        push_field(builder, "item.priority", false, &self.priorities);
+        if let Some(id) = self.created_by {
+            builder
+                .push(" AND item.created_by_actor_id = ")
+                .push_bind(id);
+        }
+        if let Some(time) = self.updated_since {
+            builder.push(" AND item.updated_at >= ").push_bind(time);
+        }
+        match self.claimed_mode {
+            "none" => {
+                builder.push(" AND claim.work_item_id IS NULL");
+            }
+            "some" => {
+                builder.push(" AND claim.work_item_id IS NOT NULL");
+            }
+            "one" => {
+                builder
+                    .push(" AND claim.actor_id = ")
+                    .push_bind(self.claimed_id);
+            }
+            _ => {}
+        }
+        if !self.labels.is_empty() {
+            builder
+                .push(
+                    " AND (SELECT count(*) FROM work_item_active_labels active \
+                       WHERE active.project_id = item.project_id \
+                         AND active.work_item_id = item.id AND lower(active.name) = ANY(",
+                )
+                .push_bind(self.labels.clone())
+                .push(")) = ")
+                .push_bind(self.labels.len() as i64);
+        }
+        if let Some((names, none)) = &self.any_labels {
+            builder.push(" AND (false");
+            if !names.is_empty() {
+                builder
+                    .push(format!(" OR {HAS_LABEL_NAMED}"))
+                    .push_bind(names.clone())
+                    .push("))");
+            }
+            if *none {
+                builder.push(format!(" OR NOT {HAS_SOME_LABEL}"));
+            }
+            builder.push(")");
+        }
+        if let Some((names, none)) = &self.not_labels {
+            if !names.is_empty() {
+                builder
+                    .push(format!(" AND NOT {HAS_LABEL_NAMED}"))
+                    .push_bind(names.clone())
+                    .push("))");
+            }
+            if *none {
+                builder.push(format!(" AND {HAS_SOME_LABEL}"));
+            }
+        }
+        if let Some(blocked) = self.blocked {
+            builder
+                .push(format!(
+                    " AND (item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER}) = "
+                ))
+                .push_bind(blocked);
+        }
+        push_field(builder, "item.milestone_id", true, &self.milestones);
+        if let Some(ready) = self.ready {
+            builder.push(format!(" AND ({READY}) = ")).push_bind(ready);
+        }
+        if let Some(date) = self.due_before {
+            builder.push(" AND item.due_date <= ").push_bind(date);
+        }
+        if let Some(date) = self.due_after {
+            builder.push(" AND item.due_date >= ").push_bind(date);
+        }
+        if let Some(overdue) = self.overdue {
+            builder
+                .push(format!(" AND ({OVERDUE}) = "))
+                .push_bind(overdue);
+        }
+        if let Some(view) = &self.view {
+            view.push_where(builder);
+        }
+    }
 }
 
 /// The filters a cursor was made for. A cursor carries a short hash of it,
@@ -292,6 +494,10 @@ struct ListFingerprint<'a> {
     due_before: Option<NaiveDate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     overdue: Option<bool>,
+    /// Several values, "leave out" filters, top-level only, dueAfter and a
+    /// view's own filters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    more: Option<String>,
 }
 
 impl ListFingerprint<'_> {
@@ -390,74 +596,112 @@ const TASK_FROM: &str = r#"
       ON claim.work_item_id = item.id AND claim.expires_at > now()
 "#;
 
-/// Every filter, bound by `bind_task_filters`. Labels match by name through
-/// the active-labels view, so an archived label never matches.
-fn task_where() -> String {
-    format!(
-        r#"{TASK_WHERE_BASE}
-      AND ($13::boolean IS NULL OR (item.blocked_reason IS NOT NULL OR {HAS_OPEN_BLOCKER}) = $13)
-      AND ($17 = 'any' OR ($17 = 'none' AND item.milestone_id IS NULL)
-           OR ($17 = 'one' AND item.milestone_id = ANY($18::uuid[])))
-      AND ($19::boolean IS NULL OR ({READY}) = $19)
-      AND ($20::date IS NULL OR item.due_date <= $20)
-      AND ($21::boolean IS NULL OR ({OVERDUE}) = $21)
-"#
-    )
+/// The order of a task_list sort. Archived tasks (includeArchived) go to
+/// the end of their column. Each order ends in the task's ID, so it's total
+/// and a page can start right after the last task of the one before.
+fn list_order(sort: &str) -> Option<String> {
+    Some(match sort {
+        "board" => "project.name, item.project_id, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id".to_owned(),
+        "priority" => format!(
+            "{PRIORITY_RANK}, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id"
+        ),
+        "updated" => "item.updated_at DESC, item.id".to_owned(),
+        "number" => "project.name, item.project_id, item.number".to_owned(),
+        _ => return None,
+    })
 }
 
-const TASK_WHERE_BASE: &str = r#"
-    WHERE item.project_id = ANY($1)
-      AND ($8 OR item.archived_at IS NULL)
-      AND ($2 OR status.semantic_category NOT IN ('completed', 'canceled'))
-      AND ($3::text IS NULL OR lower(status.name) = lower($3)
-           OR status.semantic_category = lower($3) OR status.id::text = lower($3))
-      AND ($4 = 'any' OR ($4 = 'none' AND item.assignee_actor_id IS NULL)
-           OR ($4 = 'one' AND item.assignee_actor_id = $5))
-      AND ($6 = '' OR item.search_vector @@ websearch_to_tsquery('english', $6)
-           OR item.title ILIKE '%' || $6 || '%'
-           OR upper(project.project_key || '-' || item.number::text) = upper($6))
-      AND ($7::uuid IS NULL OR item.parent_work_item_id = $7)
-      AND ($9::text IS NULL OR lower(item_type.name) = lower($9)
-           OR item_type.id::text = lower($9))
-      AND ($10::text IS NULL OR item.priority = $10)
-      AND ($11::uuid IS NULL OR item.created_by_actor_id = $11)
-      AND ($12::timestamptz IS NULL OR item.updated_at >= $12)
-      AND ($14 = 'any' OR ($14 = 'none' AND claim.work_item_id IS NULL)
-           OR ($14 = 'some' AND claim.work_item_id IS NOT NULL)
-           OR ($14 = 'one' AND claim.actor_id = $15))
-      AND (cardinality($16::text[]) = 0 OR (
-            SELECT count(*) FROM work_item_active_labels active
-            WHERE active.project_id = item.project_id AND active.work_item_id = item.id
-              AND lower(active.name) = ANY($16::text[])
-          ) = cardinality($16::text[]))
-"#;
+/// Only tasks after `position` in the `sort` order.
+fn push_after(builder: &mut QueryBuilder<'_, Postgres>, sort: &str, position: &ListPosition) {
+    match sort {
+        "priority" => {
+            builder
+                .push(format!(
+                    " AND ({PRIORITY_RANK}, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id) > ("
+                ))
+                .push_bind(position.priority_rank)
+                .push(", ")
+                .push_bind(position.status_position)
+                .push(", ")
+                .push_bind(position.archived)
+                .push(", ")
+                .push_bind(position.board_rank)
+                .push(", ")
+                .push_bind(position.id)
+                .push(")");
+        }
+        "updated" => {
+            builder
+                .push(" AND (item.updated_at < ")
+                .push_bind(position.updated_at)
+                .push(" OR (item.updated_at = ")
+                .push_bind(position.updated_at)
+                .push(" AND item.id > ")
+                .push_bind(position.id)
+                .push("))");
+        }
+        "number" => {
+            builder
+                .push(" AND (project.name, item.project_id, item.number) > (")
+                .push_bind(position.project_name.clone())
+                .push(", ")
+                .push_bind(position.project_id)
+                .push(", ")
+                .push_bind(position.number)
+                .push(")");
+        }
+        _ => {
+            builder
+                .push(
+                    " AND (project.name, item.project_id, status.position, \
+                       item.archived_at IS NOT NULL, item.board_rank, item.id) > (",
+                )
+                .push_bind(position.project_name.clone())
+                .push(", ")
+                .push_bind(position.project_id)
+                .push(", ")
+                .push_bind(position.status_position)
+                .push(", ")
+                .push_bind(position.archived)
+                .push(", ")
+                .push_bind(position.board_rank)
+                .push(", ")
+                .push_bind(position.id)
+                .push(")");
+        }
+    }
+}
 
-/// Binds $1 to $21 of `task_where`, identically for the count and the page.
-macro_rules! bind_task_filters {
-    ($query:expr, $filters:expr) => {
-        $query
-            .bind(&$filters.projects)
-            .bind($filters.include_done)
-            .bind($filters.status.as_deref())
-            .bind($filters.assignee_mode)
-            .bind($filters.assignee_id)
-            .bind($filters.query.as_str())
-            .bind($filters.parent_id)
-            .bind($filters.include_archived)
-            .bind($filters.task_type.as_deref())
-            .bind($filters.priority.as_deref())
-            .bind($filters.created_by)
-            .bind($filters.updated_since)
-            .bind($filters.blocked)
-            .bind($filters.claimed_mode)
-            .bind($filters.claimed_id)
-            .bind(&$filters.labels)
-            .bind($filters.milestone_mode)
-            .bind(&$filters.milestone_ids)
-            .bind($filters.ready)
-            .bind($filters.due_before)
-            .bind($filters.overdue)
-    };
+/// A list argument's values, trimmed, without blanks; none left reads as
+/// not passed. More than 20 is refused with `field`.
+fn listed(
+    values: Option<&Vec<String>>,
+    field: &'static str,
+) -> Result<Vec<String>, (&'static str, String)> {
+    let values = values
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if values.len() > MAX_FILTER_VALUES {
+        return Err((field, format!("Pass at most {MAX_FILTER_VALUES}.")));
+    }
+    Ok(values)
+}
+
+/// Any of `values`, and with `none` no value at all; `None` when the call
+/// names nothing.
+fn chosen<T: Ord>(values: Vec<T>, none: bool) -> Option<Values<T>> {
+    (!values.is_empty() || none).then(|| Values::new(values, none))
+}
+
+/// The one value a call names, as cursors made before lists had it.
+fn single(values: &[String]) -> Option<&str> {
+    match values {
+        [only] => Some(only),
+        _ => None,
+    }
 }
 
 pub(super) async fn task_list(
@@ -473,103 +717,244 @@ pub(super) async fn task_list(
         .unwrap_or_else(|error| ToolResult::from_error(error, "task_list"))
 }
 
+/// People named in a task_list filter: their IDs, and whether "none"
+/// (no one) is among them. Refused with `field` for someone not found.
+async fn filter_people(
+    state: &AppState,
+    principal: &McpPrincipal,
+    projects: &[Uuid],
+    values: &[String],
+    field: &'static str,
+) -> Result<Result<(Vec<Uuid>, bool), (&'static str, String)>, AppError> {
+    let mut ids = Vec::new();
+    let mut none = false;
+    for person in values {
+        match person.as_str() {
+            "me" => ids.push(principal.actor_id),
+            "none" => none = true,
+            person => match resolve_actor(state, projects, person).await? {
+                Some(id) => ids.push(id),
+                None => return Ok(Err((field, format!("No one called {person} was found.")))),
+            },
+        }
+    }
+    Ok(Ok((ids, none)))
+}
+
+/// Priorities named in a task_list filter, as stored ("none" is
+/// no_priority).
+fn filter_priorities(
+    values: &[String],
+    field: &'static str,
+) -> Result<Vec<String>, (&'static str, String)> {
+    values
+        .iter()
+        .map(|value| match value.to_lowercase() {
+            value if value == "none" => Ok("no_priority".to_owned()),
+            value if validate_priority(&value).is_ok() => Ok(value),
+            _ => Err((
+                field,
+                "Use no_priority, low, medium, high, or urgent.".to_owned(),
+            )),
+        })
+        .collect()
+}
+
+/// Labels named in a task_list filter, "none" apart: their lowercased
+/// names, and whether "none" (no labels) is among them.
+async fn filter_label_choice(
+    state: &AppState,
+    projects: &[Uuid],
+    values: &[String],
+    field: &'static str,
+) -> Result<Result<Option<(Vec<String>, bool)>, (&'static str, String)>, AppError> {
+    if values.is_empty() {
+        return Ok(Ok(None));
+    }
+    let none = values
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case("none"));
+    let named = values
+        .iter()
+        .filter(|value| !value.eq_ignore_ascii_case("none"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if named.is_empty() {
+        return Ok(Ok(Some((Vec::new(), none))));
+    }
+    Ok(match filter_labels(state, projects, &named).await? {
+        Ok(names) => Ok(Some((names, none))),
+        Err(message) => Err((field, message)),
+    })
+}
+
+/// Milestones named in a task_list filter, by name or ID: their IDs, and
+/// whether "none" (no milestone) is among them.
+async fn filter_milestone_choice(
+    state: &AppState,
+    projects: &[Uuid],
+    place: &str,
+    values: &[String],
+    field: &'static str,
+) -> Result<Result<(Vec<Uuid>, bool), (&'static str, String)>, AppError> {
+    let mut ids = Vec::new();
+    let mut none = false;
+    for value in values {
+        if value.eq_ignore_ascii_case("none") {
+            none = true;
+            continue;
+        }
+        match filter_milestones(state, projects, place, value).await? {
+            Ok(found) => ids.extend(found),
+            Err(message) => return Ok(Err((field, message))),
+        }
+    }
+    Ok(Ok((ids, none)))
+}
+
 async fn task_list_inner(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: TaskListArguments,
 ) -> Result<ToolResult<TaskListValue>, AppError> {
-    let arguments = match super::views_data::apply_view(state, principal, arguments).await? {
-        Ok(arguments) => arguments,
+    let (arguments, view) = match super::views_data::apply_view(state, principal, arguments).await?
+    {
+        Ok(applied) => applied,
         Err((field, message)) => return Ok(ToolResult::invalid(field, message)),
     };
+    match list_tasks(state, principal, arguments, view).await? {
+        Ok(value) => Ok(ToolResult::ok(value)),
+        Err(refusal) => Ok(refusal),
+    }
+}
+
+async fn list_tasks(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: TaskListArguments,
+    view: Option<ViewFilters>,
+) -> Result<Result<TaskListValue, ToolResult<TaskListValue>>, AppError> {
+    let invalid =
+        |(field, message): (&'static str, String)| Err(ToolResult::invalid(field, message));
     let limit = i64::from(arguments.limit.unwrap_or(50));
     if !(1..=200).contains(&limit) {
-        return Ok(ToolResult::invalid("limit", "Use a limit from 1 to 200."));
+        return Ok(Err(ToolResult::invalid(
+            "limit",
+            "Use a limit from 1 to 200.",
+        )));
     }
     let sort = arguments.sort.as_deref().unwrap_or("board");
-    // Archived tasks (includeArchived) go to the end of their column. Each
-    // order ends in the task's ID, so it's total and a page can start right
-    // after the last task of the one before ($23 to $31, after $22).
-    let (order, after) = match sort {
-        "board" => (
-            "project.name, item.project_id, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id".to_owned(),
-            "(project.name, item.project_id, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id) > ($23, $24, $25, $26, $27, $28)".to_owned(),
-        ),
-        "priority" => (
-            format!(
-                "{PRIORITY_RANK}, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id"
-            ),
-            format!(
-                "({PRIORITY_RANK}, status.position, item.archived_at IS NOT NULL, item.board_rank, item.id) > ($29, $25, $26, $27, $28)"
-            ),
-        ),
-        "updated" => (
-            "item.updated_at DESC, item.id".to_owned(),
-            "(item.updated_at < $30 OR (item.updated_at = $30 AND item.id > $28))".to_owned(),
-        ),
-        "number" => (
-            "project.name, item.project_id, item.number".to_owned(),
-            "(project.name, item.project_id, item.number) > ($23, $24, $31)".to_owned(),
-        ),
-        _ => {
-            return Ok(ToolResult::invalid(
-                "sort",
-                "Use board, priority, updated, or number.",
-            ));
-        }
+    let Some(order) = list_order(sort) else {
+        return Ok(Err(ToolResult::invalid(
+            "sort",
+            "Use board, priority, updated, or number.",
+        )));
     };
-    let parent_id = match arguments.parent_id.as_deref() {
+    let parent = match arguments.parent_id.as_deref().map(str::trim) {
+        None => None,
+        Some(value) if value.eq_ignore_ascii_case("none") => Some(Parent::TopLevel),
         Some(value) => match parse_id(value) {
-            Some(id) => Some(id),
+            Some(id) => Some(Parent::Of(id)),
             None => {
-                return Ok(ToolResult::invalid(
+                return Ok(Err(ToolResult::invalid(
                     "parentId",
-                    "Pass the parent task's ID.",
-                ));
+                    "Pass the parent task's ID, or \"none\" for top-level tasks.",
+                )));
             }
         },
-        None => None,
     };
     if arguments.project_id.is_some() && arguments.project_ids.is_some() {
-        return Ok(ToolResult::invalid(
+        return Ok(Err(ToolResult::invalid(
             "projectIds",
             "Pass projectId or projectIds, not both.",
-        ));
+        )));
     }
-    let priority = match arguments
-        .priority
-        .as_deref()
-        .map(|value| value.trim().to_lowercase())
-    {
-        None => None,
-        Some(value) if value == "none" => Some("no_priority".to_owned()),
-        Some(value) if validate_priority(&value).is_ok() => Some(value),
-        Some(_) => {
-            return Ok(ToolResult::invalid(
-                "priority",
-                "Use no_priority, low, medium, high, or urgent.",
-            ));
-        }
+    // An empty milestone, as before lists, means none.
+    let milestone = arguments.milestone.as_ref().map(|values| {
+        values
+            .iter()
+            .map(|value| {
+                if value.trim().is_empty() {
+                    "none".to_owned()
+                } else {
+                    value.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let lists = (|| {
+        Ok::<_, (&'static str, String)>([
+            listed(arguments.status.as_ref(), "status")?,
+            listed(arguments.not_status.as_ref(), "notStatus")?,
+            listed(arguments.assignee.as_ref(), "assignee")?,
+            listed(arguments.not_assignee.as_ref(), "notAssignee")?,
+            listed(arguments.any_labels.as_ref(), "anyLabels")?,
+            listed(arguments.not_labels.as_ref(), "notLabels")?,
+            listed(arguments.task_type.as_ref(), "type")?,
+            listed(arguments.not_type.as_ref(), "notType")?,
+            listed(arguments.priority.as_ref(), "priority")?,
+            listed(arguments.not_priority.as_ref(), "notPriority")?,
+            listed(milestone.as_ref(), "milestone")?,
+            listed(arguments.not_milestone.as_ref(), "notMilestone")?,
+        ])
+    })();
+    let [
+        status,
+        not_status,
+        assignee,
+        not_assignee,
+        any_labels,
+        not_labels,
+        task_type,
+        not_type,
+        priority,
+        not_priority,
+        milestone,
+        not_milestone,
+    ] = match lists {
+        Ok(lists) => lists,
+        Err(refusal) => return Ok(invalid(refusal)),
+    };
+    let (priorities, not_priorities) = match (
+        filter_priorities(&priority, "priority"),
+        filter_priorities(&not_priority, "notPriority"),
+    ) {
+        (Ok(any), Ok(not)) => (any, not),
+        (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
     let updated_since = match arguments.updated_since.as_deref() {
         None => None,
         Some(value) => match parse_since(value) {
             Some(time) => Some(time),
-            None => return Ok(ToolResult::invalid("updatedSince", UPDATED_SINCE_MESSAGE)),
+            None => {
+                return Ok(Err(ToolResult::invalid(
+                    "updatedSince",
+                    UPDATED_SINCE_MESSAGE,
+                )));
+            }
         },
     };
-    let due_before = match arguments.due_before.as_deref() {
-        None => None,
-        Some(value) => match NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d") {
-            Ok(date) => Some(date),
-            Err(_) => return Ok(ToolResult::invalid("dueBefore", "Use a date: YYYY-MM-DD.")),
-        },
+    let date = |value: Option<&str>, field: &'static str| match value {
+        None => Ok(None),
+        Some(value) => NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+            .map(Some)
+            .map_err(|_| (field, "Use a date: YYYY-MM-DD.".to_owned())),
+    };
+    let (due_before, due_after) = match (
+        date(arguments.due_before.as_deref(), "dueBefore"),
+        date(arguments.due_after.as_deref(), "dueAfter"),
+    ) {
+        (Ok(before), Ok(after)) => (before, after),
+        (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
 
     let projects = match &arguments.project_ids {
         Some(listed) => {
             if listed.is_empty() || listed.len() > MAX_LIST_PROJECTS {
-                return Ok(ToolResult::invalid("projectIds", "Pass 1 to 50 projects."));
+                return Ok(Err(ToolResult::invalid(
+                    "projectIds",
+                    "Pass 1 to 50 projects.",
+                )));
             }
             let reachable = accessible_project_ids(state, principal).await?;
             let mut projects = Vec::with_capacity(listed.len());
@@ -579,10 +964,10 @@ async fn task_list_inner(
                 match parse_id(raw).filter(|id| reachable.contains(id)) {
                     Some(id) => projects.push(id),
                     None => {
-                        return Ok(ToolResult::not_found(&format!(
+                        return Ok(Err(ToolResult::not_found(&format!(
                             "Project {}",
                             snippet(raw, 60)
-                        )));
+                        ))));
                     }
                 }
             }
@@ -603,48 +988,40 @@ async fn task_list_inner(
         "these projects".to_owned()
     };
 
-    let (assignee_mode, assignee_id) = match arguments.assignee.as_deref().map(str::trim) {
-        None | Some("") => ("any", None),
-        Some("me") => ("one", Some(principal.actor_id)),
-        Some("none") => ("none", None),
-        Some(person) => match resolve_actor(state, &projects, person).await? {
-            Some(id) => ("one", Some(id)),
-            None => {
-                return Ok(ToolResult::invalid(
-                    "assignee",
-                    format!("No one called {person} was found."),
-                ));
-            }
-        },
+    let (assignees, not_assignees) = match (
+        filter_people(state, principal, &projects, &assignee, "assignee").await?,
+        filter_people(state, principal, &projects, &not_assignee, "notAssignee").await?,
+    ) {
+        (Ok(any), Ok(not)) => (any, not),
+        (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
-    let status = arguments
-        .status
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    if let Some(status) = &status
-        && let Err(message) = known_status(state, &projects, &place, status).await?
-    {
-        return Ok(ToolResult::invalid("status", message));
+    let mut statuses = Vec::new();
+    for (values, field) in [(&status, "status"), (&not_status, "notStatus")] {
+        match filter_statuses(state, &projects, &place, values).await? {
+            Ok(ids) => statuses.push(ids),
+            Err(message) => return Ok(Err(ToolResult::invalid(field, message))),
+        }
     }
-    let task_type = arguments
-        .task_type
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    if let Some(task_type) = &task_type
-        && let Err(message) = known_type(state, &projects, &place, task_type).await?
-    {
-        return Ok(ToolResult::invalid("type", message));
+    let mut types = Vec::new();
+    for (values, field) in [(&task_type, "type"), (&not_type, "notType")] {
+        match filter_types(state, &projects, &place, values).await? {
+            Ok(ids) => types.push(ids),
+            Err(message) => return Ok(Err(ToolResult::invalid(field, message))),
+        }
     }
     let labels = match &arguments.labels {
         None => Vec::new(),
         Some(labels) => match filter_labels(state, &projects, labels).await? {
             Ok(names) => names,
-            Err(message) => return Ok(ToolResult::invalid("labels", message)),
+            Err(message) => return Ok(Err(ToolResult::invalid("labels", message))),
         },
+    };
+    let (any_labels, not_labels) = match (
+        filter_label_choice(state, &projects, &any_labels, "anyLabels").await?,
+        filter_label_choice(state, &projects, &not_labels, "notLabels").await?,
+    ) {
+        (Ok(any), Ok(not)) => (any, not),
+        (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
     let created_by = match arguments.created_by.as_deref().map(str::trim) {
         None | Some("") => None,
@@ -652,10 +1029,10 @@ async fn task_list_inner(
         Some(person) => match resolve_actor(state, &projects, person).await? {
             Some(id) => Some(id),
             None => {
-                return Ok(ToolResult::invalid(
+                return Ok(Err(ToolResult::invalid(
                     "createdBy",
                     format!("No one called {person} was found."),
-                ));
+                )));
             }
         },
     };
@@ -668,84 +1045,113 @@ async fn task_list_inner(
             _ => match resolve_actor(state, &projects, word).await? {
                 Some(id) => ("one", Some(id)),
                 None if word.starts_with('@') || word.parse::<Uuid>().is_ok() => {
-                    return Ok(ToolResult::invalid(
+                    return Ok(Err(ToolResult::invalid(
                         "claimed",
                         format!("No one called {word} was found."),
-                    ));
+                    )));
                 }
                 None => {
-                    return Ok(ToolResult::invalid(
+                    return Ok(Err(ToolResult::invalid(
                         "claimed",
                         "Use yes, no, me, or an @handle.",
-                    ));
+                    )));
                 }
             },
         },
     };
-    let (milestone_mode, milestone_ids) = match arguments.milestone.as_deref().map(str::trim) {
-        None => ("any", Vec::new()),
-        Some(value) if value.is_empty() || value.eq_ignore_ascii_case("none") => {
-            ("none", Vec::new())
-        }
-        Some(value) => match filter_milestones(state, &projects, &place, value).await? {
-            Ok(ids) => ("one", ids),
-            Err(message) => return Ok(ToolResult::invalid("milestone", message)),
-        },
+    let (milestones, not_milestones) = match (
+        filter_milestone_choice(state, &projects, &place, &milestone, "milestone").await?,
+        filter_milestone_choice(state, &projects, &place, &not_milestone, "notMilestone").await?,
+    ) {
+        (Ok(any), Ok(not)) => (any, not),
+        (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
     };
-    let filters = ListFilters {
-        projects,
-        include_done: arguments.include_done.unwrap_or(false),
-        status,
-        assignee_mode,
-        assignee_id,
-        query: arguments
-            .query
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_owned(),
-        parent_id,
-        include_archived: arguments.include_archived.unwrap_or(false),
-        task_type,
-        priority,
+
+    // Cursors made before lists keep fitting: one value sits where it
+    // always did, and anything newer goes in `more`.
+    let one_person = |(ids, none): &(Vec<Uuid>, bool)| match (ids.as_slice(), *none) {
+        ([], false) => Some(("any", None)),
+        ([], true) => Some(("none", None)),
+        ([id], false) => Some(("one", Some(*id))),
+        _ => None,
+    };
+    let old_milestone = match (milestone.as_slice(), &milestones) {
+        ([], _) => Some(None),
+        ([_], (ids, false)) => Some(Some(("one", ids.as_slice()))),
+        ([_], (_, true)) => Some(Some(("none", &[][..]))),
+        _ => None,
+    };
+    let old_status = single(&status);
+    let old_type = single(&task_type);
+    let old_priority = single(&priorities);
+    let old_assignee = one_person(&assignees);
+    let expressible = (status.len() <= 1)
+        && (task_type.len() <= 1)
+        && (priorities.len() <= 1)
+        && old_assignee.is_some()
+        && old_milestone.is_some()
+        && not_status.is_empty()
+        && not_assignee.is_empty()
+        && any_labels.is_none()
+        && not_labels.is_none()
+        && not_type.is_empty()
+        && not_priorities.is_empty()
+        && not_milestone.is_empty()
+        && parent != Some(Parent::TopLevel)
+        && due_after.is_none()
+        && view.is_none();
+    let more = (!expressible).then(|| {
+        format!(
+            "{:?}",
+            (
+                (&status, &not_status, &assignees, &not_assignees),
+                (&any_labels, &not_labels, &task_type, &not_type),
+                (&priorities, &not_priorities, &milestones, &not_milestones),
+                (
+                    parent,
+                    due_after,
+                    view.as_ref().map(ViewFilters::fingerprint)
+                ),
+            )
+        )
+    });
+    let query = arguments
+        .query
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let include_done = arguments.include_done.unwrap_or(false);
+    let include_archived = arguments.include_archived.unwrap_or(false);
+    let fingerprint = ListFingerprint {
+        projects: &projects,
+        status: old_status,
+        assignee: old_assignee.unwrap_or(("any", None)),
+        query: &query,
+        parent: match parent {
+            Some(Parent::Of(id)) => Some(id),
+            _ => None,
+        },
+        sort,
+        include_done,
+        include_archived,
+        labels: &labels,
+        task_type: old_type,
+        priority: old_priority,
         created_by,
-        updated_since,
+        updated_since: arguments.updated_since.as_deref().map(str::trim),
         blocked: arguments.blocked,
-        claimed_mode,
-        claimed_id,
-        labels,
-        milestone_mode,
-        milestone_ids,
+        claimed: (claimed_mode, claimed_id),
+        milestone: old_milestone.flatten(),
         ready: arguments.ready,
         due_before,
         overdue: arguments.overdue,
-    };
-    let fingerprint = ListFingerprint {
-        projects: &filters.projects,
-        status: filters.status.as_deref(),
-        assignee: (filters.assignee_mode, filters.assignee_id),
-        query: &filters.query,
-        parent: filters.parent_id,
-        sort,
-        include_done: filters.include_done,
-        include_archived: filters.include_archived,
-        labels: &filters.labels,
-        task_type: filters.task_type.as_deref(),
-        priority: filters.priority.as_deref(),
-        created_by: filters.created_by,
-        updated_since: arguments.updated_since.as_deref().map(str::trim),
-        blocked: filters.blocked,
-        claimed: (filters.claimed_mode, filters.claimed_id),
-        milestone: (filters.milestone_mode != "any")
-            .then_some((filters.milestone_mode, filters.milestone_ids.as_slice())),
-        ready: filters.ready,
-        due_before: filters.due_before,
-        overdue: filters.overdue,
+        more,
     }
     .hash()?;
     let cursor = match read_cursor(arguments.cursor.as_deref(), &fingerprint) {
         Ok(cursor) => cursor,
-        Err(message) => return Ok(ToolResult::invalid("cursor", message)),
+        Err(message) => return Ok(Err(ToolResult::invalid("cursor", message))),
     };
     let offset = match &cursor {
         ListCursor::Offset(offset) => *offset,
@@ -756,74 +1162,105 @@ async fn task_list_inner(
         _ => None,
     };
 
+    let [any_statuses, not_statuses] = <[Vec<Uuid>; 2]>::try_from(statuses)
+        .map_err(|_| AppError::Internal("task_list statuses"))?;
+    let [any_types, not_types] =
+        <[Vec<Uuid>; 2]>::try_from(types).map_err(|_| AppError::Internal("task_list types"))?;
+    let filters = ListFilters {
+        projects,
+        include_done,
+        include_archived,
+        names_statuses: !status.is_empty(),
+        statuses: FieldFilter::new(
+            (!status.is_empty()).then(|| Values::new(any_statuses, false)),
+            (!not_status.is_empty()).then(|| Values::new(not_statuses, false)),
+        ),
+        assignees: FieldFilter::new(
+            chosen(assignees.0, assignees.1),
+            chosen(not_assignees.0, not_assignees.1),
+        ),
+        query,
+        parent,
+        types: FieldFilter::new(
+            (!task_type.is_empty()).then(|| Values::new(any_types, false)),
+            (!not_type.is_empty()).then(|| Values::new(not_types, false)),
+        ),
+        priorities: FieldFilter::new(chosen(priorities, false), chosen(not_priorities, false)),
+        created_by,
+        updated_since,
+        blocked: arguments.blocked,
+        claimed_mode,
+        claimed_id,
+        labels,
+        any_labels,
+        not_labels,
+        milestones: FieldFilter::new(
+            chosen(milestones.0, milestones.1),
+            chosen(not_milestones.0, not_milestones.1),
+        ),
+        ready: arguments.ready,
+        due_before,
+        due_after,
+        overdue: arguments.overdue,
+        view,
+    };
+
     // One snapshot for both queries, so the total and the page agree.
     let mut transaction = state.pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    let task_where = task_where();
-    let total = bind_task_filters!(
-        sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) {TASK_FROM} {task_where}")),
-        filters
-    )
-    .fetch_one(&mut *transaction)
-    .await?;
+    let mut count = QueryBuilder::<Postgres>::new(format!("SELECT count(*) {TASK_FROM}"));
+    filters.push_where(&mut count);
+    let total = count
+        .build_query_scalar::<i64>()
+        .fetch_one(&mut *transaction)
+        .await?;
     // The page is chosen first, from the sort keys alone; only its tasks
     // then get their board position, labels and planning columns. A board
     // position counts the open tasks above it in its column, through the
     // (project, status, rank) index, never by ranking a whole project.
     let planning_columns = task_planning_columns();
-    let mut tasks = bind_task_filters!(
-        sqlx::query_as::<_, TaskSummary>(&format!(
-            r#"
-            SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
-                   item.title, status.name AS status, status.semantic_category AS status_group,
-                   item_type.name AS task_type, item.priority,
-                   assignee.display_name AS assignee,
-                   CASE WHEN item.archived_at IS NOT NULL THEN 0::bigint
-                        ELSE 1 + (SELECT count(*) FROM work_items peer
-                                  WHERE peer.project_id = item.project_id
-                                    AND peer.status_id = item.status_id
-                                    AND peer.archived_at IS NULL
-                                    AND (peer.board_rank, peer.id) < (item.board_rank, item.id))
-                   END AS board_position,
-                   claimer.display_name AS claimed_by, project.name AS project,
-                   item.version, item.updated_at::text AS updated_at,
-                   item.archived_at IS NOT NULL AS archived,
-                   {TASK_LABELS_COLUMN},
-                   {planning_columns}
-            {TASK_FROM}
-            LEFT JOIN project_memberships assignee
-              ON assignee.project_id = item.project_id AND assignee.actor_id = item.assignee_actor_id
-            LEFT JOIN project_memberships claimer
-              ON claimer.project_id = item.project_id AND claimer.actor_id = claim.actor_id
-            WHERE item.id IN (
-                SELECT item.id
-                {TASK_FROM}
-                {task_where}
-                  AND ($22::boolean IS NOT TRUE OR {after})
-                ORDER BY {order}
-                LIMIT $32 OFFSET $33
-            )
-            ORDER BY {order}
-            "#
-        )),
-        filters
-    )
-    .bind(position.is_some())
-    .bind(position.as_ref().map_or("", |position| position.project_name.as_str()))
-    .bind(position.as_ref().map_or(Uuid::nil(), |position| position.project_id))
-    .bind(position.as_ref().map_or(0, |position| position.status_position))
-    .bind(position.as_ref().is_some_and(|position| position.archived))
-    .bind(position.as_ref().map_or(0, |position| position.board_rank))
-    .bind(position.as_ref().map_or(Uuid::nil(), |position| position.id))
-    .bind(position.as_ref().map_or(0, |position| position.priority_rank))
-    .bind(position.as_ref().map_or(DateTime::<Utc>::UNIX_EPOCH, |position| position.updated_at))
-    .bind(position.as_ref().map_or(0, |position| position.number))
-    .bind(limit + 1)
-    .bind(offset)
-    .fetch_all(&mut *transaction)
-    .await?;
+    let mut page = QueryBuilder::<Postgres>::new(format!(
+        r#"
+        SELECT item.id::text AS id, project.project_key || '-' || item.number::text AS key,
+               item.title, status.name AS status, status.semantic_category AS status_group,
+               item_type.name AS task_type, item.priority,
+               assignee.display_name AS assignee,
+               CASE WHEN item.archived_at IS NOT NULL THEN 0::bigint
+                    ELSE 1 + (SELECT count(*) FROM work_items peer
+                              WHERE peer.project_id = item.project_id
+                                AND peer.status_id = item.status_id
+                                AND peer.archived_at IS NULL
+                                AND (peer.board_rank, peer.id) < (item.board_rank, item.id))
+               END AS board_position,
+               claimer.display_name AS claimed_by, project.name AS project,
+               item.version, item.updated_at::text AS updated_at,
+               item.archived_at IS NOT NULL AS archived,
+               {TASK_LABELS_COLUMN},
+               {planning_columns}
+        {TASK_FROM}
+        LEFT JOIN project_memberships assignee
+          ON assignee.project_id = item.project_id AND assignee.actor_id = item.assignee_actor_id
+        LEFT JOIN project_memberships claimer
+          ON claimer.project_id = item.project_id AND claimer.actor_id = claim.actor_id
+        WHERE item.id IN (
+            SELECT item.id
+            {TASK_FROM}"#
+    ));
+    filters.push_where(&mut page);
+    if let Some(position) = &position {
+        push_after(&mut page, sort, position);
+    }
+    page.push(format!(" ORDER BY {order} LIMIT "))
+        .push_bind(limit + 1)
+        .push(" OFFSET ")
+        .push_bind(offset)
+        .push(format!(") ORDER BY {order}"));
+    let mut tasks = page
+        .build_query_as::<TaskSummary>()
+        .fetch_all(&mut *transaction)
+        .await?;
     let has_more = i64::try_from(tasks.len()).unwrap_or(i64::MAX) > limit;
     tasks.truncate(usize::try_from(limit).unwrap_or(200));
     let next_cursor = match tasks.last() {
@@ -853,7 +1290,7 @@ async fn task_list_inner(
         _ => None,
     };
     transaction.commit().await?;
-    Ok(ToolResult::ok(TaskListValue {
+    Ok(Ok(TaskListValue {
         tasks,
         total,
         next_cursor,
@@ -907,92 +1344,105 @@ async fn filter_milestones(
     }))
 }
 
-/// Ok when `value` names a status (by name or ID) or a status group in the
-/// projects; otherwise the message listing what does. Retired statuses
-/// still filter, since tasks can sit in one, but only enabled ones are
-/// listed.
-async fn known_status(
+/// The statuses `values` name in the projects, each by name or ID (retired
+/// ones too, since tasks can sit in one) or a status group. For one that
+/// names nothing, the message listing the enabled statuses.
+async fn filter_statuses(
     state: &AppState,
     projects: &[Uuid],
     place: &str,
-    value: &str,
-) -> Result<Result<(), String>, AppError> {
-    if STATUS_GROUPS.contains(&value.to_lowercase().as_str()) {
-        return Ok(Ok(()));
+    values: &[String],
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    if values.is_empty() {
+        return Ok(Ok(Vec::new()));
     }
-    let known = sqlx::query_scalar::<_, bool>(
+    let rows = sqlx::query_as::<_, (String, Option<Uuid>)>(
         r#"
-        SELECT EXISTS (
-            SELECT 1 FROM work_item_statuses
-            WHERE project_id = ANY($1) AND (lower(name) = lower($2) OR id::text = lower($2))
-        )
+        SELECT requested.value, status.id
+        FROM unnest($2::text[]) WITH ORDINALITY AS requested(value, ordinality)
+        LEFT JOIN work_item_statuses status
+          ON status.project_id = ANY($1)
+         AND (lower(status.name) = lower(requested.value)
+              OR status.id::text = lower(requested.value)
+              OR status.semantic_category = lower(requested.value))
+        ORDER BY requested.ordinality
         "#,
     )
     .bind(projects)
-    .bind(value)
-    .fetch_one(&state.pool)
-    .await?;
-    if known {
-        return Ok(Ok(()));
-    }
-    let names = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT name FROM work_item_statuses
-        WHERE project_id = ANY($1) AND enabled
-        GROUP BY name ORDER BY min(position), name
-        LIMIT 40
-        "#,
-    )
-    .bind(projects)
+    .bind(values)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Err(format!(
-        "No status called \"{}\" in {place}. Statuses: {}. Groups: {}.",
-        echo(value),
-        names.join(", "),
-        STATUS_GROUPS.join(", ")
-    )))
+    // A group is known even where no status is in it yet.
+    let unknown = rows.iter().find(|(value, id)| {
+        id.is_none() && !STATUS_GROUPS.contains(&value.to_lowercase().as_str())
+    });
+    if let Some((value, _)) = unknown {
+        let names = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT name FROM work_item_statuses
+            WHERE project_id = ANY($1) AND enabled
+            GROUP BY name ORDER BY min(position), name
+            LIMIT 40
+            "#,
+        )
+        .bind(projects)
+        .fetch_all(&state.pool)
+        .await?;
+        return Ok(Err(format!(
+            "No status called \"{}\" in {place}. Statuses: {}. Groups: {}.",
+            echo(value),
+            names.join(", "),
+            STATUS_GROUPS.join(", ")
+        )));
+    }
+    Ok(Ok(rows.into_iter().filter_map(|(_, id)| id).collect()))
 }
 
-/// Ok when `value` names a task type (by name or ID) in the projects;
-/// otherwise the message listing the enabled ones.
-async fn known_type(
+/// The task types `values` name in the projects, by name or ID. For one
+/// that names nothing, the message listing the enabled types.
+async fn filter_types(
     state: &AppState,
     projects: &[Uuid],
     place: &str,
-    value: &str,
-) -> Result<Result<(), String>, AppError> {
-    let known = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM work_item_types
-            WHERE project_id = ANY($1) AND (lower(name) = lower($2) OR id::text = lower($2))
-        )
-        "#,
-    )
-    .bind(projects)
-    .bind(value)
-    .fetch_one(&state.pool)
-    .await?;
-    if known {
-        return Ok(Ok(()));
+    values: &[String],
+) -> Result<Result<Vec<Uuid>, String>, AppError> {
+    if values.is_empty() {
+        return Ok(Ok(Vec::new()));
     }
-    let names = sqlx::query_scalar::<_, String>(
+    let rows = sqlx::query_as::<_, (String, Option<Uuid>)>(
         r#"
-        SELECT name FROM work_item_types
-        WHERE project_id = ANY($1) AND enabled
-        GROUP BY name ORDER BY min(position), name
-        LIMIT 40
+        SELECT requested.value, item_type.id
+        FROM unnest($2::text[]) WITH ORDINALITY AS requested(value, ordinality)
+        LEFT JOIN work_item_types item_type
+          ON item_type.project_id = ANY($1)
+         AND (lower(item_type.name) = lower(requested.value)
+              OR item_type.id::text = lower(requested.value))
+        ORDER BY requested.ordinality
         "#,
     )
     .bind(projects)
+    .bind(values)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Err(format!(
-        "No task type called \"{}\" in {place}. Types: {}.",
-        echo(value),
-        names.join(", ")
-    )))
+    if let Some((value, _)) = rows.iter().find(|(_, id)| id.is_none()) {
+        let names = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT name FROM work_item_types
+            WHERE project_id = ANY($1) AND enabled
+            GROUP BY name ORDER BY min(position), name
+            LIMIT 40
+            "#,
+        )
+        .bind(projects)
+        .fetch_all(&state.pool)
+        .await?;
+        return Ok(Err(format!(
+            "No task type called \"{}\" in {place}. Types: {}.",
+            echo(value),
+            names.join(", ")
+        )));
+    }
+    Ok(Ok(rows.into_iter().filter_map(|(_, id)| id).collect()))
 }
 
 /// The label names a task_list filter matches, lowercased and each once.

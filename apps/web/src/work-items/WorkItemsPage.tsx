@@ -156,7 +156,7 @@ export function WorkItemsPage() {
 
   return (
     <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
-      <div className="aw-page aw-page--wide aw-workpage">
+      <div className={state.view === 'board' ? 'aw-page aw-page--wide aw-workpage aw-workpage--board' : 'aw-page aw-page--wide aw-workpage'}>
         <NavigationSyncAlert {...navigationSync} />
         <PageHeader actions={headerActions} icon="work" title="Tasks">
           Everything that needs doing in {project.data.name}.

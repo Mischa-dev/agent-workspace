@@ -86,7 +86,7 @@ const DEFAULT_TRANSITIONS: [(&str, &str); 17] = [
 
 pub(crate) mod import_parse;
 pub(crate) mod imports;
-mod list;
+pub(crate) mod list;
 mod planning;
 pub(crate) mod project_templates;
 pub(crate) mod templates;
@@ -419,6 +419,9 @@ struct WorkItemVersionRequest {
 struct AssigneeSearchQuery {
     q: Option<String>,
     limit: Option<u16>,
+    /// Comma-separated actor IDs to name instead of a search, such as the
+    /// people a filter picks.
+    ids: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -910,52 +913,6 @@ pub async fn ensure_default_workflow(
         ));
     }
     Ok(false)
-}
-
-async fn validate_list_filter_ids(
-    pool: &PgPool,
-    project_id: Uuid,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
-    assignee_actor_id: Option<Uuid>,
-) -> Result<(), AppError> {
-    if let Some(type_id) = type_id {
-        let belongs_to_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM work_item_types WHERE project_id = $1 AND id = $2)",
-        )
-        .bind(project_id)
-        .bind(type_id)
-        .fetch_one(pool)
-        .await?;
-        if !belongs_to_project {
-            return Err(AppError::Validation("typeId"));
-        }
-    }
-    if let Some(status_id) = status_id {
-        let belongs_to_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM work_item_statuses WHERE project_id = $1 AND id = $2)",
-        )
-        .bind(project_id)
-        .bind(status_id)
-        .fetch_one(pool)
-        .await?;
-        if !belongs_to_project {
-            return Err(AppError::Validation("statusId"));
-        }
-    }
-    if let Some(assignee_actor_id) = assignee_actor_id {
-        let belongs_to_project = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM project_memberships WHERE project_id = $1 AND actor_id = $2)",
-        )
-        .bind(project_id)
-        .bind(assignee_actor_id)
-        .fetch_one(pool)
-        .await?;
-        if !belongs_to_project {
-            return Err(AppError::Validation("assigneeActorId"));
-        }
-    }
-    Ok(())
 }
 
 async fn get_work_item(
@@ -1917,14 +1874,75 @@ async fn search_assignable_actors(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::NotFound("project"));
+    let rows = if let Some(ids) = query.ids.as_deref() {
+        if query.q.is_some() || query.limit.is_some() {
+            return Err(AppError::Validation("ids"));
+        }
+        named_assignees(&state, project_id, ids).await?
+    } else {
+        if membership.project_archived_at.is_some() {
+            return Err(AppError::NotFound("project"));
+        }
+        let search = normalize_search(query.q.as_deref())?
+            .unwrap_or_default()
+            .to_lowercase();
+        let limit = i64::from(query.limit.unwrap_or(20).clamp(1, 50));
+        assignee_search(&state, project_id, &search, limit).await?
+    };
+    Ok(Json(AssigneeSearchResponse {
+        actors: rows
+            .into_iter()
+            .map(|row| ActorView {
+                id: row.actor_id,
+                display_name: row.display_name,
+                handle: row.handle,
+                kind: row.kind,
+                avatar_url: None,
+            })
+            .collect(),
+    }))
+}
+
+/// The project's members, past ones too, with these IDs: a filter chip names
+/// whoever it picks, however far down the search they'd be.
+async fn named_assignees(
+    state: &AppState,
+    project_id: Uuid,
+    ids: &str,
+) -> Result<Vec<AssigneeSearchRow>, AppError> {
+    let mut actor_ids = ids
+        .split(',')
+        .map(|part| Uuid::parse_str(part.trim()).map_err(|_| AppError::Validation("ids")))
+        .collect::<Result<Vec<_>, _>>()?;
+    actor_ids.sort();
+    actor_ids.dedup();
+    if actor_ids.len() > list::MAX_FILTER_VALUES {
+        return Err(AppError::Validation("ids"));
     }
-    let search = normalize_search(query.q.as_deref())?
-        .unwrap_or_default()
-        .to_lowercase();
-    let limit = i64::from(query.limit.unwrap_or(20).clamp(1, 50));
-    let rows = sqlx::query_as::<_, AssigneeSearchRow>(
+    Ok(sqlx::query_as::<_, AssigneeSearchRow>(
+        r#"
+        SELECT membership.actor_id, membership.display_name, membership.handle, actor.kind
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id
+        WHERE membership.project_id = $1
+          AND membership.actor_id = ANY($2)
+          AND actor.kind IN ('human', 'external_agent')
+        ORDER BY lower(membership.display_name), lower(membership.handle), actor.id
+        "#,
+    )
+    .bind(project_id)
+    .bind(&actor_ids)
+    .fetch_all(&state.pool)
+    .await?)
+}
+
+async fn assignee_search(
+    state: &AppState,
+    project_id: Uuid,
+    search: &str,
+    limit: i64,
+) -> Result<Vec<AssigneeSearchRow>, AppError> {
+    Ok(sqlx::query_as::<_, AssigneeSearchRow>(
         r#"
         SELECT membership.actor_id, membership.display_name, membership.handle, actor.kind
         FROM project_memberships membership
@@ -1946,19 +1964,7 @@ async fn search_assignable_actors(
     .bind(search)
     .bind(limit)
     .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(AssigneeSearchResponse {
-        actors: rows
-            .into_iter()
-            .map(|row| ActorView {
-                id: row.actor_id,
-                display_name: row.display_name,
-                handle: row.handle,
-                kind: row.kind,
-                avatar_url: None,
-            })
-            .collect(),
-    }))
+    .await?)
 }
 
 async fn search_work_item_references(
@@ -4038,10 +4044,6 @@ fn default_priority() -> String {
 
 fn validate_priority(value: &str) -> Result<(), AppError> {
     crate::work_item_commands::validate_priority(value)
-}
-
-fn validate_priority_filter(value: Option<&str>) -> Result<(), AppError> {
-    value.map_or(Ok(()), validate_priority)
 }
 
 fn validate_semantic_category(value: Option<&str>) -> Result<(), AppError> {

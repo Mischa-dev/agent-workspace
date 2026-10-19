@@ -90,6 +90,24 @@ describe('work item live patches', () => {
     expect(added !== 'refetch' && added !== 'unchanged' && numbers(added.data)).toEqual([3, 2, 1])
   })
 
+  it('matches filters with several values and "is not" on the card itself', () => {
+    const ana = { actorId: id(50), displayName: 'Ana', handle: 'ana', kind: 'human' } as unknown as WorkItemCard['assignee']
+    const matches = (item: WorkItemCard, filters: Parameters<typeof patchList>[3]) => {
+      const patched = patchList(page([]), item, item.id, filters)
+      return patched !== 'refetch' && patched !== 'unchanged' && patched.data.items.length === 1
+    }
+    expect(matches(card(2, doing), { statusId: `${todo.id},${doing.id}` })).toBe(true)
+    expect(matches(card(2, doing), { notStatusId: doing.id })).toBe(false)
+    expect(matches(card(2), { notSemanticCategory: 'started,completed' })).toBe(true)
+    // "Is not" Ana keeps unassigned tasks unless "none" is left out too.
+    expect(matches(card(2), { notAssigneeActorId: id(50) })).toBe(true)
+    expect(matches(card(2), { notAssigneeActorId: `${id(50)},none` })).toBe(false)
+    expect(matches({ ...card(2), assignee: ana }, { assigneeActorId: `${id(50)},none` })).toBe(true)
+    expect(matches({ ...card(2), assignee: ana }, { unassigned: true })).toBe(false)
+    expect(matches(card(2), { priority: 'high,urgent' })).toBe(false)
+    expect(patchList(page([card(2)]), card(2, todo, 2), id(2), { anyLabelIds: 'none' })).toBe('refetch')
+  })
+
   it('refetches a long list instead of leaving it a card short', () => {
     const archived = { ...card(2, todo, 2), archivedAt: '2026-10-16T11:00:00Z' }
     expect(patchList(page([card(3), card(2)], 'next'), archived, id(2), {})).toBe('refetch')

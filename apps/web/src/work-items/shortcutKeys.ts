@@ -16,10 +16,13 @@ export const LIST_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
 
 export const BOARD_SHORTCUTS: Array<{ keys: string[]; label: string }> = [
   { keys: ['Arrows'], label: 'Move between cards' },
+  { keys: ['J', 'K'], label: 'Next and previous card, down each column' },
+  { keys: ['X'], label: 'Select or unselect' },
+  { keys: ['Shift', 'click'], label: 'Select a range' },
   { keys: ['Space'], label: 'Pick up a card, then arrows to move it and Space to drop' },
   { keys: ['S', 'A', 'L', 'P', 'M'], label: 'Status, assignee, labels, priority, milestone' },
   { keys: ['Enter'], label: 'Open in the side panel' },
-  { keys: ['Esc'], label: 'Put a picked-up card back, or close the panel' },
+  { keys: ['Esc'], label: 'Put a picked-up card back, close the panel, then clear the selection' },
 ]
 
 /** True when a key press belongs to something else: a field, a menu, a dialog or a picker. */

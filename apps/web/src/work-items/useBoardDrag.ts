@@ -46,7 +46,7 @@ export function targetAt(x: number, y: number, draggedId: string): DropTarget | 
 /**
  * Pointer dragging for board cards. A mouse drags after a few pixels; a finger
  * holds still for a moment first, so a swipe still scrolls the board. While a
- * card is held, the page and board scroll near their edges.
+ * card is held, the board (or the page) scrolls near its edges.
  */
 export function useBoardDrag({
   enabled,
@@ -157,7 +157,8 @@ export function useBoardDrag({
     }
   }, [enabled, finish, moveGhost, start])
 
-  // Scroll the board sideways and the page up and down near the edges.
+  // Scroll the board sideways near its edges, and up and down whichever
+  // scrolls that way: the board on a wide screen, the page on a phone.
   const active = drag !== null
   useEffect(() => {
     if (!active) return undefined
@@ -170,11 +171,11 @@ export function useBoardDrag({
         if (x < rect.left + EDGE) board.scrollLeft -= SPEED
         else if (x > rect.right - EDGE) board.scrollLeft += SPEED
       }
-      const page = board?.closest<HTMLElement>('#main-workspace') ?? null
-      if (page) {
-        const rect = page.getBoundingClientRect()
-        if (y < rect.top + EDGE) page.scrollTop -= SPEED
-        else if (y > rect.bottom - EDGE) page.scrollTop += SPEED
+      const vertical = board && board.scrollHeight > board.clientHeight ? board : (board?.closest<HTMLElement>('#main-workspace') ?? null)
+      if (vertical) {
+        const rect = vertical.getBoundingClientRect()
+        if (y < rect.top + EDGE) vertical.scrollTop -= SPEED
+        else if (y > rect.bottom - EDGE) vertical.scrollTop += SPEED
       }
       frame = window.requestAnimationFrame(tick)
     }
@@ -185,7 +186,7 @@ export function useBoardDrag({
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>, cardId: string) => {
       if (!enabled || event.button !== 0 || pending.current) return
-      if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) {
+      if ((event.target as HTMLElement).closest('button, a, input, label, select, textarea')) {
         // Links and buttons inside a card still start a drag with a mouse, but not a tap.
         if (event.pointerType !== 'mouse' || !(event.target as HTMLElement).closest('a')) return
       }

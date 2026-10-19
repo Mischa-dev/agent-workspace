@@ -9,6 +9,7 @@ import {
   getWorkItemWorkflow,
   listWorkItems,
   getWorkItemTimeline,
+  namedAssignableActors,
   removeAcceptanceCriterion,
   searchAssignableActors,
   setWorkItemPrimaryRepository,
@@ -79,6 +80,16 @@ export function useAssignableActors(projectId: string, query: string) {
     queryFn: () => searchAssignableActors(projectId, query.trim()),
     enabled: Boolean(projectId),
     staleTime: 30_000,
+  })
+}
+
+/** Names for these members, however far down a search they'd come. */
+export function useNamedActors(projectId: string, ids: readonly string[]) {
+  return useQuery({
+    queryKey: [...queryKeys.workItemAssignees(projectId, ''), 'ids', ids.join(',')] as const,
+    queryFn: () => namedAssignableActors(projectId, ids),
+    enabled: Boolean(projectId) && ids.length > 0,
+    staleTime: 60_000,
   })
 }
 

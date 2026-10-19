@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
 
-import { LazyLaunchDialog as LaunchDialog } from '../launch/LazyLaunchDialog'
-import { launchSummary, launchesHref } from '../launch/launchModel'
 import { Button, EmptyState, ErrorState, Icon, ListSkeleton, countLabel } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
-import { BulkBar } from './BulkBar'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
 import { AssigneeMark, DoneToggle, DueDate, GroupHeader, PickerCell, TaskBadges } from './ListCells'
 import { LIST_COLUMNS } from './taskDisplay'
@@ -16,13 +12,13 @@ import { tucksDone, withoutDone } from './doneModel'
 import { listQuery, type ListState } from './listModel'
 import { buildListRows, DONE_GROUP, DONE_LOADING, visibleTaskIds, withDoneRows, type ListRow } from './listRows'
 import type { Notice } from './notice'
-import { bulkUpdateWorkItems } from './planningApi'
-import { useInvalidateWorkItems, useWorkItemGroups, useWorkItemPages } from './planningHooks'
+import { useWorkItemGroups, useWorkItemPages } from './planningHooks'
+import { SelectionBar } from './SelectionBar'
 import { useDoneCount, useDoneItems } from './useDoneWork'
-import { emptySelection, keepLoaded, MAX_BULK, pick, selectAll, toggleOne, type Selection } from './selectionModel'
+import { emptySelection, keepLoaded, MAX_BULK, pick, pickerCurrent, pickerTargets, selectAll, toggleOne, type Selection } from './selectionModel'
 import { useTaskShortcuts } from './shortcutKeys'
 import { editErrorMessage, useApplyPick, type EditTarget } from './taskEdits'
-import type { BulkChanges, WorkItemCard, WorkItemWorkflow } from './types'
+import type { WorkItemCard, WorkItemWorkflow } from './types'
 import { useWindowedRows } from './useWindowedRows'
 
 const PICKER_KEYS: Record<string, PickerField> = { s: 'status', a: 'assignee', l: 'labels', p: 'priority', m: 'milestone' }
@@ -153,15 +149,11 @@ export function WorkItemList({
     [collapsedState, state.groupBy],
   )
   const [selectionState, setSelection] = useState<Selection>(emptySelection)
-  const [launching, setLaunching] = useState<WorkItemCard[] | null>(null)
-  const navigate = useNavigate()
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [picker, setPicker] = useState<PickerState | null>(null)
   const focusWanted = useRef(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   const applyPick = useApplyPick()
-  const invalidate = useInvalidateWorkItems()
-  const [bulkBusy, setBulkBusy] = useState(false)
   const coarse = useCoarsePointer()
 
   const openItems = useMemo(() => pages.data?.pages.flatMap((page) => page.items) ?? [], [pages.data])
@@ -242,34 +234,13 @@ export function WorkItemList({
 
   const openPicker = (field: PickerField, anchor: HTMLElement, card?: WorkItemCard) => {
     if (disabled) return
-    const selected = selectedCards()
-    const targets = card && !selection.ids.has(card.id) ? [card] : selected.length ? selected : card ? [card] : []
-    const editable = targets.filter((target) => target.capabilities.edit && !target.archivedAt)
-    if (!editable.length) return
-    if (editable.length > MAX_BULK) {
+    const targets = pickerTargets(selectedCards(), card)
+    if (!targets.length) return
+    if (targets.length > MAX_BULK) {
       notify({ tone: 'info', title: `Bulk changes take up to ${countLabel(MAX_BULK, 'task')} at a time`, description: 'Select fewer and try again.' })
       return
     }
-    setPicker({ field, anchor, targets: editable })
-  }
-
-  const runBulk = async (changes: BulkChanges, cards: WorkItemCard[]) => {
-    setBulkBusy(true)
-    try {
-      const result = await bulkUpdateWorkItems({
-        projectId,
-        items: cards.map((card) => ({ id: card.id, expectedVersion: card.version })),
-        changes,
-        idempotencyKey: crypto.randomUUID(),
-      })
-      return result
-    } catch (error) {
-      notify({ tone: 'danger', title: cards.length === 1 ? `${cards[0].key} didn’t change` : `${countLabel(cards.length, 'task')} didn’t change`, description: editErrorMessage(error, 'The change') })
-      return null
-    } finally {
-      setBulkBusy(false)
-      void invalidate(projectId)
-    }
+    setPicker({ field, anchor, targets })
   }
 
   const onPickResult = (result: PickResult) => {
@@ -289,35 +260,6 @@ export function WorkItemList({
           }),
       },
     )
-  }
-
-  const archiveSelected = async () => {
-    const cards = selectedCards()
-    if (!cards.length) return
-    const result = await runBulk({ archived: true }, cards)
-    if (!result) return
-    setSelection(emptySelection)
-    notify({
-      tone: 'success',
-      title: `Archived ${countLabel(cards.length, 'task')}`,
-      onUndo: () => runBulk({ archived: false }, result.items),
-    })
-  }
-
-  const restoreSelected = async () => {
-    const cards = selectedCards()
-    if (!cards.length) return
-    const result = await runBulk({ archived: false }, cards)
-    if (!result) return
-    setSelection(emptySelection)
-    notify({ tone: 'success', title: `Restored ${countLabel(cards.length, 'task')}` })
-  }
-
-  const setDueDate = async (value: string | null) => {
-    const cards = selectedCards()
-    if (!cards.length) return
-    const result = await runBulk({ dueDate: value }, cards)
-    if (result) notify({ tone: 'success', title: value ? `Changed the due date of ${countLabel(cards.length, 'task')}` : `Cleared the due date of ${countLabel(cards.length, 'task')}` })
   }
 
   const onRowSelect = (card: WorkItemCard, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
@@ -466,10 +408,6 @@ export function WorkItemList({
     }
   }
 
-  const pickerTargets = picker?.targets ?? []
-  const first = pickerTargets[0]
-  const sharedLabels = first ? first.labels.filter((label) => pickerTargets.every((target) => target.labels.some((entry) => entry.id === label.id))).map((label) => label.id) : []
-
   return (
     <div className="aw-tasks">
       <p aria-live="polite" className="aw-tasks__summary">
@@ -504,49 +442,19 @@ export function WorkItemList({
         spaceBefore={windowed.before}
       />
       {disabled ? null : (
-        <BulkBar
-          archived={selection.ids.size > 0 && selectedCards().every((card) => Boolean(card.archivedAt))}
-          busy={bulkBusy || applyPick.isPending}
-          count={selection.ids.size}
-          onArchive={() => void archiveSelected()}
+        <SelectionBar
+          busy={applyPick.isPending}
+          notify={notify}
           onClear={() => setSelection(emptySelection)}
-          onDueDate={(value) => void setDueDate(value)}
-          onLaunch={() => setLaunching(selectedCards().filter((card) => !card.archivedAt))}
           onPick={(field, anchor) => openPicker(field, anchor)}
-          onRestore={() => void restoreSelected()}
+          projectId={projectId}
+          selected={selectedCards()}
         />
       )}
-      {launching ? (
-        <LaunchDialog
-          onClose={() => setLaunching(null)}
-          onLaunched={(launches) => {
-            setLaunching(null)
-            setSelection(emptySelection)
-            const summary = launchSummary(launches)
-            notify({ ...summary, action: { label: 'View runs', run: () => navigate(launchesHref(projectId)) } })
-          }}
-          projectId={projectId}
-          tasks={launching.map((card) => ({ id: card.id, key: card.key, title: card.title }))}
-        />
-      ) : null}
       {picker ? (
         <FieldPicker
           anchor={picker.anchor}
-          current={
-            pickerTargets.length === 1 && first
-              ? {
-                  statusId: first.status.id,
-                  priority: first.priority,
-                  assigneeId: first.assignee?.actorId ?? null,
-                  assignee: first.assignee
-                    ? { id: first.assignee.actorId, displayName: first.assignee.displayName, handle: first.assignee.handle, kind: first.assignee.kind }
-                    : null,
-                  labelIds: sharedLabels,
-                  milestoneId: first.milestone?.id ?? null,
-                  typeId: first.itemType.id,
-                }
-              : { labelIds: sharedLabels }
-          }
+          current={pickerCurrent(picker.targets)}
           field={picker.field}
           onClose={() => setPicker(null)}
           onManageLabels={onManageLabels}
