@@ -25,17 +25,14 @@ export const WEB_ASSET_LIMITS = Object.freeze({
   // index.html's stylesheets: the design system's five theme presets,
   // components and page layouts. Measured 101,925 raw bytes; the UI kit
   // (toasts, command menu, shortcut sheet, skeletons) and Markdown styles
-  // bring it to 112,083, then 114,639 at the polish pass, whose sign-in
-  // choices, search results, toolbar-height fields and phone banners and tabs
-  // bring it to 117,093.
-  initialCssRawBytes: 115 * 1024,
+  // bring it to 112,083.
+  initialCssRawBytes: 112 * 1024,
   // Any other script (each lazy route or shared lazy chunk, sw.js). The
   // largest, project settings, measured 35,379 raw / 9,320 gzip bytes.
   // Tasks at scale (W3) made the task list page (list, board, filters, bulk
   // edits) and the task panel the largest lazy routes: 54,755 raw / 17,390
-  // gzip and 54,619 / 15,346 bytes. The task panel's loading skeleton, error
-  // state and paged activity bring it to 57,651 raw (October 2026).
-  chunkJavascriptRawBytes: 57 * 1024,
+  // gzip and 54,619 / 15,346 bytes.
+  chunkJavascriptRawBytes: 56 * 1024,
   chunkJavascriptGzipBytes: 18 * 1024,
   // Any stylesheet a lazy chunk loads.
   chunkCssRawBytes: 32 * 1024,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
@@ -8,11 +8,13 @@ import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
-import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref } from './links'
 import { TaskDetail } from './TaskDetail'
 import './work.css'
+
+// Only opened on request (C or the command menu), so the task panel's shared chunk doesn't carry it.
+const CreateWorkItemDialog = lazy(() => import('./CreateWorkItemDialog').then((module) => ({ default: module.CreateWorkItemDialog })))
 
 /** A task on its own page: the same parts as the side panel, with its fields in a rail beside the text when there's room. */
 export function WorkItemDetailPage() {
@@ -77,15 +79,17 @@ export function WorkItemDetailPage() {
         />
       </div>
       {createOpen && workflow.data && canCreate ? (
-        <CreateWorkItemDialog
-          onClose={() => setCreateOpen(false)}
-          onCreated={(id) => {
-            setCreateOpen(false)
-            navigate(workItemHref(projectId, id))
-          }}
-          projectId={projectId}
-          workflow={workflow.data}
-        />
+        <Suspense fallback={null}>
+          <CreateWorkItemDialog
+            onClose={() => setCreateOpen(false)}
+            onCreated={(id) => {
+              setCreateOpen(false)
+              navigate(workItemHref(projectId, id))
+            }}
+            projectId={projectId}
+            workflow={workflow.data}
+          />
+        </Suspense>
       ) : null}
     </AppShell>
   )
