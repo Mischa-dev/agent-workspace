@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { listThreads } from './api'
+import { listThreads } from './sidebarApi'
 
 /** Suggested thread statuses. Any short status works too. */
 export const THREAD_STATUSES = ['Open', 'In progress', 'Decided', 'Done', 'Dropped', 'Blocked']

@@ -1,4 +1,5 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
+import { CalendarDays, ChevronLeft } from 'lucide-react'
 
 import { Icon } from './icons'
 import { Popover } from './Popover'
@@ -41,7 +42,7 @@ export function Calendar({ label, onSelect, value }: { label: string; onSelect: 
     <div className="aw-calendar">
       <div className="aw-calendar__head">
         <button aria-label="Previous month" className="aw-iconbtn aw-iconbtn--sm" onClick={() => setFocused(addMonths(focused, -1))} type="button">
-          <Icon name="chevron-left" size={16} />
+          <Icon name={ChevronLeft} size={16} />
         </button>
         <h3 aria-live="polite" className="aw-calendar__month" id={headingId}>
           {focused.toLocaleDateString([], { month: 'long', year: 'numeric' })}
@@ -129,7 +130,7 @@ export function DatePicker({
         }}
         type="button"
       >
-        <Icon name="calendar" size={14} />
+        <Icon name={CalendarDays} size={14} />
         <span>{value ? formatDateLabel(value) : placeholder}</span>
       </button>
       <Popover anchor={anchor} className="aw-datepicker__panel" label={label} onClose={close} open={anchor !== null}>

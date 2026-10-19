@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Pin, PinOff } from 'lucide-react'
+
 
 import { toastError } from '../app/mutations'
 import { memoryKeys, pin, unpin } from '../memory/api'
@@ -53,7 +55,7 @@ export function useMessageMemory({
     return [
       {
         label: isPinned ? 'Unpin from this conversation' : 'Pin to this conversation',
-        icon: isPinned ? 'pin-off' : 'pin',
+        icon: isPinned ? PinOff : Pin,
         onSelect: () => void setPinned(message, !isPinned),
       },
       { label: 'Save as decision…', icon: 'checklist', onSelect: () => setDeciding(message) },

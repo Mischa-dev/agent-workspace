@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { normalizeConversationActor } from '../conversations/api'
+import { normalizeConversationActor } from '../conversations/sidebarApi'
 import type { ConversationActor } from '../conversations/types'
 
 export type DirectConversation = {

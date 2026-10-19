@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
-import { createChannel } from '../conversations/api'
+import { createChannel } from '../conversations/sidebarApi'
 import { Button, Dialog, TextField } from '../ui'
 
 /** The New channel dialog, loaded when someone opens it. */

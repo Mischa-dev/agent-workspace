@@ -15,7 +15,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 
-import { Icon, type IconName } from './icons'
+import { Icon, type IconGlyph } from './icons'
 
 export type Placement = 'top' | 'bottom' | 'right' | 'bottom-start' | 'bottom-end' | 'top-start' | 'right-start'
 
@@ -148,7 +148,7 @@ export function Tooltip({
 export type MenuEntry =
   | {
       label: string
-      icon?: IconName
+      icon?: IconGlyph
       shortcut?: string
       danger?: boolean
       /** Makes it a checkbox item: ✓ when true. */
