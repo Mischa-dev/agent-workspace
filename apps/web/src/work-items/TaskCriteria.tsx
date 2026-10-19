@@ -1,15 +1,22 @@
 import { useRef, useState, type FormEvent } from 'react'
 
-import { Banner, Button, Checkbox, Icon, IconButton, TextField } from '../ui'
+import { Banner, Button, Checkbox, IconButton, TextField } from '../ui'
 import { useCreateAcceptanceCriterion, useRemoveAcceptanceCriterion, useUpdateAcceptanceCriterion } from './hooks'
+import { AddForm } from './TaskConnections'
+import { TaskSection } from './TaskSection'
 import type { WorkItem } from './types'
 
+/** What has to be true for the task to count as done. Hidden while there are none and nobody is adding one. */
 export function AcceptanceCriteria({
+  adding,
   disabled,
   item,
+  onAdding,
 }: {
+  adding: boolean
   disabled: boolean
   item: WorkItem
+  onAdding: (adding: boolean) => void
 }) {
   const create = useCreateAcceptanceCriterion()
   const update = useUpdateAcceptanceCriterion()
@@ -21,6 +28,7 @@ export function AcceptanceCriteria({
   const busy = create.isPending || update.isPending || remove.isPending
   const total = item.acceptanceCriteria.length
   const done = item.acceptanceCriteria.filter((criterion) => criterion.completed).length
+  if (!total && !(adding && !disabled)) return null
 
   const nextKey = () => {
     const key = operationKey.current
@@ -31,30 +39,16 @@ export function AcceptanceCriteria({
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!text.trim() || busy) return
-    create.mutate(
-      { ...base, text: text.trim(), idempotencyKey: nextKey() },
-      {
-        onSuccess: () => setText(''),
-      },
-    )
+    create.mutate({ ...base, text: text.trim(), idempotencyKey: nextKey() }, { onSuccess: () => setText('') })
   }
 
   return (
-    <section aria-labelledby={`acceptance-${item.id}`} className="aw-worksection">
-      <header className="aw-worksection__head">
-        <h2 className="aw-worksection__title" id={`acceptance-${item.id}`}>
-          <Icon name="checklist" size={16} />
-          Acceptance criteria
-        </h2>
-        {total ? (
-          <span className="aw-progress">
-            <span className="aw-progress__text">
-              {done} of {total} done
-            </span>
-            <progress aria-hidden="true" className="aw-progress__bar" max={total} value={done} />
-          </span>
-        ) : null}
-      </header>
+    <TaskSection
+      actions={!disabled && !adding ? <IconButton icon="plus" label="Add a criterion" onClick={() => onAdding(true)} size="sm" /> : null}
+      count={total ? `${done}/${total}` : undefined}
+      id={`acceptance-${item.id}`}
+      title="Acceptance criteria"
+    >
       {total ? (
         <ol className="aw-criteria">
           {item.acceptanceCriteria.map((criterion, index) => (
@@ -81,6 +75,12 @@ export function AcceptanceCriteria({
                     autoFocus
                     maxLength={1000}
                     onChange={(event) => setEditingText(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Escape') return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setEditingId(null)
+                    }}
                     value={editingText}
                   />
                   <Button busy={update.isPending} disabled={!editingText.trim()} size="sm" type="submit" variant="primary">
@@ -97,11 +97,7 @@ export function AcceptanceCriteria({
                     description={criterion.completedBy ? `Done by ${criterion.completedBy.displayName}` : undefined}
                     disabled={disabled || busy}
                     label={criterion.text}
-                    onChange={(completed) =>
-                      update.mutate(
-                        { ...base, criterionId: criterion.id, completed, idempotencyKey: nextKey() },
-                      )
-                    }
+                    onChange={(completed) => update.mutate({ ...base, criterionId: criterion.id, completed, idempotencyKey: nextKey() })}
                   />
                   {!disabled ? (
                     <div className="aw-criterion__actions">
@@ -119,29 +115,21 @@ export function AcceptanceCriteria({
                         disabled={busy || index === 0}
                         icon="arrow-up"
                         label={`Move ${criterion.text} up`}
-                        onClick={() =>
-                          update.mutate({ ...base, criterionId: criterion.id, position: index, idempotencyKey: nextKey() })
-                        }
+                        onClick={() => update.mutate({ ...base, criterionId: criterion.id, position: index, idempotencyKey: nextKey() })}
                         size="sm"
                       />
                       <IconButton
                         disabled={busy || index === total - 1}
                         icon="arrow-down"
                         label={`Move ${criterion.text} down`}
-                        onClick={() =>
-                          update.mutate(
-                            { ...base, criterionId: criterion.id, position: index + 2, idempotencyKey: nextKey() },
-                              )
-                        }
+                        onClick={() => update.mutate({ ...base, criterionId: criterion.id, position: index + 2, idempotencyKey: nextKey() })}
                         size="sm"
                       />
                       <IconButton
                         disabled={busy}
                         icon="trash"
                         label={`Remove ${criterion.text}`}
-                        onClick={() =>
-                          remove.mutate({ ...base, criterionId: criterion.id, idempotencyKey: nextKey() })
-                        }
+                        onClick={() => remove.mutate({ ...base, criterionId: criterion.id, idempotencyKey: nextKey() })}
                         size="sm"
                       />
                     </div>
@@ -151,27 +139,25 @@ export function AcceptanceCriteria({
             </li>
           ))}
         </ol>
-      ) : (
-        <p className="aw-quiet">No acceptance criteria yet. Add what has to be true for this to count as done.</p>
-      )}
-      {!disabled ? (
-        <form className="aw-inline-add" onSubmit={submit}>
-          <TextField
-            aria-label="New acceptance criterion"
-            id={`criterion-${item.id}`}
-            maxLength={1000}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="Add a criterion, like “The export includes archived items”"
-            value={text}
-          />
-          <Button busy={create.isPending} disabled={!text.trim() || busy} icon="plus" size="sm" type="submit">
-            Add
-          </Button>
-        </form>
+      ) : null}
+      {adding && !disabled ? (
+        <AddForm
+          busy={create.isPending}
+          label="New acceptance criterion"
+          maxLength={1000}
+          onCancel={() => {
+            setText('')
+            onAdding(false)
+          }}
+          onChange={setText}
+          onSubmit={submit}
+          placeholder="Something that must be true, like “Archived tasks are left out”"
+          value={text}
+        />
       ) : null}
       {create.isError || update.isError || remove.isError ? (
         <Banner tone="warning">The checklist changed before that finished. It’s up to date now, so try again.</Banner>
       ) : null}
-    </section>
+    </TaskSection>
   )
 }

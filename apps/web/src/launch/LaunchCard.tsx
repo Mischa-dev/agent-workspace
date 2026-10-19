@@ -11,9 +11,10 @@ import './launch.css'
 
 /**
  * Launch on a task: one click starts an agent on the project's defaults, shift-click or the menu opens every choice.
- * Shows the latest launch and where its thread is.
+ * Shows the latest launch and where its thread is. Embedded, it drops its frame and heading and leaves what the
+ * task waits on to the page around it.
  */
-export function LaunchCard({ item }: { item: { id: string; key: string; title: string; projectId: string } }) {
+export function LaunchCard({ embedded = false, item }: { embedded?: boolean; item: { id: string; key: string; title: string; projectId: string } }) {
   const navigate = useNavigate()
   const plan = useLaunchPlan(item.projectId, item.id)
   const create = useCreateLaunches(item.projectId)
@@ -58,8 +59,8 @@ export function LaunchCard({ item }: { item: { id: string; key: string; title: s
   if (plan.isError && isApiError(plan.error) && (plan.error.status === 403 || plan.error.status === 404)) return null
 
   return (
-    <section aria-labelledby={`launch-heading-${item.id}`} className="aw-sidecard aw-launchcard">
-      <h2 className="aw-sidecard__title" id={`launch-heading-${item.id}`}>
+    <section aria-labelledby={`launch-heading-${item.id}`} className={embedded ? 'aw-launchcard is-embedded' : 'aw-sidecard aw-launchcard'}>
+      <h2 className={embedded ? 'visually-hidden' : 'aw-sidecard__title'} id={`launch-heading-${item.id}`}>
         Launch an agent
       </h2>
       <p className="aw-sidecard__text">
@@ -70,7 +71,7 @@ export function LaunchCard({ item }: { item: { id: string; key: string; title: s
             : unavailable ??
               `${harness?.displayName}${environment ? ` in ${environment.name}` : ''}, on the project’s defaults. It works in the task’s thread.`}
       </p>
-      {blocked ? (
+      {blocked && !embedded ? (
         <p className="aw-sidecard__note">Waiting on {data?.blockers.map((blocker) => blocker.key).join(', ')}.</p>
       ) : null}
       <div className="aw-launchcard__actions">

@@ -30,7 +30,7 @@ describe('buildOpenInCodexLink', () => {
   })
 
   it.each([
-    ['an archived item', workItem({ archivedAt: 'now' }), 'Restore this work item'],
+    ['an archived item', workItem({ archivedAt: 'now' }), 'Restore this task'],
     ['no repository', workItem({ linkedRepositories: [] }), 'Link one trusted repository'],
     ['multiple repositories', workItem({ linkedRepositories: [workItem().linkedRepositories[0], workItem().linkedRepositories[0]] }), 'exactly one'],
     ['an untrusted repository', repositoryOverride({ trusted: false }), 'must be trusted'],
