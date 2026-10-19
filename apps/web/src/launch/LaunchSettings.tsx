@@ -27,8 +27,7 @@ import {
   showToast,
 } from '../ui'
 import type { Environment, EnvironmentList } from './api'
-import { useEnvironmentAction, useEnvironments, useProjectSettings, useSaveEnvironment, useSaveProjectSetting } from './hooks'
-import { sourceLabel } from './launchModel'
+import { useEnvironmentAction, useEnvironments, useSaveEnvironment } from './hooks'
 import './launch.css'
 
 function errorText(error: unknown, fallback: string) {
@@ -268,81 +267,5 @@ function EnvironmentDialog({
         </Banner>
       ) : null}
     </Dialog>
-  )
-}
-
-/** The project's launch prompt template, with the fields it can use. */
-export function TemplateEditor({ projectId }: { projectId: string }) {
-  const settings = useProjectSettings(projectId)
-  const save = useSaveProjectSetting(projectId)
-  const [draft, setDraft] = useState<string | null>(null)
-
-  if (settings.isPending) return <ListSkeleton label="Loading the launch prompt" rows={3} />
-  if (settings.isError) {
-    return <ErrorState error={settings.error} onRetry={() => void settings.refetch()} title="The launch prompt didn’t load" />
-  }
-  const setting = settings.data.settings.find((candidate) => candidate.key === 'launch.template')
-  const current = typeof setting?.value === 'string' ? setting.value : ''
-  const canEdit = settings.data.capabilities.manageProject
-  const text = draft ?? current
-  const changed = draft !== null && draft !== current
-
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!changed) return
-    save.mutate(
-      { key: 'launch.template', value: draft },
-      {
-        onSuccess: () => {
-          setDraft(null)
-          showToast({ tone: 'success', title: 'Launch prompt saved', description: 'The next launch uses it.' })
-        },
-      },
-    )
-  }
-  const reset = () =>
-    save.mutate(
-      { key: 'launch.template', value: undefined },
-      { onSuccess: () => (setDraft(null), showToast({ tone: 'success', title: 'Back to the default launch prompt' })) },
-    )
-
-  return (
-    <form className="aw-launch-template" onSubmit={submit}>
-      <TextArea
-        disabled={!canEdit}
-        hint={`Now using the ${sourceLabel(setting?.source ?? 'default')} prompt. Fields: {{task.key}}, {{task.title}}, {{task.description}}, {{task.criteria}}, {{task.url}}, {{task.priority}}, {{task.type}}, {{task.labels}}, {{task.pages}}, {{project.name}}, {{project.key}}, {{project.guide}}, {{project.skills}}. Wrap a part in {{#if field}}…{{/if}} to keep it only when the field has a value, or {{#harness codex_cloud}}…{{/harness}} for one agent.`}
-        id="launch-template"
-        label="Prompt template"
-        maxLength={12000}
-        onChange={(event) => setDraft(event.target.value)}
-        rows={14}
-        spellCheck={false}
-        value={text}
-      />
-      {save.isError ? (
-        <Banner role="alert" tone="danger">
-          {errorText(save.error, 'The prompt didn’t save.')}
-        </Banner>
-      ) : null}
-      {canEdit ? (
-        <div className="aw-launch-template__actions">
-          <Button busy={save.isPending} disabled={!changed} type="submit" variant="primary">
-            Save prompt
-          </Button>
-          {changed ? (
-            <Button onClick={() => setDraft(null)} variant="ghost">
-              Discard changes
-            </Button>
-          ) : null}
-          {setting?.source === 'project' ? (
-            <Button disabled={save.isPending} icon="undo" onClick={reset} variant="ghost">
-              Use the {sourceLabel('workspace')} or built-in prompt
-            </Button>
-          ) : null}
-        </div>
-      ) : (
-        <p className="aw-launch__note">Only project admins change the launch prompt.</p>
-      )}
-    </form>
   )
 }

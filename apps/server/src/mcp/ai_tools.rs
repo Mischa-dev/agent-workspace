@@ -319,7 +319,7 @@ pub(super) async fn ai_analyze(
                         value(json!({"suggestion": view}))
                     }
                     Err(_) => ToolResult::conflict(
-                        "The criteria couldn't be drafted. Check Models settings, then try again.",
+                        "The criteria couldn't be drafted. Check Runs and models settings, then try again.",
                     ),
                 },
             );

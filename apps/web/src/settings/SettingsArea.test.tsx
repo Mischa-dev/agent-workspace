@@ -26,6 +26,20 @@ describe('settings addresses', () => {
     expect(await screen.findByRole('navigation', { name: 'Settings' })).toBeVisible()
   })
 
+  it.each([
+    ['/settings/workspace/run-defaults', '/settings/workspace/runs#defaults'],
+    ['/settings/workspace/ai', '/settings/workspace/runs#suggestions'],
+    [`/settings/projects/${projectBId}/environments`, `/settings/projects/${projectBId}/runs#environments`],
+    [`/settings/projects/${projectBId}/ai`, `/settings/projects/${projectBId}/runs#suggestions`],
+    // A link to one setting keeps pointing at it.
+    [`/settings/projects/${projectBId}/environments#setting-run.environment`, `/settings/projects/${projectBId}/runs#setting-run.environment`],
+  ])('sends the moved page %s to %s', async (from, to) => {
+    installStandardApi()
+    window.history.replaceState({}, '', from)
+    render(<App />)
+    await waitFor(() => expect(`${window.location.pathname}${window.location.hash}`).toBe(to))
+  })
+
   it('completes a Project address without a page and sends unknown ones to the account', () => {
     expect(parseSettingsPath(`projects/${projectBId}`)).toEqual({
       kind: 'redirect',
@@ -86,8 +100,8 @@ describe('settings addresses', () => {
     const results = await screen.findByRole('list', { name: 'Matching settings' })
     const links = within(results).getAllByRole('link')
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
-      '/settings/workspace/run-defaults#setting-run.reasoning',
-      `/settings/projects/${projectAId}/environments#setting-run.reasoning`,
+      '/settings/workspace/runs#setting-run.reasoning',
+      `/settings/projects/${projectAId}/runs#setting-run.reasoning`,
     ])
     expect(within(results).getAllByText('Reasoning')).toHaveLength(2)
   })

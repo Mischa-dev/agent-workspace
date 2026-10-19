@@ -138,8 +138,7 @@
   gap: var(--space-4);
 }
 
-.aw-profileform__pair,
-.aw-profileform__triple {
+.aw-profileform__pair {
   display: grid;
   gap: var(--space-3);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));

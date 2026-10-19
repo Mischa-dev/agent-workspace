@@ -92,7 +92,10 @@ export default function SettingsArea() {
   }
 
   if (route.kind === 'redirect') {
-    return <Navigate replace state={location.state} to={`${route.to}${location.search}`} />
+    // Keep the old link's query, and its own place on the page over the section the redirect names.
+    const [path, section] = route.to.split('#')
+    const hash = location.hash || (section ? `#${section}` : '')
+    return <Navigate replace state={location.state} to={`${path}${location.search}${hash}`} />
   }
   if (route.group === 'project' && !route.projectId) {
     if (projectList.isPending) return <SettingsFrame session={session}><SettingsSkeleton label="Loading projects" /></SettingsFrame>

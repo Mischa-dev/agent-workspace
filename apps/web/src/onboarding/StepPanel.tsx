@@ -1,4 +1,4 @@
-import { Suspense, useState, type FormEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -101,7 +101,7 @@ function Body({ onGoTo, onboarding, project, projects, step }: PanelProps & { on
     case 'account':
       return <Embedded group="account" id="provider-accounts" onboarding={onboarding} project={project} projects={projects} />
     case 'environment':
-      return <Embedded group="project" id="environments" onboarding={onboarding} project={project} projects={projects} />
+      return <RunSetupStep onboarding={onboarding} project={project} projects={projects} />
     case 'tasks':
       return <TasksStep onboarding={onboarding} project={project as Project} />
     case 'agent':
@@ -124,6 +124,21 @@ function Embedded({ group, id, onboarding, project, projects, after }: PanelProp
         <Page project={group === 'project' ? project : null} projects={projects} session={session} workspace={workspace} />
       </Suspense>
       {after}
+    </div>
+  )
+}
+
+const RunSetup = lazy(() => import('../settings/project/RunsPage').then((module) => ({ default: module.RunSetup })))
+
+/** Where runs work and the defaults they start with: the setup part of the project's Runs and models settings. */
+function RunSetupStep({ onboarding, project, projects }: PanelProps) {
+  const session = useAuthenticatedSession()
+  const workspace = session.organizations.find((organization) => organization.id === onboarding.organizationId) ?? null
+  return (
+    <div className="aw-onboarding__embed">
+      <Suspense fallback={<SettingsSkeleton label="Loading run settings" sections={2} />}>
+        <RunSetup project={project} projects={projects} session={session} workspace={workspace} />
+      </Suspense>
     </div>
   )
 }

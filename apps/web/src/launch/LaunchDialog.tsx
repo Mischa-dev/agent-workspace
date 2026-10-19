@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import { useProfiles } from '../agents/hooks'
 import { isApiError } from '../api/errors'
+import { reasoningLabel } from '../execution/labels'
 import { humanize } from '../projects/format'
 import { accountSettingsHref, projectSettingsHref } from '../settings/paths'
 import { Banner, Button, Dialog, SelectField, SettingsSkeleton, TextArea, TextField, countLabel, describeError, describeLoadError } from '../ui'
@@ -228,7 +229,9 @@ export function LaunchDialog({
               </SelectField>
             )}
             <SelectField id="launch-model" label="Model" onChange={(event) => setModel(event.target.value)} value={model}>
-              <option value="">{defaultLabel(data.settings['run.model']?.value, data.settings['run.model']?.source, models)}</option>
+              <option value="">
+                {defaultLabel(data.settings['run.model']?.value, data.settings['run.model']?.source, (id) => models.find((candidate) => candidate.id === id)?.displayName ?? id)}
+              </option>
               {models.map((candidate) => (
                 <option key={candidate.id} value={candidate.id}>
                   {candidate.displayName}
@@ -236,11 +239,11 @@ export function LaunchDialog({
               ))}
             </SelectField>
             {chosenModel && chosenModel.reasoningLevels.length > 0 ? (
-              <SelectField id="launch-reasoning" label="Thinking" onChange={(event) => setReasoning(event.target.value)} value={reasoning}>
-                <option value="">{defaultLabel(data.settings['run.reasoning']?.value, data.settings['run.reasoning']?.source)}</option>
+              <SelectField id="launch-reasoning" label="Reasoning" onChange={(event) => setReasoning(event.target.value)} value={reasoning}>
+                <option value="">{defaultLabel(data.settings['run.reasoning']?.value, data.settings['run.reasoning']?.source, reasoningLabel)}</option>
                 {chosenModel.reasoningLevels.map((level) => (
                   <option key={level} value={level}>
-                    {humanize(level)}
+                    {reasoningLabel(level)}
                   </option>
                 ))}
               </SelectField>
@@ -313,15 +316,14 @@ function environmentHint(plan: LaunchPlan, projectId: string) {
   if (plan.environments.length === 0) {
     return (
       <span>
-        Add one in <Link to={projectSettingsHref(projectId, 'environments')}>Environments and defaults</Link>.
+        Add one in <Link to={`${projectSettingsHref(projectId, 'runs')}#environments`}>Runs and models</Link>.
       </span>
     )
   }
   return undefined
 }
 
-function defaultLabel(value: unknown, source: SettingSource | undefined, models: { id: string; displayName: string }[] = []) {
+function defaultLabel(value: unknown, source: SettingSource | undefined, name: (value: string) => string = humanize) {
   if (value === null || value === undefined || value === '' || value === 'default') return 'Agent’s default'
-  const shown = models.find((candidate) => candidate.id === value)?.displayName ?? humanize(String(value))
-  return `${shown} (${sourceLabel(source ?? 'default')} default)`
+  return `${name(String(value))} (${sourceLabel(source ?? 'default')} default)`
 }

@@ -40,16 +40,6 @@
   gap: var(--space-1);
 }
 
-.aw-launch-template textarea {
-  font: var(--t-code);
-}
-
-.aw-launch-template__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 .aw-sessionlinks {
   display: inline-flex;
   align-items: center;

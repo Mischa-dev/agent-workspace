@@ -1,44 +1,60 @@
-import { useId, useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { describeError } from '../app/mutations'
-import { Banner, Button, Icon, SegmentedControl, SelectField, Switch, TextField } from '../ui'
+import { Banner, Button, SegmentedControl, SelectField, Switch, TextField } from '../ui'
 import {
   formatSettingValue,
   resetSettingValue,
+  scopeName,
   setSettingValue,
   settingsKeys,
-  sourceLabel,
   viewAtScope,
   type EffectiveSettings,
   type ResolvedSetting,
   type SettingDefinition,
   type SettingOption,
+  type SettingScope,
   type SettingsTarget,
 } from './api'
 
 type Write = { kind: 'set'; value: unknown } | { kind: 'reset' }
 
+/** A built-in default that only means "the default" goes without saying so. */
+function saysDefault(value: unknown) {
+  return value === null || value === undefined || value === '' || value === 'default'
+}
+
 /**
- * Any registry setting at one scope: what it inherits and from where, a switch
- * to override it here, the control for its type, and Reset. Writes carry the
+ * Any registry setting at one scope: the value that applies and where it's set,
+ * a switch to set it here, the control for its type, and Reset. Writes carry the
  * version they were based on; when someone else got there first it shows the
  * latest value and says so.
  */
 export function SettingField({
   canEdit,
   definition,
+  onSaved,
   options,
   resolved,
   target,
+  unsetLabel,
+  workspaceHref,
 }: {
   canEdit: boolean
   definition: SettingDefinition
-  /** Names for an identifier's values, such as repositories for `run.repository`. */
+  /** Called after a change is saved, for pages that show the same value elsewhere. */
+  onSaved?: () => void
+  /** Names for the setting's values, such as repositories for `run.repository`. */
   options?: SettingOption[]
   resolved: ResolvedSetting
   target: SettingsTarget
+  /** What leaving it unset means, such as "The harness’s default". */
+  unsetLabel?: string
+  /** The workspace settings page with this setting, linked from "Set in: Workspace" on a project. */
+  workspaceHref?: string
 }) {
   const queryClient = useQueryClient()
   const id = useId()
@@ -61,6 +77,7 @@ export function SettingField({
           ? { ...current, settings: current.settings.map((candidate) => (candidate.key === setting.key ? setting : candidate)) }
           : current,
       )
+      onSaved?.()
     },
     onError: async (error) => {
       if (isApiError(error) && (error.code === 'version_conflict' || error.status === 409)) {
@@ -72,14 +89,17 @@ export function SettingField({
     },
   })
 
-  const scopeName = target.scope === 'project' ? 'this project' : 'the workspace'
-  const inheritedText = formatSettingValue(view.inherited.value, definition.valueType, options)
   const busy = write.isPending
-  const bool = definition.valueType.type === 'bool'
-  // The workspace has only the built-in default beneath it, so its control is always there; a project turns an
-  // override on first. A yes/no setting picks Default, On or Off in one control at either scope.
-  const alwaysEditable = target.scope !== 'project' || bool
-  const showControl = !canEdit || overridden || alwaysEditable
+  const editable = canEdit && overridden && !busy
+  const formatted = (value: unknown) => formatSettingValue(value, definition.valueType, options, unsetLabel)
+  const where = (source: SettingScope | 'default'): ReactNode =>
+    source === 'workspace' && target.scope !== 'workspace' && workspaceHref ? (
+      <Link to={`${workspaceHref}#setting-${definition.key}`}>{scopeName(source)}</Link>
+    ) : (
+      scopeName(source)
+    )
+  // What applies here, and where it's set.
+  const applied = overridden ? { source: target.scope, value: view.value } : view.inherited
 
   return (
     <div className={overridden ? 'aw-setting is-overridden' : 'aw-setting'} id={`setting-${definition.key}`} tabIndex={-1}>
@@ -90,60 +110,48 @@ export function SettingField({
           </h3>
           <p className="aw-setting__desc">{definition.description}</p>
         </div>
-        {canEdit && !alwaysEditable && (
+        {canEdit && (
           <div className="aw-setting__override">
             <Switch
               checked={overridden}
               disabled={busy}
-              label="Override"
+              label={target.scope === 'project' ? 'Override' : 'Set here'}
               onChange={(checked) => write.mutate(checked ? { kind: 'set', value: view.inherited.value } : { kind: 'reset' })}
             />
           </div>
         )}
       </div>
       <p className="aw-setting__source">
-        {overridden ? (
+        {canEdit && overridden ? (
           <>
-            Set for {scopeName}. Without it: {inheritedText} (from {sourceLabel(view.inherited.source)}).
+            Set in: {where(target.scope)}. Without it: {formatted(view.inherited.value)}
+            {view.inherited.source === 'default' ? null : <>, from {where(view.inherited.source)}</>}.
           </>
-        ) : view.inherited.source === 'default' ? (
-          <>Built-in default: {inheritedText}</>
         ) : (
           <>
-            Inherited from {sourceLabel(view.inherited.source)}: {inheritedText}
+            <span className="aw-setting__current">{formatted(applied.value)}</span>
+            {applied.source !== 'default' ? (
+              <> · Set in: {where(applied.source)}</>
+            ) : saysDefault(applied.value) ? null : (
+              <> · {scopeName('default')}</>
+            )}
           </>
         )}
       </p>
-      {showControl ? (
+      {canEdit && overridden ? (
         <div className="aw-setting__control">
-          {canEdit ? (
-            bool ? (
-              <BoolControl
-                definition={definition}
-                disabled={busy}
-                inheritedText={inheritedText}
-                onChange={(next) => write.mutate(next === null ? { kind: 'reset' } : { kind: 'set', value: next })}
-                value={overridden ? view.value === true : null}
-              />
-            ) : (
-              <SettingControl
-                definition={definition}
-                disabled={busy}
-                labelledBy={`${id}-label`}
-                onSave={(value) => write.mutate({ kind: 'set', value })}
-                options={options}
-                value={view.value}
-              />
-            )
-          ) : (
-            <p className="aw-setting__value">{formatSettingValue(view.value, definition.valueType, options)}</p>
-          )}
-          {canEdit && overridden && !bool && (
-            <Button disabled={busy} icon="undo" onClick={() => write.mutate({ kind: 'reset' })} size="sm" variant="ghost">
-              {target.scope === 'project' ? 'Reset' : 'Back to default'}
-            </Button>
-          )}
-          {busy ? <Icon className="aw-spin" label="Saving" name="loader" size={16} /> : null}
+          <SettingControl
+            definition={definition}
+            disabled={!editable}
+            labelledBy={`${id}-label`}
+            onSave={(value) => write.mutate({ kind: 'set', value })}
+            options={options}
+            unsetLabel={unsetLabel}
+            value={view.value}
+          />
+          <Button disabled={busy} icon="undo" onClick={() => write.mutate({ kind: 'reset' })} size="sm" variant="ghost">
+            Reset
+          </Button>
         </div>
       ) : null}
       {notice && <Banner tone={notice.tone}>{notice.text}</Banner>}
@@ -151,38 +159,15 @@ export function SettingField({
   )
 }
 
-/** Default (whatever it inherits), On or Off. */
-function BoolControl({
-  definition,
-  disabled,
-  inheritedText,
-  onChange,
-  value,
-}: {
-  definition: SettingDefinition
-  disabled: boolean
-  inheritedText: string
-  onChange: (value: boolean | null) => void
-  value: boolean | null
-}) {
-  const current = value === null ? 'default' : value ? 'on' : 'off'
-  return (
-    <fieldset className="aw-fieldset" disabled={disabled}>
-      <SegmentedControl
-        label={definition.label}
-        onChange={(next) => {
-          if (disabled || next === current) return
-          onChange(next === 'default' ? null : next === 'on')
-        }}
-        options={[
-          { value: 'default', label: `Default (${inheritedText})` },
-          { value: 'on', label: 'On' },
-          { value: 'off', label: 'Off' },
-        ]}
-        value={current}
-      />
-    </fieldset>
-  )
+/** Options in their groups, in the order the groups first appear. */
+function grouped(options: SettingOption[]) {
+  const groups: { label: string | undefined; options: SettingOption[] }[] = []
+  for (const option of options) {
+    const group = groups.find((candidate) => candidate.label === option.group)
+    if (group) group.options.push(option)
+    else groups.push({ label: option.group, options: [option] })
+  }
+  return groups
 }
 
 function SettingControl({
@@ -191,6 +176,7 @@ function SettingControl({
   labelledBy,
   onSave,
   options,
+  unsetLabel,
   value,
 }: {
   definition: SettingDefinition
@@ -198,22 +184,30 @@ function SettingControl({
   labelledBy: string
   onSave: (value: unknown) => void
   options?: SettingOption[]
+  unsetLabel?: string
   value: unknown
 }) {
   const type = definition.valueType
+  if (type.type === 'bool') {
+    return (
+      <Switch
+        checked={value === true}
+        disabled={disabled}
+        label={value === true ? 'On' : 'Off'}
+        onChange={(checked) => onSave(checked)}
+      />
+    )
+  }
   if (type.type === 'choice') {
-    const choices = type.options.map((option) => ({ value: option, label: formatSettingValue(option, type) }))
-    if (choices.length <= 4) {
-      // Disabled while a save is on its way, but the same control, so nothing jumps.
+    const choices = type.options.map((option) => ({ value: option, label: formatSettingValue(option, type, options) }))
+    if (choices.length <= 4 && !disabled) {
       return (
-        <fieldset className="aw-fieldset" disabled={disabled}>
-          <SegmentedControl
-            label={definition.label}
-            onChange={(next) => !disabled && next !== value && onSave(next)}
-            options={choices}
-            value={typeof value === 'string' ? value : choices[0]?.value ?? ''}
-          />
-        </fieldset>
+        <SegmentedControl
+          label={definition.label}
+          onChange={(next) => next !== value && onSave(next)}
+          options={choices}
+          value={typeof value === 'string' ? value : choices[0]?.value ?? ''}
+        />
       )
     }
     return (
@@ -234,18 +228,40 @@ function SettingControl({
         onChange={(event) => onSave(event.target.value === '' ? null : event.target.value)}
         value={typeof value === 'string' ? value : ''}
       >
-        {type.optional && <option value="">Not set</option>}
+        {type.optional && <option value="">{unsetLabel ?? 'Not set'}</option>}
         {typeof value === 'string' && value && !options.some((option) => option.value === value) && <option value={value}>{value}</option>}
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
+        {grouped(options).map((group) =>
+          group.label ? (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </optgroup>
+          ) : (
+            group.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))
+          ),
+        )}
       </SelectField>
     )
   }
   // A new saved value (here or elsewhere) starts a fresh draft.
-  return <TextControl definition={definition} key={value === null || value === undefined ? '' : String(value)} disabled={disabled} labelledBy={labelledBy} onSave={onSave} value={value} />
+  return (
+    <TextControl
+      definition={definition}
+      disabled={disabled}
+      key={value === null || value === undefined ? '' : String(value)}
+      labelledBy={labelledBy}
+      onSave={onSave}
+      placeholder={unsetLabel}
+      value={value}
+    />
+  )
 }
 
 /** Integers, text and identifiers: edit, then save with Enter or the button. */
@@ -254,12 +270,14 @@ function TextControl({
   disabled,
   labelledBy,
   onSave,
+  placeholder = 'Not set',
   value,
 }: {
   definition: SettingDefinition
   disabled: boolean
   labelledBy: string
   onSave: (value: unknown) => void
+  placeholder?: string
   value: unknown
 }) {
   const type = definition.valueType
@@ -308,7 +326,7 @@ function TextControl({
         inputMode={type.type === 'integer' ? 'numeric' : undefined}
         mono={type.type === 'identifier'}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder={type.type === 'integer' ? undefined : 'Not set'}
+        placeholder={type.type === 'integer' ? undefined : placeholder}
         spellCheck={false}
         value={draft}
       />

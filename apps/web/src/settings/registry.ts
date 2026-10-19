@@ -1,12 +1,12 @@
 // Every settings page, one line each. To add a page, add a line in its group
 // (Account, Workspace or Project) next to the related ones and write the page
 // as a default-exported component taking SettingsPageProps. Add lines; don't
-// reorder: other branches add theirs (environments, notifications and alert
-// rules, models) at the same time. Give each page its own icon; a page with the
-// same name in two groups (General, Members, Models) shares one. A renamed
+// reorder: other branches add theirs (notifications and alert rules,
+// for example) at the same time. Give each page its own icon; a page with the
+// same name in two groups (General, Members, Runs and models) shares one. A renamed
 // page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
-import { ArrowDownUp, Bell, BookOpen, Cpu, LayoutTemplate, Mail, Plug, ScrollText, Server, SlidersHorizontal, User, Webhook, Zap } from 'lucide-react'
+import { ArrowDownUp, Bell, BookOpen, Cpu, LayoutTemplate, Mail, Plug, ScrollText, Server, User, Webhook, Zap } from 'lucide-react'
 
 import type { IconGlyph } from '../ui'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
@@ -62,10 +62,9 @@ export const SETTINGS_PAGES: SettingsPage[] = [
   // Workspace
   page('workspace', 'general', 'General', 'settings', ['rename', 'workspace name', 'leave', 'transfer ownership', 'owner'], () => import('./workspace/GeneralPage')),
   page('workspace', 'members', 'Members', 'users', ['people', 'agents', 'roles', 'admin', 'invite', 'invitations', 'remove'], () => import('./workspace/MembersPage')),
-  page('workspace', 'ai', 'Models', Cpu, ['ai', 'provider', 'model', 'suggestions', 'api key', 'budget', 'usage'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
   page('workspace', 'keys', 'Keys', 'lock', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
   page('workspace', 'email', 'Email', Mail, ['smtp', 'mail', 'email', 'password reset', 'test email', 'outgoing mail'], () => import('./workspace/EmailPage'), { visible: owner }),
-  page('workspace', 'run-defaults', 'Environments and run defaults', SlidersHorizontal, ['harness', 'model', 'reasoning', 'speed', 'environment'], () => import('./workspace/RunDefaultsPage'), { settings: ['run.'] }),
+  page('workspace', 'runs', 'Runs and models', Cpu, ['harness', 'model', 'models', 'reasoning', 'speed', 'attempts', 'environment', 'environments', 'defaults', 'run defaults', 'model list', 'hide model', 'provider', 'suggestions', 'summaries', 'api key', 'budget', 'usage', 'spend', 'launch prompt', 'template', 'ai', 'anthropic', 'openai', 'gemini'], () => import('./workspace/RunsPage'), { settings: ['run.', 'ai.', 'launch.'] }),
   page('workspace', 'harnesses', 'Harnesses', 'terminal', ['custom harness', 'adapter', 'manifest', 'runner', 'command', 'agents'], () => import('./workspace/HarnessesPage')),
   page('workspace', 'project-templates', 'Project templates', LayoutTemplate, ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
@@ -77,8 +76,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
     visible: (context) => manageProject(context) && Boolean(context.workspace),
   }),
   page('project', 'repositories', 'Repositories', 'repo', ['github', 'connect', 'mirror', 'code'], () => import('./project/RepositoriesPage')),
-  page('project', 'environments', 'Environments and defaults', SlidersHorizontal, ['harness', 'model', 'reasoning', 'speed', 'repository'], () => import('./project/EnvironmentsPage'), { settings: ['run.'] }),
-  page('project', 'ai', 'Models', Cpu, ['ai', 'provider', 'model', 'suggestions', 'dependencies', 'automatic'], () => import('./project/AiPage'), { settings: ['ai.'] }),
+  page('project', 'runs', 'Runs and models', Cpu, ['harness', 'model', 'models', 'reasoning', 'speed', 'attempts', 'environment', 'environments', 'repository', 'defaults', 'run defaults', 'provider', 'suggestions', 'summaries', 'dependencies', 'automatic', 'launch prompt', 'template', 'ai'], () => import('./project/RunsPage'), { settings: ['run.', 'ai.', 'launch.'] }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials', 'profiles', 'reviewer', 'planner', 'fixer', 'instructions'], () => import('./project/AgentsPage'), { visible: manageProject }),
   page('project', 'automations', 'Automation', Zap, ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation', 'pull requests', 'review', 'github'], () => import('./project/AutomationRulesPage'), { visible: projectMember }),
   page('project', 'workflow', 'Workflow', 'board', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),

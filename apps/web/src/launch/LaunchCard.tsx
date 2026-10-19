@@ -29,7 +29,7 @@ export function LaunchCard({ item }: { item: { id: string; key: string; title: s
   // Each reason links to the settings page that fixes it.
   const unavailable = !data ? null : !harness ? (
     <>
-      No agent is set up for this project yet. <Link to={projectSettingsHref(item.projectId, 'environments')}>Set one up</Link>
+      No agent is set up for this project yet. <Link to={`${projectSettingsHref(item.projectId, 'runs')}#environments`}>Set one up</Link>
     </>
   ) : accounts.length === 0 ? (
     <>

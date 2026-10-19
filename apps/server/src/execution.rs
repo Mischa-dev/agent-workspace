@@ -47,6 +47,18 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
             put(save_model_overrides).delete(remove_model),
         )
+        .route(
+            "/api/v1/organizations/{organization_id}/model-catalog",
+            get(list_workspace_catalog),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
+            post(refresh_workspace_catalog),
+        )
+        .route(
+            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
+            put(save_workspace_model).delete(remove_workspace_model),
+        )
 }
 
 #[derive(Debug, FromRow)]
@@ -703,6 +715,26 @@ async fn list_harnesses(
     Ok(Json(HarnessesResponse { harnesses }))
 }
 
+/// The workspace's model lists, for its Runs and models settings: every
+/// harness it can run, with the models people may pick. Every member reads
+/// them; owners and admins change them.
+async fn list_workspace_catalog(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    ApiPath(organization_id): ApiPath<Uuid>,
+) -> Result<Json<HarnessesResponse>, AppError> {
+    crate::settings::authorize_personal(&state.pool, &principal, organization_id).await?;
+    let can_edit =
+        crate::settings::authorize_workspace_manage(&state.pool, &principal, organization_id)
+            .await
+            .is_ok();
+    let mut harnesses = Vec::new();
+    for manifest in state.supervisors.manifests_in(organization_id) {
+        harnesses.push(harness_view(&state, organization_id, &manifest, can_edit).await?);
+    }
+    Ok(Json(HarnessesResponse { harnesses }))
+}
+
 /// Asks the harness for its current models, through one of the caller's
 /// signed-in accounts, and stores them. People's edits are kept.
 async fn refresh_catalog(
@@ -713,11 +745,67 @@ async fn refresh_catalog(
 ) -> Result<Json<HarnessView>, AppError> {
     require_authenticated_write(&state, &headers, &principal)?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
     let scope = idempotency::resource_bound_scope("project", project_id, "catalog_refresh")?;
+    // Same boundary as the other catalog edits: the project is visible and
+    // the caller may edit the workspace catalog. A refresh replaces the
+    // workspace's provider-reported models for everyone, so it is one.
+    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
+    Ok(Json(
+        refresh_in(
+            &state,
+            &principal,
+            organization_id,
+            Some(project_id),
+            &kind,
+            &scope,
+            &idempotency_key,
+        )
+        .await?,
+    ))
+}
+
+/// The same refresh from the workspace's settings, where no project is open.
+async fn refresh_workspace_catalog(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((organization_id, kind)): ApiPath<(Uuid, String)>,
+) -> Result<Json<HarnessView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
+    let scope =
+        idempotency::resource_bound_scope("organization", organization_id, "catalog_refresh")?;
+    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
+    Ok(Json(
+        refresh_in(
+            &state,
+            &principal,
+            organization_id,
+            None,
+            &kind,
+            &scope,
+            &idempotency_key,
+        )
+        .await?,
+    ))
+}
+
+/// Lists the harness's models through the caller's own signed-in account
+/// (the one they use in `project_id` first, when asked from a project) and
+/// stores them in the workspace's catalog. The caller may edit the catalog.
+async fn refresh_in(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    organization_id: Uuid,
+    project_id: Option<Uuid>,
+    kind: &str,
+    scope: &str,
+    idempotency_key: &IdempotencyKey,
+) -> Result<HarnessView, AppError> {
+    let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
     let manifest = state
         .supervisors
-        .manifest(&kind)
+        .manifest_in(organization_id, kind)
         .map(|manifest| (*manifest).clone())
         .ok_or(AppError::NotFound("harness"))?;
     if !manifest.features.model_listing {
@@ -727,38 +815,20 @@ async fn refresh_catalog(
         ));
     }
     let mut transaction = state.pool.begin().await?;
-    // Same boundary as the other catalog edits: the project is visible and
-    // the caller may edit the workspace catalog.
-    require_project_action(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::ProjectView,
-    )
-    .await?;
-    let workspace = workspace_access(&mut transaction, &principal, project_id).await?;
-    // A refresh replaces the workspace's provider-reported models for
-    // everyone, so it is a catalog edit.
-    if !may_edit_catalog(&principal, &workspace) {
-        return Err(AppError::Forbidden);
-    }
-    let can_edit = may_edit_catalog(&principal, &workspace);
     // A retry whose first refresh already landed replays it instead of
     // asking the harness again. The key is only held once the models are in
     // hand, below, so a failed listing can be retried with the same key.
     if let IdempotencyOutcome::Replay(_) = idempotency::reserve(
         &mut transaction,
         principal.actor_id,
-        &scope,
-        &idempotency_key,
+        scope,
+        idempotency_key,
         request_hash,
     )
     .await?
     {
         transaction.commit().await?;
-        return Ok(Json(
-            harness_view(&state, workspace.organization_id, &manifest, can_edit).await?,
-        ));
+        return harness_view(state, organization_id, &manifest, true).await;
     }
     let account = sqlx::query_as::<_, crate::provider::ProfileAccount>(
         r#"
@@ -774,16 +844,14 @@ async fn refresh_catalog(
         LIMIT 1
         "#,
     )
-    .bind(workspace.organization_id)
+    .bind(organization_id)
     .bind(principal.actor_id)
     .bind(&manifest.kind)
     .bind(project_id)
     .fetch_optional(&mut *transaction)
     .await?
-    .ok_or(AppError::Conflict(
-        "harness",
-        "sign in to an account for this harness first",
-    ))?;
+    // Its own code, so the settings page can say to sign in first.
+    .ok_or(AppError::ExecutionProfileRequired)?;
     transaction.rollback().await?;
     let mut session = state
         .supervisors
@@ -799,8 +867,8 @@ async fn refresh_catalog(
     match idempotency::reserve(
         &mut transaction,
         principal.actor_id,
-        &scope,
-        &idempotency_key,
+        scope,
+        idempotency_key,
         request_hash,
     )
     .await?
@@ -808,13 +876,8 @@ async fn refresh_catalog(
         // A concurrent retry with the same key stored its refresh first.
         IdempotencyOutcome::Replay(_) => {}
         IdempotencyOutcome::Reserved(reservation) => {
-            catalog::store_refresh(
-                &mut transaction,
-                workspace.organization_id,
-                &manifest.kind,
-                &models,
-            )
-            .await?;
+            catalog::store_refresh(&mut transaction, organization_id, &manifest.kind, &models)
+                .await?;
             idempotency::complete(
                 &mut transaction,
                 &reservation,
@@ -825,9 +888,7 @@ async fn refresh_catalog(
         }
     }
     transaction.commit().await?;
-    Ok(Json(
-        harness_view(&state, workspace.organization_id, &manifest, can_edit).await?,
-    ))
+    harness_view(state, organization_id, &manifest, true).await
 }
 
 fn catalog_error(kind: &str, error: crate::provider::HarnessError) -> AppError {
@@ -867,6 +928,17 @@ async fn require_catalog_editor(
     }
 }
 
+/// The workspace's owners and admins edit its catalog; other members get a
+/// 403, and people outside it a 404.
+async fn require_workspace_catalog_editor(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    organization_id: Uuid,
+) -> Result<(), AppError> {
+    crate::settings::authorize_personal(&state.pool, principal, organization_id).await?;
+    crate::settings::authorize_workspace_manage(&state.pool, principal, organization_id).await
+}
+
 /// A workspace owner or admin edits one model (context size, prices, name,
 /// reasoning levels, speeds, hiding it), or adds one by hand.
 async fn save_model_overrides(
@@ -880,24 +952,68 @@ async fn save_model_overrides(
     IdempotencyKey::from_headers(&headers)?;
     valid_model_id(&model_id)?;
     overrides.validate().map_err(AppError::Validation)?;
+    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
+    Ok(Json(
+        save_overrides_in(
+            &state,
+            &principal,
+            organization_id,
+            &kind,
+            &model_id,
+            &overrides,
+        )
+        .await?,
+    ))
+}
+
+async fn save_workspace_model(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
+    ApiJson(overrides): ApiJson<ModelOverrides>,
+) -> Result<Json<HarnessView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    IdempotencyKey::from_headers(&headers)?;
+    valid_model_id(&model_id)?;
+    overrides.validate().map_err(AppError::Validation)?;
+    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
+    Ok(Json(
+        save_overrides_in(
+            &state,
+            &principal,
+            organization_id,
+            &kind,
+            &model_id,
+            &overrides,
+        )
+        .await?,
+    ))
+}
+
+async fn save_overrides_in(
+    state: &AppState,
+    principal: &AuthenticatedActor,
+    organization_id: Uuid,
+    kind: &str,
+    model_id: &str,
+    overrides: &ModelOverrides,
+) -> Result<HarnessView, AppError> {
     let manifest = state
         .supervisors
-        .manifest(&kind)
+        .manifest_in(organization_id, kind)
         .map(|manifest| (*manifest).clone())
         .ok_or(AppError::NotFound("harness"))?;
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
     catalog::save_overrides(
         &state.pool,
         organization_id,
         &manifest.kind,
-        &model_id,
-        &overrides,
+        model_id,
+        overrides,
         principal.actor_id,
     )
     .await?;
-    Ok(Json(
-        harness_view(&state, organization_id, &manifest, true).await?,
-    ))
+    harness_view(state, organization_id, &manifest, true).await
 }
 
 async fn remove_model(
@@ -909,18 +1025,42 @@ async fn remove_model(
     require_authenticated_write(&state, &headers, &principal)?;
     IdempotencyKey::from_headers(&headers)?;
     valid_model_id(&model_id)?;
+    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
+    Ok(Json(
+        remove_model_in(&state, organization_id, &kind, &model_id).await?,
+    ))
+}
+
+async fn remove_workspace_model(
+    State(state): State<AppState>,
+    principal: AuthenticatedActor,
+    headers: HeaderMap,
+    ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
+) -> Result<Json<HarnessView>, AppError> {
+    require_authenticated_write(&state, &headers, &principal)?;
+    IdempotencyKey::from_headers(&headers)?;
+    valid_model_id(&model_id)?;
+    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
+    Ok(Json(
+        remove_model_in(&state, organization_id, &kind, &model_id).await?,
+    ))
+}
+
+async fn remove_model_in(
+    state: &AppState,
+    organization_id: Uuid,
+    kind: &str,
+    model_id: &str,
+) -> Result<HarnessView, AppError> {
     let manifest = state
         .supervisors
-        .manifest(&kind)
+        .manifest_in(organization_id, kind)
         .map(|manifest| (*manifest).clone())
         .ok_or(AppError::NotFound("harness"))?;
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    if !catalog::remove_model(&state.pool, organization_id, &manifest.kind, &model_id).await? {
+    if !catalog::remove_model(&state.pool, organization_id, &manifest.kind, model_id).await? {
         return Err(AppError::NotFound("harness_model"));
     }
-    Ok(Json(
-        harness_view(&state, organization_id, &manifest, true).await?,
-    ))
+    harness_view(state, organization_id, &manifest, true).await
 }
 
 async fn fetch_owned_execution_profile(

@@ -292,7 +292,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.harness",
         label: "Harness",
-        description: "The harness new runs use. Unset, the first one connected.",
+        description: "The harness new runs use. Unset, one you've signed in to.",
         kind: SettingType::Identifier { optional: true },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -312,7 +312,9 @@ pub const REGISTRY: &[SettingDef] = &[
         label: "Reasoning",
         description: "How hard the model thinks before answering, where the harness supports it.",
         kind: SettingType::Choice {
-            options: &["default", "minimal", "low", "medium", "high", "max"],
+            options: &[
+                "default", "minimal", "low", "medium", "high", "xhigh", "max",
+            ],
         },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -341,9 +343,10 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.environment",
         label: "Environment",
-        description: "Where new runs execute, such as a provider's cloud environment. Unset, this host.",
+        description: "Where new runs work, such as a cloud environment set up with the repository. Unset, this server.",
         kind: SettingType::Identifier { optional: true },
-        scopes: TEAM_SCOPES,
+        // Environments belong to a project, so only a project can pick one.
+        scopes: &[Scope::Project],
         launch_override: true,
         default: "null",
     },
@@ -367,7 +370,7 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.auto_apply_suggestions",
-        label: "Apply model suggestions automatically",
+        label: "Apply suggestions automatically",
         description: "Accept suggested dependencies and fields without review.",
         kind: SettingType::Bool,
         scopes: TEAM_SCOPES,
@@ -376,8 +379,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.provider",
-        label: "Model provider",
-        description: "Which provider the server's short model jobs (like dependency detection) use.",
+        label: "Provider",
+        description: "Which provider suggestions and summaries use.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -385,8 +388,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.model",
-        label: "Model",
-        description: "The model the server's short jobs use. Unset, the provider's default.",
+        label: "Model for quick jobs",
+        description: "The model short jobs, like dependency detection, use. Unset, the provider's default.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -395,7 +398,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "ai.deep_model",
         label: "Model for deep jobs",
-        description: "The model longer jobs (like turning a plan into tasks) use. Unset, the provider's default.",
+        description: "The model longer jobs, like turning a plan into tasks, use. Unset, the provider's default.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -403,7 +406,7 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.base_url",
-        label: "Model provider address",
+        label: "Provider address",
         description: "The address of an OpenAI-compatible server (OpenRouter, Ollama, vLLM), or another address for a provider's API.",
         kind: SettingType::Text {
             max_chars: 300,
@@ -415,8 +418,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.monthly_budget_usd",
-        label: "Monthly model budget (USD)",
-        description: "Model jobs stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
+        label: "Monthly budget (USD)",
+        description: "Suggestions and summaries stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
         kind: SettingType::Integer {
             min: 0,
             max: 100_000,

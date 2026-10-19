@@ -78,16 +78,16 @@ describe('SettingField', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows what a Project inherits and where from, read-only without the right to change it', () => {
+  it('shows what a project inherits and where from, read-only without the right to change it', () => {
     vi.stubGlobal('fetch', vi.fn())
     renderField(inherited, false)
-    expect(screen.getByText('Inherited from the workspace: Fast')).toBeVisible()
     expect(screen.getByText('Fast')).toBeVisible()
+    expect(screen.getByText(/Set in: Workspace/)).toBeVisible()
     expect(screen.queryByRole('switch', { name: 'Override' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument()
   })
 
-  it('overrides at the Project starting from the inherited value, with the version it was based on', async () => {
+  it('overrides at the project starting from the inherited value, with the version it was based on', async () => {
     const fetchMock = vi.fn(() => jsonResponse({ setting: { ...overridden, value: 'fast', layers: [layer('project', 'fast', 1), layer('workspace', 'fast', 3)] } }))
     vi.stubGlobal('fetch', fetchMock)
     renderField(inherited)
@@ -112,7 +112,7 @@ describe('SettingField', () => {
     vi.stubGlobal('fetch', fetchMock)
     renderField(overridden)
 
-    expect(screen.getByText(/Set for this project\. Without it: Fast \(from the workspace\)/)).toBeVisible()
+    expect(screen.getByText('Set in: This project. Without it: Fast, from Workspace.')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))

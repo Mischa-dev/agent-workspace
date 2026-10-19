@@ -3,9 +3,11 @@
 /* The nav is the area's sidebar: flush with the rail, its top in line with the page title. */
 .aw-settings {
   display: grid;
+  flex-shrink: 0;
   grid-template-columns: 264px minmax(0, 1fr);
   align-items: start;
   width: 100%;
+  /* At least the window's height, and as tall as the page, so the nav stays in view on long pages. */
   min-height: 100%;
 }
 
@@ -292,10 +294,9 @@
   flex: 0 1 auto;
 }
 
-.aw-setting__value {
-  margin: 0;
-  font: var(--t-ui);
+.aw-setting__current {
   color: var(--content-fg);
+  font-weight: 600;
 }
 
 .aw-setting__form {
@@ -554,6 +555,15 @@
 
   .aw-setting__form {
     flex-basis: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  /* A row's buttons drop under it on a phone, indented to line up past its
+     icon. Settings rows mostly have none, so there's nothing to line up with.
+     Here rather than with the rows so the first load stays within budget. */
+  .aw-settings .aw-row:not(.aw-row--link):not(:has(> .aw-row__lead)) .aw-row__actions {
+    padding-left: 0;
   }
 }
 

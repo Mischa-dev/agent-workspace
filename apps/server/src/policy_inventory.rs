@@ -535,6 +535,24 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         ProjectManage
     ),
     policy_route!(
+        "execution",
+        Post,
+        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
+        SettingsManage
+    ),
+    policy_route!(
+        "execution",
+        Put,
+        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
+        SettingsManage
+    ),
+    policy_route!(
+        "execution",
+        Delete,
+        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
+        SettingsManage
+    ),
+    policy_route!(
         "conversations",
         Post,
         "/api/v1/projects/{id}/channels",

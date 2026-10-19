@@ -110,7 +110,7 @@ records or child environments.
    built-in default, and always says where its value came from.
 3. **Secrets are write-only.** Keys are encrypted at rest, shown only by their
    last four characters, and handed to nothing but the adapter call that needs
-   them. Your Anthropic key goes into Workspace settings, under AI and models,
+   them. Your Anthropic key goes into Workspace settings, under Runs and models,
    once W1 and W10 land. It never goes into the repository, a file or an
    environment variable.
 4. **AI suggests; you decide.** The server now makes model calls for short
