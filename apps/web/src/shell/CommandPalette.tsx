@@ -556,7 +556,7 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button busy={busy} onClick={() => void run()} variant="primary">
-            Mark all read
+            Mark messages read
           </Button>
         </>
       }

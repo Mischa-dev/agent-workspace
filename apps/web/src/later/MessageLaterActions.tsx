@@ -4,11 +4,12 @@ import { useNavigate } from 'react-router-dom'
 
 import { invalidateConversation } from '../conversations/liveMessages'
 import type { ConversationMessage, SavedMark } from '../conversations/types'
+import { toastError } from '../app/mutations'
 import { IconButton, Menu, showToast, type MenuEntry } from '../ui'
 import { changeSaved, invalidateLater, removeSaved, saveForLater } from './api'
 import { ForwardDialog, MessageTaskDialog } from './dialogs'
 import { TimeDialog } from './TimeDialog'
-import { describeWhen, whenChoices, whenPhrase } from './when'
+import { atPhrase, describeWhen, whenChoices } from './when'
 
 type Open =
   | { kind: 'remind'; message: ConversationMessage }
@@ -45,8 +46,9 @@ export function useLaterActions({
     invalidateLater(queryClient)
     invalidateConversation(queryClient, projectId, conversationId)
   }
-  const failed = (title: string) => (reason: unknown) =>
-    showToast({ tone: 'danger', title, description: reason instanceof Error ? reason.message : 'Try again.' })
+  const failed = (title: string) => (reason: unknown) => {
+    toastError(title, reason)
+  }
 
   const save = (message: ConversationMessage, remindAt: Date | null = null) => {
     const saved = markOf(message)
@@ -58,7 +60,7 @@ export function useLaterActions({
       refresh()
       showToast({
         tone: 'success',
-        title: item.remindAt ? `I’ll remind you ${whenPhrase(item.remindAt)}` : 'Saved for later',
+        title: item.remindAt ? `Reminder set for ${atPhrase(item.remindAt)}` : 'Saved for later',
         action: { label: 'View Later', onSelect: () => navigate('/later') },
       })
     })
@@ -73,7 +75,7 @@ export function useLaterActions({
       })
       .catch((reason: unknown) => {
         mark(message.id, saved)
-        failed('Couldn’t remove it from Later.')(reason)
+        failed('It wasn’t removed from Later')(reason)
       })
   }
 
@@ -85,11 +87,13 @@ export function useLaterActions({
       ...whenChoices().map((choice) => ({
         label: choice.label,
         icon: 'clock' as const,
-        onSelect: () => void save(message, choice.at).catch(failed('The reminder wasn’t set.')),
+        // Read the time again when it's picked, so a toolbar left open still means "from now".
+        onSelect: () =>
+          void save(message, whenChoices().find((fresh) => fresh.id === choice.id)?.at ?? choice.at).catch(failed('The reminder wasn’t set')),
       })),
       { label: 'Custom time…', icon: 'clock' as const, onSelect: () => setOpen({ kind: 'remind', message }) },
       ...(saved?.remindAt
-        ? [{ label: 'Stop reminding me', icon: 'x' as const, onSelect: () => void save(message, null).catch(failed('That didn’t work.')) }]
+        ? [{ label: 'Stop reminding me', icon: 'x' as const, onSelect: () => void save(message, null).catch(failed('The reminder wasn’t turned off')) }]
         : []),
       { separator: true as const },
       ...(canForward ? [{ label: 'Forward…', icon: 'send' as const, onSelect: () => setOpen({ kind: 'forward', message }) }] : []),
@@ -101,7 +105,7 @@ export function useLaterActions({
           void navigator.clipboard
             ?.writeText(message.plainText)
             .then(() => showToast({ tone: 'success', title: 'Text copied' }))
-            .catch(() => undefined),
+            .catch(failed('The text wasn’t copied')),
       },
     ]
     return (
@@ -109,7 +113,7 @@ export function useLaterActions({
         <IconButton
           icon="bookmark"
           label={saved ? 'Remove from Later' : 'Save for later'}
-          onClick={() => (saved ? unsave(message, saved) : void save(message).catch(failed('It wasn’t saved.')))}
+          onClick={() => (saved ? unsave(message, saved) : void save(message).catch(failed('It wasn’t saved for later')))}
           pressed={Boolean(saved)}
           size="sm"
         />

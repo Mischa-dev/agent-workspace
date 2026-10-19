@@ -937,6 +937,48 @@
   margin-top: var(--space-1);
 }
 
+/* Other ways in, under the form: "or", then Google and single sign-on. */
+.aw-auth__sso {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-auth__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-auth__divider::before,
+.aw-auth__divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--content-border);
+}
+
+/* "Joining as Sam. Not you? Sign out" on an invitation. */
+.aw-auth__whoami {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-auth__linkbutton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.aw-auth__linkbutton:hover {
+  text-decoration: underline;
+}
+
 .aw-auth__footer {
   padding-top: var(--space-4);
   border-top: 1px solid var(--content-border);
@@ -961,8 +1003,8 @@
   align-items: center;
   gap: var(--space-2);
   flex: 1;
-  height: var(--size-control-lg);
-  padding: 0 var(--space-3);
+  min-height: var(--size-control-lg);
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   font: var(--t-ui);
@@ -1050,7 +1092,8 @@
   margin: 0;
 }
 
-.aw-boot__actions {
+.aw-boot__actions,
+.aw-empty-choices {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -1454,6 +1497,34 @@
 
 .aw-inline-form > .aw-btn {
   height: var(--size-control-lg);
+}
+
+/* Search */
+.aw-search__scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-search__results {
+  margin-top: var(--space-6);
+}
+
+.aw-search__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.aw-search__snippet mark {
+  border-radius: 2px;
+  background: var(--accent-soft);
+  color: inherit;
 }
 
 .aw-formcard {

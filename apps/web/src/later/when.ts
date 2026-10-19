@@ -227,9 +227,15 @@ export function describeWhen(at: Date | string, now = new Date()) {
   return `${formatShortDate(iso, now)} at ${time}`
 }
 
+/** After "for" or "until": "today at 3:00 PM", "tomorrow at 9:00 AM", "Nov 2 at 9:00 AM". */
+export function atPhrase(at: Date | string, now = new Date()) {
+  const text = describeWhen(at, now)
+  return /^(Today|Tomorrow|Yesterday) /.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text
+}
+
 /** For the middle of a sentence: "today at 3:00 PM", "tomorrow at 9:00 AM", "on Nov 2 at 9:00 AM". */
 export function whenPhrase(at: Date | string, now = new Date()) {
-  const text = describeWhen(at, now)
-  if (/^(Today|Tomorrow|Yesterday) /.test(text)) return text.charAt(0).toLowerCase() + text.slice(1)
-  return text ? `on ${text}` : ''
+  const text = atPhrase(at, now)
+  if (!text || /^(today|tomorrow|yesterday) /.test(text)) return text
+  return `on ${text}`
 }

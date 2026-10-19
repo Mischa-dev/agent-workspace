@@ -11,7 +11,7 @@ export function RunSteps({ hidden, steps }: { hidden: number; steps: RunStep[] }
     <>
       {hidden > 0 ? (
         <p className="aw-runs__quiet">
-          {hidden} earlier {hidden === 1 ? 'step isn’t' : 'steps aren’t'} shown.
+          {hidden === 1 ? 'The first step isn’t shown' : `The first ${hidden.toLocaleString()} steps aren’t shown`}; the latest {steps.length.toLocaleString()} are.
         </p>
       ) : null}
       <ol className="aw-runsteps">
@@ -40,7 +40,7 @@ function StepItem({ step }: { step: RunStep }) {
           </time>
         </div>
         {exitCode !== null ? (
-          <p className="aw-runsteps__meta">{exitCode === 0 ? 'Exited with 0' : `Failed with exit code ${exitCode}`}</p>
+          <p className="aw-runsteps__meta">{exitCode === 0 ? 'Succeeded' : `Failed with exit code ${exitCode}`}</p>
         ) : null}
         {payload.tests ? (
           <p className="aw-runsteps__meta">

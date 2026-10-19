@@ -325,7 +325,7 @@ export function AppShell({
           ) : null}
           {conversationLayout ? null : (
             <div className="aw-mobilebar">
-              <MenuButton label={project ? project.name : direct ? 'Messages' : home ? 'Home' : staticPageTitle(location.pathname) || 'Agent Workspace'} />
+              <MenuButton label={project ? project.name : direct ? 'Messages' : staticPageTitle(location.pathname) || (home ? 'Home' : 'Agent Workspace')} />
             </div>
           )}
           {realtime?.connection === 'retrying' && (

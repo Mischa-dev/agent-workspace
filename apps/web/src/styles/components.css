@@ -722,6 +722,15 @@
   right: 10px;
 }
 
+.aw-field--compact .aw-field__control {
+  min-height: var(--size-control);
+}
+
+.aw-field--compact .aw-field__control input,
+.aw-field--compact .aw-field__control--select select {
+  height: calc(var(--size-control) - 2px);
+}
+
 .aw-field__note {
   display: flex;
   align-items: center;

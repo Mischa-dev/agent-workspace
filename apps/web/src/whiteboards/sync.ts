@@ -42,7 +42,7 @@ export function missingFiles(elements: readonly StoredElement[], loaded: Readonl
   return [...wanted]
 }
 
-export type SaveState = 'saved' | 'saving' | 'unsaved' | 'offline' | 'error'
+export type SaveState = 'saved' | 'saving' | 'unsaved' | 'offline' | 'error' | 'failed'
 
 export function saveLabel(state: SaveState) {
   switch (state) {
@@ -56,5 +56,7 @@ export function saveLabel(state: SaveState) {
       return 'Offline: changes will save when you reconnect'
     case 'error':
       return 'Changes aren’t saving. Retrying…'
+    case 'failed':
+      return 'Changes aren’t saving'
   }
 }

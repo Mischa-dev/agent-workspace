@@ -2,7 +2,22 @@ import { useDeferredValue, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import { Banner, Button, Dialog, IconButton, ListSkeleton, Row, RowList, Section, TextField, formatRelative } from '../ui'
+import { toastError } from '../app/mutations'
+import {
+  Banner,
+  Button,
+  Dialog,
+  IconButton,
+  ListSkeleton,
+  Row,
+  RowList,
+  Section,
+  TextField,
+  describeError,
+  formatFullDate,
+  formatRelative,
+  showToast,
+} from '../ui'
 import {
   linkWhiteboard,
   linkedWhiteboards,
@@ -11,9 +26,9 @@ import {
   whiteboardKeys,
   whiteboardPath,
   type LinkTargetKind,
+  type Whiteboard,
 } from './api'
 import { NewWhiteboardDialog } from './dialogs'
-import { errorText } from './errors'
 
 const SERVER_KIND: Record<LinkTargetKind, string> = { task: 'work_item', project: 'project', page: 'page' }
 
@@ -35,12 +50,21 @@ export function LinkedWhiteboards({
     queryFn: () => linkedWhiteboards(targetKind, targetId),
   })
   const [dialog, setDialog] = useState<'new' | 'link' | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const unlink = (id: string) => {
-    setError(null)
-    void unlinkWhiteboard(id, SERVER_KIND[targetKind], targetId)
-      .then(() => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all }))
-      .catch((reason: unknown) => setError(errorText(reason, 'The board wasn’t unlinked.')))
+  const refresh = () => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
+  // Taking a link off is undone from the toast; the whiteboard itself stays.
+  const unlink = (board: Whiteboard) => {
+    void unlinkWhiteboard(board.id, SERVER_KIND[targetKind], targetId)
+      .then(() => {
+        void refresh()
+        showToast({
+          title: `${board.title} unlinked`,
+          onUndo: () =>
+            void linkWhiteboard(board.id, targetKind, targetId)
+              .then(refresh)
+              .catch((reason: unknown) => toastError('It wasn’t linked again', reason)),
+        })
+      })
+      .catch((reason: unknown) => toastError('The whiteboard wasn’t unlinked', reason))
   }
   const list = boards.data?.whiteboards ?? []
   return (
@@ -49,10 +73,10 @@ export function LinkedWhiteboards({
         canEdit ? (
           <span className="aw-linked-boards__actions">
             <Button icon="link" onClick={() => setDialog('link')} size="sm">
-              Link a board
+              Link a whiteboard
             </Button>
             <Button icon="plus" onClick={() => setDialog('new')} size="sm">
-              New board
+              New whiteboard
             </Button>
           </span>
         ) : null
@@ -61,7 +85,11 @@ export function LinkedWhiteboards({
       title="Whiteboards"
     >
       {boards.isPending ? <ListSkeleton label="Loading whiteboards" rows={1} /> : null}
-      {boards.isError ? <Banner tone="danger">Whiteboards didn’t load.</Banner> : null}
+      {boards.isError ? (
+        <Banner onRetry={() => void boards.refetch()} tone="danger" title="Whiteboards didn’t load.">
+          {describeError(boards.error).message}
+        </Banner>
+      ) : null}
       {boards.data && list.length === 0 ? <p className="aw-linked-boards__empty">No whiteboards here yet.</p> : null}
       {list.length ? (
         <RowList label="Linked whiteboards">
@@ -69,17 +97,24 @@ export function LinkedWhiteboards({
             <Row
               actions={
                 canEdit ? (
-                  <IconButton icon="unlink" label={`Unlink ${board.title}`} onClick={() => unlink(board.id)} size="sm" />
+                  <IconButton icon="unlink" label={`Unlink ${board.title}`} onClick={() => unlink(board)} size="sm" />
                 ) : null
               }
               key={board.id}
-              meta={<span>Changed {formatRelative(board.updatedAt)}{board.updatedBy ? ` by ${board.updatedBy}` : ''}</span>}
+              meta={
+                <span>
+                  Changed{' '}
+                  <time dateTime={board.updatedAt} title={formatFullDate(board.updatedAt)}>
+                    {formatRelative(board.updatedAt)}
+                  </time>
+                  {board.updatedBy ? ` by ${board.updatedBy}` : ''}
+                </span>
+              }
               title={<Link to={whiteboardPath(board.id)}>{board.title}</Link>}
             />
           ))}
         </RowList>
       ) : null}
-      {error ? <Banner tone="danger">{error}</Banner> : null}
       <NewWhiteboardDialog
         link={{ targetKind, targetId }}
         onClose={() => setDialog(null)}
@@ -130,11 +165,21 @@ function LinkBoardDialog({
         void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
         onClose()
       })
-      .catch((reason: unknown) => setError(errorText(reason, 'The board wasn’t linked.')))
+      .catch((reason: unknown) => setError(describeError(reason).message))
       .finally(() => setBusy(null))
   }
   return (
-    <Dialog footer={<Button onClick={onClose}>Cancel</Button>} onClose={onClose} open={open} title="Link a whiteboard" width={520}>
+    <Dialog
+      footer={
+        <Button onClick={onClose} variant="secondary">
+          Cancel
+        </Button>
+      }
+      onClose={onClose}
+      open={open}
+      title="Link a whiteboard"
+      width={520}
+    >
       <TextField
         aria-label="Search whiteboards"
         autoFocus
@@ -144,7 +189,12 @@ function LinkBoardDialog({
         value={query}
       />
       {boards.isPending ? <ListSkeleton label="Loading whiteboards" rows={3} /> : null}
-      {boards.data && candidates.length === 0 ? <p className="aw-linked-boards__empty">No other boards match.</p> : null}
+      {boards.isError ? (
+        <Banner onRetry={() => void boards.refetch()} tone="danger" title="Whiteboards didn’t load.">
+          {describeError(boards.error).message}
+        </Banner>
+      ) : null}
+      {boards.data && candidates.length === 0 ? <p className="aw-linked-boards__empty">No other whiteboards match.</p> : null}
       {candidates.length ? (
         <RowList label="Whiteboards to link">
           {candidates.map((board) => (

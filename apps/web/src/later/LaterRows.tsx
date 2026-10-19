@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-import { Icon, IconButton, Menu, StatusChip, formatFullDate, type IconName, type MenuEntry } from '../ui'
+import { Icon, IconButton, Menu, StatusChip, formatFullDate, plainPreview, type IconName, type MenuEntry } from '../ui'
 import type { SavedItem, ScheduledMessage } from './api'
 import { describeWhen, whenChoices } from './when'
 
@@ -13,10 +13,10 @@ const KIND_ICON: Record<SavedItem['kind'], IconName> = {
 function savedTitle(item: SavedItem) {
   if (item.kind === 'message') {
     if (item.message?.removed) return 'This message was removed'
-    return item.message?.preview || 'A message'
+    return plainPreview(item.message?.preview, 200) || 'A message'
   }
   if (item.kind === 'work_item') return item.workItem?.title ?? 'A task'
-  return item.note
+  return plainPreview(item.note, 200) || 'Reminder'
 }
 
 function savedMeta(item: SavedItem) {
@@ -25,6 +25,14 @@ function savedMeta(item: SavedItem) {
   }
   if (item.kind === 'work_item' && item.workItem) return `${item.workItem.key} · ${item.projectName}`
   return 'Reminder'
+}
+
+/**
+ * The quick reminder times as the menu shows them, each read again when it's
+ * picked, so a page left open for an hour still sets "In 20 minutes" from now.
+ */
+function freshChoice(id: string) {
+  return whenChoices(new Date()).find((choice) => choice.id === id)?.at ?? null
 }
 
 /** One saved message, task or reminder, with its reminder and Done. */
@@ -47,9 +55,14 @@ export function SavedRow({
 }) {
   const title = savedTitle(item)
   const due = item.remindAt && !item.done && new Date(item.remindAt).getTime() <= now.getTime()
+  const note = item.kind !== 'reminder' ? plainPreview(item.note, 160) : ''
   const remindItems: MenuEntry[] = [
     { heading: 'Remind me' },
-    ...whenChoices(now).map((choice) => ({ label: choice.label, icon: 'clock' as const, onSelect: () => onRemind(choice.at) })),
+    ...whenChoices(now).map((choice) => ({
+      label: choice.label,
+      icon: 'clock' as const,
+      onSelect: () => onRemind(freshChoice(choice.id) ?? choice.at),
+    })),
     { label: 'Custom time…', icon: 'clock' as const, onSelect: onRemindCustom },
     ...(item.remindAt ? [{ separator: true as const }, { label: 'No reminder', icon: 'x' as const, onSelect: () => onRemind(null) }] : []),
   ]
@@ -59,19 +72,24 @@ export function SavedRow({
         <Icon name={KIND_ICON[item.kind]} size={16} />
       </span>
       <div className="aw-later__text">
-        <Link className="aw-later__title" to={item.href}>
-          {title}
-        </Link>
+        {/* A reminder lives here; it has nowhere else to open. */}
+        {item.kind === 'reminder' ? (
+          <span className="aw-later__title">{title}</span>
+        ) : (
+          <Link className="aw-later__title" to={item.href}>
+            {title}
+          </Link>
+        )}
         <span className="aw-later__meta">
           {savedMeta(item)}
-          {item.note && item.kind !== 'reminder' ? <span className="aw-later__note"> · {item.note}</span> : null}
+          {note ? <span className="aw-later__note"> · {note}</span> : null}
         </span>
       </div>
       <div className="aw-later__end">
         {item.remindAt && !item.done ? (
           <span title={formatFullDate(item.remindAt)}>
             <StatusChip icon="clock" tone={due ? 'warning' : 'muted'}>
-              {describeWhen(item.remindAt, now)}
+              {due ? `Due · ${describeWhen(item.remindAt, now)}` : describeWhen(item.remindAt, now)}
             </StatusChip>
           </span>
         ) : null}
@@ -81,11 +99,11 @@ export function SavedRow({
         <IconButton
           disabled={busy}
           icon={item.done ? 'undo' : 'check'}
-          label={item.done ? 'Move back to Later' : 'Mark done'}
+          label={item.done ? 'Move back to Saved' : 'Mark done'}
           onClick={() => onDone(!item.done)}
           size="sm"
         />
-        <IconButton disabled={busy} icon="trash" label="Remove" onClick={onRemove} size="sm" />
+        <IconButton disabled={busy} icon="trash" label="Remove from Later" onClick={onRemove} size="sm" />
       </div>
     </li>
   )
@@ -102,6 +120,7 @@ export function ScheduledRow({
   item,
   now,
   onCancel,
+  onCopy,
   onEdit,
   onReschedule,
   onSendNow,
@@ -110,19 +129,30 @@ export function ScheduledRow({
   item: ScheduledMessage
   now: Date
   onCancel: () => void
+  onCopy: () => void
   onEdit: () => void
   onReschedule: () => void
   onSendNow: () => void
 }) {
   const waiting = item.status === 'scheduled'
+  // A failed message keeps every way to rescue its text; throwing it away asks first.
+  const menu: MenuEntry[] = [
+    { label: 'Change time…', icon: 'clock', onSelect: onReschedule },
+    ...(plainOnly(item) ? [{ label: 'Edit text…', icon: 'pencil' as const, onSelect: onEdit }] : []),
+    { label: 'Copy text', icon: 'copy', onSelect: onCopy },
+    { separator: true },
+    waiting
+      ? { label: 'Cancel message…', icon: 'x', danger: true, onSelect: onCancel }
+      : { label: 'Discard message…', icon: 'trash', danger: true, onSelect: onCancel },
+  ]
   return (
     <li className="aw-later__row">
-      <span className="aw-later__icon">
-        <Icon name={item.status === 'failed' ? 'circle-alert' : 'clock'} size={16} />
+      <span className={`aw-later__icon${waiting ? '' : ' is-failed'}`}>
+        <Icon name={waiting ? 'clock' : 'circle-alert'} size={16} />
       </span>
       <div className="aw-later__text">
         <Link className="aw-later__title" to={item.href}>
-          {item.plainText}
+          {plainPreview(item.plainText, 200) || 'A message'}
         </Link>
         <span className="aw-later__meta">
           To {item.place} · {item.projectName}
@@ -135,24 +165,13 @@ export function ScheduledRow({
             {waiting ? describeWhen(item.sendAt, now) : 'Not sent'}
           </StatusChip>
         </span>
-        {waiting ? (
-          <>
-            <IconButton disabled={busy} icon="send" label="Send now" onClick={onSendNow} size="sm" />
-            <Menu
-              items={[
-                { label: 'Change time…', icon: 'clock', onSelect: onReschedule },
-                ...(plainOnly(item) ? [{ label: 'Edit text…', icon: 'pencil' as const, onSelect: onEdit }] : []),
-                { separator: true },
-                { label: 'Cancel message', icon: 'x', danger: true, onSelect: onCancel },
-              ]}
-              label={`Scheduled message to ${item.place}`}
-              placement="bottom-end"
-              trigger={<IconButton disabled={busy} icon="more" label="More" size="sm" />}
-            />
-          </>
-        ) : (
-          <IconButton disabled={busy} icon="trash" label="Dismiss" onClick={onCancel} size="sm" />
-        )}
+        <IconButton disabled={busy} icon={waiting ? 'send' : 'retry'} label={waiting ? 'Send now' : 'Try sending again'} onClick={onSendNow} size="sm" />
+        <Menu
+          items={menu}
+          label={`Scheduled message to ${item.place}`}
+          placement="bottom-end"
+          trigger={<IconButton disabled={busy} icon="more" label="More" size="sm" />}
+        />
       </div>
     </li>
   )

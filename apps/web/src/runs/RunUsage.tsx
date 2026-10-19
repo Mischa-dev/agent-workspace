@@ -1,18 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { Button, ErrorState, ListSkeleton, Section, SegmentedControl, formatShortDate } from '../ui'
+import { ErrorState, ListSkeleton, Section, SegmentedControl, formatShortDate } from '../ui'
 import { getUsage, runKeys, type UsageGroup, type UsageReport, type UsageRow } from './api'
 import { formatCost, formatTokens } from './runModel'
 
 const GROUPS: { value: UsageGroup; label: string }[] = [
   { value: 'day', label: 'Day' },
   { value: 'project', label: 'Project' },
-  { value: 'account', label: 'Account' },
+  { value: 'account', label: 'Provider account' },
   { value: 'model', label: 'Model' },
 ]
 
-const COLUMN: Record<UsageGroup, string> = { day: 'Day', project: 'Project', account: 'Account', model: 'Model' }
+const COLUMN: Record<UsageGroup, string> = { day: 'Day', project: 'Project', account: 'Provider account', model: 'Model' }
 
 const DAYS = 30
 
@@ -24,17 +24,13 @@ export function RunUsage({ organizationId, projectId }: { organizationId?: strin
 
   return (
     <Section
+      actions={<SegmentedControl label="Group by" onChange={setGroupBy} options={GROUPS} value={groupBy} />}
       description={`What runs used in the last ${DAYS} days. Cost shows where the price of the model is known.`}
       id="runs-usage"
       title="Tokens and cost"
     >
-      <SegmentedControl label="Group by" onChange={setGroupBy} options={GROUPS} value={groupBy} />
       {usage.isPending ? <ListSkeleton label="Loading tokens and cost" rows={4} /> : null}
-      {usage.isError ? (
-        <ErrorState action={<Button onClick={() => void usage.refetch()}>Try again</Button>} title="Tokens and cost didn’t load">
-          {usage.error.message}
-        </ErrorState>
-      ) : null}
+      {usage.isError ? <ErrorState error={usage.error} onRetry={() => void usage.refetch()} title="Tokens and cost didn’t load" /> : null}
       {usage.data ? <UsageTable groupBy={groupBy} report={usage.data} /> : null}
     </Section>
   )
@@ -47,7 +43,7 @@ function rowLabel(groupBy: UsageGroup, row: UsageRow) {
 
 function UsageTable({ groupBy, report }: { groupBy: UsageGroup; report: UsageReport }) {
   if (report.rows.length === 0) {
-    return <p className="aw-runs__quiet">No runs used tokens since {formatShortDate(`${report.since}T12:00:00`)}.</p>
+    return <p className="aw-runs__quiet">No tokens used in the last {DAYS} days.</p>
   }
   return (
     <div className="aw-runs__tablewrap">

@@ -1,20 +1,15 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { isApiError } from '../api/errors'
 import { useAuthenticatedSession } from '../auth/session'
 import { createIdempotencyKey } from '../conversations/composerModel'
 import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { ConversationMessage } from '../conversations/types'
 import { conversationTitle, useDirectOverview } from '../direct/api'
 import { useProjects } from '../projects/hooks'
-import { Banner, Button, Dialog, SelectField, TextArea, TextField, showToast } from '../ui'
+import { Banner, Button, Dialog, SelectField, TextArea, TextField, describeError, plainPreview, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import { forwardMessage } from './api'
-
-function failure(reason: unknown, fallback: string) {
-  return isApiError(reason) ? reason.message : reason instanceof Error ? reason.message : fallback
-}
 
 type Destination = { id: string; label: string; group: string }
 
@@ -79,7 +74,7 @@ export function ForwardDialog({
         : `/messages/${encodeURIComponent(chosen.id)}`
       showToast({ tone: 'success', title: `Forwarded to ${chosen.label}`, action: { label: 'Open', onSelect: () => navigate(href) } })
     } catch (reason) {
-      setError(failure(reason, 'It wasn’t forwarded. Try again.'))
+      setError(describeError(reason).message)
     } finally {
       setBusy(false)
     }
@@ -88,9 +83,10 @@ export function ForwardDialog({
   return (
     <Dialog
       description="People there see the original only if they can see where it was said."
+      dirty={Boolean(comment.trim())}
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button busy={busy} disabled={!chosen} icon="send" type="submit" variant="primary">
@@ -108,7 +104,7 @@ export function ForwardDialog({
         <div className="aw-forward__meta">
           <span className="aw-forward__author">{message.author.displayName}</span>
         </div>
-        <p className="aw-forward__text">{message.plainText.slice(0, 400)}</p>
+        <p className="aw-forward__text">{plainPreview(message.plainText, 400)}</p>
       </blockquote>
       {choices.length > 1 ? (
         <SelectField
@@ -169,8 +165,12 @@ export function MessageTaskDialog({
   projectId: string
 }) {
   const navigate = useNavigate()
-  const [title, setTitle] = useState(() => firstLine(message.plainText))
-  const [description, setDescription] = useState(() => `From ${message.author.displayName}:\n\n> ${message.plainText.slice(0, 2_000).replace(/\n/g, '\n> ')}`)
+  const [initial] = useState(() => ({
+    title: firstLine(message.plainText),
+    description: `From ${message.author.displayName}:\n\n> ${message.plainText.slice(0, 2_000).replace(/\n/g, '\n> ')}`,
+  }))
+  const [title, setTitle] = useState(initial.title)
+  const [description, setDescription] = useState(initial.description)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [key] = useState(createIdempotencyKey)
@@ -196,7 +196,7 @@ export function MessageTaskDialog({
         action: { label: 'Open', onSelect: () => navigate(`/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(item.id)}`) },
       })
     } catch (reason) {
-      setError(failure(reason, 'The task wasn’t created. Try again.'))
+      setError(describeError(reason).message)
     } finally {
       setBusy(false)
     }
@@ -205,9 +205,10 @@ export function MessageTaskDialog({
   return (
     <Dialog
       description="The task links back to this message."
+      dirty={title !== initial.title || description !== initial.description}
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">

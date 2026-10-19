@@ -1,12 +1,14 @@
 // Before the canvas chunk loads: Excalidraw reads its font path as it starts.
 import './assetPath'
 
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
+import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
+import { usePageTitle } from '../shell/documentTitleModel'
 import { useTheme } from '../theme/themeContext'
 import {
   AvatarStack,
@@ -21,10 +23,12 @@ import {
   actorKind,
   showToast,
 } from '../ui'
+import type { SaveFailure } from './BoardCanvas'
 import {
   duplicateWhiteboard,
   getScene,
   getWhiteboard,
+  isDarkPreset,
   updateWhiteboard,
   whiteboardKeys,
   whiteboardPath,
@@ -32,23 +36,35 @@ import {
 } from './api'
 import { HistoryDialog, LinksDialog } from './BoardPanels'
 import { RenameDialog } from './dialogs'
-import { errorText } from './errors'
 import { saveLabel, type SaveState } from './sync'
 import './whiteboards.css'
 
 const BoardCanvas = lazy(() => import('./BoardCanvas'))
+
+/** Someone counts as drawing now while their last change is this recent. */
+const DRAWING_MS = 2 * 60_000
+
+/** The time, read again every half minute, so "is drawing" fades once they stop. */
+function useNow() {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return now
+}
 
 export function WhiteboardPage() {
   const { whiteboardId = '' } = useParams()
   const session = useAuthenticatedSession()
   return (
     <AppShell mainClassName="aw-main--whiteboard" user={session.user}>
-      <Board key={whiteboardId} whiteboardId={whiteboardId} />
+      <Board key={whiteboardId} viewerId={session.user.actorId} whiteboardId={whiteboardId} />
     </AppShell>
   )
 }
 
-function Board({ whiteboardId }: { whiteboardId: string }) {
+function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: string }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { preset } = useTheme()
@@ -64,27 +80,26 @@ function Board({ whiteboardId }: { whiteboardId: string }) {
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [editors, setEditors] = useState<Editor[]>([])
   const [panel, setPanel] = useState<'links' | 'history' | 'rename' | null>(null)
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null)
+  const now = useNow()
+  usePageTitle(detail.data?.whiteboard.title ?? null)
   if (detail.isPending || scene.isPending) return <PageSkeleton cards={1} label="Loading whiteboard" />
   if (detail.isError || scene.isError || !detail.data || !scene.data) {
     return (
       <div className="aw-page">
         <ErrorState
-          action={
-            <Button icon="retry" onClick={() => void Promise.all([detail.refetch(), scene.refetch()])}>
-              Try again
-            </Button>
-          }
+          error={detail.error ?? scene.error}
+          onRetry={() => void Promise.all([detail.refetch(), scene.refetch()])}
           title="This whiteboard didn’t open"
-        >
-          {errorText(detail.error ?? scene.error, 'It may have been removed, or you may not have access to it.')}
-        </ErrorState>
+        />
       </div>
     )
   }
   const { whiteboard, canEdit, links } = detail.data
   const editable = canEdit && !whiteboard.deleted
-  const others = (editors.length ? editors : scene.data.recentEditors).filter((editor) => editor.actorId)
-  const agents = others.filter((editor) => actorKind(editor.kind) === 'agent')
+  // Who else has drawn here lately; you're not in your own list.
+  const others = (editors.length ? editors : scene.data.recentEditors).filter((editor) => editor.actorId && editor.actorId !== viewerId)
+  const agents = others.filter((editor) => actorKind(editor.kind) === 'agent' && now - new Date(editor.at).getTime() < DRAWING_MS)
   const refresh = () => queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
   const trash = (deleted: boolean) =>
     updateWhiteboard(whiteboard.id, { deleted })
@@ -95,14 +110,16 @@ function Board({ whiteboardId }: { whiteboardId: string }) {
           navigate('/whiteboards')
         }
       })
-      .catch((reason: unknown) => showToast({ tone: 'danger', title: errorText(reason, 'That didn’t work.') }))
+      .catch((reason: unknown) =>
+        toastError(deleted ? 'The whiteboard wasn’t moved to the trash' : 'The whiteboard wasn’t restored', reason),
+      )
   const duplicate = () =>
     duplicateWhiteboard(whiteboard.id)
       .then((copy) => {
         void refresh()
         navigate(whiteboardPath(copy.whiteboard.id))
       })
-      .catch((reason: unknown) => showToast({ tone: 'danger', title: errorText(reason, 'The board wasn’t copied.') }))
+      .catch((reason: unknown) => toastError('The whiteboard wasn’t copied', reason))
   return (
     <div className="aw-wb">
       <header className="aw-wb__bar">
@@ -154,23 +171,33 @@ function Board({ whiteboardId }: { whiteboardId: string }) {
         />
       </header>
       {whiteboard.deleted ? (
-        <Banner tone="offline" title="This board is in the trash.">
-          {canEdit ? (
-            <Button onClick={() => void trash(false)} size="sm">
-              Restore it
-            </Button>
-          ) : (
-            'Ask someone who can edit it to restore it.'
-          )}
+        <Banner
+          action={
+            canEdit ? (
+              <Button icon="undo" onClick={() => void trash(false)} size="sm">
+                Restore it
+              </Button>
+            ) : undefined
+          }
+          tone="offline"
+          title="This whiteboard is in the trash."
+        >
+          {canEdit ? null : 'Ask someone who can edit it to restore it.'}
+        </Banner>
+      ) : null}
+      {saveFailure && editable ? (
+        <Banner onRetry={saveFailure.retry} tone="danger" title="Your latest changes aren’t saved.">
+          {saveFailure.message} Keep this page open so they aren’t lost.
         </Banner>
       ) : null}
       <div className="aw-wb__canvas">
         <Suspense fallback={<PageSkeleton cards={1} decorative label="Loading the canvas" />}>
           <BoardCanvas
-            dark={preset === 'midnight'}
+            dark={isDarkPreset(preset)}
             editable={editable}
             initial={scene.data}
             onEditors={setEditors}
+            onSaveFailure={setSaveFailure}
             onSaveState={setSaveState}
             whiteboardId={whiteboard.id}
           />

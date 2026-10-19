@@ -1,16 +1,11 @@
 import { useState, type FormEvent } from 'react'
 
-import { isApiError } from '../api/errors'
-import { Banner, Button, Dialog, TextField, formatFullDate } from '../ui'
-import { parseLeadingWhen, toLocalInput, whenChoices } from './when'
+import { Banner, Button, Dialog, TextField, describeError } from '../ui'
+import { describeWhen, parseLeadingWhen, toLocalInput, whenChoices } from './when'
 
 /** Outside the component: the time is read when it's submitted. */
 function isPast(at: Date) {
   return at.getTime() <= Date.now()
-}
-
-function failure(reason: unknown, fallback: string) {
-  return isApiError(reason) ? reason.message : reason instanceof Error ? reason.message : fallback
 }
 
 /** Pick a custom time: a date and time field, or words like "friday 3pm". */
@@ -62,7 +57,7 @@ export function TimeDialog({
       await onPick(at, note.trim())
       onClose()
     } catch (reason) {
-      setError(failure(reason, 'That didn’t work. Try again.'))
+      setError(describeError(reason).message)
     } finally {
       setBusy(false)
     }
@@ -71,9 +66,10 @@ export function TimeDialog({
   return (
     <Dialog
       description={description}
+      dirty={Boolean(note.trim() || words.trim())}
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button busy={busy} type="submit" variant="primary">
@@ -92,7 +88,7 @@ export function TimeDialog({
       ) : null}
       <TextField
         data-autofocus={noteLabel ? undefined : true}
-        hint={words.trim() ? (typedAt ? formatFullDate(typedAt.toISOString()) : 'Not a time yet') : 'Or type it, like “friday 3pm”.'}
+        hint={words.trim() ? (typedAt ? describeWhen(typedAt) : 'Not a time yet') : 'Or type it, like “friday 3pm”.'}
         label="When"
         onChange={(event) => setWords(event.target.value)}
         placeholder="tomorrow at 3pm"

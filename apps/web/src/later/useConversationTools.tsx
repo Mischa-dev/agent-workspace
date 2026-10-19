@@ -5,7 +5,8 @@ import { Link, useNavigate } from 'react-router-dom'
 
 import { createIdempotencyKey } from '../conversations/composerModel'
 import type { ConversationKind, MessageContentV1 } from '../conversations/types'
-import { Banner, showToast, type MenuEntry } from '../ui'
+import { toastError } from '../app/mutations'
+import { Banner, countLabel, showToast, type MenuEntry } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import {
   invalidateLater,
@@ -18,7 +19,7 @@ import {
   type NotificationLevel,
 } from './api'
 import { commandsFor, type SlashCommand, type SlashOutcome } from './slashCommands'
-import { parseReminder, parseSchedule, whenPhrase } from './when'
+import { atPhrase, parseReminder, parseSchedule, whenPhrase } from './when'
 
 const LEVELS: { level: NotificationLevel; label: string }[] = [
   { level: 'all', label: 'Every new message' },
@@ -82,7 +83,7 @@ export function useConversationTools({
         if (reminder.at.getTime() <= Date.now()) throw new Error('That time has passed.')
         await saveForLater({ note: reminder.note, remindAt: reminder.at.toISOString() })
         invalidateLater(queryClient)
-        showToast({ tone: 'success', title: `I’ll remind you ${whenPhrase(reminder.at)}`, description: reminder.note, action: viewLater() })
+        showToast({ tone: 'success', title: `Reminder set for ${atPhrase(reminder.at)}`, description: reminder.note, action: viewLater() })
         return { kind: 'done' }
       }
       case 'later': {
@@ -153,11 +154,17 @@ export function useConversationTools({
       checked: current === item.level,
       onSelect: () =>
         void changeLevel(item.level === 'mentions' && kind !== 'thread' ? null : item.level).catch((reason: unknown) =>
-          showToast({ tone: 'danger', title: 'That didn’t change.', description: reason instanceof Error ? reason.message : 'Try again.' }),
+          toastError('Your notification setting didn’t change', reason),
         ),
     })),
     ...(kind === 'thread' && level.data?.own
-      ? [{ label: 'Follow the channel', icon: 'undo' as const, onSelect: () => void changeLevel(null).catch(() => undefined) }]
+      ? [
+          {
+            label: 'Follow the channel',
+            icon: 'undo' as const,
+            onSelect: () => void changeLevel(null).catch((reason: unknown) => toastError('Your notification setting didn’t change', reason)),
+          },
+        ]
       : []),
   ]
 
@@ -165,7 +172,7 @@ export function useConversationTools({
     <Banner className="aw-conv__banner" icon="clock" tone="info">
       {waiting.length === 1
         ? `You have a message scheduled to send here ${whenPhrase(waiting[0].sendAt)}.`
-        : `You have ${waiting.length} messages scheduled here.`}{' '}
+        : `You have ${countLabel(waiting.length, 'message')} scheduled here.`}{' '}
       <Link to="/later?view=scheduled">See scheduled</Link>
     </Banner>
   ) : null

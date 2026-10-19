@@ -148,6 +148,8 @@ pub struct DecisionView {
     pub superseded_by_decision_id: Option<Uuid>,
     pub source_conversation_id: Option<Uuid>,
     pub source_conversation_name: Option<String>,
+    /// channel, thread, dm or group: how the app links to the source.
+    pub source_conversation_kind: Option<String>,
     pub source_message_id: Option<Uuid>,
     pub decided_by: String,
     pub via: Option<String>,
@@ -713,7 +715,8 @@ async fn insert_revision(
 const DECISION_SELECT: &str = r#"
     SELECT decision.id, decision.project_id, decision.title, decision.detail, decision.status,
            decision.superseded_by_decision_id, decision.source_conversation_id,
-           source.name AS source_conversation_name, decision.source_message_id,
+           source.name AS source_conversation_name, source.kind AS source_conversation_kind,
+           decision.source_message_id,
            COALESCE(decider.display_name, 'Former member') AS decided_by,
            via_client.client_name AS via, decision.created_at::text AS created_at
     FROM project_decisions decision

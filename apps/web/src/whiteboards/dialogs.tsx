@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { useProjects } from '../projects/hooks'
-import { Banner, Button, Dialog, SelectField, TextField } from '../ui'
+import { Banner, Button, Dialog, SelectField, TextField, describeError } from '../ui'
 import {
   createWhiteboard,
   updateWhiteboard,
@@ -13,7 +13,6 @@ import {
   type Whiteboard,
   type Workspace,
 } from './api'
-import { errorText } from './errors'
 
 /**
  * Makes a board. From the Whiteboards page it asks where the board lives;
@@ -58,17 +57,20 @@ export function NewWhiteboardDialog({
         onClose()
         navigate(whiteboardPath(created.whiteboard.id))
       })
-      .catch((reason: unknown) => setError(errorText(reason, 'The board wasn’t created.')))
+      .catch((reason: unknown) => setError(describeError(reason).message))
       .finally(() => setBusy(false))
   }
   return (
     <Dialog
       description={link ? 'It’s linked here and opens to draw on. You can link it to more tasks and pages later.' : undefined}
+      dirty={Boolean(title.trim())}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose} variant="secondary">
+            Cancel
+          </Button>
           <Button busy={busy} disabled={!title.trim()} type="submit" variant="primary">
-            Create board
+            Create whiteboard
           </Button>
         </>
       }
@@ -110,7 +112,7 @@ function PlacePicker({
   ]
   return (
     <SelectField
-      hint="Project boards are only for that project’s members."
+      hint="A project’s whiteboards are only for its members."
       label="Who can see it"
       onChange={(event) => onChange(event.target.value)}
       value={value}
@@ -139,14 +141,17 @@ export function RenameDialog({ board, onClose, open }: { board: Whiteboard; onCl
         void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all })
         onClose()
       })
-      .catch((reason: unknown) => setError(errorText(reason, 'The board wasn’t renamed.')))
+      .catch((reason: unknown) => setError(describeError(reason).message))
       .finally(() => setBusy(false))
   }
   return (
     <Dialog
+      dirty={title.trim() !== board.title}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose} variant="secondary">
+            Cancel
+          </Button>
           <Button busy={busy} disabled={!title.trim() || title.trim() === board.title} type="submit" variant="primary">
             Rename
           </Button>

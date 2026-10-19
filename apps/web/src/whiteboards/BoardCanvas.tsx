@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useOptionalRealtime } from '../realtime/realtimeContext'
 import { onWhiteboardChange } from '../realtime/whiteboardEvents'
+import { describeError } from '../ui'
 import { getFile, getScene, uploadFile, writeScene, type Editor, type SceneView, type StoredElement } from './api'
 import { missingFiles, remember, unsaved, type Known, type SaveState } from './sync'
 
@@ -15,7 +16,12 @@ import { missingFiles, remember, unsaved, type Known, type SaveState } from './s
 const SAVE_DELAY_MS = 250
 /** How often the board checks for changes while the live connection is down. */
 const POLL_MS = 5_000
+/** A failed save is tried again after 3, then 6 seconds; after that the page says why and waits for you. */
 const RETRY_MS = 3_000
+const RETRIES = 2
+
+/** Why saving stopped, and how to try again. */
+export type SaveFailure = { message: string; retry: () => void }
 
 export type BoardCanvasProps = {
   whiteboardId: string
@@ -24,6 +30,8 @@ export type BoardCanvasProps = {
   dark: boolean
   onSaveState: (state: SaveState) => void
   onEditors: (editors: Editor[]) => void
+  /** Saving has failed more than a retry can fix (null once it saves again). */
+  onSaveFailure?: (failure: SaveFailure | null) => void
 }
 
 type Element = OrderedExcalidrawElement
@@ -31,7 +39,7 @@ type Element = OrderedExcalidrawElement
 const asStored = (elements: readonly Element[]) => elements as unknown as StoredElement[]
 const asElements = (elements: readonly StoredElement[]) => elements as unknown as Element[]
 
-export default function BoardCanvas({ whiteboardId, initial, editable, dark, onSaveState, onEditors }: BoardCanvasProps) {
+export default function BoardCanvas({ whiteboardId, initial, editable, dark, onSaveState, onEditors, onSaveFailure }: BoardCanvasProps) {
   const navigate = useNavigate()
   const realtime = useOptionalRealtime()
   const live = realtime?.connection === 'live'
@@ -51,11 +59,21 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
   const fetching = useRef<Promise<void> | null>(null)
   const fetchAgain = useRef(false)
   const failed = useRef(false)
-  const callbacks = useRef({ onSaveState, onEditors })
+  const failures = useRef(0)
+  const retryTimer = useRef<number | undefined>(undefined)
+  // Once the board closes, a last save may still go out, but nothing retries.
+  const closed = useRef(false)
+  const callbacks = useRef({ onSaveState, onEditors, onSaveFailure })
   const saveRef = useRef<() => Promise<void>>(() => Promise.resolve())
   useEffect(() => {
-    callbacks.current = { onSaveState, onEditors }
-  }, [onEditors, onSaveState])
+    callbacks.current = { onSaveState, onEditors, onSaveFailure }
+  }, [onEditors, onSaveFailure, onSaveState])
+  useEffect(() => {
+    closed.current = false
+    return () => {
+      closed.current = true
+    }
+  }, [])
 
   const loadFiles = useCallback(
     async (elements: readonly StoredElement[]) => {
@@ -118,7 +136,7 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
     const files = board.getFiles() as BinaryFiles
     const newFiles = Object.values(files).filter((file) => !uploadedFiles.current.has(file.id))
     if (changed.length === 0 && newFiles.length === 0) {
-      callbacks.current.onSaveState(failed.current ? 'error' : 'saved')
+      callbacks.current.onSaveState(failed.current ? (failures.current > RETRIES ? 'failed' : 'error') : 'saved')
       return
     }
     saving.current = true
@@ -153,10 +171,33 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
         }
       }
       failed.current = false
-    } catch {
+      if (failures.current) {
+        failures.current = 0
+        callbacks.current.onSaveFailure?.(null)
+      }
+    } catch (reason) {
       failed.current = true
-      callbacks.current.onSaveState(navigator.onLine === false ? 'offline' : 'error')
-      window.setTimeout(() => void saveRef.current(), RETRY_MS)
+      window.clearTimeout(retryTimer.current)
+      if (closed.current) return
+      if (navigator.onLine === false) {
+        // Coming back online saves again; nothing to retry until then.
+        callbacks.current.onSaveState('offline')
+        return
+      }
+      failures.current += 1
+      if (failures.current <= RETRIES) {
+        callbacks.current.onSaveState('error')
+        retryTimer.current = window.setTimeout(() => void saveRef.current(), RETRY_MS * failures.current)
+      } else {
+        callbacks.current.onSaveState('failed')
+        callbacks.current.onSaveFailure?.({
+          message: describeError(reason).message,
+          retry: () => {
+            failures.current = 0
+            void saveRef.current()
+          },
+        })
+      }
       return
     } finally {
       saving.current = false
@@ -218,6 +259,7 @@ export default function BoardCanvas({ whiteboardId, initial, editable, dark, onS
     return () => {
       window.removeEventListener('beforeunload', warn)
       window.clearTimeout(saveTimer.current)
+      window.clearTimeout(retryTimer.current)
       void save()
     }
   }, [editable, known, save])
