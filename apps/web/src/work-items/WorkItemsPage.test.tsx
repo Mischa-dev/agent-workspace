@@ -31,7 +31,6 @@ import { ApiError } from '../api/errors'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { useProjectConversationSidebar } from '../conversations/hooks'
-import { ToastViewport, clearToasts } from '../ui'
 
 vi.mock('../auth/session', () => ({
   useAuthenticatedSession: () => ({ user: { displayName: 'Mischa' } }),
@@ -283,7 +282,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  clearToasts()
   vi.clearAllMocks()
   vi.unstubAllGlobals()
 })
@@ -312,7 +310,6 @@ function renderDetail() {
           <Route element={<WorkItemDetailPage />} path="/projects/:projectId/work-items/:workItemId" />
         </Routes>
       </MemoryRouter>
-      <ToastViewport />
     </QueryClientProvider>,
   )
 }
@@ -451,14 +448,35 @@ describe('Work Item detail', () => {
     expect(prompt.length).toBeLessThanOrEqual(2_000)
   })
 
-  it('says why a task can’t open in Codex yet, from the task’s menu', async () => {
+  it('offers to open a task locally only when its one repository allows it', async () => {
     renderDetail()
-
     fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in Codex' }))
+    expect(await screen.findByRole('menuitem', { name: 'Copy link' })).toBeVisible()
+    expect(screen.queryByRole('menuitem', { name: 'Open locally' })).not.toBeInTheDocument()
+    cleanup()
 
-    expect(await screen.findByText('This task can’t open in Codex yet.')).toBeVisible()
-    expect(screen.getByText('Link one trusted repository before opening this task in Codex.')).toBeVisible()
+    vi.mocked(useWorkItem).mockReturnValue({
+      data: {
+        ...workItem,
+        linkedRepositories: [{
+          id: 'repository-a',
+          owner: 'Mischa-dev',
+          name: 'agent-workspace',
+          cloneUrl: 'https://github.com/Mischa-dev/agent-workspace.git',
+          role: 'primary',
+          preparationState: 'ready',
+          trusted: true,
+          available: true,
+          archivedAt: null,
+          href: `/projects/${projectId}/settings`,
+        }],
+      },
+      isPending: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useWorkItem>)
+    renderDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
+    expect(await screen.findByRole('menuitem', { name: 'Open locally' })).toBeVisible()
   })
 
   it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', async () => {

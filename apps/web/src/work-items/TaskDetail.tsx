@@ -211,13 +211,8 @@ function TaskDetailBody({
       .catch(() => showToast({ tone: 'danger', title: 'That didn’t copy. Try again.' }))
   }
 
-  const openInCodex = () => {
-    const link = projectArchived
-      ? { href: null, reason: 'Restore this project before opening its tasks in Codex.' }
-      : buildOpenInCodexLink(item, window.location.origin)
-    if (link.href) window.location.assign(link.href)
-    else showToast({ title: 'This task can’t open in Codex yet.', description: link.reason ?? undefined, duration: 8_000 })
-  }
+  // Opens the coding app on this computer with the task ready; offered only when the task's one repository allows it.
+  const local = projectArchived ? null : buildOpenInCodexLink(item, window.location.origin).href
 
   const menu: MenuEntry[] = [
     { label: 'Copy link', icon: 'link', onSelect: () => copy(`${window.location.origin}${workItemHref(item.projectId, item.id)}`, 'Link copied') },
@@ -236,7 +231,7 @@ function TaskDetailBody({
         : { label: 'Mark as blocked…', icon: 'circle-minus', onSelect: () => afterMenu(() => setBlocking(true)) },
     )
   }
-  menu.push({ separator: true }, { label: 'Open in Codex', icon: 'terminal', onSelect: openInCodex })
+  if (local) menu.push({ separator: true }, { label: 'Open locally', icon: 'terminal', onSelect: () => window.location.assign(local) })
   if (archive.allowed) {
     menu.push(
       { separator: true },
