@@ -8,11 +8,11 @@ import { formatCost, formatTokens } from './runModel'
 const GROUPS: { value: UsageGroup; label: string }[] = [
   { value: 'day', label: 'Day' },
   { value: 'project', label: 'Project' },
-  { value: 'account', label: 'Provider account' },
+  { value: 'account', label: 'Account' },
   { value: 'model', label: 'Model' },
 ]
 
-const COLUMN: Record<UsageGroup, string> = { day: 'Day', project: 'Project', account: 'Provider account', model: 'Model' }
+const COLUMN: Record<UsageGroup, string> = { day: 'Day', project: 'Project', account: 'Account', model: 'Model' }
 
 const DAYS = 30
 

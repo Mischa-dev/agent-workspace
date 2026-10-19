@@ -42,7 +42,7 @@ function AnalyzeButton({ analyze, status }: { analyze: ReturnType<typeof useAnal
 function AnalyzeProblem({ analyze }: { analyze: ReturnType<typeof useAnalyze> }) {
   if (!analyze.isError) return null
   return (
-    <Banner className="aw-page__banner" onRetry={() => analyze.mutate()} title="The analysis didn’t start" tone="danger">
+    <Banner className="aw-page__banner" onRetry={() => analyze.mutate()} title="The analysis didn’t start." tone="danger">
       {aiErrorMessage(analyze.error, 'Analyzing')}
     </Banner>
   )

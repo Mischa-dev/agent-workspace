@@ -515,7 +515,10 @@ export function TimelineEntries({
     if (!previous || dayKey(previous.createdAt) !== dayKey(entry.createdAt)) {
       dividers.push(<DayDivider key="day" label={dayLabel(entry.createdAt)} />)
     }
-    if (!newShown && firstUnreadSequence != null && entry.sequence >= firstUnreadSequence) {
+    // What you wrote yourself is never new to you, even when it was sent from
+    // somewhere that didn't mark the conversation read (a notification reply).
+    const own = Boolean(viewerId && entry.message?.author.id === viewerId)
+    if (!newShown && firstUnreadSequence != null && entry.sequence >= firstUnreadSequence && !own) {
       newShown = true
       dividers.push(<NewDivider key="new" />)
     }

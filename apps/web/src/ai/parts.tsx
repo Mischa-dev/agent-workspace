@@ -216,7 +216,7 @@ export function AiNotConfigured({ projectId, status }: { projectId: string; stat
       className="aw-page__banner"
       icon="bot"
       role="note"
-      title="No model is set up for this project yet"
+      title="No model is set up for this project yet."
       tone="info"
     >
       {status.problem ?? 'Choose a provider and add its key in settings.'} Readiness and the graph still work without one.

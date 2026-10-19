@@ -108,9 +108,9 @@ impl AiError {
         match self {
             Self::NotConfigured(message) => message.clone(),
             Self::OverBudget { budget_usd } => format!(
-                "This workspace has spent its AI budget for the month (${budget_usd}). An admin can raise it in Models settings."
+                "This workspace has spent its model budget for the month (${budget_usd}). An admin can raise it in Models settings."
             ),
-            Self::Provider(error) => format!("The AI call failed: {}.", error.category()),
+            Self::Provider(error) => format!("The model call failed: {}.", error.category()),
             Self::InvalidOutput => {
                 "The model's answer didn't have the expected shape, twice. Try again, or pick another model.".to_owned()
             }
@@ -200,7 +200,7 @@ pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<Resol
     };
     let provider = ProviderId::parse(&provider_id).ok_or_else(|| {
         AiError::NotConfigured(format!(
-            "The AI provider \"{provider_id}\" isn't one this server knows. Choose another in Models settings."
+            "The model provider \"{provider_id}\" isn't one this server knows. Choose another in Models settings."
         ))
     })?;
     let manifest = provider.manifest();

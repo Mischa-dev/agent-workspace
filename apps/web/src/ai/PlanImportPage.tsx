@@ -239,7 +239,7 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
     return (
       <>
         <PlanningIntro title={plan.title}>{back}</PlanningIntro>
-        <Banner title="This import stopped" tone="danger">
+        <Banner title="This import stopped." tone="danger">
           {plan.error ?? 'Something went wrong.'}{' '}
           {plan.createdTasks ? `${countLabel(plan.createdTasks, 'task was', 'tasks were')} created before it stopped.` : ''}
         </Banner>
@@ -254,7 +254,7 @@ function PlanReview({ importId, projectId }: { importId: string; projectId: stri
         <PlanningIntro title={plan.title}>{back}</PlanningIntro>
         <div aria-live="polite" className="aw-ai-progress">
           {done ? (
-            <Banner icon="circle-check" title="Your plan is now tasks" tone="success">
+            <Banner icon="circle-check" title="Your plan is now tasks." tone="success">
               Created {countLabel(plan.createdMilestones, 'milestone')}, {countLabel(plan.createdTasks, 'task')} and{' '}
               {countLabel(plan.createdDependencies, 'dependency', 'dependencies')}.
             </Banner>

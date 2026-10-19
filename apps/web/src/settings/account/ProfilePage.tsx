@@ -92,6 +92,7 @@ export default function ProfilePage({ session, workspace }: SettingsPageProps) {
             busy={saveGithub.isPending}
             disabled={profile.isPending || githubLogin.trim() === (profile.data?.githubLogin ?? '')}
             type="submit"
+            variant="primary"
           >
             Save
           </Button>
