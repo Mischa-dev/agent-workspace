@@ -170,18 +170,17 @@ export function viewAtScope(resolved: ResolvedSetting, scope: SettingScope): Sco
   return { own, inherited, value: own ? own.value : inherited.value }
 }
 
-export function sourceLabel(source: SettingScope | 'default' | 'launch') {
+/** Where a value is set, as a setting's "Set in" line names it. */
+export function scopeName(source: SettingScope | 'default') {
   switch (source) {
     case 'workspace':
-      return 'the workspace'
+      return 'Workspace'
     case 'user':
-      return 'your own settings'
+      return 'Your own settings'
     case 'project':
-      return 'this Project'
-    case 'launch':
-      return 'this run'
+      return 'This project'
     default:
-      return 'the built-in default'
+      return 'Built-in default'
   }
 }
 
@@ -190,9 +189,9 @@ function humanizeChoice(value: string) {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
-/** A value as a person reads it: "On", "Fast", "Not set". */
-export function formatSettingValue(value: unknown, valueType: SettingValueType, options?: SettingOption[]) {
-  if (value === null || value === undefined || value === '') return 'Not set'
+/** A value as a person reads it: "On", "Fast", "Not set" (or what unset means for this setting). */
+export function formatSettingValue(value: unknown, valueType: SettingValueType, options?: SettingOption[], unsetLabel = 'Not set') {
+  if (value === null || value === undefined || value === '') return unsetLabel
   if (valueType.type === 'bool') return value === true ? 'On' : 'Off'
   const named = options?.find((option) => option.value === value)
   if (named) return named.label
@@ -200,5 +199,8 @@ export function formatSettingValue(value: unknown, valueType: SettingValueType, 
   return String(value)
 }
 
-/** Named choices for an identifier setting, such as the Project's repositories for `run.repository`. */
-export type SettingOption = { value: string; label: string }
+/**
+ * Names for a setting's values: the choices of an identifier setting, such as the project's repositories for
+ * `run.repository`, or better words for some of a choice setting's values. Choices with a `group` are listed under it.
+ */
+export type SettingOption = { value: string; label: string; group?: string }

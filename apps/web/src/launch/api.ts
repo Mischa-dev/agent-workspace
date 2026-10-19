@@ -166,8 +166,6 @@ export type AgentSession = {
   createdAt: string
 }
 
-export type SettingWrite = { setting: { key: string; value: unknown; source: SettingSource } }
-
 export type EffectiveSetting = { key: string; value: unknown; source: SettingSource; default: unknown }
 
 export type EffectiveSettings = {
@@ -240,18 +238,3 @@ export function getProjectSettings(projectId: string) {
   return requestJson<EffectiveSettings>(`/api/v1/settings/effective?projectId=${encodeURIComponent(projectId)}`)
 }
 
-export function setProjectSetting(projectId: string, key: string, value: unknown) {
-  return requestJson<SettingWrite>(`/api/v1/settings/values/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    json: { scope: 'project', projectId, value },
-    idempotencyKey: crypto.randomUUID(),
-  })
-}
-
-export function resetProjectSetting(projectId: string, key: string) {
-  return requestJson<SettingWrite>(`/api/v1/settings/values/${encodeURIComponent(key)}/reset`, {
-    method: 'POST',
-    json: { scope: 'project', projectId },
-    idempotencyKey: crypto.randomUUID(),
-  })
-}
