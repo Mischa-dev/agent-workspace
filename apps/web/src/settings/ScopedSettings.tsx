@@ -7,18 +7,32 @@ import { SettingField } from './SettingField'
 
 /**
  * The registry settings whose keys start with one of `prefixes`, as they apply
- * at `target`. New keys in the registry show up here without a code change.
+ * at `target`, in the order of the first prefix each matches (so a list of
+ * whole keys ending in a prefix like `ai.` puts those keys first). New keys in
+ * the registry show up here without a code change.
  */
 export function ScopedSettings({
   emptyText = 'There’s nothing to set here yet.',
+  onSaved,
   options,
   prefixes,
+  readOnlyNote = true,
   target,
+  unsetLabels,
+  workspaceHref,
 }: {
   emptyText?: string
+  /** Called with a setting's key after a change to it is saved. */
+  onSaved?: (key: string) => void
   options?: Record<string, SettingOption[]>
   prefixes: string[]
+  /** Say who can change these when the viewer can't; off where the page says it once. */
+  readOnlyNote?: boolean
   target: SettingsTarget
+  /** What leaving each setting unset means, by key. */
+  unsetLabels?: Record<string, string>
+  /** The workspace settings page with these settings, for "Set in: Workspace" links on a project. */
+  workspaceHref?: string
 }) {
   const registry = useSettingsRegistry()
   const effective = useEffectiveSettings(target)
@@ -58,19 +72,19 @@ export function ScopedSettings({
     )
   }
 
-  const definitions = registry.data.filter(
-    (definition) =>
-      definition.scopes.includes(target.scope) && prefixes.some((prefix) => definition.key.startsWith(prefix)),
-  )
+  const rank = (key: string) => prefixes.findIndex((prefix) => key.startsWith(prefix))
+  const definitions = registry.data
+    .filter((definition) => definition.scopes.includes(target.scope) && rank(definition.key) >= 0)
+    .sort((left, right) => rank(left.key) - rank(right.key))
   const canEdit =
     target.scope === 'project' ? effective.data.capabilities.manageProject : effective.data.capabilities.manageWorkspace
 
   return (
     <div className="aw-settings-stack">
-      {!canEdit && (
+      {!canEdit && readOnlyNote && (
         <Banner role="note" tone="info">
           {target.scope === 'project'
-            ? 'Only Project owners and admins can change these.'
+            ? 'Only project owners and admins can change these.'
             : 'Only workspace owners and admins can change these.'}
         </Banner>
       )}
@@ -83,9 +97,12 @@ export function ScopedSettings({
                 canEdit={canEdit}
                 definition={definition}
                 key={definition.key}
+                onSaved={onSaved ? () => onSaved(definition.key) : undefined}
                 options={options?.[definition.key]}
                 resolved={resolved}
                 target={target}
+                unsetLabel={unsetLabels?.[definition.key]}
+                workspaceHref={workspaceHref}
               />
             ) : null
           })}

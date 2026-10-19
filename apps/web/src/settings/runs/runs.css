@@ -1,0 +1,21 @@
+/* Runs and models settings */
+
+.aw-runs__line {
+  display: block;
+}
+
+.aw-runs__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-runs__prompt {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-runs__prompt textarea {
+  font: var(--t-code);
+}

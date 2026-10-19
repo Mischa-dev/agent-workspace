@@ -18,7 +18,20 @@ const LEGACY_PROJECT_TABS: Record<string, string> = {
   github: 'repositories',
 }
 
-/** Reads the part of the address after /settings/; `search` carries an old link's `?tab=`. */
+/** Pages that became part of another, and the section of it they became. */
+const MOVED_WORKSPACE_PAGES: Record<string, { page: string; section: string }> = {
+  ai: { page: 'runs', section: 'suggestions' },
+  'run-defaults': { page: 'runs', section: 'defaults' },
+}
+const MOVED_PROJECT_PAGES: Record<string, { page: string; section: string }> = {
+  ai: { page: 'runs', section: 'suggestions' },
+  environments: { page: 'runs', section: 'environments' },
+}
+
+/**
+ * Reads the part of the address after /settings/; `search` carries an old link's `?tab=`. A redirect to a moved
+ * page names its section after `#`; a link that already names a place on the page keeps its own.
+ */
 export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
   const segments = splat.split('/').filter(Boolean)
   let decoded: string[]
@@ -34,6 +47,8 @@ export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
     return decoded.length === 2 ? { kind: 'page', group, section: second } : { kind: 'redirect', to: ACCOUNT_HOME }
   }
   if (group === 'workspace') {
+    const moved = decoded.length === 2 ? MOVED_WORKSPACE_PAGES[second] : undefined
+    if (moved) return { kind: 'redirect', to: `${workspaceSettingsHref(moved.page)}#${moved.section}` }
     return decoded.length === 2
       ? { kind: 'page', group, section: second }
       : { kind: 'redirect', to: workspaceSettingsHref('general') }
@@ -44,7 +59,11 @@ export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
       const tab = new URLSearchParams(search).get('tab') ?? 'general'
       return { kind: 'redirect', to: projectSettingsHref(second, LEGACY_PROJECT_TABS[tab] ?? 'general') }
     }
-    if (decoded.length === 3) return { kind: 'page', group: 'project', projectId: second, section: third }
+    if (decoded.length === 3) {
+      const moved = MOVED_PROJECT_PAGES[third]
+      if (moved) return { kind: 'redirect', to: `${projectSettingsHref(second, moved.page)}#${moved.section}` }
+      return { kind: 'page', group: 'project', projectId: second, section: third }
+    }
   }
   return { kind: 'redirect', to: ACCOUNT_HOME }
 }

@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
-import { useEnvironments } from '../launch/hooks'
+import { queryKeys } from '../api/queryKeys'
+import { listHarnesses, pickableModels, type Harness, type RunSettings } from '../execution/api'
+import { RunSettingsFields } from '../execution/RunSettingsFields'
+import { useEnvironments, useProjectSettings } from '../launch/hooks'
+import { workspaceSettingsHref } from '../settings/paths'
 import { Banner, Button, Dialog, SWATCHES, SelectField, TextArea, TextField, showToast } from '../ui'
 import type { AgentProfile, ProfileHarness, ProfileInput, ProfileTemplate } from './api'
 import { useCreateProfile, useUpdateProfile } from './hooks'
@@ -39,6 +45,22 @@ function draftFrom(source: AgentProfile | ProfileTemplate | null): Draft {
   }
 }
 
+/**
+ * The model settings that still fit on `harness`: a model it doesn't list is
+ * dropped, and so are a reasoning level or speed the model that would run
+ * doesn't offer. Without a model list nothing can be checked, so it all goes.
+ */
+function fitTo(harness: Harness, draft: Pick<Draft, 'model' | 'reasoning' | 'speed'>) {
+  const models = pickableModels(harness)
+  const model = models.find((candidate) => candidate.id === draft.model)
+  const runs = model ?? models.find((candidate) => candidate.isDefault) ?? models[0]
+  return {
+    model: model ? draft.model : '',
+    reasoning: runs && (runs.reasoningLevels.length === 0 || runs.reasoningLevels.includes(draft.reasoning)) ? draft.reasoning : '',
+    speed: runs?.speeds.some((speed) => speed.id === draft.speed) ? draft.speed : '',
+  }
+}
+
 function instructionsHint(harness: ProfileHarness | undefined) {
   if (!harness) return 'Whether these go in as instructions or are added to the prompt depends on the project’s default harness.'
   return harness.takesInstructions
@@ -67,14 +89,31 @@ export function AgentProfileDialog({
   const create = useCreateProfile(projectId)
   const update = useUpdateProfile(projectId)
   const environments = useEnvironments(projectId)
+  const catalogs = useQuery({ queryKey: queryKeys.harnesses(projectId), queryFn: () => listHarnesses(projectId) })
+  const settings = useProjectSettings(projectId)
   const saving = create.isPending || update.isPending
   const error = create.error ?? update.error
   const harness = harnesses.find((choice) => choice.kind === draft.harness)
   const set = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }))
   const environmentChoices = (environments.data?.environments ?? []).filter((environment) => !draft.harness || environment.harness === draft.harness)
+  // The harness this agent runs on: its own, else the project's default when one is set.
+  const projectHarness = settings.data?.settings.find((setting) => setting.key === 'run.harness')?.value
+  const defaultKind = typeof projectHarness === 'string' && harnesses.some((choice) => choice.kind === projectHarness) ? projectHarness : ''
+  const runsOn = draft.harness || defaultKind
+  const listed = (catalogs.data ?? []).filter((catalog) => harnesses.some((choice) => choice.kind === catalog.kind))
+  const runsOnCatalog = listed.find((catalog) => catalog.kind === runsOn)
+  const withoutModels = runsOnCatalog && pickableModels(runsOnCatalog).length === 0 ? runsOnCatalog : null
+  const pickHarness = (kind: string) => {
+    const next = listed.find((catalog) => catalog.kind === (kind || defaultKind))
+    set({ harness: kind, environmentId: '', ...(next ? fitTo(next, draft) : {}) })
+  }
+  const pickSettings = (next: RunSettings) =>
+    set({ harness: next.harness ?? draft.harness, model: next.model ?? '', reasoning: next.reasoning ?? '', speed: next.speed ?? '' })
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    // Settings the harness can't check would only stop the agent's runs.
+    const runDefaults = runsOnCatalog ? fitTo(runsOnCatalog, draft) : draft
     const input: ProfileInput = {
       name: draft.name.trim(),
       handle: draft.handle.trim(),
@@ -82,7 +121,7 @@ export function AgentProfileDialog({
       color: draft.color || undefined,
       description: draft.description.trim(),
       harness: draft.harness || null,
-      runDefaults: { model: draft.model.trim() || null, reasoning: draft.reasoning.trim() || null, speed: draft.speed.trim() || null },
+      runDefaults: { model: runDefaults.model || null, reasoning: runDefaults.reasoning || null, speed: runDefaults.speed || null },
       instructions: draft.instructions,
       allowedTools: harness?.takesAllowedTools ? parseTools(draft.tools) : profile?.allowedTools ?? [],
       environmentId: draft.environmentId || null,
@@ -143,20 +182,36 @@ export function AgentProfileDialog({
           </SelectField>
         </div>
         <TextArea label="Description" maxLength={500} onChange={(event) => set({ description: event.target.value })} rows={2} value={draft.description} />
-        <SelectField label="Harness" onChange={(event) => set({ harness: event.target.value, environmentId: '' })} value={draft.harness}>
-          <option value="">The project’s default</option>
+        <SelectField
+          hint={
+            withoutModels ? (
+              // One piece, so the note's layout doesn't space the link apart.
+              <span>
+                {withoutModels.displayName} has nothing in its <Link to={`${workspaceSettingsHref('runs')}#models`}>model list</Link> yet, so
+                this agent uses its defaults.
+              </span>
+            ) : undefined
+          }
+          label="Harness"
+          onChange={(event) => pickHarness(event.target.value)}
+          value={draft.harness}
+        >
+          <option value="">
+            {defaultKind ? `The project’s default (${harnesses.find((choice) => choice.kind === defaultKind)?.displayName})` : 'The project’s default'}
+          </option>
           {harnesses.map((choice) => (
             <option key={choice.kind} value={choice.kind}>
               {choice.displayName}
             </option>
           ))}
         </SelectField>
-        <div className="aw-agentform__triple">
-          <TextField hint="Empty uses the harness default." label="Model" onChange={(event) => set({ model: event.target.value })} value={draft.model} />
-          <TextField label="Reasoning" onChange={(event) => set({ reasoning: event.target.value })} value={draft.reasoning} />
-          <TextField label="Speed" onChange={(event) => set({ speed: event.target.value })} value={draft.speed} />
-        </div>
-        <TextArea hint={instructionsHint(harness)} label="Instructions" onChange={(event) => set({ instructions: event.target.value })} rows={6} value={draft.instructions} />
+        <RunSettingsFields
+          harnesses={runsOn ? listed.filter((catalog) => catalog.kind === runsOn) : listed}
+          idPrefix="agent-profile"
+          onChange={pickSettings}
+          value={{ harness: draft.harness || undefined, model: draft.model || undefined, reasoning: draft.reasoning || undefined, speed: draft.speed || undefined }}
+        />
+        <TextArea hint={instructionsHint(harness ?? harnesses.find((choice) => choice.kind === defaultKind))} label="Instructions" onChange={(event) => set({ instructions: event.target.value })} rows={6} value={draft.instructions} />
         {harness?.takesAllowedTools ? (
           <TextArea
             hint="One per line. Empty lets the harness use its own defaults."

@@ -2,6 +2,7 @@ import { useState, type FormEvent, type RefObject } from 'react'
 
 import { useProfiles } from '../agents/hooks'
 import { isApiError } from '../api/errors'
+import { reasoningLabel } from '../execution/labels'
 import { Banner, Button, Dialog, MessageSkeleton, SelectField, TextArea, TextField } from '../ui'
 import type { HarnessPlan, Launch, LaunchInput, LaunchPlan, LaunchTask, SettingSource, StartWhen } from './api'
 import { useCreateLaunches, useLaunchPlan } from './hooks'
@@ -220,7 +221,9 @@ export function LaunchDialog({
               </SelectField>
             )}
             <SelectField id="launch-model" label="Model" onChange={(event) => setModel(event.target.value)} value={model}>
-              <option value="">{defaultLabel(data.settings['run.model']?.value, data.settings['run.model']?.source, models)}</option>
+              <option value="">
+                {defaultLabel(data.settings['run.model']?.value, data.settings['run.model']?.source, (id) => models.find((candidate) => candidate.id === id)?.displayName ?? id)}
+              </option>
               {models.map((candidate) => (
                 <option key={candidate.id} value={candidate.id}>
                   {candidate.displayName}
@@ -228,11 +231,11 @@ export function LaunchDialog({
               ))}
             </SelectField>
             {chosenModel && chosenModel.reasoningLevels.length > 0 ? (
-              <SelectField id="launch-reasoning" label="Thinking" onChange={(event) => setReasoning(event.target.value)} value={reasoning}>
-                <option value="">{defaultLabel(data.settings['run.reasoning']?.value, data.settings['run.reasoning']?.source)}</option>
+              <SelectField id="launch-reasoning" label="Reasoning" onChange={(event) => setReasoning(event.target.value)} value={reasoning}>
+                <option value="">{defaultLabel(data.settings['run.reasoning']?.value, data.settings['run.reasoning']?.source, reasoningLabel)}</option>
                 {chosenModel.reasoningLevels.map((level) => (
                   <option key={level} value={level}>
-                    {level}
+                    {reasoningLabel(level)}
                   </option>
                 ))}
               </SelectField>
@@ -302,12 +305,11 @@ function runnerHint(harness: HarnessPlan | undefined) {
 function environmentHint(plan: LaunchPlan) {
   const chosen = plan.environments.find((environment) => environment.id === plan.environmentId)
   if (chosen?.lastCheckOk === false) return chosen.lastCheckMessage ?? 'The last check of this environment failed.'
-  if (plan.environments.length === 0) return 'Add environments in Settings › Project › Environments and defaults.'
+  if (plan.environments.length === 0) return 'Add environments in Settings › Project › Runs and models.'
   return undefined
 }
 
-function defaultLabel(value: unknown, source: SettingSource | undefined, models: { id: string; displayName: string }[] = []) {
+function defaultLabel(value: unknown, source: SettingSource | undefined, name: (value: string) => string = String) {
   if (value === null || value === undefined || value === '' || value === 'default') return 'Agent’s default'
-  const shown = models.find((candidate) => candidate.id === value)?.displayName ?? String(value)
-  return `${shown} (${sourceLabel(source ?? 'default')} default)`
+  return `${name(String(value))} (${sourceLabel(source ?? 'default')} default)`
 }

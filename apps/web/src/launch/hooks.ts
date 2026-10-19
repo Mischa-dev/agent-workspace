@@ -12,8 +12,6 @@ import {
   listAgentSessions,
   listEnvironments,
   listLaunches,
-  resetProjectSetting,
-  setProjectSetting,
   updateEnvironment,
   type EnvironmentInput,
   type Launch,
@@ -81,12 +79,14 @@ export function useCancelLaunch(projectId: string) {
   })
 }
 
+/** A project's environments, as a query; for pages that load several projects' at once. */
+export const environmentsQuery = (projectId: string) => ({
+  queryKey: launchKeys.environments(projectId),
+  queryFn: () => listEnvironments(projectId),
+})
+
 export function useEnvironments(projectId: string) {
-  return useQuery({
-    queryKey: launchKeys.environments(projectId),
-    queryFn: () => listEnvironments(projectId),
-    enabled: Boolean(projectId),
-  })
+  return useQuery({ ...environmentsQuery(projectId), enabled: Boolean(projectId) })
 }
 
 export function useSaveEnvironment(projectId: string) {
@@ -139,17 +139,5 @@ export function useProjectSettings(projectId: string) {
     queryKey: launchKeys.projectSettings(projectId),
     queryFn: () => getProjectSettings(projectId),
     enabled: Boolean(projectId),
-  })
-}
-
-export function useSaveProjectSetting(projectId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ key, value }: { key: string; value: unknown | undefined }) =>
-      value === undefined ? resetProjectSetting(projectId, key) : setProjectSetting(projectId, key, value),
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: launchKeys.projectSettings(projectId) })
-      void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) })
-    },
   })
 }

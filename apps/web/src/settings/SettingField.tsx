@@ -1,5 +1,6 @@
-import { useId, useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { describeError } from '../app/mutations'
@@ -7,38 +8,53 @@ import { Banner, Button, SegmentedControl, SelectField, Switch, TextField } from
 import {
   formatSettingValue,
   resetSettingValue,
+  scopeName,
   setSettingValue,
   settingsKeys,
-  sourceLabel,
   viewAtScope,
   type EffectiveSettings,
   type ResolvedSetting,
   type SettingDefinition,
   type SettingOption,
+  type SettingScope,
   type SettingsTarget,
 } from './api'
 
 type Write = { kind: 'set'; value: unknown } | { kind: 'reset' }
 
+/** A built-in default that only means "the default" goes without saying so. */
+function saysDefault(value: unknown) {
+  return value === null || value === undefined || value === '' || value === 'default'
+}
+
 /**
- * Any registry setting at one scope: what it inherits and from where, a switch
- * to override it here, the control for its type, and Reset. Writes carry the
+ * Any registry setting at one scope: the value that applies and where it's set,
+ * a switch to set it here, the control for its type, and Reset. Writes carry the
  * version they were based on; when someone else got there first it shows the
  * latest value and says so.
  */
 export function SettingField({
   canEdit,
   definition,
+  onSaved,
   options,
   resolved,
   target,
+  unsetLabel,
+  workspaceHref,
 }: {
   canEdit: boolean
   definition: SettingDefinition
-  /** Names for an identifier's values, such as repositories for `run.repository`. */
+  /** Called after a change is saved, for pages that show the same value elsewhere. */
+  onSaved?: () => void
+  /** Names for the setting's values, such as repositories for `run.repository`. */
   options?: SettingOption[]
   resolved: ResolvedSetting
   target: SettingsTarget
+  /** What leaving it unset means, such as "The harness’s default". */
+  unsetLabel?: string
+  /** The workspace settings page with this setting, linked from "Set in: Workspace" on a project. */
+  workspaceHref?: string
 }) {
   const queryClient = useQueryClient()
   const id = useId()
@@ -61,6 +77,7 @@ export function SettingField({
           ? { ...current, settings: current.settings.map((candidate) => (candidate.key === setting.key ? setting : candidate)) }
           : current,
       )
+      onSaved?.()
     },
     onError: async (error) => {
       if (isApiError(error) && (error.code === 'version_conflict' || error.status === 409)) {
@@ -72,10 +89,17 @@ export function SettingField({
     },
   })
 
-  const scopeName = target.scope === 'project' ? 'this Project' : 'the workspace'
-  const inheritedText = formatSettingValue(view.inherited.value, definition.valueType, options)
   const busy = write.isPending
   const editable = canEdit && overridden && !busy
+  const formatted = (value: unknown) => formatSettingValue(value, definition.valueType, options, unsetLabel)
+  const where = (source: SettingScope | 'default'): ReactNode =>
+    source === 'workspace' && target.scope !== 'workspace' && workspaceHref ? (
+      <Link to={`${workspaceHref}#setting-${definition.key}`}>{scopeName(source)}</Link>
+    ) : (
+      scopeName(source)
+    )
+  // What applies here, and where it's set.
+  const applied = overridden ? { source: target.scope, value: view.value } : view.inherited
 
   return (
     <div className={overridden ? 'aw-setting is-overridden' : 'aw-setting'} id={`setting-${definition.key}`} tabIndex={-1}>
@@ -98,42 +122,52 @@ export function SettingField({
         )}
       </div>
       <p className="aw-setting__source">
-        {overridden ? (
+        {canEdit && overridden ? (
           <>
-            Set for {scopeName}. Without it: {inheritedText} (from {sourceLabel(view.inherited.source)}).
+            Set in: {where(target.scope)}. Without it: {formatted(view.inherited.value)}
+            {view.inherited.source === 'default' ? null : <>, from {where(view.inherited.source)}</>}.
           </>
-        ) : view.inherited.source === 'default' ? (
-          <>Built-in default: {inheritedText}</>
         ) : (
           <>
-            Inherited from {sourceLabel(view.inherited.source)}: {inheritedText}
+            <span className="aw-setting__current">{formatted(applied.value)}</span>
+            {applied.source !== 'default' ? (
+              <> · Set in: {where(applied.source)}</>
+            ) : saysDefault(applied.value) ? null : (
+              <> · {scopeName('default')}</>
+            )}
           </>
         )}
       </p>
-      {overridden || !canEdit ? (
+      {canEdit && overridden ? (
         <div className="aw-setting__control">
-          {canEdit ? (
-            <SettingControl
-              definition={definition}
-              disabled={!editable}
-              labelledBy={`${id}-label`}
-              onSave={(value) => write.mutate({ kind: 'set', value })}
-              options={options}
-              value={view.value}
-            />
-          ) : (
-            <p className="aw-setting__value">{formatSettingValue(view.value, definition.valueType, options)}</p>
-          )}
-          {canEdit && (
-            <Button disabled={busy} icon="undo" onClick={() => write.mutate({ kind: 'reset' })} size="sm" variant="ghost">
-              Reset
-            </Button>
-          )}
+          <SettingControl
+            definition={definition}
+            disabled={!editable}
+            labelledBy={`${id}-label`}
+            onSave={(value) => write.mutate({ kind: 'set', value })}
+            options={options}
+            unsetLabel={unsetLabel}
+            value={view.value}
+          />
+          <Button disabled={busy} icon="undo" onClick={() => write.mutate({ kind: 'reset' })} size="sm" variant="ghost">
+            Reset
+          </Button>
         </div>
       ) : null}
       {notice && <Banner tone={notice.tone}>{notice.text}</Banner>}
     </div>
   )
+}
+
+/** Options in their groups, in the order the groups first appear. */
+function grouped(options: SettingOption[]) {
+  const groups: { label: string | undefined; options: SettingOption[] }[] = []
+  for (const option of options) {
+    const group = groups.find((candidate) => candidate.label === option.group)
+    if (group) group.options.push(option)
+    else groups.push({ label: option.group, options: [option] })
+  }
+  return groups
 }
 
 function SettingControl({
@@ -142,6 +176,7 @@ function SettingControl({
   labelledBy,
   onSave,
   options,
+  unsetLabel,
   value,
 }: {
   definition: SettingDefinition
@@ -149,6 +184,7 @@ function SettingControl({
   labelledBy: string
   onSave: (value: unknown) => void
   options?: SettingOption[]
+  unsetLabel?: string
   value: unknown
 }) {
   const type = definition.valueType
@@ -163,7 +199,7 @@ function SettingControl({
     )
   }
   if (type.type === 'choice') {
-    const choices = type.options.map((option) => ({ value: option, label: formatSettingValue(option, type) }))
+    const choices = type.options.map((option) => ({ value: option, label: formatSettingValue(option, type, options) }))
     if (choices.length <= 4 && !disabled) {
       return (
         <SegmentedControl
@@ -192,18 +228,40 @@ function SettingControl({
         onChange={(event) => onSave(event.target.value === '' ? null : event.target.value)}
         value={typeof value === 'string' ? value : ''}
       >
-        {type.optional && <option value="">Not set</option>}
+        {type.optional && <option value="">{unsetLabel ?? 'Not set'}</option>}
         {typeof value === 'string' && value && !options.some((option) => option.value === value) && <option value={value}>{value}</option>}
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
+        {grouped(options).map((group) =>
+          group.label ? (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </optgroup>
+          ) : (
+            group.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))
+          ),
+        )}
       </SelectField>
     )
   }
   // A new saved value (here or elsewhere) starts a fresh draft.
-  return <TextControl definition={definition} key={value === null || value === undefined ? '' : String(value)} disabled={disabled} labelledBy={labelledBy} onSave={onSave} value={value} />
+  return (
+    <TextControl
+      definition={definition}
+      disabled={disabled}
+      key={value === null || value === undefined ? '' : String(value)}
+      labelledBy={labelledBy}
+      onSave={onSave}
+      placeholder={unsetLabel}
+      value={value}
+    />
+  )
 }
 
 /** Integers, text and identifiers: edit, then save with Enter or the button. */
@@ -212,12 +270,14 @@ function TextControl({
   disabled,
   labelledBy,
   onSave,
+  placeholder = 'Not set',
   value,
 }: {
   definition: SettingDefinition
   disabled: boolean
   labelledBy: string
   onSave: (value: unknown) => void
+  placeholder?: string
   value: unknown
 }) {
   const type = definition.valueType
@@ -266,7 +326,7 @@ function TextControl({
         inputMode={type.type === 'integer' ? 'numeric' : undefined}
         mono={type.type === 'identifier'}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder={type.type === 'integer' ? undefined : 'Not set'}
+        placeholder={type.type === 'integer' ? undefined : placeholder}
         spellCheck={false}
         value={draft}
       />

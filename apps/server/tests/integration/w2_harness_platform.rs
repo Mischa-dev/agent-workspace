@@ -383,6 +383,11 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     )
     .await;
     assert_eq!(admin_refresh.0, StatusCode::CONFLICT, "{}", admin_refresh.1);
+    assert_eq!(
+        admin_refresh.2["error"]["code"], "execution_profile_required",
+        "{}",
+        admin_refresh.1
+    );
     sqlx::query("UPDATE organization_memberships SET role = 'member' WHERE actor_id = (SELECT actor_id FROM project_memberships WHERE handle = 'w2-member')")
         .execute(&pool)
         .await
@@ -504,6 +509,124 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     )
     .await;
     assert_eq!(refused.0, StatusCode::BAD_REQUEST, "{}", refused.1);
+
+    // The workspace's own settings edit the same catalog with no project
+    // open: every member reads it, only owners and admins change it.
+    let workspace_catalog = format!(
+        "/api/v1/organizations/{}/model-catalog",
+        seed.organization_id
+    );
+    let demo_in = |listed: &Value| {
+        listed["harnesses"]
+            .as_array()
+            .and_then(|list| list.iter().find(|harness| harness["kind"] == "demo"))
+            .cloned()
+            .expect("demo harness listed")
+    };
+    let small_hidden = |harness: &Value| {
+        harness["catalog"]["models"]
+            .as_array()
+            .and_then(|models| models.iter().find(|model| model["id"] == "demo-small"))
+            .map(|model| model["hidden"].clone())
+    };
+    let listed = send_get(&application, member, &workspace_catalog).await;
+    assert_eq!(listed.0, StatusCode::OK, "{}", listed.1);
+    let demo = demo_in(&listed.2);
+    assert_eq!(demo["canEditCatalog"], false);
+    assert_eq!(small_hidden(&demo), Some(json!(true)));
+    let workspace_model = format!("{workspace_catalog}/demo/models/demo-small");
+    for (method, path, key) in [
+        ("PUT", workspace_model.as_str(), "member-workspace-show"),
+        (
+            "DELETE",
+            workspace_model.as_str(),
+            "member-workspace-remove",
+        ),
+        (
+            "POST",
+            &format!("{workspace_catalog}/demo/refresh"),
+            "member-workspace-refresh",
+        ),
+    ] {
+        let edit = send(
+            &application,
+            member,
+            method,
+            path,
+            key,
+            json!({"hidden": false}),
+        )
+        .await;
+        assert_eq!(edit.0, StatusCode::FORBIDDEN, "{method} {path}: {}", edit.1);
+    }
+    let shown = send(
+        &application,
+        owner,
+        "PUT",
+        &workspace_model,
+        "owner-workspace-show",
+        json!({"hidden": false}),
+    )
+    .await;
+    assert_eq!(shown.0, StatusCode::OK, "{}", shown.1);
+    assert_eq!(shown.2["canEditCatalog"], true);
+    assert_eq!(small_hidden(&shown.2), Some(json!(false)));
+    let owner_listed = send_get(&application, owner, &workspace_catalog).await;
+    assert_eq!(demo_in(&owner_listed.2)["canEditCatalog"], true);
+    // The project's view is the same catalog.
+    let project_listed = send_get(
+        &application,
+        owner,
+        &format!("/api/v1/projects/{}/harnesses", seed.project_id),
+    )
+    .await;
+    assert_eq!(
+        small_hidden(&demo_in(&project_listed.2)),
+        Some(json!(false))
+    );
+    let workspace_refresh = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{workspace_catalog}/demo/refresh"),
+        "owner-workspace-refresh",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        workspace_refresh.0,
+        StatusCode::OK,
+        "{}",
+        workspace_refresh.1
+    );
+    let unknown_harness = send(
+        &application,
+        owner,
+        "PUT",
+        &format!("{workspace_catalog}/not-a-harness/models/demo-small"),
+        "owner-workspace-unknown",
+        json!({"hidden": true}),
+    )
+    .await;
+    assert_eq!(
+        unknown_harness.0,
+        StatusCode::NOT_FOUND,
+        "{}",
+        unknown_harness.1
+    );
+    let elsewhere = send(
+        &application,
+        owner,
+        "PUT",
+        &format!(
+            "/api/v1/organizations/{}/model-catalog/demo/models/demo-small",
+            Uuid::now_v7()
+        ),
+        "owner-elsewhere",
+        json!({"hidden": true}),
+    )
+    .await;
+    assert_eq!(elsewhere.0, StatusCode::NOT_FOUND, "{}", elsewhere.1);
 
     // A second account for the same harness gets its own profile here.
     let second_account = send(

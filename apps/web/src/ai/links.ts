@@ -6,8 +6,8 @@ export type PlanningTab = 'next' | 'suggestions' | 'graph' | 'plan-import'
 /** Where each planning page lives. */
 export const planningHref = (projectId: string, tab: PlanningTab) => `/projects/${encodeURIComponent(projectId)}/${tab}`
 
-/** Settings link for a project's AI and models page. */
-export const projectAiSettingsHref = (projectId: string) => projectSettingsHref(projectId, 'ai')
+/** Settings link for a project's suggestions and summaries, part of its Runs and models settings. */
+export const projectAiSettingsHref = (projectId: string) => `${projectSettingsHref(projectId, 'runs')}#suggestions`
 
 /** What an AI call's error means, in words a person can act on. */
 export function aiErrorMessage(error: unknown, doing = 'That') {
