@@ -47,6 +47,7 @@ vi.mock('../projects/useRememberProjectLocation', () => ({
 }))
 vi.mock('./hooks', () => ({
   useAssignableActors: vi.fn(),
+  useNamedActors: vi.fn(() => ({ data: [] })),
   useCreateAcceptanceCriterion: vi.fn(),
   useCreateWorkItem: vi.fn(),
   useCreateWorkItemComment: vi.fn(),

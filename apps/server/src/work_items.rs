@@ -418,6 +418,9 @@ struct WorkItemVersionRequest {
 struct AssigneeSearchQuery {
     q: Option<String>,
     limit: Option<u16>,
+    /// Comma-separated actor IDs to name instead of a search, such as the
+    /// people a filter picks.
+    ids: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1866,14 +1869,75 @@ async fn search_assignable_actors(
         .await?
         .ok_or(AppError::NotFound("project"))?;
     authorize_work_item(&principal, &membership, Action::WorkItemView, None)?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::NotFound("project"));
+    let rows = if let Some(ids) = query.ids.as_deref() {
+        if query.q.is_some() || query.limit.is_some() {
+            return Err(AppError::Validation("ids"));
+        }
+        named_assignees(&state, project_id, ids).await?
+    } else {
+        if membership.project_archived_at.is_some() {
+            return Err(AppError::NotFound("project"));
+        }
+        let search = normalize_search(query.q.as_deref())?
+            .unwrap_or_default()
+            .to_lowercase();
+        let limit = i64::from(query.limit.unwrap_or(20).clamp(1, 50));
+        assignee_search(&state, project_id, &search, limit).await?
+    };
+    Ok(Json(AssigneeSearchResponse {
+        actors: rows
+            .into_iter()
+            .map(|row| ActorView {
+                id: row.actor_id,
+                display_name: row.display_name,
+                handle: row.handle,
+                kind: row.kind,
+                avatar_url: None,
+            })
+            .collect(),
+    }))
+}
+
+/// The project's members, past ones too, with these IDs: a filter chip names
+/// whoever it picks, however far down the search they'd be.
+async fn named_assignees(
+    state: &AppState,
+    project_id: Uuid,
+    ids: &str,
+) -> Result<Vec<AssigneeSearchRow>, AppError> {
+    let mut actor_ids = ids
+        .split(',')
+        .map(|part| Uuid::parse_str(part.trim()).map_err(|_| AppError::Validation("ids")))
+        .collect::<Result<Vec<_>, _>>()?;
+    actor_ids.sort();
+    actor_ids.dedup();
+    if actor_ids.len() > list::MAX_FILTER_VALUES {
+        return Err(AppError::Validation("ids"));
     }
-    let search = normalize_search(query.q.as_deref())?
-        .unwrap_or_default()
-        .to_lowercase();
-    let limit = i64::from(query.limit.unwrap_or(20).clamp(1, 50));
-    let rows = sqlx::query_as::<_, AssigneeSearchRow>(
+    Ok(sqlx::query_as::<_, AssigneeSearchRow>(
+        r#"
+        SELECT membership.actor_id, membership.display_name, membership.handle, actor.kind
+        FROM project_memberships membership
+        JOIN actors actor ON actor.id = membership.actor_id
+        WHERE membership.project_id = $1
+          AND membership.actor_id = ANY($2)
+          AND actor.kind IN ('human', 'external_agent')
+        ORDER BY lower(membership.display_name), lower(membership.handle), actor.id
+        "#,
+    )
+    .bind(project_id)
+    .bind(&actor_ids)
+    .fetch_all(&state.pool)
+    .await?)
+}
+
+async fn assignee_search(
+    state: &AppState,
+    project_id: Uuid,
+    search: &str,
+    limit: i64,
+) -> Result<Vec<AssigneeSearchRow>, AppError> {
+    Ok(sqlx::query_as::<_, AssigneeSearchRow>(
         r#"
         SELECT membership.actor_id, membership.display_name, membership.handle, actor.kind
         FROM project_memberships membership
@@ -1895,19 +1959,7 @@ async fn search_assignable_actors(
     .bind(search)
     .bind(limit)
     .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(AssigneeSearchResponse {
-        actors: rows
-            .into_iter()
-            .map(|row| ActorView {
-                id: row.actor_id,
-                display_name: row.display_name,
-                handle: row.handle,
-                kind: row.kind,
-                avatar_url: None,
-            })
-            .collect(),
-    }))
+    .await?)
 }
 
 async fn search_work_item_references(

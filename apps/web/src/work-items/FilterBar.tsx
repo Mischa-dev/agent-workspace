@@ -22,13 +22,14 @@ import {
   type FilterOperator,
   type ListField,
 } from './filterModel'
-import { useAssignableActors, useWorkItem } from './hooks'
+import { useAssignableActors, useNamedActors, useWorkItem } from './hooks'
 import {
   COLUMN_FIELDS,
   GROUPINGS,
   LANE_FIELDS,
   MAX_FILTER_VALUES,
   SORTS,
+  canonicalValues,
   clearFilters,
   type FilterValues,
   type ListState,
@@ -87,7 +88,15 @@ export function FilterBar({
   const milestones = useMilestones(projectId)
   const assignees = useAssignableActors(projectId, '')
   const parent = useWorkItem(projectId, state.filters.parentId && state.filters.parentId !== 'none' ? state.filters.parentId : '')
-  const actorNames = useMemo(() => new Map((assignees.data ?? []).map((actor) => [actor.id, actor.displayName])), [assignees.data])
+  // Anyone a filter picks who isn't on the first page of people is looked up by ID.
+  const unnamed = canonicalValues([...valuesOf(state.filters, 'assigneeActorId'), ...valuesOf(state.filters, 'notAssigneeActorId')]).filter(
+    (id) => id !== 'none' && id !== 'me' && assignees.data !== undefined && !assignees.data.some((actor) => actor.id === id),
+  )
+  const named = useNamedActors(projectId, unnamed)
+  const actorNames = useMemo(
+    () => new Map([...(assignees.data ?? []), ...(named.data ?? [])].map((actor) => [actor.id, actor.displayName])),
+    [assignees.data, named.data],
+  )
   const lookups = { workflow, labels: labels.data, milestones: milestones.data, actorNames, parentKey: parent.data?.key ?? null }
   const chips = filterChips(state.filters, lookups)
   const apply = (field: FilterField, values: Partial<FilterValues>) => update((current) => setField(current, field, values))

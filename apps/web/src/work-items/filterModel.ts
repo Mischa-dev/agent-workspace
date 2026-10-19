@@ -163,6 +163,7 @@ function named(field: ListField, value: string, lookups: FilterLookups): { name:
       return { name: workItemPriorities[rank]?.label ?? value, rank }
     }
     case 'assignee':
+      if (value === 'me') return { name: 'Me', rank: -2 }
       return { name: lookups.actorNames?.get(value) ?? 'someone', rank: 0 }
   }
 }

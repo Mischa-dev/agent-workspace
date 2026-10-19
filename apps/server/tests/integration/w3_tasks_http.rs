@@ -1108,6 +1108,31 @@ async fn filters_take_several_values_and_leave_tasks_out() {
         .collect::<Vec<_>>()
         .join("&");
     assert_eq!(list(resolved).await, ["Theirs"]);
+
+    // A filter chip names whoever it picks, however far down a search they'd be.
+    let stranger = Uuid::now_v7();
+    let (status, named) = owner
+        .get(&format!(
+            "{base}/work-item-assignees?ids={member},{me},{stranger}"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{named}");
+    let mut named = named["actors"]
+        .as_array()
+        .expect("actors")
+        .iter()
+        .map(|actor| actor["id"].as_str().expect("id").to_owned())
+        .collect::<Vec<_>>();
+    named.sort();
+    let mut expected = vec![me.to_string(), member.to_string()];
+    expected.sort();
+    assert_eq!(named, expected);
+    for query in ["ids=nope", "ids=", &format!("ids={member}&q=a")] {
+        let (status, body) = owner
+            .get(&format!("{base}/work-item-assignees?{query}"))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+    }
 }
 
 #[tokio::test]

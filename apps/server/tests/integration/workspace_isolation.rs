@@ -2400,7 +2400,10 @@ fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/api/v1/projects/{project_id}/work-item-assignees",
             vec![format!("{}/work-item-assignees?q=rook", p(a))],
             vec![format!("{}/work-item-assignees?q=rook", p(b))],
-            vec![format!("{}/work-item-assignees?q={MARKER}", p(a))],
+            vec![
+                format!("{}/work-item-assignees?q={MARKER}", p(a)),
+                format!("{}/work-item-assignees?ids={}", p(a), b.rook),
+            ],
         ),
         case(
             "/api/v1/projects/{project_id}/work-item-references",

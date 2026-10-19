@@ -39,7 +39,7 @@ use crate::{
 const DEFAULT_LIMIT: u16 = 50;
 const MAX_LIMIT: u16 = 200;
 /// The most values one filter names, such as 20 labels or 20 people.
-const MAX_FILTER_VALUES: usize = 20;
+pub(crate) const MAX_FILTER_VALUES: usize = 20;
 const MAX_CURSOR_LENGTH: usize = 1_024;
 
 /// Sort rank of a priority: urgent first, no priority last.
