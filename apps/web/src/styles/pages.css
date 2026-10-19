@@ -1388,11 +1388,6 @@
     width: 100%;
     padding-left: 44px;
   }
-
-  /* Without a leading icon there's no column to line up with. */
-  .aw-row:not(.aw-row--link):not(:has(> .aw-row__lead)) .aw-row__actions {
-    padding-left: 0;
-  }
 }
 
 /* Home */

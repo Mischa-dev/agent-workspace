@@ -7,6 +7,7 @@ import { describeError } from '../../app/mutations'
 import {
   listHarnesses,
   listWorkspaceHarnesses,
+  modelCatalogKey,
   pickableModels,
   refreshCatalog,
   saveModel,
@@ -23,7 +24,7 @@ import { accountSettingsHref, workspaceSettingsHref } from '../paths'
  */
 export function WorkspaceModelLists({ organizationId }: { organizationId: string }) {
   const harnesses = useQuery({
-    queryKey: queryKeys.modelCatalog(organizationId),
+    queryKey: modelCatalogKey(organizationId),
     queryFn: () => listWorkspaceHarnesses(organizationId),
     enabled: Boolean(organizationId),
   })
@@ -70,7 +71,7 @@ function ModelList({ harness, organizationId }: { harness: Harness; organization
   const queryClient = useQueryClient()
   const editable = harness.canEditCatalog
   const saved = (updated: Harness) =>
-    queryClient.setQueryData<Harness[]>(queryKeys.modelCatalog(organizationId), (current) =>
+    queryClient.setQueryData<Harness[]>(modelCatalogKey(organizationId), (current) =>
       current?.map((entry) => (entry.kind === updated.kind ? updated : entry)),
     )
   const edit = useMutation({

@@ -517,6 +517,15 @@
   }
 }
 
+@media (max-width: 640px) {
+  /* A row's buttons drop under it on a phone, indented to line up past its
+     icon. Settings rows mostly have none, so there's nothing to line up with.
+     Here rather than with the rows so the first load stays within budget. */
+  .aw-settings .aw-row:not(.aw-row--link):not(:has(> .aw-row__lead)) .aw-row__actions {
+    padding-left: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .aw-setting,
   .aw-settings__link {

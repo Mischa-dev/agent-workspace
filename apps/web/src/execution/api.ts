@@ -209,6 +209,10 @@ export function logoutAccount(projectId: string, accountId: string, idempotencyK
 const workspaceCatalog = (organizationId: string) =>
   `/api/v1/organizations/${encodeURIComponent(organizationId)}/model-catalog`
 
+/** Kept here rather than in the shared query keys so it loads with the
+ * settings pages that use it. */
+export const modelCatalogKey = (organizationId: string) => ['organization', organizationId, 'model-catalog'] as const
+
 /** Every harness the workspace can run, with its model list, for settings
  * where no project is open. */
 export async function listWorkspaceHarnesses(organizationId: string): Promise<Harness[]> {

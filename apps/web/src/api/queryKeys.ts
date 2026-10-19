@@ -9,8 +9,6 @@ export const queryKeys = {
   executionProfileAccount: (projectId: string, profileId: string) =>
     ['project', projectId, 'execution-profile', profileId, 'account'] as const,
   harnesses: (projectId: string) => ['project', projectId, 'harnesses'] as const,
-  modelCatalog: (organizationId: string) =>
-    ['organization', organizationId, 'model-catalog'] as const,
   providerAccounts: (projectId: string) =>
     ['project', projectId, 'provider-accounts'] as const,
   providerAccountStatus: (projectId: string, accountId: string) =>

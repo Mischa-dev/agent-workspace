@@ -1,4 +1,4 @@
-import { useQueries } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { environmentsQuery } from '../../launch/hooks'
@@ -14,7 +14,6 @@ const COUNTED = 20
  * lists its projects and what each one has, linking to where they're managed.
  */
 export function WorkspaceEnvironments({ projects }: { projects: Project[] }) {
-  const lists = useQueries({ queries: projects.slice(0, COUNTED).map((project) => environmentsQuery(project.id)) })
   if (!projects.length) {
     return (
       <EmptyState
@@ -32,32 +31,35 @@ export function WorkspaceEnvironments({ projects }: { projects: Project[] }) {
   }
   return (
     <RowList label="Environments by project">
-      {projects.map((project, index) => {
-        const list = lists[index]?.data
-        const fallback = list?.environments.find((environment) => environment.isDefault)
-        return (
-          <Row
-            actions={
-              <Link
-                aria-label={`Open ${project.name}’s environments`}
-                className="aw-btn aw-btn--ghost aw-btn--sm"
-                to={`${projectSettingsHref(project.id, 'runs')}#environments`}
-              >
-                <span className="aw-btn__label">Open</span>
-              </Link>
-            }
-            key={project.id}
-            meta={
-              !list
-                ? null
-                : list.environments.length === 0
-                  ? 'None yet, so runs work on this server'
-                  : `${list.environments.length === 1 ? '1 environment' : `${list.environments.length} environments`}${fallback ? ` · Default: ${fallback.name}` : ''}`
-            }
-            title={project.name}
-          />
-        )
-      })}
+      {projects.map((project, index) => (
+        <ProjectEnvironments counted={index < COUNTED} key={project.id} project={project} />
+      ))}
     </RowList>
+  )
+}
+
+function ProjectEnvironments({ counted, project }: { counted: boolean; project: Project }) {
+  const list = useQuery({ ...environmentsQuery(project.id), enabled: counted }).data
+  const fallback = list?.environments.find((environment) => environment.isDefault)
+  return (
+    <Row
+      actions={
+        <Link
+          aria-label={`Open ${project.name}’s environments`}
+          className="aw-btn aw-btn--ghost aw-btn--sm"
+          to={`${projectSettingsHref(project.id, 'runs')}#environments`}
+        >
+          <span className="aw-btn__label">Open</span>
+        </Link>
+      }
+      meta={
+        !list
+          ? null
+          : list.environments.length === 0
+            ? 'None yet, so runs work on this server'
+            : `${list.environments.length === 1 ? '1 environment' : `${list.environments.length} environments`}${fallback ? ` · Default: ${fallback.name}` : ''}`
+      }
+      title={project.name}
+    />
   )
 }

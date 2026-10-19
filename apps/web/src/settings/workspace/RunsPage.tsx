@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import { queryKeys } from '../../api/queryKeys'
 import type { OrganizationSummary } from '../../auth/session'
-import { listWorkspaceHarnesses } from '../../execution/api'
+import { listWorkspaceHarnesses, modelCatalogKey } from '../../execution/api'
 import type { Project } from '../../projects/types'
 import { Banner, PageHeader, Section } from '../../ui'
 import { useEffectiveSettings, type SettingsTarget } from '../api'
@@ -29,14 +28,14 @@ export default function RunsPage({ projects, workspace }: SettingsPageProps) {
 function WorkspaceRuns({ projects, workspace }: { projects: Project[]; workspace: OrganizationSummary }) {
   const target: SettingsTarget = { scope: 'workspace', organizationId: workspace.id }
   const effective = useEffectiveSettings(target)
-  const harnesses = useQuery({ queryKey: queryKeys.modelCatalog(workspace.id), queryFn: () => listWorkspaceHarnesses(workspace.id) })
+  const harnesses = useQuery({ queryKey: modelCatalogKey(workspace.id), queryFn: () => listWorkspaceHarnesses(workspace.id) })
   useSectionScroll(effective.isSuccess && !harnesses.isPending)
   const manager = workspace.role === 'owner' || workspace.role === 'admin'
   const readOnly = effective.data ? !effective.data.capabilities.manageWorkspace : false
 
   return (
     <>
-      <PageHeader icon="sliders" title="Runs and models">
+      <PageHeader icon="activity" title="Runs and models">
         What runs and agents in {workspace.name} use, and the models people can pick. Each project can change any of it.
       </PageHeader>
       {readOnly ? (

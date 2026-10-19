@@ -108,7 +108,7 @@ function ProjectRuns({ project, session, setup = false }: { project: Project; se
 
   return (
     <>
-      <PageHeader icon="sliders" title="Runs and models">
+      <PageHeader icon="activity" title="Runs and models">
         What runs and agents in {project.name} use. Each setting follows the{' '}
         {workspaceHref ? <Link to={workspaceHref}>workspace</Link> : 'workspace'} until you change it here.
       </PageHeader>
