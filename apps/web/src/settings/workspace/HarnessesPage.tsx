@@ -1,7 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { Banner, Button, Dialog, EmptyState, ErrorState, PageHeader, Row, RowList, Section, SettingsSkeleton, StatusChip, Switch, showToast } from '../../ui'
+import { describeError, toastError } from '../../app/mutations'
+import {
+  Banner,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Row,
+  RowList,
+  Section,
+  SettingsSkeleton,
+  StatusChip,
+  Switch,
+  countLabel,
+  showToast,
+} from '../../ui'
 import type { SettingsPageProps } from '../types'
 import { CommandsOffNote, HarnessForm } from './HarnessForm'
 import { harnessKeys, listHarnesses, removeHarness, updateHarness, type CustomHarness, type HarnessList } from './harnessesApi'
@@ -31,12 +47,8 @@ export default function HarnessesPage({ workspace }: SettingsPageProps) {
       >
         Bring your own agent. Registered harnesses show up in the Launch dialog and on project agents, with the models their manifest lists.
       </PageHeader>
-      {list.isPending ? <SettingsSkeleton /> : null}
-      {list.isError ? (
-        <ErrorState action={<Button onClick={() => void list.refetch()}>Try again</Button>} title="Harnesses didn’t load">
-          {list.error.message}
-        </ErrorState>
-      ) : null}
+      {list.isPending ? <SettingsSkeleton label="Loading harnesses" /> : null}
+      {list.isError ? <ErrorState error={list.error} onRetry={() => void list.refetch()} title="Harnesses didn’t load" /> : null}
       {data && !data.commandsAllowed ? <CommandsOffNote /> : null}
       {data && !data.canManage ? <Banner tone="info">Only workspace owners and admins can register or change harnesses.</Banner> : null}
       {data ? (
@@ -91,9 +103,17 @@ function HarnessRow({
     mutationFn: (enabled: boolean) => updateHarness(organizationId, harness.id, { version: harness.version, enabled }),
     onSuccess: (saved) => {
       void client.invalidateQueries({ queryKey: harnessKeys.list(organizationId) })
-      showToast({ tone: 'success', title: saved.enabled ? `${saved.name} is on` : `${saved.name} is off` })
+      showToast({
+        tone: 'success',
+        title: saved.enabled ? `${saved.name} turned on` : `${saved.name} turned off`,
+        onUndo: () =>
+          updateHarness(organizationId, saved.id, { version: saved.version, enabled: !saved.enabled }).then(
+            () => client.invalidateQueries({ queryKey: harnessKeys.list(organizationId) }),
+            (reason) => toastError(`${saved.name} wasn’t changed back`, reason),
+          ),
+      })
     },
-    onError: (error) => showToast({ tone: 'danger', title: `${harness.name} wasn’t changed`, description: error.message }),
+    onError: (error) => toastError(`${harness.name} wasn’t changed`, error),
   })
   const models = harness.resolved?.defaultModels?.length ?? 0
   return (
@@ -101,7 +121,7 @@ function HarnessRow({
       actions={
         canManage ? (
           <div className="aw-harnesses__actions">
-            <Switch checked={harness.enabled} disabled={toggle.isPending} label="On" onChange={(enabled) => toggle.mutate(enabled)} />
+            <Switch checked={harness.enabled} disabled={toggle.isPending} label="Enabled" onChange={(enabled) => toggle.mutate(enabled)} />
             <Button icon="pencil" onClick={onEdit} size="sm" variant="ghost">
               Edit
             </Button>
@@ -110,13 +130,13 @@ function HarnessRow({
             </Button>
           </div>
         ) : (
-          <StatusChip tone={harness.enabled ? 'success' : 'muted'}>{harness.enabled ? 'On' : 'Off'}</StatusChip>
+          <StatusChip tone={harness.enabled ? 'success' : 'muted'}>{harness.enabled ? 'Enabled' : 'Turned off'}</StatusChip>
         )
       }
       meta={
         <span className="aw-harnesses__meta">
           <span>{harness.transport === 'runner' ? `Hands off to ${harness.runnerName ?? 'a runner'}` : 'Command on this server'}</span>
-          <span>{models === 1 ? '1 model' : `${models} models`}</span>
+          <span>{countLabel(models, 'model')}</span>
           {harness.resolved ? null : <span>The manifest no longer loads</span>}
         </span>
       }
@@ -139,27 +159,17 @@ function RemoveDialog({ harness, list, onClose, organizationId }: { harness: Cus
     },
   })
   return (
-    <Dialog
-      footer={
-        <>
-          <Button onClick={onClose} variant="ghost">
-            Cancel
-          </Button>
-          <Button busy={remove.isPending} onClick={() => remove.mutate()} variant="danger">
-            Remove
-          </Button>
-        </>
-      }
+    <ConfirmDialog
+      busy={remove.isPending}
+      confirmLabel="Remove harness"
+      error={remove.isError ? `It wasn’t removed. ${describeError(remove.error).message}` : null}
       onClose={onClose}
+      onConfirm={() => remove.mutate()}
       open
       title={`Remove ${harness.name}?`}
     >
-      <p>New launches can’t pick it any more, and runs it already did keep their history. While accounts still use it, turn it off instead.</p>
-      {remove.isError ? (
-        <Banner tone="danger" title="Not removed.">
-          {remove.error.message}
-        </Banner>
-      ) : null}
-    </Dialog>
+      New runs can’t pick it any more, and runs it already did keep their history. While accounts still use it, turn it off
+      instead.
+    </ConfirmDialog>
   )
 }

@@ -15,8 +15,9 @@ export type AppearancePreferences = {
   textSize: TextSizePreference
 }
 
+/** Until someone picks a theme, it follows the device: Indigo in light mode, Midnight in dark. */
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
-  theme: 'indigo',
+  theme: 'system',
   overrides: {},
   density: 'comfortable',
   textSize: 'default',
@@ -36,12 +37,12 @@ export function normalizeAppearancePreferences(value: unknown): AppearancePrefer
   }
 }
 
-/** Carry a pre-redesign choice forward: dark stays dark, everything else gets the default two-tone. */
+/** Carry a pre-redesign choice forward: dark stays dark, light stays light, anything else follows the device. */
 function migrateLegacy(value: unknown): AppearancePreferences {
   const legacy = record(value)
   return {
     ...DEFAULT_APPEARANCE,
-    theme: legacy.theme === 'dark' ? 'midnight' : 'indigo',
+    theme: legacy.theme === 'dark' ? 'midnight' : legacy.theme === 'light' ? 'indigo' : DEFAULT_APPEARANCE.theme,
     density: legacy.density === 'compact' ? 'compact' : 'comfortable',
   }
 }

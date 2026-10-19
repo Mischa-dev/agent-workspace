@@ -12,10 +12,16 @@ const LEGACY_PROJECT_TABS: Record<string, string> = {
   general: 'general',
   members: 'members',
   agents: 'agents',
-  codex: 'codex-runs',
+  codex: 'run-requests',
   workflow: 'workflow',
   repositories: 'repositories',
   github: 'repositories',
+}
+
+/** Project pages that were renamed or merged, and where their old addresses go now. */
+const RENAMED_PROJECT_PAGES: Record<string, string> = {
+  automation: 'automations',
+  'codex-runs': 'run-requests',
 }
 
 /** Reads the part of the address after /settings/; `search` carries an old link's `?tab=`. */
@@ -44,7 +50,12 @@ export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
       const tab = new URLSearchParams(search).get('tab') ?? 'general'
       return { kind: 'redirect', to: projectSettingsHref(second, LEGACY_PROJECT_TABS[tab] ?? 'general') }
     }
-    if (decoded.length === 3) return { kind: 'page', group: 'project', projectId: second, section: third }
+    if (decoded.length === 3) {
+      const renamed = RENAMED_PROJECT_PAGES[third]
+      return renamed
+        ? { kind: 'redirect', to: projectSettingsHref(second, renamed) }
+        : { kind: 'page', group: 'project', projectId: second, section: third }
+    }
   }
   return { kind: 'redirect', to: ACCOUNT_HOME }
 }

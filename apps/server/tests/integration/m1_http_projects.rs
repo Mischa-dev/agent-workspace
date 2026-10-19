@@ -469,6 +469,10 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .await
         .expect("create second Project");
     assert_eq!(named_like_key.status(), StatusCode::CREATED);
+    let second_project_id = response_json(named_like_key).await["id"]
+        .as_str()
+        .expect("second Project id")
+        .to_owned();
     let exact_first = app
         .clone()
         .oneshot(request(
@@ -594,6 +598,99 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     assert!(
         archived_project["archivedAt"].is_string(),
         "idempotent replay returns the current Project archive state"
+    );
+
+    // Renaming from project settings: managers only, against the version they
+    // read, never an archived project, and audited once per real change.
+    let write_headers = [
+        ("origin", "http://127.0.0.1:3100"),
+        ("cookie", cookie_header.as_str()),
+        ("x-csrf-token", csrf.as_str()),
+    ];
+    let rename = |project_id: &str, body: Value| {
+        app.clone().oneshot(request(
+            "PATCH",
+            &format!("/api/v1/projects/{project_id}"),
+            &write_headers,
+            body,
+        ))
+    };
+    let archived_rename = rename(
+        first_project_id,
+        json!({"name": "Back again", "expectedVersion": 2}),
+    )
+    .await
+    .expect("archived rename response");
+    assert_eq!(archived_rename.status(), StatusCode::CONFLICT);
+    let renamed = rename(
+        &second_project_id,
+        json!({"name": "  Alpha renamed  ", "expectedVersion": 1}),
+    )
+    .await
+    .expect("rename response");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let renamed = response_json(renamed).await;
+    assert_eq!(renamed["name"], "Alpha renamed");
+    assert_eq!(renamed["key"], "ALP");
+    assert_eq!(renamed["version"], 2);
+    let stale_rename = rename(
+        &second_project_id,
+        json!({"name": "Someone else's name", "expectedVersion": 1}),
+    )
+    .await
+    .expect("stale rename response");
+    assert_eq!(stale_rename.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(stale_rename).await["error"]["code"],
+        "version_conflict"
+    );
+    let blank_rename = rename(
+        &second_project_id,
+        json!({"name": "   ", "expectedVersion": 2}),
+    )
+    .await
+    .expect("blank rename response");
+    assert_eq!(blank_rename.status(), StatusCode::BAD_REQUEST);
+    let unchanged = rename(
+        &second_project_id,
+        json!({"name": "Alpha renamed", "expectedVersion": 2}),
+    )
+    .await
+    .expect("unchanged rename response");
+    assert_eq!(unchanged.status(), StatusCode::OK);
+    assert_eq!(response_json(unchanged).await["version"], 2);
+    sqlx::query(
+        "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(second_project_id.parse::<Uuid>().expect("Project UUID"))
+    .bind(bootstrapped.actor_id)
+    .execute(&pool)
+    .await
+    .expect("make the renamer a Viewer");
+    let viewer_rename = rename(
+        &second_project_id,
+        json!({"name": "Viewer name", "expectedVersion": 2}),
+    )
+    .await
+    .expect("Viewer rename response");
+    assert_eq!(viewer_rename.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT name FROM projects WHERE id = $1")
+            .bind(second_project_id.parse::<Uuid>().expect("Project UUID"))
+            .fetch_one(&pool)
+            .await
+            .expect("read the Project name"),
+        "Alpha renamed"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events WHERE action = 'project.renamed' AND target_id = $1",
+        )
+        .bind(second_project_id.parse::<Uuid>().expect("Project UUID"))
+        .fetch_one(&pool)
+        .await
+        .expect("count rename audit events"),
+        1
     );
 
     let logout_headers = [

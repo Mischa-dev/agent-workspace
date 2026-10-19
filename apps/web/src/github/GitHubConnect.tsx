@@ -16,6 +16,7 @@ import {
   SettingsSkeleton,
   StatusChip,
   TextField,
+  formatFullDate,
   formatShortDate,
   showToast,
 } from '../ui'
@@ -61,7 +62,7 @@ export function GitHubConnectPanel({ connection, projectId }: { connection: GitH
           </Button>
         </div>
       ) : (
-        <p className="aw-quiet">Project owners and admins connect GitHub.</p>
+        <p className="aw-quiet">The project’s owners and admins connect GitHub.</p>
       )}
     </div>
   )
@@ -80,7 +81,12 @@ export function GitHubInstallationList({ connection }: { connection: GitHubConne
               <Icon name={installation.targetType === 'Organization' ? 'users' : 'at-sign'} size={16} />
             </span>
           }
-          meta={`${installation.targetType === 'Organization' ? 'Organization' : 'Personal account'} · connected by ${installation.claimedByDisplayName} on ${formatShortDate(installation.claimedAt)}`}
+          meta={
+            <span title={formatFullDate(installation.claimedAt)}>
+              {installation.targetType === 'Organization' ? 'GitHub organization' : 'GitHub account'} · connected by{' '}
+              {installation.claimedByDisplayName} on {formatShortDate(installation.claimedAt)}
+            </span>
+          }
           title={installation.accountLogin}
         />
       ))}
@@ -95,12 +101,12 @@ export function GitHubConnectUnavailable({ connection, projectId }: { connection
     <div className="aw-settings-stack">
       <Banner role="note" tone="info" title={connection.configured ? 'Connecting from here isn’t set up.' : 'GitHub isn’t set up on this server.'}>
         {connection.configured
-          ? 'To connect repositories in a few clicks, the host operator must set the GitHub App’s slug and its OAuth client ID and secret.'
-          : 'A host operator must install the GitHub App’s credentials and set its slug and OAuth client before Projects can connect to GitHub.'}
+          ? 'To connect repositories in a few clicks, whoever runs this server has to finish setting up the GitHub App on it. Until then, add a repository by hand below.'
+          : 'Whoever runs this server has to set up the GitHub App on it before a project can connect to GitHub.'}
       </Banner>
       {connection.capabilities.manage && (
         <details className="aw-disclosure">
-          <summary>Register manually</summary>
+          <summary>Add a repository by hand</summary>
           <RepositoryRegistrationForm
             onCreated={() => void queryClient.invalidateQueries({ queryKey: queryKeys.repositories(projectId) })}
             projectId={projectId}
@@ -136,7 +142,7 @@ export function GitHubRepositoryPicker({ projectId }: { projectId: string }) {
       })
     },
     onError: (error, repository) => {
-      if (toastError(`Couldn’t add ${repository.fullName}`, error)) void available.refetch()
+      if (toastError(`${repository.fullName} wasn’t added`, error)) void available.refetch()
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.repositories(projectId) }),
   })
@@ -159,9 +165,7 @@ export function GitHubRepositoryPicker({ projectId }: { projectId: string }) {
   if (available.isPending) return <ListSkeleton label="Loading repositories from GitHub" rows={3} />
   if (available.isError) {
     return (
-      <ErrorState action={<Button onClick={() => void available.refetch()}>Try again</Button>} title="GitHub’s repositories didn’t load">
-        GitHub may be slow to answer. Try again in a moment.
-      </ErrorState>
+      <ErrorState error={available.error} onRetry={() => void available.refetch()} title="GitHub’s repositories didn’t load" />
     )
   }
   if (!available.data.repositories.length) {

@@ -252,6 +252,7 @@
 /* Agents */
 .aw-agents {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .aw-agents__error {
@@ -325,8 +326,15 @@
   flex: 1;
 }
 
-.aw-agentform {
+.aw-agentcard__form {
+  display: grid;
   gap: var(--space-4);
+}
+
+.aw-agentform {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
   max-width: none;
   padding: var(--space-5);
 }
@@ -1743,10 +1751,15 @@
   white-space: pre;
 }
 
-.aw-connect__note {
+.aw-connect__note,
+.aw-copyline__note {
   margin: 0;
   color: var(--content-fg-muted);
   font: var(--t-small);
+}
+
+.aw-copyline__note {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 640px) {

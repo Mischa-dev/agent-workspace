@@ -16,8 +16,13 @@ import {
 } from '../../automations/api'
 import '../../automations/automations.css'
 import { WEEKDAYS } from '../../automations/ruleModel'
+import { GitHubAutomationSettings } from '../../github/GitHubIntegrationSettings'
+import { priorityLabel } from '../../work-items/constants'
+import { useWorkItemWorkflow } from '../../work-items/hooks'
+import type { WorkItemPriority } from '../../work-items/types'
 import {
   Button,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
@@ -49,7 +54,7 @@ const RUN_STATE: Record<AutomationRun['state'], { label: string; tone: ChipTone 
 function describeTrigger(trigger: Trigger): string {
   switch (trigger.kind) {
     case 'run_finished':
-      return trigger.outcomes?.length ? `When a run ends ${trigger.outcomes.join(' or ')}` : 'When a run finishes'
+      return trigger.outcomes?.length ? `When a run ${joinWithOr(trigger.outcomes.map((outcome) => RUN_OUTCOME_VERBS[outcome] ?? outcome))}` : 'When a run finishes'
     case 'message_posted':
       return trigger.contains ? `When a message mentions “${trigger.contains}”` : 'When someone posts a message'
     case 'schedule': {
@@ -70,7 +75,34 @@ function describeTrigger(trigger: Trigger): string {
     case 'pull_request_checks_failed':
       return 'When checks fail on a pull request'
     case 'capacity_window':
-      return 'When a provider account resets soon with capacity left'
+      return 'When an account for runs resets soon with capacity left'
+  }
+}
+
+const RUN_OUTCOME_VERBS: Record<string, string> = {
+  completed: 'completes',
+  failed: 'fails',
+  canceled: 'is canceled',
+  interrupted: 'is interrupted',
+}
+
+/** "a, b or c". */
+function joinWithOr(parts: string[]) {
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}` : (parts[0] ?? '')
+}
+
+function describeSetField(field: Extract<RuleAction, { kind: 'set_field' }>['field'], value: string) {
+  switch (field) {
+    case 'status':
+      return `move the task to ${value}`
+    case 'priority':
+      return `set its priority to ${priorityLabel(value as WorkItemPriority).toLocaleLowerCase()}`
+    case 'assignee':
+      return value === 'none' ? 'unassign it' : `assign it to ${value === 'me' ? 'me' : value}`
+    case 'add_label':
+      return `add the label ${value}`
+    case 'remove_label':
+      return `remove the label ${value}`
   }
 }
 
@@ -79,7 +111,7 @@ function describeAction(action: RuleAction): string {
     case 'launch':
       return 'launch an agent'
     case 'set_field':
-      return `set ${action.field.replace('_', ' ')} to ${action.value}`
+      return describeSetField(action.field, action.value)
     case 'notify':
       return {
         owner: 'notify me',
@@ -91,10 +123,15 @@ function describeAction(action: RuleAction): string {
   }
 }
 
-/** Project › Automation rules: when something happens, do something, acting as the rule's maker. */
+/**
+ * Project › Automation: rules (when something happens, do something, acting as
+ * the rule's maker) and what pull requests do to their linked tasks.
+ */
 export default function AutomationRulesPage({ project }: SettingsPageProps) {
   const projectId = project?.id ?? ''
   const queryClient = useQueryClient()
+  const manage = project?.capabilities.manage === true
+  const workflow = useWorkItemWorkflow(manage ? projectId : '')
   const rules = useQuery({
     queryKey: automationKeys.rules(projectId),
     queryFn: () => listRules(projectId),
@@ -154,18 +191,25 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
             </Button>
           ) : null
         }
-        icon="play"
-        title="Automation rules"
+        icon="checklist"
+        title="Automation"
       >
         When something happens in {project.name}, do something on its own. A rule acts as the person who made it, and turns itself off if
         they can no longer work here.
       </PageHeader>
+      {manage && (
+        <Section
+          description="Keep linked tasks in step with their pull requests on GitHub."
+          id="pull-request-automation-heading"
+          title="Pull requests"
+        >
+          <GitHubAutomationSettings projectId={projectId} statuses={workflow.data?.statuses} />
+        </Section>
+      )}
       {rules.isPending ? (
         <ListSkeleton label="Loading rules" rows={3} />
       ) : rules.isError ? (
-        <ErrorState action={<Button onClick={() => void rules.refetch()}>Try again</Button>} title="Rules didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={rules.error} onRetry={() => void rules.refetch()} title="Rules didn’t load" />
       ) : rules.data.rules.length ? (
         <Section id="automation-rules-heading" title="Rules">
           <RowList label="Automation rules">
@@ -218,7 +262,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
                 key={rule.id}
                 leading={
                   <span className="aw-row__tile">
-                    <Icon name="play" size={16} />
+                    <Icon name="checklist" size={16} />
                   </span>
                 }
                 meta={
@@ -231,7 +275,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
                     <span title={rule.lastFiredAt ? formatFullDate(rule.lastFiredAt) : undefined}>
                       {rule.lastFiredAt ? `Last ran ${formatRelative(rule.lastFiredAt)}` : 'Hasn’t run yet'}
                     </span>
-                    {rule.enabled && rule.nextRunAt && <span>Next {formatRelative(rule.nextRunAt)}</span>}
+                    {rule.enabled && rule.nextRunAt && <span title={formatFullDate(rule.nextRunAt)}>Next {formatRelative(rule.nextRunAt)}</span>}
                     {rule.disabledReason && <span>{rule.disabledReason}</span>}
                   </span>
                 }
@@ -256,7 +300,7 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
               </Button>
             ) : undefined
           }
-          icon="play"
+          icon="checklist"
           title="No rules yet"
         >
           For example: when a pull request’s checks fail, launch an agent on it.
@@ -274,20 +318,16 @@ export default function AutomationRulesPage({ project }: SettingsPageProps) {
         />
       )}
       {history && <HistoryDialog onClose={() => setHistory(null)} projectId={projectId} rule={history} />}
-      <Dialog
-        description={deleting ? `${deleting.name} stops for good, and its history goes too.` : undefined}
-        footer={
-          <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
-            <Button busy={remove.isPending} data-autofocus onClick={() => deleting && remove.mutate(deleting)} variant="danger">
-              Delete rule
-            </Button>
-          </>
-        }
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Delete rule"
         onClose={() => setDeleting(null)}
+        onConfirm={() => deleting && remove.mutate(deleting)}
         open={deleting !== null}
-        title="Delete this rule?"
-      />
+        title={deleting ? `Delete ${deleting.name}?` : 'Delete this rule?'}
+      >
+        It stops for good, and its history goes too.
+      </ConfirmDialog>
     </>
   )
 }
@@ -302,9 +342,7 @@ function HistoryDialog({ onClose, projectId, rule }: { onClose: () => void; proj
       {runs.isPending ? (
         <ListSkeleton label="Loading history" rows={3} />
       ) : runs.isError ? (
-        <ErrorState action={<Button onClick={() => void runs.refetch()}>Try again</Button>} title="History didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={runs.error} onRetry={() => void runs.refetch()} title="History didn’t load" />
       ) : runs.data.runs.length ? (
         <RowList label="Runs">
           {runs.data.runs.map((entry) => (

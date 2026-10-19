@@ -112,7 +112,7 @@ describe('SettingField', () => {
     vi.stubGlobal('fetch', fetchMock)
     renderField(overridden)
 
-    expect(screen.getByText(/Set for this Project\. Without it: Fast \(from the workspace\)/)).toBeVisible()
+    expect(screen.getByText(/Set for this project\. Without it: Fast \(from the workspace\)/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))

@@ -1,13 +1,12 @@
 /* Settings: the area's nav and search, the inherited setting field, and the pages' own pieces. Loads with /settings. */
 
+/* The nav is the area's sidebar: flush with the rail, its top in line with the page title. */
 .aw-settings {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr);
   align-items: start;
   width: 100%;
-  max-width: 1180px;
   min-height: 100%;
-  margin: 0 auto;
 }
 
 .aw-settings__toggle {
@@ -22,7 +21,7 @@
   gap: var(--space-5);
   max-height: 100dvh;
   overflow-y: auto;
-  padding: var(--space-6) var(--space-3) var(--space-8) var(--space-5);
+  padding: var(--space-8) var(--space-3) var(--space-8) var(--space-4);
 }
 
 .aw-settings__group {
@@ -168,6 +167,23 @@
 .aw-settings__page.aw-page {
   max-width: 880px;
   margin: 0;
+  padding-left: var(--space-8);
+}
+
+/* Groups of checkboxes and fields under one legend, without the browser's frame. */
+.aw-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-fieldset > legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
 }
 
 .aw-settings__filter {
@@ -358,6 +374,25 @@
   cursor: pointer;
 }
 
+.aw-disclosure > p {
+  margin: 0;
+}
+
+.aw-filechooser {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.aw-filechooser__name {
+  min-width: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  overflow-wrap: anywhere;
+}
+
 .aw-recovery-codes {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -456,6 +491,8 @@
 @media (max-width: 860px) {
   .aw-settings {
     grid-template-columns: minmax(0, 1fr);
+    /* A short page starts under the picker instead of being pushed down the screen. */
+    align-content: start;
   }
 
   .aw-settings__toggle {
@@ -502,7 +539,12 @@
   }
 
   .aw-settings__link {
-    min-height: 40px;
+    min-height: 44px;
+  }
+
+  .aw-settings__page.aw-page {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
   }
 
   .aw-setting__head {
@@ -520,4 +562,9 @@
   .aw-settings__link {
     transition: none;
   }
+}
+
+/* A segmented control waiting on a save: the same control, just not clickable. */
+.aw-fieldset:disabled .aw-seg {
+  opacity: 0.6;
 }

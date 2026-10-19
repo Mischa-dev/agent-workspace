@@ -29,7 +29,7 @@ export default function EnvironmentsPage({ project }: SettingsPageProps) {
   }))
   return (
     <>
-      <PageHeader icon="settings" title="Environments and defaults">
+      <PageHeader icon="play" title="Environments and defaults">
         Where agents launched in {project.name} work and what they run with. Each default follows the workspace until you
         override it here.
       </PageHeader>

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 
 import { useEnvironments } from '../launch/hooks'
-import { Banner, Button, Dialog, SWATCHES, SelectField, TextArea, TextField, showToast } from '../ui'
+import { Banner, Button, Dialog, SWATCHES, SelectField, TextArea, TextField, describeError, showToast } from '../ui'
 import type { AgentProfile, ProfileHarness, ProfileInput, ProfileTemplate } from './api'
 import { useCreateProfile, useUpdateProfile } from './hooks'
 import { parseTools } from './presenceModel'
@@ -63,7 +63,9 @@ export function AgentProfileDialog({
   projectId: string
   template: ProfileTemplate | null
 }) {
-  const [draft, setDraft] = useState(() => draftFrom(profile ?? template))
+  const [initial] = useState(() => draftFrom(profile ?? template))
+  const [draft, setDraft] = useState(initial)
+  const dirty = (Object.keys(draft) as (keyof Draft)[]).some((key) => draft[key] !== initial[key])
   const create = useCreateProfile(projectId)
   const update = useUpdateProfile(projectId)
   const environments = useEnvironments(projectId)
@@ -100,24 +102,23 @@ export function AgentProfileDialog({
       description={profile ? undefined : template ? `Starts from the ${template.name} template. Change anything you like.` : 'Starts blank.'}
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
-            Cancel
-          </Button>
+          <Button onClick={onClose}>Cancel</Button>
           <Button busy={saving} disabled={!draft.name.trim()} type="submit" variant="primary">
-            {profile ? 'Save' : 'Add agent'}
+            {profile ? 'Save changes' : 'Add agent'}
           </Button>
         </>
       }
+      dirty={dirty}
       onClose={onClose}
       onSubmit={submit}
       open
       title={profile ? `Edit ${profile.name}` : 'Add an agent'}
       width={600}
     >
-      <div className="aw-agentform">
+      <div className="aw-profileform">
         {error ? (
-          <Banner tone="danger" title="Not saved.">
-            {error.message}
+          <Banner tone="danger" title={profile ? 'Your changes weren’t saved.' : 'The agent wasn’t added.'}>
+            {describeError(error).message}
           </Banner>
         ) : null}
         <TextField autoFocus label="Name" maxLength={80} onChange={(event) => set({ name: event.target.value })} required value={draft.name} />
@@ -130,8 +131,8 @@ export function AgentProfileDialog({
           prefix="@"
           value={draft.handle}
         />
-        <div className="aw-agentform__pair">
-          <TextField hint="Up to 8 characters." label="Avatar" maxLength={8} onChange={(event) => set({ avatar: event.target.value })} value={draft.avatar} />
+        <div className="aw-profileform__pair">
+          <TextField hint="Up to 2 letters or an emoji." label="Avatar" maxLength={8} onChange={(event) => set({ avatar: event.target.value })} value={draft.avatar} />
           <SelectField label="Color" onChange={(event) => set({ color: event.target.value })} value={draft.color}>
             <option value="">Pick for me</option>
             {draft.color && !(SWATCHES as readonly string[]).includes(draft.color) ? <option value={draft.color}>{draft.color}</option> : null}
@@ -151,7 +152,7 @@ export function AgentProfileDialog({
             </option>
           ))}
         </SelectField>
-        <div className="aw-agentform__triple">
+        <div className="aw-profileform__triple">
           <TextField hint="Empty uses the harness default." label="Model" onChange={(event) => set({ model: event.target.value })} value={draft.model} />
           <TextField label="Reasoning" onChange={(event) => set({ reasoning: event.target.value })} value={draft.reasoning} />
           <TextField label="Speed" onChange={(event) => set({ speed: event.target.value })} value={draft.speed} />
@@ -167,7 +168,7 @@ export function AgentProfileDialog({
           />
         ) : null}
         <SelectField
-          error={environments.isError ? 'Environments didn’t load.' : undefined}
+          error={environments.isError ? 'Environments didn’t load. Close this and open it again to retry.' : undefined}
           hint={environmentChoices.length === 0 && environments.data ? 'No environment uses this harness yet.' : undefined}
           label="Environment"
           onChange={(event) => set({ environmentId: event.target.value })}

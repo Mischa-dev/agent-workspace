@@ -2,10 +2,13 @@
 // (Account, Workspace or Project) next to the related ones and write the page
 // as a default-exported component taking SettingsPageProps. Add lines; don't
 // reorder: other branches add theirs (environments, notifications and alert
-// rules, AI and models) at the same time.
+// rules, models) at the same time. Give each page its own icon; a page with the
+// same name in two groups (General, Members, Models) shares one. A renamed
+// page's old id redirects in ./route.ts.
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
+import { ArrowDownUp, Bell, BookOpen, Cpu, LayoutTemplate, Mail, Plug, ScrollText, Server, SlidersHorizontal, User, Webhook, Zap } from 'lucide-react'
 
-import type { IconName } from '../ui'
+import type { IconGlyph } from '../ui'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 
 export type SettingsPage = {
@@ -13,7 +16,8 @@ export type SettingsPage = {
   /** The last part of the URL, such as `security` in /settings/account/security. */
   id: string
   label: string
-  icon: IconName
+  /** A kit icon name, or a lucide icon imported here so it loads with Settings, not with every page. */
+  icon: IconGlyph
   /** Other words people search for. */
   keywords: string[]
   /** Registry settings shown on this page, by key prefix (such as `run.`), so search can find them. */
@@ -29,7 +33,7 @@ function page(
   group: SettingsGroup,
   id: string,
   label: string,
-  icon: IconName,
+  icon: IconGlyph,
   keywords: string[],
   load: () => Promise<PageModule>,
   options: Pick<SettingsPage, 'settings' | 'visible'> = {},
@@ -45,43 +49,42 @@ const runsSomewhere = ({ projects }: SettingsVisibility) => projects.some((proje
 
 export const SETTINGS_PAGES: SettingsPage[] = [
   // Account
-  page('account', 'profile', 'Profile', 'at-sign', ['name', 'display name', 'username', 'github username', 'workos', 'google', 'sign-in', 'email', 'email address'], () => import('./account/ProfilePage')),
+  page('account', 'profile', 'Profile', User, ['name', 'display name', 'username', 'github username', 'single sign-on', 'sso', 'google', 'sign-in', 'email', 'email address'], () => import('./account/ProfilePage')),
   page('account', 'security', 'Security', 'shield-check', ['password', 'sessions', 'devices', 'sign out', 'two-factor', '2fa', 'authenticator', 'recovery codes'], () => import('./account/SecurityPage')),
   page('account', 'appearance', 'Appearance', 'palette', ['theme', 'dark', 'light', 'colors', 'density', 'text size'], () => import('../theme/AppearancePage')),
-  page('account', 'provider-accounts', 'Provider accounts', 'terminal', ['codex', 'sign in', 'chatgpt', 'runs'], () => import('./account/ProviderAccountsPage'), { visible: runsSomewhere }),
+  page('account', 'provider-accounts', 'Accounts for runs', Plug, ['provider accounts', 'sign in', 'sign-in', 'harness', 'runs', 'api key'], () => import('./account/ProviderAccountsPage'), { visible: runsSomewhere }),
   page('account', 'usage', 'Usage and alerts', 'activity', ['limits', 'rate limits', 'windows', 'resets', 'capacity', 'quota', 'banked reset', 'alerts'], () => import('./account/UsagePage'), { visible: runsSomewhere }),
-  page('account', 'notifications', 'Notifications', 'inbox', ['push', 'phone', 'desktop', 'quiet hours', 'mute', 'email', 'digest', 'do not disturb'], () => import('./account/NotificationsPage'), { settings: ['notifications.'] }),
-  page('account', 'connected-apps', 'Connected apps', 'link', ['mcp', 'claude code', 'oauth', 'apps'], () => import('./account/ConnectedAppsPage')),
+  page('account', 'notifications', 'Notifications', Bell, ['push', 'phone', 'desktop', 'quiet hours', 'mute', 'email', 'digest', 'do not disturb'], () => import('./account/NotificationsPage'), { settings: ['notifications.'] }),
+  page('account', 'connected-apps', 'Connected apps', 'link', ['mcp', 'mcp client', 'oauth', 'apps', 'connector'], () => import('./account/ConnectedAppsPage')),
   page('account', 'api-tokens', 'API tokens', 'key', ['token', 'bearer', 'mcp', 'credential', 'scripts'], () => import('./account/ApiTokensPage')),
-  page('account', 'webhooks', 'Webhooks', 'link', ['webhook', 'events', 'http', 'callback', 'integration', 'signed'], () => import('./account/WebhooksPage')),
-  page('account', 'api-reference', 'API reference', 'terminal', ['rest', 'openapi', 'api', 'scripts', 'curl', 'docs'], () => import('./account/ApiReferencePage')),
+  page('account', 'webhooks', 'Webhooks', Webhook, ['webhook', 'events', 'http', 'callback', 'integration', 'signed'], () => import('./account/WebhooksPage')),
+  page('account', 'api-reference', 'API reference', BookOpen, ['rest', 'openapi', 'api', 'scripts', 'curl', 'docs'], () => import('./account/ApiReferencePage')),
   // Workspace
   page('workspace', 'general', 'General', 'settings', ['rename', 'workspace name', 'leave', 'transfer ownership', 'owner'], () => import('./workspace/GeneralPage')),
   page('workspace', 'members', 'Members', 'users', ['people', 'agents', 'roles', 'admin', 'invite', 'invitations', 'remove'], () => import('./workspace/MembersPage')),
-  page('workspace', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions', 'api key', 'budget', 'usage', 'anthropic', 'openai', 'gemini'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
-  page('workspace', 'keys', 'Keys', 'key', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
-  page('workspace', 'email', 'Email', 'at-sign', ['smtp', 'mail', 'email', 'password reset', 'test email', 'outgoing mail'], () => import('./workspace/EmailPage'), { visible: owner }),
-  page('workspace', 'run-defaults', 'Environments and run defaults', 'settings', ['harness', 'model', 'reasoning', 'speed', 'environment'], () => import('./workspace/RunDefaultsPage'), { settings: ['run.'] }),
+  page('workspace', 'ai', 'Models', Cpu, ['ai', 'provider', 'model', 'suggestions', 'api key', 'budget', 'usage'], () => import('./workspace/AiPage'), { settings: ['ai.'] }),
+  page('workspace', 'keys', 'Keys', 'lock', ['secrets', 'api keys', 'credentials'], () => import('./workspace/KeysPage'), { visible: manager }),
+  page('workspace', 'email', 'Email', Mail, ['smtp', 'mail', 'email', 'password reset', 'test email', 'outgoing mail'], () => import('./workspace/EmailPage'), { visible: owner }),
+  page('workspace', 'run-defaults', 'Environments and run defaults', SlidersHorizontal, ['harness', 'model', 'reasoning', 'speed', 'environment'], () => import('./workspace/RunDefaultsPage'), { settings: ['run.'] }),
   page('workspace', 'harnesses', 'Harnesses', 'terminal', ['custom harness', 'adapter', 'manifest', 'runner', 'command', 'agents'], () => import('./workspace/HarnessesPage')),
-  page('workspace', 'project-templates', 'Project templates', 'list', ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
+  page('workspace', 'project-templates', 'Project templates', LayoutTemplate, ['templates', 'new project', 'setup', 'starter'], () => import('./workspace/ProjectTemplatesPage')),
   page('workspace', 'github', 'GitHub', 'pull-request', ['installation', 'app', 'repositories'], () => import('./workspace/GitHubPage'), { visible: manager }),
-  page('workspace', 'audit-log', 'Audit log', 'activity', ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
-  page('workspace', 'server', 'Server', 'activity', ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: owner }),
+  page('workspace', 'audit-log', 'Audit log', ScrollText, ['history', 'activity', 'who changed', 'events'], () => import('./workspace/AuditLogPage'), { visible: manager }),
+  page('workspace', 'server', 'Server', Server, ['version', 'commit', 'backup', 'backups', 'health', 'preflight', 'disk', 'migrations', 'self-hosting'], () => import('./workspace/ServerPage'), { visible: owner }),
   // Project
   page('project', 'general', 'General', 'settings', ['about', 'archive', 'key', 'name'], () => import('./project/GeneralPage')),
   page('project', 'members', 'Members', 'users', ['team', 'people', 'roles', 'invite'], () => import('./project/MembersPage'), {
     visible: (context) => manageProject(context) && Boolean(context.workspace),
   }),
   page('project', 'repositories', 'Repositories', 'repo', ['github', 'connect', 'mirror', 'code'], () => import('./project/RepositoriesPage')),
-  page('project', 'environments', 'Environments and defaults', 'settings', ['harness', 'model', 'reasoning', 'speed', 'repository'], () => import('./project/EnvironmentsPage'), { settings: ['run.'] }),
-  page('project', 'ai', 'AI and models', 'bot', ['provider', 'model', 'suggestions', 'dependencies', 'automatic'], () => import('./project/AiPage'), { settings: ['ai.'] }),
+  page('project', 'environments', 'Environments and defaults', SlidersHorizontal, ['harness', 'model', 'reasoning', 'speed', 'repository'], () => import('./project/EnvironmentsPage'), { settings: ['run.'] }),
+  page('project', 'ai', 'Models', Cpu, ['ai', 'provider', 'model', 'suggestions', 'dependencies', 'automatic'], () => import('./project/AiPage'), { settings: ['ai.'] }),
   page('project', 'agents', 'Agents', 'bot', ['external agents', 'connections', 'credentials', 'profiles', 'reviewer', 'planner', 'fixer', 'instructions'], () => import('./project/AgentsPage'), { visible: manageProject }),
-  page('project', 'automation', 'Automation', 'checklist', ['pull requests', 'work items', 'review', 'github'], () => import('./project/AutomationPage'), { visible: manageProject }),
-  page('project', 'automations', 'Automation rules', 'play', ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation'], () => import('./project/AutomationRulesPage'), { visible: projectMember }),
-  page('project', 'workflow', 'Workflow', 'work', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
-  page('project', 'templates', 'Templates', 'list', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
-  page('project', 'import-export', 'Import and export', 'arrow-down', ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
-  page('project', 'codex-runs', 'Run requests', 'play', ['codex', 'run requests', 'sponsored', 'approve'], () => import('./project/CodexRunsPage'), { visible: projectMember }),
+  page('project', 'automations', 'Automation', Zap, ['rules', 'triggers', 'when', 'schedule', 'launch', 'checks failed', 'workflow automation', 'pull requests', 'review', 'github'], () => import('./project/AutomationRulesPage'), { visible: projectMember }),
+  page('project', 'workflow', 'Workflow', 'board', ['statuses', 'types', 'estimates', 'transitions', 'board', 'columns'], () => import('./project/WorkflowPage'), { visible: projectMember }),
+  page('project', 'templates', 'Templates', 'bookmark', ['task templates', 'recurring', 'repeat', 'schedule', 'project template'], () => import('./project/TemplatesPage'), { visible: projectMember }),
+  page('project', 'import-export', 'Import and export', ArrowDownUp, ['import', 'export', 'csv', 'markdown', 'github issues', 'linear', 'jira', 'json', 'download'], () => import('./project/ImportExportPage')),
+  page('project', 'run-requests', 'Run requests', 'circle-check', ['run requests', 'sponsored', 'approve', 'provider account'], () => import('./project/CodexRunsPage'), { visible: projectMember }),
 ]
 
 export const GROUP_LABELS: Record<SettingsGroup, string> = {

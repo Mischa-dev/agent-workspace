@@ -5,14 +5,16 @@ import { testProjectAi } from '../../ai/api'
 import { planningHref } from '../../ai/links'
 import { useAnalyze, useProjectAi } from '../../ai/hooks'
 import { aiErrorMessage } from '../../ai/links'
-import { Banner, Button, DetailList, ErrorState, PageHeader, Section, SettingsSkeleton, StatusChip, formatRelative, showToast } from '../../ui'
+import { Banner, Button, DetailList, ErrorState, PageHeader, Section, SettingsSkeleton, StatusChip, countLabel, formatFullDate, formatRelative, showToast } from '../../ui'
 import { workspaceSettingsHref } from '../paths'
 import { ScopedSettings } from '../ScopedSettings'
 import type { SettingsPageProps } from '../types'
 
 const KEY_SOURCES = { project: 'This project’s key', workspace: 'The workspace key' } as const
 
-/** Project › AI and models: what this project's AI uses, the switches for detection and applying, and recent runs. */
+const RUN_KINDS: Record<string, string> = { edit: 'Edit', analyze: 'Analysis', nightly: 'Nightly check', triage: 'Triage' }
+
+/** Project › Models: what this project's models use, the switches for detection and applying, and recent runs. */
 export default function AiPage({ project }: SettingsPageProps) {
   const projectId = project?.id ?? ''
   const status = useProjectAi(projectId)
@@ -26,16 +28,12 @@ export default function AiPage({ project }: SettingsPageProps) {
 
   return (
     <>
-      <PageHeader icon="bot" title="AI and models">
+      <PageHeader icon="star" title="Models">
         What {project.name} uses for dependency detection, triage, plan import and summaries. Each setting follows the{' '}
         <Link to={workspaceSettingsHref('ai')}>workspace</Link> until you override it here.
       </PageHeader>
-      {status.isPending ? <SettingsSkeleton label="Loading AI status" sections={1} /> : null}
-      {status.isError ? (
-        <ErrorState action={<Button onClick={() => void status.refetch()}>Try again</Button>} title="AI status didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {status.isPending ? <SettingsSkeleton label="Loading model status" sections={1} /> : null}
+      {status.isError ? <ErrorState error={status.error} onRetry={() => void status.refetch()} title="Model status didn’t load" /> : null}
       {data ? (
         <Section
           actions={
@@ -56,7 +54,7 @@ export default function AiPage({ project }: SettingsPageProps) {
           title="Status"
         >
           {data.configured ? null : (
-            <Banner icon="bot" role="note" title="AI isn’t set up for this project." tone="info">
+            <Banner icon="bot" role="note" title="Models aren’t set up for this project." tone="info">
               {data.problem ?? 'Choose a provider and add its key.'} A workspace admin can add keys in{' '}
               <Link to={workspaceSettingsHref('ai')}>workspace settings</Link>.
             </Banner>
@@ -82,18 +80,20 @@ export default function AiPage({ project }: SettingsPageProps) {
               {data.runs.slice(0, 6).map((run) => (
                 <li key={run.id}>
                   <StatusChip tone={run.state === 'failed' ? 'danger' : run.state === 'succeeded' ? 'success' : 'agent'} dots={run.state === 'running'}>
-                    {run.kind}
+                    {RUN_KINDS[run.kind] ?? 'Run'}
                   </StatusChip>
                   <span>
                     {run.state === 'failed'
                       ? (run.error ?? 'Failed')
                       : run.state === 'succeeded'
-                        ? `${run.tasksConsidered} tasks checked, ${run.suggestionsCreated} suggestions${run.suggestionsApplied ? `, ${run.suggestionsApplied} applied` : ''}`
+                        ? `${countLabel(run.tasksConsidered, 'task')} checked, ${countLabel(run.suggestionsCreated, 'suggestion')}${run.suggestionsApplied ? `, ${run.suggestionsApplied} applied` : ''}`
                         : run.state === 'running'
                           ? 'Running'
                           : 'Waiting to run'}
                   </span>
-                  <span className="aw-quiet">{formatRelative(run.finishedAt ?? run.createdAt)}</span>
+                  <span className="aw-quiet" title={formatFullDate(run.finishedAt ?? run.createdAt)}>
+                    {formatRelative(run.finishedAt ?? run.createdAt)}
+                  </span>
                 </li>
               ))}
             </ul>

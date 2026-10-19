@@ -197,10 +197,39 @@
   border-bottom: 0;
 }
 
+.aw-notify__table td {
+  padding: 0;
+}
+
+/* The whole cell is the checkbox's hit area: 44px, so it works under a thumb. */
+.aw-notify__check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.aw-notify__check:has(input:disabled) {
+  cursor: default;
+}
+
 .aw-notify__table input[type='checkbox'] {
   width: 18px;
   height: 18px;
+  margin: 0;
   accent-color: var(--accent);
+  cursor: inherit;
+}
+
+.aw-notify__saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: var(--space-2);
+  font: var(--t-caption);
+  color: var(--success);
 }
 
 @media (max-width: 640px) {
@@ -332,4 +361,10 @@
 .aw-history__table th {
   color: var(--content-fg-muted);
   font-weight: 500;
+}
+
+/* The pause choices wrap on a phone instead of running off the side. */
+.aw-usage__pause {
+  flex-wrap: wrap;
+  justify-content: flex-start;
 }

@@ -77,7 +77,7 @@
   gap: var(--space-3);
 }
 
-.aw-agentcard {
+.aw-profilecard {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -88,21 +88,21 @@
   min-width: 0;
 }
 
-.aw-agentcard.is-off {
+.aw-profilecard.is-off {
   background: var(--surface-sunken);
 }
 
-.aw-agentcard.is-off .aw-avatar {
+.aw-profilecard.is-off .aw-avatar {
   opacity: 0.5;
 }
 
-.aw-agentcard__head {
+.aw-profilecard__head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
 }
 
-.aw-agentcard__name {
+.aw-profilecard__name {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -110,19 +110,19 @@
   overflow-wrap: anywhere;
 }
 
-.aw-agentcard__meta {
+.aw-profilecard__meta {
   margin: 0;
   font: var(--t-small);
   color: var(--content-fg-muted);
   overflow-wrap: anywhere;
 }
 
-.aw-agentcard__text {
+.aw-profilecard__text {
   margin: 0;
   font: var(--t-small);
 }
 
-.aw-agentcard__presence {
+.aw-profilecard__presence {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -132,15 +132,26 @@
 
 /* Profile form */
 
-.aw-agentform {
+.aw-profileform {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
-.aw-agentform__pair,
-.aw-agentform__triple {
+.aw-profileform__pair,
+.aw-profileform__triple {
   display: grid;
   gap: var(--space-3);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+}
+
+/* Two wide letters (or a wide emoji) still fit: clip anything wider than the square. */
+.aw-agentmark {
+  overflow: hidden;
+}
+
+.aw-agentmark .aw-avatar__initials {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
 }

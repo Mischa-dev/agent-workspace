@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -7,7 +7,10 @@ import { pauseChoices, pausedUntilLabel, useNotificationPause } from '../../shel
 import {
   Banner,
   Button,
+  EmptyState,
   ErrorState,
+  Icon,
+  ListSkeleton,
   PageHeader,
   Row,
   RowList,
@@ -17,10 +20,14 @@ import {
   StatusChip,
   Switch,
   TextField,
+  countLabel,
+  describeLoadError,
+  formatFullDate,
   formatRelative,
   showToast,
 } from '../../ui'
-import { accountSettingsHref } from '../paths'
+import { accountSettingsHref, workspaceSettingsHref } from '../paths'
+import { TimeZoneField } from '../TimeZoneField'
 import type { SettingsPageProps } from '../types'
 import {
   PushPermissionDenied,
@@ -54,23 +61,35 @@ const CHANNELS: { channel: NotificationChannel; field: 'inApp' | 'push' | 'email
 ]
 
 /** Account › Notifications: which kinds reach you where (N4), push devices (N3), quiet hours and muted projects. */
-export default function NotificationsPage({ projects }: SettingsPageProps) {
-  const settings = useQuery({ queryKey: notificationKeys.settings, queryFn: getNotificationSettings })
+export default function NotificationsPage({ projects, session, workspace }: SettingsPageProps) {
+  const settings = useQuery({
+    queryKey: notificationKeys.settings,
+    queryFn: getNotificationSettings,
+    enabled: Boolean(workspace),
+  })
+  // Notification settings belong to one workspace: the default one.
+  const shownWorkspace =
+    session.organizations.find((organization) => organization.id === settings.data?.organizationId) ?? workspace
+  const ownsWorkspace = shownWorkspace?.role === 'owner'
   return (
     <>
       <PageHeader icon="inbox" title="Notifications">
-        Choose what reaches you in the inbox, on your phone and desktop, and when to stay quiet.
+        Choose what reaches you in the inbox, on your phone and desktop, and when to stay quiet
+        {session.organizations.length > 1 && shownWorkspace ? ` in ${shownWorkspace.name}` : ''}.
       </PageHeader>
-      {settings.isPending ? (
+      {!workspace ? (
+        <EmptyState icon="inbox" title="No workspace yet">
+          Join or create a workspace to set notifications.
+        </EmptyState>
+      ) : settings.isPending ? (
         <SettingsSkeleton label="Loading notification settings" sections={3} />
       ) : settings.isError ? (
-        <ErrorState action={<Button onClick={() => void settings.refetch()}>Try again</Button>} title="Notification settings didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={settings.error} onRetry={() => void settings.refetch()} title="Notification settings didn’t load" />
       ) : (
         <>
-          <ChannelsSection settings={settings.data} />
+          <ChannelsSection canSetUpEmail={ownsWorkspace} settings={settings.data} />
           <DevicesSection />
+          <PauseSection />
           <QuietHoursSection settings={settings.data} />
           <MutesSection projects={projects} settings={settings.data} />
           <DigestSection settings={settings.data} />
@@ -85,13 +104,29 @@ function useSettingsUpdate() {
   return (updated: NotificationSettings) => queryClient.setQueryData(notificationKeys.settings, updated)
 }
 
-function ChannelsSection({ settings }: { settings: NotificationSettings }) {
+type ChannelChange = { group: NotificationGroup; channel: NotificationChannel; enabled: boolean }
+
+function ChannelsSection({ canSetUpEmail, settings }: { canSetUpEmail: boolean; settings: NotificationSettings }) {
   const update = useSettingsUpdate()
+  // Each box saves on its own; only the one saving waits, and its row says when it's saved.
+  const [saving, setSaving] = useState<string | null>(null)
+  const [savedRow, setSavedRow] = useState<NotificationGroup | null>(null)
+  const savedTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(savedTimer.current), [])
   const change = useMutation({
-    mutationFn: ({ group, channel, enabled }: { group: NotificationGroup; channel: NotificationChannel; enabled: boolean }) =>
-      setChannel(settings.organizationId, group, channel, enabled),
-    onSuccess: update,
-    onError: (reason) => toastError('That wasn’t saved', reason),
+    mutationFn: ({ group, channel, enabled }: ChannelChange) => setChannel(settings.organizationId, group, channel, enabled),
+    onMutate: ({ group, channel }) => setSaving(`${group}:${channel}`),
+    onSuccess: (updated, { group }) => {
+      update(updated)
+      setSavedRow(group)
+      window.clearTimeout(savedTimer.current)
+      savedTimer.current = window.setTimeout(() => setSavedRow(null), 2000)
+    },
+    onError: (reason, { group }) => {
+      const label = settings.groups.find((entry) => entry.group === group)?.label ?? 'notification'
+      toastError(`${label} choice wasn’t saved`, reason)
+    },
+    onSettled: () => setSaving(null),
   })
   return (
     <Section description="Turning the inbox off for a kind still lets it reach you by push." id="channels-heading" title="What reaches you where">
@@ -110,18 +145,31 @@ function ChannelsSection({ settings }: { settings: NotificationSettings }) {
           <tbody>
             {settings.groups.map((group: GroupSetting) => (
               <tr key={group.group}>
-                <th scope="row">{group.label}</th>
+                <th scope="row">
+                  {group.label}
+                  <span aria-live="polite" className="aw-notify__saved">
+                    {savedRow === group.group ? (
+                      <>
+                        <Icon name="check" size={12} /> Saved
+                      </>
+                    ) : null}
+                  </span>
+                </th>
                 {CHANNELS.map((column) => {
                   const unavailable = column.channel === 'email' && !settings.emailAvailable
                   return (
                     <td key={column.channel}>
-                      <input
-                        aria-label={`${group.label} by ${column.label.toLowerCase()}`}
-                        checked={group[column.field]}
-                        disabled={unavailable || change.isPending}
-                        onChange={(event) => change.mutate({ group: group.group, channel: column.channel, enabled: event.target.checked })}
-                        type="checkbox"
-                      />
+                      <label className="aw-notify__check">
+                        <input
+                          aria-label={`${group.label} by ${column.label.toLowerCase()}`}
+                          checked={group[column.field]}
+                          disabled={unavailable || saving === `${group.group}:${column.channel}`}
+                          onChange={(event) =>
+                            change.mutate({ group: group.group, channel: column.channel, enabled: event.target.checked })
+                          }
+                          type="checkbox"
+                        />
+                      </label>
                     </td>
                   )
                 })}
@@ -130,18 +178,30 @@ function ChannelsSection({ settings }: { settings: NotificationSettings }) {
           </tbody>
         </table>
       </div>
-      <EmailNote settings={settings} />
+      <EmailNote canSetUpEmail={canSetUpEmail} settings={settings} />
     </Section>
   )
 }
 
 /** Why email can't be chosen yet, or where it goes. */
-function EmailNote({ settings }: { settings: NotificationSettings }) {
+function EmailNote({ canSetUpEmail, settings }: { canSetUpEmail: boolean; settings: NotificationSettings }) {
   if (settings.emailAvailable) {
     return settings.emailAddress ? <p className="aw-usage__at">Email goes to {settings.emailAddress}.</p> : null
   }
   if (!settings.mailConfigured) {
-    return <p className="aw-usage__at">This workspace doesn’t send email yet; an owner sets it up in Workspace › Email. Your choices are kept for when it does.</p>
+    return (
+      <p className="aw-usage__at">
+        This workspace doesn’t send email yet.{' '}
+        {canSetUpEmail ? (
+          <>
+            Set it up in <Link to={workspaceSettingsHref('email')}>Workspace › Email</Link>.
+          </>
+        ) : (
+          'A workspace owner sets it up in Workspace › Email.'
+        )}{' '}
+        Your choices are kept for when it does.
+      </p>
+    )
   }
   return (
     <p className="aw-usage__at">
@@ -179,7 +239,10 @@ function DevicesSection() {
       await removeDevice(device.id)
       if (device.endpointHash === hereHash) await unsubscribeHere().catch(() => undefined)
     },
-    onSuccess: refresh,
+    onSuccess: (_, device) => {
+      refresh()
+      showToast({ tone: 'success', title: `${device.label} removed` })
+    },
     onError: (reason) => toastError('The device wasn’t removed', reason),
   })
   const test = useMutation({
@@ -221,9 +284,13 @@ function DevicesSection() {
             : describeError(enable.error).message}
         </Banner>
       ) : null}
-      {devices.isError ? (
-        <Banner tone="danger">Your devices didn’t load.</Banner>
-      ) : list.length === 0 && !devices.isPending ? (
+      {devices.isPending ? (
+        <ListSkeleton label="Loading your devices" rows={1} />
+      ) : devices.isError ? (
+        <Banner onRetry={() => void devices.refetch()} title="Your devices didn’t load." tone="danger">
+          {describeLoadError(devices.error)}
+        </Banner>
+      ) : list.length === 0 ? (
         <p className="aw-usage__empty">No devices yet.</p>
       ) : (
         <RowList label="Push devices">
@@ -246,13 +313,19 @@ function DevicesSection() {
                 </>
               }
               key={device.id}
-              meta={[
-                device.serviceHost,
-                device.lastSentAt ? `last push ${formatRelative(device.lastSentAt)}` : `added ${formatRelative(device.createdAt)}`,
-                device.failureCount > 0 ? `${device.failureCount} failed` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+              meta={
+                <span className="aw-row__metaline aw-wrap">
+                  <span>{device.serviceHost}</span>
+                  {device.lastSentAt ? (
+                    <span title={formatFullDate(device.lastSentAt)}>Last push {formatRelative(device.lastSentAt)}</span>
+                  ) : (
+                    <span title={formatFullDate(device.createdAt)}>Added {formatRelative(device.createdAt)}</span>
+                  )}
+                  {device.failureCount > 0 ? (
+                    <span>{countLabel(device.failureCount, 'failed push', 'failed pushes')}</span>
+                  ) : null}
+                </span>
+              }
               title={
                 <>
                   {device.label} {device.endpointHash === hereHash ? <StatusChip tone="success">This device</StatusChip> : null}
@@ -287,6 +360,7 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
       void queryClient.invalidateQueries({ queryKey: notificationKeys.settings })
       showToast({ tone: 'success', title: 'Quiet hours saved' })
     },
+    onError: () => void queryClient.invalidateQueries({ queryKey: notificationKeys.settings }),
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -294,15 +368,20 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
     save.mutate()
   }
   return (
-    <Section description="Pause now, or hold pushes every night. Pushes wait until the pause or quiet hours end; the inbox still collects everything." id="quiet-heading" title="Pause and quiet hours">
+    <Section
+      description="Hold pushes every night. They arrive when quiet hours end; the inbox still collects everything."
+      id="quiet-heading"
+      title="Quiet hours"
+    >
       <form className="aw-card aw-formcard aw-form aw-usage__form" onSubmit={submit}>
-        {save.isError ? <Banner tone="danger">{describeError(save.error).message}</Banner> : null}
-        <PauseControls />
+        {save.isError ? (
+          <Banner tone="danger">Quiet hours weren’t saved. {describeError(save.error).message}</Banner>
+        ) : null}
         <Switch checked={enabled} label="Hold pushes during quiet hours" onChange={setEnabled} />
         <div className="aw-form__grid">
           <TextField disabled={!enabled} error={startMinute == null ? 'Use a time such as 22:00.' : null} label="From" onChange={(event) => setStart(event.target.value)} type="time" value={start} />
           <TextField disabled={!enabled} error={endMinute == null ? 'Use a time such as 07:00.' : null} label="Until" onChange={(event) => setEnd(event.target.value)} type="time" value={end} />
-          <TextField hint="Such as Europe/Berlin." label="Time zone" maxLength={64} onChange={(event) => setTimeZone(event.target.value)} value={timeZone} />
+          <TimeZoneField onChange={setTimeZone} value={timeZone} />
         </div>
         <div className="aw-form__actions">
           <Button busy={save.isPending} type="submit" variant="primary">
@@ -314,49 +393,72 @@ function QuietHoursSection({ settings }: { settings: NotificationSettings }) {
   )
 }
 
-/** Pause by hand, the same as from your avatar menu. */
-function PauseControls() {
+/** Pause by hand, the same as from your avatar menu. Takes effect at once. */
+function PauseSection() {
   const pause = useNotificationPause()
-  const failed = (reason: unknown) => toastError('Couldn’t change notifications.', reason)
   if (!pause.available) return null
-  if (pause.until) {
-    return (
-      <Banner
-        action={
-          <Button onClick={() => void pause.resume().catch(failed)} size="sm">
-            Resume
-          </Button>
-        }
-        tone="info"
-      >
-        Notifications are paused until {pausedUntilLabel(pause.until, new Date())}. Pushes wait until then and emails aren’t sent.
-      </Banner>
-    )
-  }
   return (
-    <div className="aw-form__actions" role="group" aria-label="Pause notifications">
-      {pauseChoices(new Date()).map((choice) => (
-        <Button icon="moon" key={choice.id} onClick={() => void pause.pause(choice.until).catch(failed)} size="sm">
-          Pause {choice.label.charAt(0).toLowerCase()}
-          {choice.label.slice(1)}
-        </Button>
-      ))}
-    </div>
+    <Section
+      description="Pushes wait until the pause ends and emails aren’t sent; the inbox still collects everything."
+      id="pause-heading"
+      title="Pause notifications"
+    >
+      {pause.until ? (
+        <Banner
+          action={
+            <Button onClick={() => void pause.resume().catch((reason) => toastError('Notifications didn’t resume', reason))} size="sm">
+              Resume
+            </Button>
+          }
+          tone="info"
+        >
+          Notifications are paused until {pausedUntilLabel(pause.until, new Date())}.
+        </Banner>
+      ) : (
+        <div className="aw-form__actions aw-usage__pause" role="group" aria-label="Pause notifications">
+          {pauseChoices(new Date()).map((choice) => (
+            <Button
+              icon="moon"
+              key={choice.id}
+              onClick={() => void pause.pause(choice.until).catch((reason) => toastError('Notifications weren’t paused', reason))}
+              size="sm"
+            >
+              Pause {choice.label.charAt(0).toLowerCase()}
+              {choice.label.slice(1)}
+            </Button>
+          ))}
+        </div>
+      )}
+    </Section>
   )
 }
 
 function MutesSection({ projects, settings }: { projects: SettingsPageProps['projects']; settings: NotificationSettings }) {
   const update = useSettingsUpdate()
   const choices = projects.filter((project) => project.organizationId === settings.organizationId)
-  const [projectId, setProjectId] = useState(choices[0]?.id ?? '')
+  // Projects can arrive after the first render, so the first one is the
+  // choice until someone picks another.
+  const [picked, setProjectId] = useState('')
+  const projectId = choices.some((project) => project.id === picked) ? picked : (choices[0]?.id ?? '')
   const [group, setGroup] = useState<NotificationGroup | 'all'>('runs')
-  const mute = useMutation({
-    mutationFn: ({ project, kind, muted }: { project: string; kind: NotificationGroup | 'all'; muted: boolean }) => setMute(project, kind, muted),
-    onSuccess: update,
-    onError: (reason) => toastError('That wasn’t saved', reason),
-  })
   const groupLabel = (value: string) =>
     value === 'all' ? 'Everything' : (settings.groups.find((entry) => entry.group === value)?.label ?? value)
+  const projectName = (id: string) =>
+    choices.find((project) => project.id === id)?.name ??
+    settings.mutes.find((entry) => entry.projectId === id)?.projectName ??
+    'the project'
+  const mute = useMutation({
+    mutationFn: ({ project, kind, muted }: { project: string; kind: NotificationGroup | 'all'; muted: boolean }) => setMute(project, kind, muted),
+    onSuccess: (updated, { project, kind, muted }) => {
+      update(updated)
+      showToast({
+        tone: 'success',
+        title: `${groupLabel(kind)} in ${projectName(project)} ${muted ? 'muted' : 'unmuted'}`,
+        onUndo: () => mute.mutate({ project, kind, muted: !muted }),
+      })
+    },
+    onError: (reason, { muted }) => toastError(muted ? 'The project wasn’t muted' : 'The project wasn’t unmuted', reason),
+  })
   return (
     <Section description="Mute one kind in a busy project, such as its runs, and keep its mentions." id="mutes-heading" title="Muted projects">
       {settings.mutes.length > 0 ? (
@@ -364,7 +466,12 @@ function MutesSection({ projects, settings }: { projects: SettingsPageProps['pro
           {settings.mutes.map((entry) => (
             <Row
               actions={
-                <Button onClick={() => mute.mutate({ project: entry.projectId, kind: entry.group, muted: false })} size="sm" variant="ghost">
+                <Button
+                  disabled={mute.isPending && mute.variables?.project === entry.projectId && mute.variables.kind === entry.group}
+                  onClick={() => mute.mutate({ project: entry.projectId, kind: entry.group, muted: false })}
+                  size="sm"
+                  variant="ghost"
+                >
                   Unmute
                 </Button>
               }
@@ -411,8 +518,11 @@ function DigestSection({ settings }: { settings: NotificationSettings }) {
   const queryClient = useQueryClient()
   const save = useMutation({
     mutationFn: (value: string) => setPersonalSetting(settings.organizationId, 'notifications.digest', value),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: notificationKeys.settings }),
-    onError: (reason) => toastError('That wasn’t saved', reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: notificationKeys.settings })
+      showToast({ tone: 'success', title: 'Digest saved' })
+    },
+    onError: (reason) => toastError('The digest choice wasn’t saved', reason),
   })
   return (
     <Section

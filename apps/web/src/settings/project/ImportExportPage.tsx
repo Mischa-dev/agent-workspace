@@ -8,7 +8,9 @@ import { listRepositories } from '../../repositories/api'
 import {
   Banner,
   Button,
+  ButtonLink,
   Checkbox,
+  ConfirmDialog,
   ErrorState,
   ListSkeleton,
   PageHeader,
@@ -19,7 +21,10 @@ import {
   SelectField,
   StatusChip,
   TextArea,
+  countLabel,
+  formatFullDate,
   formatRelative,
+  formatShortDate,
   showToast,
 } from '../../ui'
 import {
@@ -34,6 +39,7 @@ import {
   type ImportSource,
   type TaskImport,
 } from '../../views/api'
+import { projectSettingsHref } from '../paths'
 import type { SettingsPageProps } from '../types'
 import '../../views/views.css'
 
@@ -65,6 +71,36 @@ const STATUS_LABELS: Record<TaskImport['status'], string> = {
 
 const active = (taskImport: TaskImport) => ['fetching', 'queued', 'running'].includes(taskImport.status)
 
+/** "Oct 24" for a plain date such as 2026-10-24, read as that day wherever you are. */
+function dueDate(value: string) {
+  return (/^\d{4}-\d{2}-\d{2}$/.test(value) ? formatShortDate(`${value}T00:00`) : formatShortDate(value)) || value
+}
+
+/** A button that opens the file picker, with the chosen file's name beside it. */
+function FileChooser({ accept, fileName, label, onChange }: { accept: string; fileName?: string; label: string; onChange: (event: ChangeEvent<HTMLInputElement>) => void }) {
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <div className="aw-filechooser">
+      <Button icon="arrow-up" onClick={() => input.current?.click()} size="sm">
+        Choose a file…
+      </Button>
+      <span className="aw-filechooser__name">{fileName ?? 'No file chosen'}</span>
+      <input
+        accept={accept}
+        aria-label={label}
+        className="visually-hidden"
+        onChange={(event) => {
+          onChange(event)
+          event.target.value = ''
+        }}
+        ref={input}
+        tabIndex={-1}
+        type="file"
+      />
+    </div>
+  )
+}
+
 /** Project › Import and export: bring tasks in from a plan, a CSV or GitHub issues, and take them out again. */
 export default function ImportExportPage({ project }: SettingsPageProps) {
   const projectId = project?.id ?? ''
@@ -82,11 +118,7 @@ export default function ImportExportPage({ project }: SettingsPageProps) {
         you’ve seen the preview.
       </PageHeader>
       {imports.isPending ? <ListSkeleton label="Loading imports" rows={2} /> : null}
-      {imports.isError ? (
-        <ErrorState action={<Button onClick={() => void imports.refetch()}>Try again</Button>} title="Imports didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {imports.isError ? <ErrorState error={imports.error} onRetry={() => void imports.refetch()} title="Imports didn’t load" /> : null}
       {imports.data && canImport && !open ? <NewImport onStarted={setOpenId} projectId={projectId} /> : null}
       {open ? <ImportReview importId={open} onDone={() => setOpenId('')} projectId={projectId} /> : null}
       {imports.data && !canImport ? (
@@ -105,19 +137,19 @@ export default function ImportExportPage({ project }: SettingsPageProps) {
                       Open
                     </Button>
                   ) : entry.status === 'completed' ? (
-                    <Link className="aw-btn aw-btn--ghost aw-btn--sm" to={entry.href}>
-                      <span className="aw-btn__label">See tasks</span>
-                    </Link>
+                    <ButtonLink size="sm" to={entry.href} variant="ghost">
+                      See tasks
+                    </ButtonLink>
                   ) : null
                 }
                 key={entry.id}
                 meta={
                   <span className="aw-row__metaline aw-wrap">
                     <span>{STATUS_LABELS[entry.status]}</span>
-                    {entry.status === 'completed' ? <span>{entry.createdCount.toLocaleString()} created</span> : null}
+                    {entry.status === 'completed' ? <span>{countLabel(entry.createdCount, 'task')} created</span> : null}
                     {entry.skippedCount ? <span>{entry.skippedCount.toLocaleString()} skipped</span> : null}
                     {entry.error ? <span>{entry.error}</span> : null}
-                    <span>
+                    <span title={formatFullDate(entry.createdAt)}>
                       {formatRelative(entry.createdAt)}
                       {entry.createdByName ? ` by ${entry.createdByName}` : ''}
                     </span>
@@ -225,18 +257,20 @@ function NewImport({ onStarted, projectId }: { onStarted: (id: string) => void; 
               value={text}
             />
             <Checkbox checked={headings} label="Headings become milestones" onChange={setHeadings} />
-            <label className="aw-field__label">
-              Or choose a file <input accept=".md,.markdown,.txt,text/markdown,text/plain" onChange={readFile} type="file" />
-            </label>
+            <div className="aw-field">
+              <span className="aw-field__label">Or use a file</span>
+              <FileChooser accept=".md,.markdown,.txt,text/markdown,text/plain" fileName={fileName} label="Plan file" onChange={readFile} />
+            </div>
           </>
         ) : null}
         {source === 'csv' ? (
           <>
-            <label className="aw-field__label">
-              CSV file <input accept=".csv,text/csv" onChange={readFile} type="file" />
-            </label>
+            <div className="aw-field">
+              <span className="aw-field__label">CSV file</span>
+              <FileChooser accept=".csv,text/csv" fileName={fileName} label="CSV file" onChange={readFile} />
+            </div>
             <p className="aw-pagesection__desc">
-              {fileName ? `${fileName} is ready.` : 'Exports from Linear and Jira map on their own; you can change the mapping in the preview.'}
+              Exports from Linear and Jira map on their own; you can change the mapping in the preview.
             </p>
             {error ? (
               <Banner className="aw-page__banner" tone="danger">
@@ -248,8 +282,15 @@ function NewImport({ onStarted, projectId }: { onStarted: (id: string) => void; 
         {source === 'github' ? (
           <>
             {repositories.isPending ? <ListSkeleton label="Loading repositories" rows={1} /> : null}
+            {repositories.isError ? (
+              <Banner onRetry={() => void repositories.refetch()} title="Repositories didn’t load." tone="danger">
+                {describeError(repositories.error).message}
+              </Banner>
+            ) : null}
             {repositories.data && !usable.length ? (
-              <Banner icon="info">Connect a repository to this Project first, under Repositories.</Banner>
+              <Banner icon="info">
+                Connect a repository to this project first, in <Link to={projectSettingsHref(projectId, 'repositories')}>Repositories</Link>.
+              </Banner>
             ) : null}
             {usable.length ? (
               <SelectField label="Repository" onChange={(event) => setRepositoryId(event.target.value)} value={chosenRepository}>
@@ -289,6 +330,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
     refetchInterval: (query) => (query.state.data && active(query.state.data) ? 1500 : false),
   })
   const [finishedId, setFinishedId] = useState<string | null>(null)
+  const [stopping, setStopping] = useState(false)
   const data = taskImport.data
   if (data && !active(data) && data.status !== 'draft' && finishedId !== data.id) {
     setFinishedId(data.id)
@@ -306,10 +348,12 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
     },
     onSuccess: (next, changes) => {
       refresh(next)
+      if (changes.cancel) setStopping(false)
       if (changes.cancel && next.status === 'canceled') onDone()
     },
-    onError: (error) => {
-      if (toastError('That didn’t save', error)) void taskImport.refetch()
+    onError: (error, changes) => {
+      if (changes.cancel) return
+      if (toastError('The import wasn’t changed', error)) void taskImport.refetch()
     },
   })
   const commit = useMutation({
@@ -319,7 +363,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
     },
     onSuccess: (next) => {
       refresh(next)
-      showToast({ title: `Importing ${next.preview?.willCreate ?? next.rowCount} tasks` })
+      showToast({ title: `Importing ${countLabel(next.preview?.willCreate ?? next.rowCount, 'task')}` })
     },
     onError: (error) => {
       if (toastError('The import didn’t start', error)) void taskImport.refetch()
@@ -328,11 +372,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
 
   if (taskImport.isPending) return <ListSkeleton label="Loading the preview" rows={4} />
   if (taskImport.isError || !data) {
-    return (
-      <ErrorState action={<Button onClick={() => void taskImport.refetch()}>Try again</Button>} title="The preview didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
+    return <ErrorState error={taskImport.error} onRetry={() => void taskImport.refetch()} title="The preview didn’t load" />
   }
   const preview = data.preview
   const excluded = new Set(data.options.excludedRows ?? [])
@@ -342,8 +382,15 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
     <Section
       actions={
         data.status === 'draft' || active(data) ? (
-          <Button busy={change.isPending && change.variables?.cancel} onClick={() => change.mutate({ cancel: true })} size="sm" variant="ghost">
-            {data.status === 'draft' ? 'Discard' : 'Stop'}
+          <Button
+            onClick={() => {
+              change.reset()
+              setStopping(true)
+            }}
+            size="sm"
+            variant="ghost"
+          >
+            {data.status === 'draft' ? 'Discard…' : 'Stop…'}
           </Button>
         ) : (
           <Button onClick={onDone} size="sm" variant="ghost">
@@ -354,6 +401,19 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
       id="import-review-heading"
       title={data.repositoryName ? `${data.sourceName} from ${data.repositoryName}` : data.sourceName}
     >
+      <ConfirmDialog
+        busy={change.isPending && Boolean(change.variables?.cancel)}
+        confirmLabel={data.status === 'draft' ? 'Discard' : 'Stop'}
+        error={change.isError && change.variables?.cancel ? `It wasn’t ${data.status === 'draft' ? 'discarded' : 'stopped'}. ${describeError(change.error).message}` : null}
+        onClose={() => setStopping(false)}
+        onConfirm={() => change.mutate({ cancel: true })}
+        open={stopping}
+        title={data.status === 'draft' ? 'Discard this import?' : 'Stop this import?'}
+      >
+        {data.status === 'draft'
+          ? 'The preview and your column choices go. Nothing was created from it yet.'
+          : 'No more tasks are made from it. Tasks it already made stay.'}
+      </ConfirmDialog>
       {data.status === 'fetching' ? (
         <p aria-live="polite" className="aw-pagesection__desc" role="status">
           Reading issues from {data.repositoryName ?? 'GitHub'}…
@@ -369,7 +429,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
       ) : null}
       {data.status === 'completed' ? (
         <Banner className="aw-page__banner" icon="circle-check" tone="success">
-          {data.createdCount.toLocaleString()} {data.createdCount === 1 ? 'task' : 'tasks'} created
+          {countLabel(data.createdCount, 'task')} created
           {data.skippedCount ? `, ${data.skippedCount.toLocaleString()} skipped` : ''}.{' '}
           <Link to={data.href}>See them</Link>
         </Banner>
@@ -377,19 +437,21 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
       {data.status === 'failed' || data.status === 'canceled' ? (
         <Banner className="aw-page__banner" tone={data.status === 'failed' ? 'danger' : 'info'}>
           {data.error ?? (data.status === 'failed' ? 'The import failed.' : 'The import was stopped.')}
-          {data.createdCount ? ` ${data.createdCount.toLocaleString()} tasks were made before it ended; they stay.` : ''}
+          {data.createdCount ? ` ${countLabel(data.createdCount, 'task')} ${data.createdCount === 1 ? 'was' : 'were'} made before it ended; they stay.` : ''}
         </Banner>
       ) : null}
       {data.status === 'draft' && preview ? (
         <>
           <p className="aw-pagesection__desc">
             {preview.willCreate.toLocaleString()} of {preview.total.toLocaleString()} will be created.
-            {preview.alreadyImported ? ` ${preview.alreadyImported.toLocaleString()} were imported before and stay as they are.` : ''}
-            {preview.withoutTitle ? ` ${preview.withoutTitle.toLocaleString()} have no title.` : ''}
+            {preview.alreadyImported
+              ? ` ${preview.alreadyImported.toLocaleString()} ${preview.alreadyImported === 1 ? 'was' : 'were'} imported before and stay as they are.`
+              : ''}
+            {preview.withoutTitle ? ` ${preview.withoutTitle.toLocaleString()} ${preview.withoutTitle === 1 ? 'has' : 'have'} no title.` : ''}
             {preview.leftOut ? ` ${preview.leftOut.toLocaleString()} left out.` : ''}
           </p>
           {data.columns ? (
-            <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
+            <fieldset className="aw-fieldset">
               <legend className="aw-field__label">Columns</legend>
               <div className="aw-form__row">
                 {data.fields.map((field) => (
@@ -419,7 +481,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
             <Checkbox
               checked={data.options.createLabels}
               description={preview.newLabels.slice(0, 20).join(', ') + (preview.newLabels.length > 20 ? '…' : '')}
-              label={`Create ${preview.newLabels.length} new ${preview.newLabels.length === 1 ? 'label' : 'labels'}`}
+              label={`Create ${countLabel(preview.newLabels.length, 'new label')}`}
               onChange={(checked) => setOption({ createLabels: checked })}
             />
           ) : null}
@@ -427,7 +489,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
             <Checkbox
               checked={data.options.createMilestones}
               description={preview.newMilestones.slice(0, 20).join(', ')}
-              label={`Create ${preview.newMilestones.length} new ${preview.newMilestones.length === 1 ? 'milestone' : 'milestones'}`}
+              label={`Create ${countLabel(preview.newMilestones.length, 'new milestone')}`}
               onChange={(checked) => setOption({ createMilestones: checked })}
             />
           ) : null}
@@ -457,7 +519,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
                   {row.status ? <span>{row.status}</span> : null}
                   {row.labels.length ? <span>{row.labels.join(', ')}</span> : null}
                   {row.milestone ? <span>{row.milestone}</span> : null}
-                  {row.dueDate ? <span>Due {row.dueDate}</span> : null}
+                  {row.dueDate ? <span>Due {dueDate(row.dueDate)}</span> : null}
                 </span>
               </li>
             ))}
@@ -469,7 +531,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
           ) : null}
           <div className="aw-form__actions">
             <Button busy={commit.isPending} disabled={!preview.willCreate || change.isPending} onClick={() => commit.mutate()} variant="primary">
-              Import {preview.willCreate.toLocaleString()} {preview.willCreate === 1 ? 'task' : 'tasks'}
+              Import {countLabel(preview.willCreate, 'task')}
             </Button>
           </div>
         </>

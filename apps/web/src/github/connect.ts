@@ -25,9 +25,14 @@ export function useGitHubConnection(projectId: string, enabled = true) {
   })
 }
 
-/** What the `?github=` return from GitHub means, in words. */
-export function githubReturnMessage(result: string | null, reason: string | null) {
-  if (result === 'connected') return { tone: 'success' as const, text: 'GitHub is connected. Add a repository below.' }
+/**
+ * What the `?github=` return from GitHub means, in words. Only the
+ * repositories page has a list to add to, so only it says "below".
+ */
+export function githubReturnMessage(result: string | null, reason: string | null, repositoriesHere = false) {
+  if (result === 'connected') {
+    return { tone: 'success' as const, text: repositoriesHere ? 'GitHub is connected. Add a repository below.' : 'GitHub is connected.' }
+  }
   if (result !== 'error') return null
   switch (reason) {
     case 'expired':

@@ -9,7 +9,7 @@ import { presenceLabel } from './presenceModel'
 import './agents.css'
 
 /**
- * The Project's agents in its sidebar, each with what it's doing now, so you
+ * The project's agents in its sidebar, each with what it's doing now, so you
  * can see who is working and jump to the thread. Polled, and loaded on its own.
  */
 export default function SidebarAgents({ onNavigate, projectId }: { onNavigate: () => void; projectId: string }) {

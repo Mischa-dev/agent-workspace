@@ -3,14 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
-import { isApiError } from '../../api/errors'
+import { describeError } from '../../app/mutations'
 import { startWorkOs, workOsStatus } from '../../auth/workos'
-import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField } from '../../ui'
+import { Avatar, Banner, Button, PageHeader, Section, SettingsSkeleton, TextField, describeLoadError, showToast } from '../../ui'
 import type { SettingsPageProps } from '../types'
 import { EmailSection } from './EmailSection'
 
 /** Account › Profile: your name, your email address, your GitHub username and how you sign in. */
-export default function ProfilePage({ session }: SettingsPageProps) {
+export default function ProfilePage({ session, workspace }: SettingsPageProps) {
   const client = useQueryClient()
   const [name, setName] = useState(session.user.displayName)
   const [error, setError] = useState<string | null>(null)
@@ -25,21 +25,24 @@ export default function ProfilePage({ session }: SettingsPageProps) {
     mutationFn: () => requestJson('/api/v1/account/profile', { method: 'PATCH', json: { githubLogin: githubLogin.trim() } }),
     onSuccess: async () => {
       setError(null)
+      setGithubDraft(null)
+      showToast({ tone: 'success', title: githubLogin.trim() ? 'GitHub username saved' : 'GitHub username removed' })
       await client.invalidateQueries({ queryKey: ['account-profile'] })
     },
-    onError: (reason) => setError(isApiError(reason) ? reason.message : 'Could not save your GitHub username.'),
+    onError: (reason) => setError(`Your GitHub username wasn’t saved. ${describeError(reason).message}`),
   })
   const save = useMutation({
     mutationFn: () => requestJson('/api/v1/account/profile', { method: 'PATCH', json: { displayName: name.trim() } }),
     onSuccess: async () => {
       setError(null)
+      showToast({ tone: 'success', title: 'Display name saved' })
       await client.invalidateQueries({ queryKey: queryKeys.session })
     },
-    onError: (reason) => setError(isApiError(reason) ? reason.message : 'Could not save your profile.'),
+    onError: (reason) => setError(`Your display name wasn’t saved. ${describeError(reason).message}`),
   })
   const link = useMutation({
     mutationFn: (provider?: 'GoogleOAuth') => startWorkOs({ link: true, provider }),
-    onError: () => setError('Could not open secure sign-in. Try again.'),
+    onError: () => setError('Single sign-on didn’t open. Try again.'),
   })
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -52,7 +55,7 @@ export default function ProfilePage({ session }: SettingsPageProps) {
         mark={<Avatar name={session.user.displayName} seed={session.user.actorId} size={40} />}
         title="Profile"
       >
-        Your identity stays with you across workspaces and Projects.
+        Your identity stays with you across workspaces and projects.
       </PageHeader>
       {error && <Banner tone="danger">{error}</Banner>}
       <Section id="profile-heading" title="Name">
@@ -70,9 +73,8 @@ export default function ProfilePage({ session }: SettingsPageProps) {
             Save
           </Button>
         </form>
-        {save.isSuccess && <p className="aw-quiet" role="status">Profile saved.</p>}
       </Section>
-      <EmailSection />
+      <EmailSection canSetUpEmail={workspace?.role === 'owner'} />
       <Section
         description="Used only to find pull requests that ask for your review."
         id="github-username-heading"
@@ -86,28 +88,24 @@ export default function ProfilePage({ session }: SettingsPageProps) {
             onChange={(event) => setGithubDraft(event.target.value)}
             value={githubLogin}
           />
-          <Button busy={saveGithub.isPending} disabled={profile.isPending} type="submit">
+          <Button
+            busy={saveGithub.isPending}
+            disabled={profile.isPending || githubLogin.trim() === (profile.data?.githubLogin ?? '')}
+            type="submit"
+          >
             Save
           </Button>
         </form>
-        {saveGithub.isSuccess && <p className="aw-quiet" role="status">GitHub username saved.</p>}
       </Section>
       <Section
-        description="Link a single sign-on account to keep your Projects, conversations and username when you sign in with it."
+        description="Link a single sign-on account to keep your projects, conversations and username when you sign in with it."
         id="sign-in-heading"
         title="Sign-in"
       >
         {status.isPending && <SettingsSkeleton label="Loading sign-in settings" sections={1} />}
         {status.isError && (
-          <Banner
-            action={
-              <Button onClick={() => void status.refetch()} size="sm">
-                Try again
-              </Button>
-            }
-            tone="danger"
-          >
-            Sign-in settings didn’t load.
+          <Banner onRetry={() => void status.refetch()} title="Sign-in settings didn’t load." tone="danger">
+            {describeLoadError(status.error)}
           </Banner>
         )}
         <div className="aw-form__row">
@@ -118,10 +116,10 @@ export default function ProfilePage({ session }: SettingsPageProps) {
           )}
           {status.data?.enabled &&
             (status.data.linked ? (
-              <p className="aw-quiet">WorkOS connected as {status.data.email}.</p>
+              <p className="aw-quiet">Single sign-on linked as {status.data.email}.</p>
             ) : (
               <Button busy={link.isPending} onClick={() => link.mutate(undefined)}>
-                Link WorkOS account
+                Link single sign-on account
               </Button>
             ))}
         </div>

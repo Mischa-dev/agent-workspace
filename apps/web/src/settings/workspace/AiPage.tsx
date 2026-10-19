@@ -4,14 +4,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { aiKeys, getWorkspaceAi, providerKeyName, testWorkspaceAi, type ProviderManifest, type WorkspaceAi } from '../../ai/api'
 import { aiErrorMessage } from '../../ai/links'
 import { describeError } from '../../app/mutations'
-import { Banner, Button, Dialog, ErrorState, Icon, PageHeader, Row, RowList, Section, SettingsSkeleton, StatusChip, TextField, showToast } from '../../ui'
+import { Banner, Button, Dialog, ErrorState, Icon, PageHeader, Row, RowList, Section, SettingsSkeleton, StatusChip, TextField, countLabel, showToast } from '../../ui'
 import { ScopedSettings } from '../ScopedSettings'
 import type { SettingsPageProps } from '../types'
 import { putWorkspaceSecret, workspaceKeys } from './api'
 
 const dollars = (micros: number) => `$${(micros / 1_000_000).toFixed(micros >= 10_000_000 ? 0 : 2)}`
 
-/** Workspace › AI and models: the provider, its key, the models, the budget and what's been spent. */
+/** Workspace › Models: the provider, its key, the models, the budget and what's been spent. */
 export default function AiPage({ workspace }: SettingsPageProps) {
   const organizationId = workspace?.id ?? ''
   const manager = workspace?.role === 'owner' || workspace?.role === 'admin'
@@ -27,7 +27,7 @@ export default function AiPage({ workspace }: SettingsPageProps) {
   }))
   return (
     <>
-      <PageHeader icon="bot" title="AI and models">
+      <PageHeader icon="star" title="Models">
         The provider and models behind dependency detection, triage, plan import and summaries in {workspace.name}. Any provider works;
         projects can choose their own.
       </PageHeader>
@@ -50,13 +50,9 @@ function WorkspaceStatus({ organizationId, status }: { organizationId: string; s
     mutationFn: () => testWorkspaceAi(organizationId),
     onSuccess: (result) => showToast({ tone: 'success', title: `${result.model} answered in ${result.latencyMs} ms` }),
   })
-  if (status.isPending) return <SettingsSkeleton label="Loading AI status" sections={1} />
+  if (status.isPending) return <SettingsSkeleton label="Loading model status" sections={1} />
   if (status.isError) {
-    return (
-      <ErrorState action={<Button onClick={() => void status.refetch()}>Try again</Button>} title="AI status didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
+    return <ErrorState error={status.error} onRetry={() => void status.refetch()} title="Model status didn’t load" />
   }
   const data = status.data
   const budgetMicros = data.budgetUsd * 1_000_000
@@ -73,13 +69,13 @@ function WorkspaceStatus({ organizationId, status }: { organizationId: string; s
             </Button>
           }
           icon="circle-check"
-          title="AI is ready."
+          title="Models are ready."
           tone="success"
         >
           Quick jobs use {data.quickModel} from {data.providers.find((provider) => provider.id === data.provider)?.displayName ?? data.provider}.
         </Banner>
       ) : (
-        <Banner icon="bot" role="note" title="AI isn’t set up yet." tone="info">
+        <Banner icon="bot" role="note" title="Models aren’t set up yet." tone="info">
           {data.problem ?? 'Choose a provider below and add its key.'}
         </Banner>
       )}
@@ -132,12 +128,12 @@ function WorkspaceStatus({ organizationId, status }: { organizationId: string; s
         <div className="aw-ai-budget">
           <p>
             <strong>{dollars(data.spentMicros)}</strong> spent{budgetMicros > 0 ? ` of the ${dollars(budgetMicros)} monthly budget` : ' (no budget limit)'}.
-            {budgetMicros > 0 && share >= 1 ? ' AI calls are paused until next month or a higher budget.' : ''}
+            {budgetMicros > 0 && share >= 1 ? ' Model calls are paused until next month or a higher budget.' : ''}
           </p>
           {budgetMicros > 0 ? <progress aria-label="Budget used" className="aw-progress__bar" max={1} value={share} /> : null}
         </div>
         {data.usageByModel.length ? (
-          <div aria-label="AI use by model" className="aw-ai-usage__scroll" role="region" tabIndex={0}>
+          <div aria-label="Use by model" className="aw-ai-usage__scroll" role="region" tabIndex={0}>
             <table className="aw-ai-usage">
               <thead>
                 <tr>
@@ -164,15 +160,15 @@ function WorkspaceStatus({ organizationId, status }: { organizationId: string; s
             </table>
           </div>
         ) : (
-          <p className="aw-quiet">No AI calls this month yet.</p>
+          <p className="aw-quiet">No model calls this month yet.</p>
         )}
         {data.usageByDay.length ? (
           <ol aria-label="Cost per day, last 30 days" className="aw-ai-days">
             {data.usageByDay.map((day) => (
-              <li key={day.day} title={`${day.day}: ${day.calls} calls, ${dollars(day.costMicros)}`}>
+              <li key={day.day} title={`${day.day}: ${countLabel(day.calls, 'call')}, ${dollars(day.costMicros)}`}>
                 <span className="aw-ai-days__bar" style={{ height: `${Math.max(4, (day.costMicros / maxDay) * 100)}%` }} />
                 <span className="visually-hidden">
-                  {day.day}: {day.calls} calls, {dollars(day.costMicros)}
+                  {day.day}: {countLabel(day.calls, 'call')}, {dollars(day.costMicros)}
                 </span>
               </li>
             ))}
@@ -216,7 +212,7 @@ function ProviderKeyDialog({
     setError(null)
   }
   const save = useMutation({
-    mutationFn: () => putWorkspaceSecret(organizationId, providerKeyName(provider?.id ?? ''), value, `${provider?.displayName ?? ''} API key for AI planning`),
+    mutationFn: () => putWorkspaceSecret(organizationId, providerKeyName(provider?.id ?? ''), value, `${provider?.displayName ?? ''} API key for models`),
     onSuccess: () => {
       setValue('')
       showToast({ tone: 'success', title: `${provider?.displayName} key saved` })
@@ -240,6 +236,7 @@ function ProviderKeyDialog({
           </Button>
         </>
       }
+      dirty={Boolean(value)}
       onClose={onClose}
       onSubmit={submit}
       open={provider !== null}

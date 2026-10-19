@@ -30,12 +30,14 @@
     if (raw) saved = JSON.parse(raw) || {}
     else {
       var legacy = JSON.parse(window.localStorage.getItem('agent-workspace:appearance:v1') || '{}') || {}
-      saved = { theme: legacy.theme === 'dark' ? 'midnight' : 'indigo' }
+      saved = { theme: legacy.theme === 'dark' ? 'midnight' : legacy.theme === 'light' ? 'indigo' : 'system' }
     }
   } catch (error) {
     saved = {}
   }
   var theme = saved.theme
+  // Until someone picks a theme, it follows the device (DEFAULT_APPEARANCE in preferences.ts).
+  if (presets.indexOf(theme) < 0 && classic.indexOf(theme) < 0) theme = 'system'
   if (theme === 'system') {
     theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'indigo'
   }

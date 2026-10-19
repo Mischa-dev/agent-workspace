@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { describeError, toastError } from '../../app/mutations'
+import { describeError } from '../../app/mutations'
 import {
   Banner,
   Button,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
@@ -15,6 +16,7 @@ import {
   RowList,
   Section,
   TextField,
+  formatFullDate,
   formatRelative,
   formatShortDate,
   showToast,
@@ -48,10 +50,6 @@ export default function KeysPage({ workspace }: SettingsPageProps) {
       setDeleting(null)
       showToast({ tone: 'success', title: `${secret.name} deleted` })
     },
-    onError: (error) => {
-      setDeleting(null)
-      toastError('Couldn’t delete the key', error)
-    },
     onSettled: refresh,
   })
   if (!workspace) return null
@@ -66,7 +64,7 @@ export default function KeysPage({ workspace }: SettingsPageProps) {
             </Button>
           ) : null
         }
-        icon="key"
+        icon="lock"
         title="Keys"
       >
         API keys and other secrets the server uses for {workspace.name}. Once saved, a key can be replaced or deleted but
@@ -75,14 +73,12 @@ export default function KeysPage({ workspace }: SettingsPageProps) {
       {secrets.isPending ? (
         <ListSkeleton label="Loading keys" rows={2} />
       ) : secrets.isError ? (
-        <ErrorState action={<Button onClick={() => void secrets.refetch()}>Try again</Button>} title="Keys didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={secrets.error} onRetry={() => void secrets.refetch()} title="Keys didn’t load" />
       ) : (
         <Section id="workspace-keys-heading" title="Workspace keys">
           {!secrets.data.configured && (
             <Banner role="note" tone="info" title="Keys can’t be saved on this server yet.">
-              The host operator must set up the server’s encryption key first.
+              Whoever runs this server has to give it an encryption key first.
             </Banner>
           )}
           {secrets.data.secrets.length ? (
@@ -104,18 +100,22 @@ export default function KeysPage({ workspace }: SettingsPageProps) {
                   key={secret.id}
                   leading={
                     <span className="aw-row__tile">
-                      <Icon name="key" size={16} />
+                      <Icon name="lock" size={16} />
                     </span>
                   }
                   meta={
                     <span className="aw-row__metaline aw-wrap">
                       {secret.lastFour ? <code className="aw-inline-code">••••{secret.lastFour}</code> : <span>Short value</span>}
                       {secret.description && <span>{secret.description}</span>}
-                      <span>
+                      <span title={formatFullDate(secret.updatedAt)}>
                         Updated {formatShortDate(secret.updatedAt)}
                         {secret.createdByName ? ` by ${secret.createdByName}` : ''}
                       </span>
-                      <span>{secret.lastUsedAt ? `Used ${formatRelative(secret.lastUsedAt)}` : 'Not used yet'}</span>
+                      {secret.lastUsedAt ? (
+                        <span title={formatFullDate(secret.lastUsedAt)}>Used {formatRelative(secret.lastUsedAt)}</span>
+                      ) : (
+                        <span>Not used yet</span>
+                      )}
                     </span>
                   }
                   title={<code className="aw-setting__key">{secret.name}</code>}
@@ -123,7 +123,17 @@ export default function KeysPage({ workspace }: SettingsPageProps) {
               ))}
             </RowList>
           ) : (
-            <EmptyState icon="key" title="No keys yet">
+            <EmptyState
+              action={
+                secrets.data.configured ? (
+                  <Button icon="plus" onClick={() => setEditing('new')}>
+                    Add a key
+                  </Button>
+                ) : null
+              }
+              icon="lock"
+              title="No keys yet"
+            >
               {secrets.data.configured ? 'Add one for the providers and services this workspace uses.' : null}
             </EmptyState>
           )}
@@ -141,22 +151,20 @@ export default function KeysPage({ workspace }: SettingsPageProps) {
         organizationId={organizationId}
         taken={(secrets.data?.secrets ?? []).map((secret) => secret.name)}
       />
-      <Dialog
-        description={
-          deleting ? `Anything that uses ${deleting.name} stops working until someone adds it again. This can’t be undone.` : undefined
-        }
-        footer={
-          <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
-            <Button busy={remove.isPending} data-autofocus onClick={() => deleting && remove.mutate(deleting)} variant="danger">
-              Delete key
-            </Button>
-          </>
-        }
-        onClose={() => setDeleting(null)}
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Delete key"
+        error={remove.isError ? `The key wasn’t deleted. ${describeError(remove.error).message}` : null}
+        onClose={() => {
+          setDeleting(null)
+          remove.reset()
+        }}
+        onConfirm={() => deleting && remove.mutate(deleting)}
         open={deleting !== null}
-        title="Delete this key?"
-      />
+        title={`Delete ${deleting?.name ?? 'this key'}?`}
+      >
+        Anything that uses it stops working until someone adds it again. This can’t be undone.
+      </ConfirmDialog>
     </>
   )
 }
@@ -197,7 +205,7 @@ function SecretDialog({
       setValue('')
       onSaved(secret)
     },
-    onError: (reason) => setError(describeError(reason).message),
+    onError: (reason) => setError(`The key wasn’t saved. ${describeError(reason).message}`),
   })
   const nameError =
     !existing && keyName && !NAME_PATTERN.test(keyName)
@@ -225,6 +233,7 @@ function SecretDialog({
           </Button>
         </>
       }
+      dirty={Boolean(value || (!existing && name))}
       onClose={onClose}
       onSubmit={submit}
       open={open}
@@ -235,7 +244,7 @@ function SecretDialog({
           <TextField
             autoComplete="off"
             error={nameError}
-            hint="Such as anthropic_api_key."
+            hint="Such as search_api_key."
             id="secret-name"
             label="Name"
             maxLength={120}

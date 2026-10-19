@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
-import { ActorTag, Avatar, Banner, Button, ErrorState, ListSkeleton, Row, RowList, formatDateTime } from '../ui'
+import { ActorTag, Avatar, Banner, Button, EmptyState, ErrorState, ListSkeleton, Row, RowList, describeError, formatFullDate, formatRelative } from '../ui'
 import {
   listSponsoredExecutionRequests,
   respondToSponsoredExecution,
@@ -13,10 +12,6 @@ import {
 type DecisionInput = {
   request: SponsoredExecutionRequest
   decision: 'approve' | 'deny'
-}
-
-function formatWhen(iso: string) {
-  return formatDateTime(iso) || iso
 }
 
 export function SponsoredExecutionSettings({ projectId }: { projectId: string }) {
@@ -36,18 +31,14 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.sponsoredExecutions(projectId) })
     },
-    onError: (reason) => {
-      setError(isApiError(reason) ? reason.message : 'Your answer to that request didn’t go through. Try again.')
+    onError: (reason, input) => {
+      setError(`${input.decision === 'approve' ? 'It wasn’t approved' : 'It wasn’t denied'}. ${describeError(reason).message}`)
     },
   })
 
   if (requests.isPending) return <ListSkeleton label="Loading run requests" rows={2} />
   if (requests.isError) {
-    return (
-      <ErrorState action={<Button onClick={() => void requests.refetch()}>Try again</Button>} title="Run requests didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
+    return <ErrorState error={requests.error} onRetry={() => void requests.refetch()} title="Run requests didn’t load" />
   }
   const pending = requests.data.requests.filter((request) => request.status === 'pending')
   return (
@@ -58,7 +49,9 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
         </Banner>
       )}
       {!pending.length ? (
-        <p className="aw-quiet">No run requests are waiting for you.</p>
+        <EmptyState icon="circle-check" title="No run requests are waiting for you">
+          When an agent asks to run on your account, its request shows here.
+        </EmptyState>
       ) : (
         <RowList label="Run requests">
           {pending.map((request) => (
@@ -93,7 +86,11 @@ export function SponsoredExecutionSettings({ projectId }: { projectId: string })
               }
               key={request.id}
               leading={<Avatar kind="agent" name={request.requesterDisplayName} seed={request.requestingActorId} size={32} />}
-              meta={`@${request.requesterHandle} · asks to run on your account · expires ${formatWhen(request.expiresAt)}`}
+              meta={
+                <span title={`Expires ${formatFullDate(request.expiresAt)}`}>
+                  @{request.requesterHandle} · asks to run on your account · expires {formatRelative(request.expiresAt)}
+                </span>
+              }
               title={
                 <span className="aw-row__titleline">
                   {request.requesterDisplayName}

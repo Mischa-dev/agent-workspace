@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -6,6 +6,7 @@ import { describeError, toastError } from '../../app/mutations'
 import {
   Banner,
   Button,
+  ButtonLink,
   Dialog,
   EmptyState,
   ErrorState,
@@ -18,10 +19,14 @@ import {
   StatusChip,
   Switch,
   TextField,
+  countLabel,
   formatDateTime,
+  formatFullDate,
   formatRelative,
   showToast,
 } from '../../ui'
+import { accountSettingsHref } from '../paths'
+import { TimeZoneField } from '../TimeZoneField'
 import {
   addSchedule,
   listUsage,
@@ -33,6 +38,7 @@ import {
   type AccountUsage,
   type AlertRule,
   type NewSchedule,
+  type UsageSchedule,
   type UsageWindow,
 } from './usageApi'
 import {
@@ -56,11 +62,13 @@ const RULE_LABELS: Record<AlertRule['rule'], string> = {
   reset_credits: 'Banked resets',
 }
 
-const FAILURES: Record<string, string> = {
+const providerAccountsLink = <Link to={accountSettingsHref('provider-accounts')}>Accounts for runs</Link>
+
+const FAILURES: Record<string, ReactNode> = {
   unsupported: 'This harness doesn’t report usage. Add a reset schedule below to track it yourself.',
-  busy: 'The harness was busy the last time we checked. We’ll try again shortly.',
-  configuration: 'The account’s settings changed. Check it under Provider accounts.',
-  unavailable: 'The harness couldn’t be reached the last time we checked.',
+  busy: 'The harness was busy at the last check. It’s checked again shortly.',
+  configuration: <>The account’s settings changed. Check it in {providerAccountsLink}.</>,
+  unavailable: 'The harness couldn’t be reached at the last check. It’s checked again shortly.',
 }
 
 /**
@@ -87,18 +95,16 @@ export default function UsagePage() {
       {usage.isPending ? (
         <SettingsSkeleton label="Loading usage" sections={2} />
       ) : usage.isError ? (
-        <ErrorState action={<Button onClick={() => void usage.refetch()}>Try again</Button>} title="Usage didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={usage.error} onRetry={() => void usage.refetch()} title="Usage didn’t load" />
       ) : accounts.length === 0 ? (
         <EmptyState
           action={
-            <Link className="aw-btn aw-btn--primary aw-btn--md" to="/settings/account/provider-accounts">
-              <span className="aw-btn__label">Add a provider account</span>
-            </Link>
+            <ButtonLink to={accountSettingsHref('provider-accounts')} variant="primary">
+              Add an account for runs
+            </ButtonLink>
           }
           icon="activity"
-          title="No provider accounts yet"
+          title="No accounts for runs yet"
         >
           Once you sign in to a harness, its usage windows show here.
         </EmptyState>
@@ -149,9 +155,17 @@ function AccountUsageSection({
   useEffect(() => {
     if (focused) section.current?.scrollIntoView?.({ block: 'start' })
   }, [focused])
-  const description = [account.harnessName, account.plan ? `${account.plan} plan` : null, account.polledAt ? `checked ${formatRelative(account.polledAt)}` : null]
-    .filter(Boolean)
-    .join(' · ')
+  const description = (
+    <>
+      {[account.harnessName, account.plan ? `${account.plan} plan` : null].filter(Boolean).join(' · ')}
+      {account.polledAt ? (
+        <>
+          {' · '}
+          <span title={formatFullDate(account.polledAt)}>checked {formatRelative(account.polledAt)}</span>
+        </>
+      ) : null}
+    </>
+  )
 
   return (
     <div className={focused ? 'aw-usage is-focused' : 'aw-usage'} ref={section}>
@@ -168,7 +182,7 @@ function AccountUsageSection({
         title={account.name}
       >
         {!account.connected ? (
-          <Banner tone="warning">This account is signed out, so its usage isn’t read. Sign in again under Provider accounts.</Banner>
+          <Banner tone="warning">This account is signed out, so its usage isn’t read. Sign in again in {providerAccountsLink}.</Banner>
         ) : account.pollFailure && account.pollFailedAt && (!account.polledAt || account.pollFailedAt > account.polledAt) ? (
           <Banner tone="warning">{FAILURES[account.pollFailure] ?? FAILURES.unavailable}</Banner>
         ) : null}
@@ -253,7 +267,7 @@ function BankedResets({ account }: { account: AccountUsage }) {
     <div className="aw-usage__credits">
       <div>
         <p className="aw-usage__label">
-          {credits.available === 1 ? '1 banked reset' : `${credits.available} banked resets`}
+          {countLabel(credits.available, 'banked reset')}
         </p>
         <p className="aw-usage__at">
           {next?.expiresAt ? `The next one expires ${formatDateTime(next.expiresAt)}.` : 'A reset refills every window at once.'}
@@ -266,7 +280,7 @@ function BankedResets({ account }: { account: AccountUsage }) {
         description="This refills the account’s windows now. It can’t be undone."
         footer={
           <>
-            <Button onClick={() => setOpen(false)} variant="ghost">
+            <Button data-autofocus onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button busy={spend.isPending} onClick={() => spend.mutate()} variant="primary">
@@ -278,7 +292,7 @@ function BankedResets({ account }: { account: AccountUsage }) {
         open={open}
         title="Spend a banked reset?"
       >
-        {spend.isError ? <Banner tone="danger">{describeError(spend.error).message}</Banner> : null}
+        {spend.isError ? <Banner tone="danger">The reset wasn’t spent. {describeError(spend.error).message}</Banner> : null}
         {next?.title ? <p>{next.title}</p> : null}
       </Dialog>
     </div>
@@ -302,9 +316,26 @@ function Schedules({ account }: { account: AccountUsage }) {
       setLabel('')
     },
   })
+  // Removing is undone by adding the same schedule back.
   const remove = useMutation({
-    mutationFn: (scheduleId: string) => removeSchedule(account.accountId, scheduleId),
-    onSuccess: update,
+    mutationFn: (schedule: UsageSchedule) => removeSchedule(account.accountId, schedule.id),
+    onSuccess: (updated, removed) => {
+      update(updated)
+      const schedule: NewSchedule = {
+        label: removed.label,
+        cadence: removed.cadence,
+        weekday: removed.weekday,
+        monthDay: removed.monthDay,
+        minuteOfDay: removed.minuteOfDay,
+        timeZone: removed.timeZone,
+      }
+      showToast({
+        tone: 'success',
+        title: `${schedule.label} removed`,
+        onUndo: () =>
+          addSchedule(account.accountId, schedule).then(update, (reason) => toastError('The schedule wasn’t restored', reason)),
+      })
+    },
     onError: (reason) => toastError('The schedule wasn’t removed', reason),
   })
   const minute = timeToMinute(time)
@@ -337,9 +368,9 @@ function Schedules({ account }: { account: AccountUsage }) {
             <Row
               actions={
                 <Button
-                  busy={remove.isPending && remove.variables === schedule.id}
+                  busy={remove.isPending && remove.variables?.id === schedule.id}
                   icon="trash"
-                  onClick={() => remove.mutate(schedule.id)}
+                  onClick={() => remove.mutate(schedule)}
                   size="sm"
                   variant="ghost"
                 >
@@ -355,7 +386,7 @@ function Schedules({ account }: { account: AccountUsage }) {
       ) : null}
       {adding ? (
         <form className="aw-card aw-formcard aw-form aw-usage__form" onSubmit={submit}>
-          {add.isError ? <Banner tone="danger">{describeError(add.error).message}</Banner> : null}
+          {add.isError ? <Banner tone="danger">The schedule wasn’t added. {describeError(add.error).message}</Banner> : null}
           <TextField label="Name" maxLength={80} onChange={(event) => setLabel(event.target.value)} placeholder="Team plan" required value={label} />
           <div className="aw-form__grid">
             <SelectField label="Resets" onChange={(event) => setCadence(event.target.value as NewSchedule['cadence'])} value={cadence}>
@@ -375,12 +406,10 @@ function Schedules({ account }: { account: AccountUsage }) {
               <TextField label="Day of the month" max={28} min={1} onChange={(event) => setMonthDay(Number(event.target.value))} type="number" value={monthDay} />
             ) : null}
             <TextField error={minute == null ? 'Use a time such as 09:00.' : null} label="At" onChange={(event) => setTime(event.target.value)} type="time" value={time} />
-            <TextField label="Time zone" maxLength={64} onChange={(event) => setTimeZone(event.target.value)} value={timeZone} />
+            <TimeZoneField onChange={setTimeZone} value={timeZone} />
           </div>
           <div className="aw-form__actions">
-            <Button onClick={() => setAdding(false)} variant="ghost">
-              Cancel
-            </Button>
+            <Button onClick={() => setAdding(false)}>Cancel</Button>
             <Button busy={add.isPending} type="submit" variant="primary">
               Add schedule
             </Button>
@@ -396,7 +425,8 @@ function Rules({ account }: { account: AccountUsage }) {
     <div className="aw-usage__block">
       <h3 className="aw-usage__blocktitle">Alerts</h3>
       <p className="aw-usage__at">
-        Each alert fires once per reset. Choose where they reach you under Notifications.
+        Each alert fires once per reset. Choose where they reach you in{' '}
+        <Link to={accountSettingsHref('notifications')}>Notifications</Link>.
       </p>
       <div className="aw-usage__rules">
         {account.rules.map((rule) => (
@@ -410,13 +440,13 @@ function Rules({ account }: { account: AccountUsage }) {
 function ruleSummary(rule: AlertRule) {
   switch (rule.rule) {
     case 'reset_soon':
-      return `When a window resets within ${rule.hours ?? 3} h with at least ${rule.percent ?? 25}% unused.`
+      return `When a window resets within ${countLabel(rule.hours ?? 3, 'hour')} with at least ${rule.percent ?? 25}% unused.`
     case 'high_usage':
       return `When a window is ${rule.percent ?? 90}% used.`
     case 'limit_reached':
       return 'When a limit is reached, with when it resets.'
     case 'reset_credits':
-      return `When a banked reset arrives or expires within ${rule.hours ?? 48} h.`
+      return `When a banked reset arrives or expires within ${countLabel(rule.hours ?? 48, 'hour')}.`
   }
 }
 

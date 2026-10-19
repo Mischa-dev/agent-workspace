@@ -8,7 +8,7 @@ import {
   Avatar,
   Banner,
   Button,
-  Dialog,
+  ConfirmDialog,
   ErrorState,
   Icon,
   ListSkeleton,
@@ -19,10 +19,14 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  countLabel,
+  describeLoadError,
+  formatFullDate,
   formatShortDate,
   showToast,
   type ChipTone,
 } from '../../ui'
+import { DEFAULT_INVITATION_HOURS, INVITATION_EXPIRY_OPTIONS } from '../invitationExpiry'
 import { OneTimeValue } from '../OneTimeValue'
 import type { SettingsPageProps } from '../types'
 import {
@@ -65,13 +69,17 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
         tone: 'success',
         title:
           change.enabled === false
-            ? `${member.displayName} was removed from the workspace`
+            ? `${member.displayName} removed from the workspace`
             : `${updated.displayName} is now ${updated.role === 'admin' ? 'an admin' : 'a member'}`,
+        onUndo:
+          change.role && (member.role === 'admin' || member.role === 'member')
+            ? () => update.mutate({ member: updated, change: { role: member.role as 'admin' | 'member' } })
+            : undefined,
       })
     },
-    onError: (error, { member }) => {
-      setRemoving(null)
-      toastError(`Couldn’t change ${member.displayName}`, error)
+    onError: (error, { change, member }) => {
+      // A failed removal shows in its dialog; a role change says so in a toast.
+      if (change.enabled !== false) toastError(`${member.displayName}’s role wasn’t changed`, error)
     },
     onSettled: refresh,
   })
@@ -95,7 +103,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
   return (
     <>
       <PageHeader icon="users" title="Members">
-        People and agents in {workspace.name}. Anyone here can be added to any of its Projects.
+        People and agents in {workspace.name}. Anyone here can be added to any of its projects.
       </PageHeader>
       {manager && <InviteSection organizationId={organizationId} role={workspace.role} />}
       <Section
@@ -116,9 +124,7 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
         {members.isPending ? (
           <ListSkeleton avatars label="Loading members" rows={4} />
         ) : members.isError ? (
-          <ErrorState action={<Button onClick={() => void members.refetch()}>Try again</Button>} title="Members didn’t load">
-            Check your connection and try again.
-          </ErrorState>
+          <ErrorState error={members.error} onRetry={() => void members.refetch()} title="Members didn’t load" />
         ) : shown.length ? (
           <RowList label="Workspace members">
             {shown.map((member) => (
@@ -168,10 +174,8 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
                 meta={
                   <span className="aw-row__metaline aw-wrap">
                     <span>@{member.handle}</span>
-                    <span>
-                      {member.projectCount === 1 ? 'In 1 Project' : `In ${member.projectCount} Projects`}
-                    </span>
-                    <span>Joined {formatShortDate(member.joinedAt)}</span>
+                    <span>In {countLabel(member.projectCount, 'project')}</span>
+                    <span title={formatFullDate(member.joinedAt)}>Joined {formatShortDate(member.joinedAt)}</span>
                   </span>
                 }
                 title={
@@ -190,41 +194,31 @@ export default function MembersPage({ workspace }: SettingsPageProps) {
           </p>
         )}
       </Section>
-      <Dialog
-        description={
-          removing
-            ? `${removing.displayName} will be removed from ${workspace.name} and from every Project in it. ${
-                removing.kind === 'external_agent' ? 'Its credentials stop working.' : 'They’ll need a new invitation to come back.'
-              }`
-            : undefined
+      <ConfirmDialog
+        busy={update.isPending}
+        confirmLabel="Remove from workspace"
+        error={
+          update.isError && update.variables?.change.enabled === false
+            ? `${update.variables.member.displayName} wasn’t removed. ${describeError(update.error).message}`
+            : null
         }
-        footer={
-          <>
-            <Button onClick={() => setRemoving(null)}>Cancel</Button>
-            <Button
-              busy={update.isPending}
-              data-autofocus
-              onClick={() => removing && update.mutate({ member: removing, change: { enabled: false } })}
-              variant="danger"
-            >
-              Remove from workspace
-            </Button>
-          </>
-        }
-        onClose={() => setRemoving(null)}
+        onClose={() => {
+          setRemoving(null)
+          update.reset()
+        }}
+        onConfirm={() => removing && update.mutate({ member: removing, change: { enabled: false } })}
         open={removing !== null}
         title={removing ? `Remove ${removing.displayName}?` : 'Remove member?'}
-      />
+      >
+        {removing
+          ? `${removing.displayName} will be removed from ${workspace.name} and from every project in it. ${
+              removing.kind === 'external_agent' ? 'Its credentials stop working.' : 'They’ll need a new invitation to come back.'
+            }`
+          : null}
+      </ConfirmDialog>
     </>
   )
 }
-
-const EXPIRY_OPTIONS = [
-  { hours: 24, label: '24 hours' },
-  { hours: 72, label: '3 days' },
-  { hours: 168, label: '7 days' },
-  { hours: 720, label: '30 days' },
-]
 
 function InviteSection({ organizationId, role }: { organizationId: string; role: string }) {
   const queryClient = useQueryClient()
@@ -233,7 +227,8 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
     queryFn: () => listWorkspaceInvitations(organizationId),
   })
   const [inviteRole, setInviteRole] = useState<'admin' | 'member'>('member')
-  const [hours, setHours] = useState(168)
+  const [hours, setHours] = useState(DEFAULT_INVITATION_HOURS)
+  const [revoking, setRevoking] = useState<WorkspaceInvitation | null>(null)
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [issued, setIssued] = useState<string | null>(null)
@@ -246,14 +241,14 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
       setNote('')
       setError(null)
     },
-    onError: (reason) => setError(describeError(reason).message),
+    onError: (reason) => setError(`The invitation wasn’t created. ${describeError(reason).message}`),
     onSettled: refresh,
   })
   const revoke = useMutation({
     mutationFn: revokeWorkspaceInvitation,
-    onSuccess: () => showToast({ tone: 'success', title: 'Invitation revoked', description: 'Its link no longer works.' }),
-    onError: (reason) => {
-      toastError('Couldn’t revoke the invitation', reason)
+    onSuccess: () => {
+      setRevoking(null)
+      showToast({ tone: 'success', title: 'Invitation revoked', description: 'Its link no longer works.' })
     },
     onSettled: refresh,
   })
@@ -265,7 +260,7 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
 
   return (
     <Section
-      description="One link for one person. They join the workspace once and can then be added to any Project."
+      description="One link for one person. They join the workspace once and can then be added to any project."
       id="workspace-invite-heading"
       title="Invite to the workspace"
     >
@@ -281,7 +276,7 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
             {role === 'owner' && <option value="admin">Admin</option>}
           </SelectField>
           <SelectField id="workspace-invite-expiry" label="Link works for" onChange={(event) => setHours(Number(event.target.value))} value={hours}>
-            {EXPIRY_OPTIONS.map((option) => (
+            {INVITATION_EXPIRY_OPTIONS.map((option) => (
               <option key={option.hours} value={option.hours}>
                 {option.label}
               </option>
@@ -304,20 +299,16 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
         </div>
       </form>
       {invitations.isError ? (
-        <Banner tone="danger">Invitations didn’t load.</Banner>
+        <Banner onRetry={() => void invitations.refetch()} title="Invitations didn’t load." tone="danger">
+          {describeLoadError(invitations.error)}
+        </Banner>
       ) : recent.length ? (
         <RowList label="Workspace invitations">
           {recent.map((invitation) => (
             <Row
               actions={
                 invitation.status === 'active' ? (
-                  <Button
-                    disabled={revoke.isPending}
-                    icon="x"
-                    onClick={() => revoke.mutate(invitation)}
-                    size="sm"
-                    variant="ghost"
-                  >
+                  <Button icon="x" onClick={() => setRevoking(invitation)} size="sm" variant="ghost">
                     Revoke
                   </Button>
                 ) : null
@@ -331,7 +322,9 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
               meta={
                 <span className="aw-row__metaline aw-wrap">
                   <span>By {invitation.issuedByDisplayName}</span>
-                  {invitation.status === 'active' && <span>Expires {formatShortDate(invitation.expiresAt)}</span>}
+                  {invitation.status === 'active' && (
+                    <span title={formatFullDate(invitation.expiresAt)}>Expires {formatShortDate(invitation.expiresAt)}</span>
+                  )}
                   {invitation.status === 'accepted' && invitation.acceptedByDisplayName && (
                     <span>Accepted by {invitation.acceptedByDisplayName}</span>
                   )}
@@ -348,6 +341,20 @@ function InviteSection({ organizationId, role }: { organizationId: string; role:
           ))}
         </RowList>
       ) : null}
+      <ConfirmDialog
+        busy={revoke.isPending}
+        confirmLabel="Revoke invitation"
+        error={revoke.isError ? `The invitation wasn’t revoked. ${describeError(revoke.error).message}` : null}
+        onClose={() => {
+          setRevoking(null)
+          revoke.reset()
+        }}
+        onConfirm={() => revoking && revoke.mutate(revoking)}
+        open={revoking !== null}
+        title="Revoke this invitation?"
+      >
+        Its link stops working right away. You can make a new one at any time.
+      </ConfirmDialog>
     </Section>
   )
 }

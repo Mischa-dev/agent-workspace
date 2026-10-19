@@ -134,11 +134,11 @@ export async function listProviderAccounts(projectId: string): Promise<ProviderA
   return Array.isArray(response.accounts) ? response.accounts : []
 }
 
-export function createProviderAccount(projectId: string, adapterKind: string, idempotencyKey: string) {
+export function createProviderAccount(projectId: string, adapterKind: string, idempotencyKey: string, name?: string) {
   return requestJson<ProviderAccount>(`${project(projectId)}/provider-accounts`, {
     method: 'POST',
     idempotencyKey,
-    json: { adapterKind },
+    json: name ? { adapterKind, name } : { adapterKind },
   })
 }
 

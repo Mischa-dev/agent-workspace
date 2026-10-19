@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 
-import { Banner, Button, ErrorState, SettingsSkeleton } from '../ui'
+import { Banner, ErrorState, SettingsSkeleton } from '../ui'
 import { useEffectiveSettings, useSettingsRegistry, type SettingOption, type SettingsTarget } from './api'
 import { SettingField } from './SettingField'
 
@@ -41,20 +41,13 @@ export function ScopedSettings({
   if (registry.isError || effective.isError) {
     return (
       <ErrorState
-        action={
-          <Button
-            onClick={() => {
-              void registry.refetch()
-              void effective.refetch()
-            }}
-          >
-            Try again
-          </Button>
-        }
+        error={registry.error ?? effective.error}
+        onRetry={() => {
+          void registry.refetch()
+          void effective.refetch()
+        }}
         title="Settings didn’t load"
-      >
-        Check your connection and try again.
-      </ErrorState>
+      />
     )
   }
 
@@ -70,7 +63,7 @@ export function ScopedSettings({
       {!canEdit && (
         <Banner role="note" tone="info">
           {target.scope === 'project'
-            ? 'Only Project owners and admins can change these.'
+            ? 'Only project owners and admins can change these.'
             : 'Only workspace owners and admins can change these.'}
         </Banner>
       )}
