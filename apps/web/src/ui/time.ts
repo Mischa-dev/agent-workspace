@@ -106,6 +106,21 @@ export function formatRelative(iso: string | null | undefined, now = new Date())
   return formatShortDate(iso, now)
 }
 
+/**
+ * The compact form for right-aligned time columns in dense lists: "now",
+ * "5m", "3h", "2d", then the date. Pair it with `formatFullDate` as a title.
+ */
+export function formatRelativeShort(iso: string | null | undefined, now = new Date()) {
+  const date = parse(iso)
+  if (!date) return ''
+  const distance = Math.abs(now.getTime() - date.getTime()) / 1000
+  if (distance < 60) return 'now'
+  if (distance < 3_600) return `${Math.round(distance / 60)}m`
+  if (distance < 86_400) return `${Math.round(distance / 3_600)}h`
+  if (distance < 7 * 86_400) return `${Math.round(distance / 86_400)}d`
+  return formatShortDate(iso, now)
+}
+
 /** "run_started" → "Run started". */
 export function eventLabel(kind: string) {
   const words = kind.split('_').join(' ')

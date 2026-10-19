@@ -1,5 +1,7 @@
 import { forwardRef, type ReactNode } from 'react'
 
+import { Button } from './controls'
+import { describeLoadError } from './errorText'
 import { Icon, type IconName } from './icons'
 
 export type BannerTone = 'info' | 'warning' | 'danger' | 'success' | 'agent' | 'offline'
@@ -21,6 +23,8 @@ export const Banner = forwardRef<
     children?: ReactNode
     className?: string
     icon?: IconName
+    /** Adds a "Try again" button when there's no other action. */
+    onRetry?: () => void
     /** Overrides the live-region role; danger banners are alerts, the rest are status by default. */
     role?: 'alert' | 'status' | 'note'
     /** Set to -1 so the banner can take focus, for example an error after a failed submit. */
@@ -28,7 +32,7 @@ export const Banner = forwardRef<
     title?: ReactNode
     tone?: BannerTone
   }
->(function Banner({ action, children, className, icon, role, tabIndex, title, tone = 'info' }, ref) {
+>(function Banner({ action, children, className, icon, onRetry, role, tabIndex, title, tone = 'info' }, ref) {
   return (
     <div
       className={['aw-banner', `aw-banner--${tone}`, className].filter(Boolean).join(' ')}
@@ -41,10 +45,18 @@ export const Banner = forwardRef<
         {title ? <strong>{title} </strong> : null}
         {children}
       </p>
-      {action}
+      {action ?? (onRetry ? <RetryButton onRetry={onRetry} size="sm" /> : null)}
     </div>
   )
 })
+
+function RetryButton({ onRetry, size = 'md' }: { onRetry: () => void; size?: 'sm' | 'md' }) {
+  return (
+    <Button icon="retry" onClick={onRetry} size={size}>
+      Try again
+    </Button>
+  )
+}
 
 export function EmptyState({
   action,
@@ -133,23 +145,33 @@ export function MessageSkeleton({
   )
 }
 
+/**
+ * Something didn't load. Pass the failure as `error` to explain it in plain
+ * words (offline, gone, no access, server trouble) and `onRetry` for a
+ * "Try again" button; `children` and `action` override either.
+ */
 export function ErrorState({
   action,
   children,
+  error,
+  onRetry,
   title,
 }: {
   action?: ReactNode
   children?: ReactNode
+  error?: unknown
+  onRetry?: () => void
   title: string
 }) {
+  const text = children ?? (error !== undefined ? describeLoadError(error) : null)
   return (
     <section className="aw-empty aw-empty--error" role="alert">
       <span className="aw-empty__icon">
         <Icon name="circle-alert" size={24} />
       </span>
       <h2 className="aw-empty__title">{title}</h2>
-      {children ? <p className="aw-empty__text">{children}</p> : null}
-      {action}
+      {text ? <p className="aw-empty__text">{text}</p> : null}
+      {action ?? (onRetry ? <RetryButton onRetry={onRetry} /> : null)}
     </section>
   )
 }
