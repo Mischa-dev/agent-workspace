@@ -15,7 +15,7 @@ test('opens Ready for agents from the sidebar, then My work and the timeline', a
   await expect(page).toHaveURL(/ready=true/)
   await expect(page.getByRole('button', { name: /^Ready for agents/ })).toBeVisible()
 
-  await page.getByRole('navigation', { name: 'Projects' }).getByRole('link', { name: /^Home/ }).click()
+  await page.getByRole('navigation', { name: 'Spaces' }).getByRole('link', { name: /^Home/ }).click()
   await page.getByRole('complementary', { name: 'Home navigation' }).getByRole('link', { name: 'My work' }).click()
   await expect(page.getByRole('heading', { name: 'My work', exact: true })).toBeVisible()
   await page.screenshot({ path: `${screenshotDir}/my-work.png`, fullPage: true })
@@ -29,12 +29,12 @@ test('imports a Markdown plan after a preview', async ({ page }) => {
   const projectId = seededValue('E2E_PROJECT_ID')
   const stamp = Date.now()
   await page.goto(`/settings/projects/${projectId}/import-export`)
-  await page.getByLabel('Plan').fill(`## Launch ${stamp}\n- [ ] Write the notes ${stamp}\n  - [ ] Check the links ${stamp}\n- [x] Pick a date ${stamp}`)
+  await page.getByLabel('Plan', { exact: true }).fill(`## Launch ${stamp}\n- [ ] Write the notes ${stamp}\n  - [ ] Check the links ${stamp}\n- [x] Pick a date ${stamp}`)
   await page.getByRole('button', { name: 'Preview import' }).click()
   await expect(page.getByText(`Write the notes ${stamp}`)).toBeVisible()
   await page.screenshot({ path: `${screenshotDir}/import-preview.png`, fullPage: true })
   await page.getByRole('button', { name: 'Import 3 tasks' }).click()
-  await expect(page.getByText('3 tasks created')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('status').filter({ hasText: '3 tasks created' })).toBeVisible({ timeout: 30_000 })
 })
 
 test('shows what slips when a milestone moves earlier', async ({ page, context }) => {
@@ -66,7 +66,7 @@ test('shows what slips when a milestone moves earlier', async ({ page, context }
   })
   await page.getByRole('button', { name: 'Preview import' }).click()
   await page.getByRole('button', { name: 'Import 2 tasks' }).click()
-  await expect(page.getByText('2 tasks created')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('status').filter({ hasText: '2 tasks created' })).toBeVisible({ timeout: 30_000 })
 
   await page.goto(`/projects/${projectId}/timeline?milestoneId=${milestone.id}`)
   const diamond = page.getByRole('button', { name: new RegExp(`^Beta ${stamp}, target`) })

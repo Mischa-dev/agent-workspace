@@ -97,7 +97,7 @@ const keyPages: KeyPage[] = [
   {
     name: 'share',
     path: () => '/share?title=Flaky%20deploy&text=Fails%20on%20the%20second%20try%20https%3A%2F%2Fci.example%2Frun%2F1',
-    ready: (page) => expect(page.getByRole('heading', { name: 'Share to Workspace' })).toBeVisible(),
+    ready: (page) => expect(page.getByRole('heading', { name: 'Share', exact: true })).toBeVisible(),
   },
   {
     name: 'appearance',

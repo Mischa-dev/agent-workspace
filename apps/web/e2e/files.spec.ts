@@ -85,7 +85,8 @@ test.describe('on a phone', () => {
     await expect(page.getByRole('list', { name: 'Attached files' }).locator('.aw-upload.is-done')).toHaveCount(2)
     await box.fill('From my phone')
     await page.screenshot({ path: path.join(screenshotDir, 'files-composer-phone.png') })
-    await box.press('Enter')
+    // On a touch screen Enter makes a new line; the button sends.
+    await page.getByRole('button', { name: 'Send message' }).click()
     const message = page.locator('.aw-msg', { hasText: 'From my phone' }).last()
     await expect(message.getByRole('button', { name: 'Open phone.png' })).toBeVisible()
     await message.scrollIntoViewIfNeeded()
@@ -131,7 +132,9 @@ for (const device of [
       ])
       await expect(composer.locator('.aw-upload.is-done')).toHaveCount(1)
       await comment.fill('Here is the log')
-      await comment.press('Enter')
+      // On a touch screen Enter makes a new line; the button sends.
+      if (device.name === 'phone') await composer.getByRole('button', { name: 'Send message' }).click()
+      else await comment.press('Enter')
       const posted = page.locator('.aw-msg, li, article', { hasText: 'Here is the log' }).last()
       await expect(posted.getByRole('link', { name: 'Download log.txt' })).toBeVisible()
       await filesSection.scrollIntoViewIfNeeded()

@@ -17,7 +17,7 @@ test('signs in with a password and lands on Home', async ({ page }) => {
   await expect(page).toHaveURL(/\/home$/)
   await expect(page.getByRole('heading', { name: new RegExp(`^(Welcome|Good \\w+), ${seeded.displayName.split(' ')[0]}$`) })).toBeVisible()
   await expect(
-    page.getByRole('navigation', { name: 'Projects' }).getByRole('link', { name: seeded.projectName }),
+    page.getByRole('navigation', { name: 'Spaces' }).getByRole('link', { name: seeded.projectName }),
   ).toBeVisible()
 })
 
