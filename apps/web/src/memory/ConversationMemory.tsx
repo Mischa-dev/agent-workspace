@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Pin as PinIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
@@ -57,7 +56,7 @@ export function PinnedBar({
   return (
     <div className="aw-pins">
       <button aria-expanded={open} className="aw-pins__toggle" onClick={() => setOpen(!open)} type="button">
-        <Icon name={PinIcon} size={14} />
+        <Icon name="pin" size={14} />
         {items.length.toLocaleString()} pinned
         <Icon name="chevron-down" size={12} />
       </button>

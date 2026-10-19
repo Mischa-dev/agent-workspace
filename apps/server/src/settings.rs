@@ -292,7 +292,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.harness",
         label: "Harness",
-        description: "The harness new runs use, such as Codex or Claude Code. Unset, the first one connected.",
+        description: "The harness new runs use. Unset, the first one connected.",
         kind: SettingType::Identifier { optional: true },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -332,7 +332,7 @@ pub const REGISTRY: &[SettingDef] = &[
     SettingDef {
         key: "run.attempts",
         label: "Attempts",
-        description: "How many attempts a run makes, where the harness can try several and keep the best (such as Codex Cloud).",
+        description: "How many attempts a run makes, where the harness can try several and keep the best.",
         kind: SettingType::Integer { min: 1, max: 8 },
         scopes: RUN_SCOPES,
         launch_override: true,
@@ -367,8 +367,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.auto_apply_suggestions",
-        label: "Apply AI suggestions automatically",
-        description: "Accept the AI's suggested dependencies and fields without review.",
+        label: "Apply model suggestions automatically",
+        description: "Accept suggested dependencies and fields without review.",
         kind: SettingType::Bool,
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -376,8 +376,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.provider",
-        label: "AI provider",
-        description: "Which provider the server's short AI jobs (like dependency detection) use.",
+        label: "Model provider",
+        description: "Which provider the server's short model jobs (like dependency detection) use.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -385,8 +385,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.model",
-        label: "AI model",
-        description: "The model the server's short AI jobs use. Unset, the provider's default.",
+        label: "Model",
+        description: "The model the server's short jobs use. Unset, the provider's default.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -394,8 +394,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.deep_model",
-        label: "AI model for deep jobs",
-        description: "The model longer AI jobs (like turning a plan into tasks) use. Unset, the provider's default.",
+        label: "Model for deep jobs",
+        description: "The model longer jobs (like turning a plan into tasks) use. Unset, the provider's default.",
         kind: SettingType::Identifier { optional: true },
         scopes: TEAM_SCOPES,
         launch_override: false,
@@ -403,7 +403,7 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.base_url",
-        label: "AI provider address",
+        label: "Model provider address",
         description: "The address of an OpenAI-compatible server (OpenRouter, Ollama, vLLM), or another address for a provider's API.",
         kind: SettingType::Text {
             max_chars: 300,
@@ -415,8 +415,8 @@ pub const REGISTRY: &[SettingDef] = &[
     },
     SettingDef {
         key: "ai.monthly_budget_usd",
-        label: "Monthly AI budget (USD)",
-        description: "AI jobs stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
+        label: "Monthly model budget (USD)",
+        description: "Model jobs stop for the rest of the month once the workspace has spent this much. 0 means no limit.",
         kind: SettingType::Integer {
             min: 0,
             max: 100_000,

@@ -34,13 +34,18 @@ function nextMorning(now: Date) {
   return atHour(now.getHours() >= 5 ? addDays(now, 1) : now, 9)
 }
 
-/** The quick choices for "remind me" and "schedule". */
+function clock(at: Date) {
+  return formatTime(at.toISOString())
+}
+
+/** The quick choices for "remind me" and "schedule", each saying the time it means. */
 export function whenChoices(now = new Date()): WhenChoice[] {
   return [
     { id: '20m', label: 'In 20 minutes', at: new Date(now.getTime() + 20 * MINUTE) },
     { id: '1h', label: 'In 1 hour', at: new Date(now.getTime() + 60 * MINUTE) },
-    { id: 'tomorrow', label: now.getHours() >= 5 ? 'Tomorrow morning' : 'This morning', at: nextMorning(now) },
-    { id: 'next-week', label: 'Next week', at: nextWeek(now) },
+    { id: 'tomorrow', label: `${now.getHours() >= 5 ? 'Tomorrow' : 'This morning'} at ${clock(nextMorning(now))}`, at: nextMorning(now) },
+    // "Monday at 9:00 AM" says when; on a Monday it's a week away.
+    { id: 'next-week', label: `${now.getDay() === 1 ? 'Next Monday' : 'Monday'} at ${clock(nextWeek(now))}`, at: nextWeek(now) },
   ]
 }
 

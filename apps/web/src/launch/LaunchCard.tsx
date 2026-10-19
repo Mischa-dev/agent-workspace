@@ -33,7 +33,7 @@ export function LaunchCard({ item }: { item: { id: string; key: string; title: s
     </>
   ) : accounts.length === 0 ? (
     <>
-      Connect a {harness.displayName} account first. <Link to={accountSettingsHref('provider-accounts')}>Provider accounts</Link>
+      Connect a {harness.displayName} account first. <Link to={accountSettingsHref('provider-accounts')}>Accounts for runs</Link>
     </>
   ) : null
 

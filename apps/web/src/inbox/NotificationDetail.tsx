@@ -136,7 +136,8 @@ export function NotificationDetail({
             items={[
               { heading: 'Snooze until' },
               ...snoozeChoices().map((choice) => ({
-                label: `${choice.label} · ${snoozeHint(choice.until)}`,
+                // The quick choices already say their time; "Later today" gets it added.
+                label: choice.id === 'later' ? `${choice.label} · ${snoozeHint(choice.until)}` : choice.label,
                 icon: 'clock' as const,
                 // The time is read again when it's picked, so a menu left open stays right.
                 onSelect: () => onSnooze(snoozeChoices().find((fresh) => fresh.id === choice.id)?.until ?? choice.until),

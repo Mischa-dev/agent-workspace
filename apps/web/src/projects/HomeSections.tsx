@@ -204,7 +204,7 @@ export function Capacity() {
         <ErrorState error={usage.error} onRetry={() => void usage.refetch()} title="Usage didn’t load" />
       ) : accounts.length === 0 ? (
         <p className="aw-home__quiet">
-          No accounts for agents yet. <Link to="/settings/account/provider-accounts">Add one</Link> to run agents and see their limits
+          No accounts for runs yet. <Link to="/settings/account/provider-accounts">Add one</Link> to run agents and see their limits
           here.
         </p>
       ) : (

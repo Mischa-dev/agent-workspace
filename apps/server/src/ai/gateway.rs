@@ -195,7 +195,7 @@ pub async fn resolve(state: &AppState, scope: Scope, tier: Tier) -> Result<Resol
     drop(connection);
     let Some(provider_id) = effective.string("ai.provider") else {
         return Err(AiError::NotConfigured(
-            "Choose an AI provider in Models settings first.".to_owned(),
+            "Choose a model provider in Models settings first.".to_owned(),
         ));
     };
     let provider = ProviderId::parse(&provider_id).ok_or_else(|| {

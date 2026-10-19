@@ -108,7 +108,7 @@ export function ForwardDialog({
       </blockquote>
       {choices.length > 1 ? (
         <SelectField
-          label="Channels from"
+          label="Project"
           onChange={(event) => {
             setProjectId(event.target.value)
             setTarget('')
@@ -219,7 +219,7 @@ export function MessageTaskDialog({
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
       open
-      title="Make a task"
+      title="New task from this message"
       width={520}
     >
       <TextField data-autofocus label="Title" maxLength={240} onChange={(event) => setTitle(event.target.value)} required value={title} />

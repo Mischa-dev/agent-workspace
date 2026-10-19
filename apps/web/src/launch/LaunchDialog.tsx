@@ -210,7 +210,7 @@ export function LaunchDialog({
                   accounts.length === 0 ? (
                     // One span, so the note's flex layout keeps the sentence and its link on one line.
                     <span>
-                      Connect an account for {harnessPlan?.displayName ?? 'it'} first, in <Link to={accountSettingsHref('provider-accounts')}>Provider accounts</Link>.
+                      Connect an account for {harnessPlan?.displayName ?? 'it'} first, in <Link to={accountSettingsHref('provider-accounts')}>Accounts for runs</Link>.
                     </span>
                   ) : undefined
                 }

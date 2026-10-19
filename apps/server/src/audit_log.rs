@@ -388,8 +388,8 @@ fn kind_label(kind: &str) -> String {
 fn channel_label(channel: &str) -> &'static str {
     match channel {
         "browser" => "Browser",
-        "mcp" => "Apps (MCP)",
-        "host_cli" => "Host command",
+        "mcp" => "Connected apps",
+        "host_cli" => "Server command line",
         "system" => "System",
         _ => "Other",
     }

@@ -821,7 +821,7 @@ async fn drive_turn(
                         project_id,
                         run_id,
                         conversation_id,
-                        "The provider account was signed out. The worktree was preserved.",
+                        "The account this run used was signed out. Its worktree was kept.",
                     ).await?;
                     return Ok(());
                 }
@@ -951,7 +951,7 @@ async fn handle_provider_request(
                 project_id,
                 run_id,
                 conversation_id,
-                "The provider account was signed out. The worktree was preserved.",
+                "The account this run used was signed out. Its worktree was kept.",
             )
             .await?;
             return Ok(());

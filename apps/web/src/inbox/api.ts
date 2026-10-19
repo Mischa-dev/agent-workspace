@@ -303,7 +303,7 @@ export function snoozeChoices(now = new Date()): Array<{ id: string; label: stri
   return [
     ...(hour >= 5 && hour < 18 ? [{ id: 'later', label: 'Later today', until: new Date(now.getTime() + 3 * 60 * 60 * 1000) }] : []),
     { id: 'tomorrow', label: pick('tomorrow').label, until: pick('tomorrow').at },
-    { id: 'next-week', label: 'Next week', until: pick('next-week').at },
+    { id: 'next-week', label: pick('next-week').label, until: pick('next-week').at },
   ]
 }
 

@@ -60,8 +60,11 @@ export function useConversationTools({
   const changeLevel = async (next: NotificationLevel | null) => {
     const result = await setLevel(conversationId, next)
     queryClient.setQueryData(laterKeys.level(conversationId), result)
-    const label = LEVELS.find((item) => item.level === result.level)?.label.toLowerCase() ?? result.level
-    showToast({ tone: 'success', title: result.level === 'nothing' ? 'Muted here' : `You’ll hear about ${label === 'only when mentioned' ? 'mentions only' : 'every message'} here` })
+    showToast(
+      result.level === 'nothing'
+        ? { tone: 'success', title: 'Muted', description: 'You won’t be notified here.' }
+        : { tone: 'success', title: result.level === 'all' ? 'Notifications: every message' : 'Notifications: mentions only' },
+    )
   }
 
   const schedule = async (content: MessageContentV1, at: Date) => {
@@ -108,15 +111,19 @@ export function useConversationTools({
         await schedule(content, parsed.at)
         return { kind: 'done' }
       }
-      case 'mute': {
+      case 'mute':
+      case 'unmute':
+      case 'notify': {
         const word = args.toLowerCase()
+        // "/mute off" read as unmute before /unmute existed; keep it working.
         const next: NotificationLevel | null | undefined =
-          word === '' || word === 'all off' || word === 'nothing' ? 'nothing'
-            : word === 'mentions' ? 'mentions'
+          command.name === 'unmute' || (command.name === 'mute' && word === 'off') ? null
+            : command.name === 'mute' ? (word === '' ? 'nothing' : undefined)
               : word === 'all' ? 'all'
-                : word === 'off' || word === 'unmute' ? null
-                  : undefined
-        if (next === undefined) throw new Error('Try “/mute”, “/mute mentions”, “/mute all” or “/mute off”.')
+                : word === 'mentions' ? 'mentions'
+                  : word === 'off' || word === 'nothing' ? 'nothing'
+                    : undefined
+        if (next === undefined) throw new Error('Try “/mute”, “/unmute”, or “/notify all”, “/notify mentions” or “/notify off”.')
         await changeLevel(next)
         return { kind: 'done' }
       }
