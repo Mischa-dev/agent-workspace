@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Ban, User } from 'lucide-react'
 
 import { useAuthenticatedSession } from '../auth/session'
-import { Button, TextArea, formatFullDate, formatRelative } from '../ui'
+import { Button, TextArea, actorKind, formatFullDate, formatRelative } from '../ui'
 import { Markdown } from '../ui/markdown/Markdown'
 import { useReleaseClaim } from './planningHooks'
 import { editErrorMessage } from './taskEdits'
@@ -11,32 +11,49 @@ import type { TaskHandoff, WorkItem } from './types'
 
 // The notes under a task's title: who is working on it, why it's blocked, and the last handoff.
 
-/** Who is working on this right now. Agents claim a task before starting it; the claim ends on its own. */
+/**
+ * Who is working on this right now. Agents claim a task before starting it;
+ * the claim ends on its own. Releasing asks first, since whoever holds it may
+ * still be partway through.
+ */
 export function ClaimNotice({ item, projectArchived }: { item: WorkItem; projectArchived: boolean }) {
   const session = useAuthenticatedSession()
   const release = useReleaseClaim()
+  const [confirming, setConfirming] = useState(false)
   const claim = item.claim
   if (!claim) return null
+  const own = claim.actor.id === session.user.actorId
   // Releasing is a task write: it needs edit rights and a project that isn't archived.
-  const canRelease = !projectArchived && item.capabilities.edit && (item.capabilities.archive || claim.actor.id === session.user.actorId)
+  const canRelease = !projectArchived && item.capabilities.edit && (item.capabilities.archive || own)
+  const releaseNow = () => {
+    setConfirming(false)
+    release.mutate({ projectId: item.projectId, workItemId: item.id, idempotencyKey: crypto.randomUUID() })
+  }
   return (
     <TaskNotice
       actions={
-        canRelease ? (
-          <Button
-            busy={release.isPending}
-            onClick={() => release.mutate({ projectId: item.projectId, workItemId: item.id, idempotencyKey: crypto.randomUUID() })}
-            size="sm"
-          >
+        !canRelease ? undefined : confirming ? (
+          <>
+            <Button autoFocus busy={release.isPending} onClick={releaseNow} size="sm" variant="primary">
+              Release
+            </Button>
+            <Button onClick={() => setConfirming(false)} size="sm" variant="ghost">
+              Keep it
+            </Button>
+          </>
+        ) : (
+          <Button busy={release.isPending} onClick={() => (own ? releaseNow() : setConfirming(true))} size="sm">
             Release
           </Button>
-        ) : undefined
+        )
       }
-      icon={claim.actor.kind === 'external_agent' ? 'bot' : User}
+      icon={actorKind(claim.actor.kind) === 'person' ? User : 'bot'}
       title={`${claim.actor.displayName} is working on this.`}
       tone="agent"
     >
-      {claim.note ? `${claim.note} · ` : ''}Claimed until {formatFullDate(claim.expiresAt)}.
+      {confirming
+        ? `Release the claim? ${claim.actor.displayName} may still be partway through.`
+        : `${claim.note ? `${claim.note} · ` : ''}Claimed until ${formatFullDate(claim.expiresAt)}.`}
       {release.isError ? ` ${editErrorMessage(release.error, 'Releasing it')}` : ''}
     </TaskNotice>
   )
