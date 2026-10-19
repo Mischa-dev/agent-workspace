@@ -2,10 +2,12 @@
 
 .aw-settings {
   display: grid;
+  flex-shrink: 0;
   grid-template-columns: 248px minmax(0, 1fr);
   align-items: start;
   width: 100%;
   max-width: 1180px;
+  /* At least the window's height, and as tall as the page, so the nav stays in view on long pages. */
   min-height: 100%;
   margin: 0 auto;
 }
@@ -276,10 +278,9 @@
   flex: 0 1 auto;
 }
 
-.aw-setting__value {
-  margin: 0;
-  font: var(--t-ui);
+.aw-setting__current {
   color: var(--content-fg);
+  font-weight: 600;
 }
 
 .aw-setting__form {
@@ -456,6 +457,7 @@
 @media (max-width: 860px) {
   .aw-settings {
     grid-template-columns: minmax(0, 1fr);
+    align-content: start;
   }
 
   .aw-settings__toggle {

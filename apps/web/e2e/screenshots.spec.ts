@@ -70,6 +70,16 @@ const keyPages: KeyPage[] = [
     ready: (page) => expect(page.getByRole('heading', { name: 'Harnesses', exact: true })).toBeVisible(),
   },
   {
+    name: 'workspace-runs',
+    path: () => '/settings/workspace/runs',
+    ready: (page) => expect(page.getByText(/to pick from/).first()).toBeVisible(),
+  },
+  {
+    name: 'project-runs',
+    path: () => `/settings/projects/${seededValue('E2E_PROJECT_ID')}/runs`,
+    ready: (page) => expect(page.getByRole('textbox', { name: 'Prompt template' })).toBeVisible(),
+  },
+  {
     name: 'webhooks',
     path: () => '/settings/account/webhooks',
     ready: (page) => expect(page.getByRole('heading', { name: 'No webhooks yet' })).toBeVisible(),

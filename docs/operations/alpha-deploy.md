@@ -117,12 +117,18 @@ Restart the service after editing.
   app instead of acting); new pushes have working buttons. Drafts and unsent
   messages kept on a device from before the deploy are forgotten once, the
   first time the app opens, because they are now kept per person.
+- **Runs and models (2026-10-19).** Nothing goes in this file and there's no
+  migration. Run defaults, environments, model lists, suggestions and the
+  launch prompt now share one Runs and models page in workspace and in project
+  settings; links to the old pages redirect. The environment new runs use is
+  now set per project only, so a workspace-wide or personal value for it, if
+  one was saved, stops applying: set it on the project's page instead.
 
 ## After: in the app
 
 1. Sign in, open Settings › General and check "Server version".
-2. Settings › AI and models: add the Anthropic key and press Test connection.
-   Set a monthly budget if you want one.
+2. Settings › Workspace › Runs and models: add the Anthropic key and press Test
+   connection. Set a monthly budget if you want one.
 3. Settings › Provider accounts: connect the Claude and Codex accounts runs
    should use.
 4. Project settings › Repositories: connect the GitHub App for each project.

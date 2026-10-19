@@ -121,7 +121,7 @@ struct Places {
 }
 
 fn settings_href(project_id: Uuid) -> String {
-    format!("/settings/projects/{project_id}/environments")
+    format!("/settings/projects/{project_id}/runs#environments")
 }
 
 /// Where the account can run for `viewer`, and where it can't and why.

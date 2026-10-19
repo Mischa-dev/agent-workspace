@@ -1,4 +1,4 @@
-//! HTTP routes for AI planning: the AI and models settings, the review
+//! HTTP routes for AI planning: the Runs and models settings, the review
 //! queue, readiness and the ranking, the dependency graph, plan imports and
 //! summaries. MCP calls the same functions (see `mcp/ai_tools.rs`).
 

@@ -206,8 +206,20 @@ export function logoutAccount(projectId: string, accountId: string, idempotencyK
   })
 }
 
-export function refreshCatalog(projectId: string, kind: string, idempotencyKey: string) {
-  return requestJson<Harness>(`${project(projectId)}/harnesses/${encodeURIComponent(kind)}/catalog/refresh`, {
+const workspaceCatalog = (organizationId: string) =>
+  `/api/v1/organizations/${encodeURIComponent(organizationId)}/model-catalog`
+
+/** Every harness the workspace can run, with its model list, for settings
+ * where no project is open. */
+export async function listWorkspaceHarnesses(organizationId: string): Promise<Harness[]> {
+  const response = await requestJson<{ harnesses: Harness[] }>(workspaceCatalog(organizationId))
+  return Array.isArray(response.harnesses) ? response.harnesses : []
+}
+
+/** Asks the harness for its current models through one of your signed-in
+ * accounts. Edits people made to the list are kept. */
+export function refreshCatalog(organizationId: string, kind: string, idempotencyKey: string) {
+  return requestJson<Harness>(`${workspaceCatalog(organizationId)}/${encodeURIComponent(kind)}/refresh`, {
     method: 'POST',
     idempotencyKey,
     json: {},
@@ -215,28 +227,16 @@ export function refreshCatalog(projectId: string, kind: string, idempotencyKey: 
 }
 
 export function saveModel(
-  projectId: string,
+  organizationId: string,
   kind: string,
   modelId: string,
   overrides: ModelOverrides,
   idempotencyKey: string,
 ) {
-  return requestJson<Harness>(modelPath(projectId, kind, modelId), {
-    method: 'PUT',
-    idempotencyKey,
-    json: overrides,
-  })
-}
-
-export function removeModel(projectId: string, kind: string, modelId: string, idempotencyKey: string) {
-  return requestJson<Harness>(modelPath(projectId, kind, modelId), {
-    method: 'DELETE',
-    idempotencyKey,
-  })
-}
-
-function modelPath(projectId: string, kind: string, modelId: string) {
-  return `${project(projectId)}/harnesses/${encodeURIComponent(kind)}/models/${encodeURIComponent(modelId)}`
+  return requestJson<Harness>(
+    `${workspaceCatalog(organizationId)}/${encodeURIComponent(kind)}/models/${encodeURIComponent(modelId)}`,
+    { method: 'PUT', idempotencyKey, json: overrides },
+  )
 }
 
 /** The models people can pick for a harness: its catalog without hidden ones. */

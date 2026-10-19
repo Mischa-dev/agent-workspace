@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ExecutionAccountSettings } from './ExecutionAccountSettings'
@@ -119,29 +120,6 @@ describe('ExecutionAccountSettings', () => {
     // Signed in, the account's run defaults come from the harness catalog.
     expect(screen.getByLabelText('Model')).toHaveTextContent('Demo large')
   })
-
-  it('lets a workspace admin hide a model from everyone, keeping its other edits', async () => {
-    const edited = () => {
-      const value = harness({ canEditCatalog: true })
-      value.catalog.models[0] = { ...value.catalog.models[0], edited: true, overrides: { contextWindow: 64_000 } }
-      return value
-    }
-    stubFetch((method, path, body) => {
-      if (path === `${base}/harnesses`) return { harnesses: [edited()] }
-      if (path === `${base}/provider-accounts`) return { accounts: [] }
-      if (path === `${base}/harnesses/demo/models/demo-small` && method === 'PUT') {
-        expect(body).toEqual({ contextWindow: 64_000, hidden: true })
-        const updated = edited()
-        updated.catalog.models[0] = { ...updated.catalog.models[0], hidden: true }
-        return updated
-      }
-      return undefined
-    })
-
-    renderSettings()
-    fireEvent.click(await screen.findByRole('button', { name: 'Hide Demo small' }))
-    expect(await screen.findByRole('button', { name: 'Show Demo small' })).toBeVisible()
-  })
 })
 
 function stubFetch(handle: (method: string, path: string, body: unknown) => unknown) {
@@ -167,7 +145,9 @@ function renderSettings() {
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <ExecutionAccountSettings projectId={projectId} />
+      <MemoryRouter>
+        <ExecutionAccountSettings projectId={projectId} />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
