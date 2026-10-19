@@ -13,7 +13,11 @@ import {
   Section,
   SegmentedControl,
   TextField,
+  countLabel,
+  formatTime,
+  showToast,
 } from '../ui'
+import type { SettingsPageProps } from '../settings/types'
 import {
   CONTRAST_PAIRS,
   SLOT_GROUPS,
@@ -28,6 +32,7 @@ import {
   toHex,
   type Rgb,
 } from './slots'
+import type { AppearancePreferences, ThemeChoice } from './preferences'
 import { useTheme } from './themeContext'
 
 /** Read what every slot resolves to on <html>, as sRGB, for swatches and contrast. */
@@ -87,8 +92,15 @@ function PresetMini({ id }: { id: string }) {
   )
 }
 
+/** A time today, as the clock on this device shows it: "10:24 AM" or "10:24". */
+function todayAt(hours: number, minutes: number) {
+  const date = new Date()
+  date.setHours(hours, minutes, 0, 0)
+  return formatTime(date.toISOString())
+}
+
 /** A small, real rendering of the shell so the sidebar and rail colors show on this page too. */
-function ThemePreview() {
+function ThemePreview({ name, seed }: { name: string; seed: string }) {
   return (
     <div aria-hidden="true" className="aw-preview">
       <div className="aw-preview__rail" data-region="rail">
@@ -146,11 +158,11 @@ function ThemePreview() {
       </div>
       <div className="aw-preview__main" data-region="content">
         <div className="aw-preview__msg">
-          <Avatar name="Mischa Nelson" size={28} />
+          <Avatar name={name} seed={seed} size={28} />
           <div>
             <div className="aw-msg__meta">
-              <span className="aw-msg__author">Mischa Nelson</span>
-              <span className="aw-msg__time">9:41 AM</span>
+              <span className="aw-msg__author">{name}</span>
+              <span className="aw-msg__time">{todayAt(10, 24)}</span>
             </div>
             <p className="aw-preview__text">
               <span className="aw-mention">@Muse</span> can you check the new colors? <a href="#preview">Link</a>
@@ -163,7 +175,7 @@ function ThemePreview() {
             <div className="aw-msg__meta">
               <span className="aw-msg__author">Muse</span>
               <ActorTag kind="agent" />
-              <span className="aw-msg__time">9:44 AM</span>
+              <span className="aw-msg__time">{todayAt(10, 27)}</span>
             </div>
             <p className="aw-preview__text">
               Looks good. <span className="aw-mention is-you">@you</span>, the unread badge reads clearly.
@@ -182,7 +194,7 @@ function ThemePreview() {
 }
 
 /** Account › Appearance in settings. */
-export default function AppearancePage() {
+export default function AppearancePage({ session }: SettingsPageProps) {
   const theme = useTheme()
   const [mode, setMode] = useState<'main' | 'all'>('main')
   const [pasted, setPasted] = useState('')
@@ -217,7 +229,10 @@ export default function AppearancePage() {
       window.clearTimeout(copiedTimer.current)
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1600)
     }
-    void navigator.clipboard?.writeText(code).then(done, () => document.getElementById('theme-code')?.focus())
+    // Without the clipboard, select the code so it can be copied by hand.
+    const selectCode = () => document.getElementById('theme-code')?.focus()
+    if (!navigator.clipboard) selectCode()
+    else void navigator.clipboard.writeText(code).then(done, selectCode)
   }
   const apply = () => {
     try {
@@ -227,16 +242,41 @@ export default function AppearancePage() {
       setPasted('')
       setPasteError(null)
     } catch (reason) {
-      setPasteError(reason instanceof ThemeCodeError ? reason.message : 'That theme code didn’t work.')
+      setPasteError(reason instanceof ThemeCodeError ? reason.message : 'That theme code couldn’t be read. Copy it again and paste the whole thing.')
     }
   }
   const presetName = THEME_PRESETS.find((preset) => preset.id === theme.preset)?.name ?? 'Indigo'
+  const current = (): AppearancePreferences => ({
+    theme: theme.theme,
+    overrides: theme.overrides,
+    density: theme.density,
+    textSize: theme.textSize,
+  })
+  // Another preset starts from its own colors, so say what went and offer it back.
+  const choose = (next: ThemeChoice) => {
+    if (next === theme.theme) return
+    const previous = current()
+    const cleared = Object.keys(previous.overrides).length
+    theme.setTheme(next)
+    if (cleared) {
+      showToast({
+        title: `${countLabel(cleared, 'custom color')} cleared`,
+        description: 'Each preset starts from its own colors.',
+        onUndo: () => theme.replaceAppearance(previous),
+      })
+    }
+  }
+  const reset = () => {
+    const previous = current()
+    theme.resetAppearance()
+    showToast({ title: 'Appearance reset', onUndo: () => theme.replaceAppearance(previous) })
+  }
 
   return (
       <div className="aw-appearance">
         <PageHeader
           actions={
-            <Button icon="undo" onClick={theme.resetAppearance} variant="ghost">
+            <Button icon="undo" onClick={reset} variant="ghost">
               Reset everything
             </Button>
           }
@@ -261,7 +301,7 @@ export default function AppearancePage() {
                           aria-checked={theme.theme === preset.id}
                           className="aw-preset"
                           key={preset.id}
-                          onClick={() => theme.setTheme(preset.id)}
+                          onClick={() => choose(preset.id)}
                           role="radio"
                           type="button"
                         >
@@ -273,7 +313,7 @@ export default function AppearancePage() {
                         <button
                           aria-checked={theme.theme === 'system'}
                           className="aw-preset"
-                          onClick={() => theme.setTheme('system')}
+                          onClick={() => choose('system')}
                           role="radio"
                           type="button"
                         >
@@ -309,7 +349,7 @@ export default function AppearancePage() {
                 Object.keys(colors).length ? <Banner tone="success">Every text color reads clearly on its background.</Banner> : null
               ) : (
                 <div className="aw-contrast">
-                  <Banner tone="warning" title={`${failing.length} ${failing.length === 1 ? 'color is' : 'colors are'} hard to read.`}>
+                  <Banner tone="warning" title={`${countLabel(failing.length, 'color')} ${failing.length === 1 ? 'is' : 'are'} hard to read.`}>
                     Fix nudges the text color until it passes.
                   </Banner>
                   <ul>
@@ -423,7 +463,7 @@ export default function AppearancePage() {
           </div>
           <div className="aw-appearance__preview">
             <p className="aw-appearance__label">Preview</p>
-            <ThemePreview />
+            <ThemePreview name={session.user.displayName} seed={session.user.actorId} />
           </div>
         </div>
       </div>

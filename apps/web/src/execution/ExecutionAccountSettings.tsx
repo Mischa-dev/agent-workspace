@@ -2,11 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { humanize } from '../projects/format'
 import { projectSettingsHref } from '../settings/paths'
-import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField } from '../ui'
+import { Banner, Button, EmptyState, ErrorState, Icon, SelectField, SettingsSkeleton, StatusChip, TextField, describeError, showToast } from '../ui'
 import {
   cancelAccountLogin,
   createProviderAccount,
@@ -27,7 +26,7 @@ import {
 } from './api'
 import { RunSettingsFields } from './RunSettingsFields'
 
-/** Your provider accounts: the sign-ins your runs use. An account is yours
+/** Your accounts for runs: the sign-ins your runs use. An account is yours
  * alone and works in every project you choose to use it in, so you sign in
  * once. Everything shown comes from each harness's manifest. */
 export function ExecutionAccountSettings({ projectId }: { actorId?: string; projectId: string }) {
@@ -39,32 +38,34 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
   })
   const [adding, setAdding] = useState('')
   const refresh = () => void queryClient.invalidateQueries({ queryKey: queryKeys.providerAccounts(projectId) })
+  // A new account starts signed out, so it's only used here at once when it's
+  // the first one; otherwise the project keeps the account that works.
   const add = useMutation({
     mutationFn: async (kind: string) => {
-      const account = await createProviderAccount(projectId, kind, crypto.randomUUID())
-      return setAccountInUse(projectId, account.id, crypto.randomUUID())
+      const existing = accounts.data ?? []
+      const harnessName = harnesses.data?.find((harness) => harness.kind === kind)?.displayName
+      const name = harnessName ? unusedName(harnessName, existing) : undefined
+      const account = await createProviderAccount(projectId, kind, crypto.randomUUID(), name)
+      if (existing.length === 0) await setAccountInUse(projectId, account.id, crypto.randomUUID())
+      return account
     },
-    onSuccess: refresh,
+    onSuccess: (account) => {
+      refresh()
+      showToast({ tone: 'success', title: `${account.name} added`, description: 'Sign in to it below to use it for runs.' })
+    },
   })
 
   if (harnesses.isPending || accounts.isPending) return <SettingsSkeleton label="Loading your accounts" />
   if (harnesses.isError || accounts.isError) {
     return (
       <ErrorState
-        action={
-          <Button
-            onClick={() => {
-              void harnesses.refetch()
-              void accounts.refetch()
-            }}
-          >
-            Try again
-          </Button>
-        }
+        error={harnesses.error ?? accounts.error}
+        onRetry={() => {
+          void harnesses.refetch()
+          void accounts.refetch()
+        }}
         title="Your accounts didn’t load"
-      >
-        Check your connection and try again.
-      </ErrorState>
+      />
     )
   }
   const byKind = new Map(harnesses.data.map((harness) => [harness.kind, harness]))
@@ -92,7 +93,7 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
       {accounts.data.length === 0 ? (
         <div className="aw-card aw-formcard">
           <EmptyState action={addForm} icon="terminal" title="Connect an account for your runs">
-            Runs use your own account with the agent’s provider. It’s never shared with anyone else, and once you sign in you can use it in any project.
+            Runs use your own account with the agent’s provider. Once you sign in, you can use it in any of your projects.
           </EmptyState>
         </div>
       ) : (
@@ -101,7 +102,7 @@ export function ExecutionAccountSettings({ projectId }: { actorId?: string; proj
         ))
       )}
       {accounts.data.length > 0 ? addForm : null}
-      {add.isError && <Banner tone="danger">{errorMessage(add.error)}</Banner>}
+      {add.isError && <Banner tone="danger">The account wasn’t added. {errorMessage(add.error)}</Banner>}
     </div>
   )
 }
@@ -182,6 +183,18 @@ function ProviderAccountCard({
     onSuccess: onChange,
     onError: (reason) => setError(errorMessage(reason)),
   })
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const rename = useMutation({
+    mutationFn: (name: string) =>
+      updateProviderAccount(projectId, account.id, { expectedVersion: account.version, name }, crypto.randomUUID()),
+    onSuccess: (updated) => {
+      setRenaming(null)
+      setError(null)
+      onChange()
+      showToast({ tone: 'success', title: `Renamed to ${updated.name}` })
+    },
+    onError: (reason) => setError(`The account wasn’t renamed. ${errorMessage(reason)}`),
+  })
   const submitApiKey = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const value = apiKey
@@ -189,7 +202,7 @@ function ProviderAccountCard({
     setError(null)
     if (value) apiKeyLogin.mutate(value)
   }
-  const pending = login.isPending || apiKeyLogin.isPending || cancel.isPending || logout.isPending || use.isPending
+  const pending = login.isPending || apiKeyLogin.isPending || cancel.isPending || logout.isPending || use.isPending || rename.isPending
   const current = status.data
   const ceremony = current?.ceremony
   const methods = harness?.loginMethods ?? []
@@ -206,6 +219,33 @@ function ProviderAccountCard({
           <h3 className="aw-profile__name" id={`account-${account.id}`}>
             {account.name}
           </h3>
+          {renaming !== null ? (
+            <form
+              className="aw-inline-form"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const name = renaming.trim()
+                if (name && name !== account.name) rename.mutate(name)
+                else setRenaming(null)
+              }}
+            >
+              <TextField
+                autoFocus
+                compact
+                id={`account-name-${account.id}`}
+                label="Name"
+                maxLength={120}
+                onChange={(event) => setRenaming(event.target.value)}
+                value={renaming}
+              />
+              <Button busy={rename.isPending} disabled={!renaming.trim()} size="sm" type="submit" variant="primary">
+                Save
+              </Button>
+              <Button disabled={rename.isPending} onClick={() => setRenaming(null)} size="sm">
+                Cancel
+              </Button>
+            </form>
+          ) : null}
           <p className="aw-profile__sub">
             {harnessName}
             {harness?.runsOn === 'cloud' ? ' · runs in the cloud' : ''}
@@ -216,7 +256,11 @@ function ProviderAccountCard({
         <AccountState state={current?.accountState ?? account.accountState} />
       </header>
       {!harness && <Banner tone="warning">This server no longer has this harness installed, so it can’t run.</Banner>}
-      {status.isError && <Banner tone="danger">We couldn’t check this account right now.</Banner>}
+      {status.isError && (
+        <Banner onRetry={() => void status.refetch()} tone="danger">
+          This account’s sign-in couldn’t be checked.
+        </Banner>
+      )}
       {error && <Banner tone="danger">{error}</Banner>}
       {(current?.account || current?.rateLimits?.primary) && (
         <div className="aw-profile__facts">
@@ -258,6 +302,11 @@ function ProviderAccountCard({
         {!account.preferred ? (
           <Button disabled={pending || !harness} onClick={() => use.mutate()}>
             Use in this project
+          </Button>
+        ) : null}
+        {renaming === null ? (
+          <Button disabled={pending} icon="pencil" onClick={() => setRenaming(account.name)} variant="ghost">
+            Rename
           </Button>
         ) : null}
         {ceremony?.state === 'pending' ? (
@@ -361,7 +410,7 @@ function AccountRunDefaults({
           ))}
         </SelectField>
       ) : null}
-      {save.isError && <Banner tone="danger">{errorMessage(save.error)}</Banner>}
+      {save.isError && <Banner tone="danger">The defaults weren’t saved. {errorMessage(save.error)}</Banner>}
       {changed ? (
         <Button busy={save.isPending} onClick={() => save.mutate()} size="sm" variant="primary">
           Save defaults
@@ -376,5 +425,18 @@ function clean(settings: RunSettings): RunSettings {
 }
 
 function errorMessage(reason: unknown) {
-  return isApiError(reason) ? reason.message : 'That didn’t work. Try again.'
+  return describeError(reason).message
+}
+
+/**
+ * A name for a new account when the harness's own name (the server's default)
+ * is taken: "<Harness> account 2" and on. Undefined leaves the default.
+ */
+function unusedName(harnessName: string, accounts: ProviderAccount[]) {
+  const taken = new Set(accounts.map((account) => account.name.trim().toLocaleLowerCase()))
+  if (!taken.has(harnessName.toLocaleLowerCase())) return undefined
+  for (let number = 2; ; number += 1) {
+    const name = `${harnessName} account ${number}`
+    if (!taken.has(name.toLocaleLowerCase())) return name
+  }
 }

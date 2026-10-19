@@ -7,14 +7,14 @@ export type Shortcut = {
   keys: string[]
   label: string
   group: 'General' | 'Conversations' | 'Go to'
-  /** Needs a Project open. */
+  /** Needs a project open. */
   inProject?: boolean
 }
 
 export const SHORTCUTS: Shortcut[] = [
   { action: 'command-menu', keys: ['⌘', 'K'], label: 'Search and run commands', group: 'General' },
   { action: 'shortcut-sheet', keys: ['?'], label: 'Show keyboard shortcuts', group: 'General' },
-  { action: 'create-task', keys: ['C'], label: 'Create a task', group: 'General' },
+  { action: 'create-task', keys: ['C'], label: 'New task', group: 'General' },
   { action: 'search', keys: ['/'], label: 'Search messages and pages', group: 'General' },
   { action: 'previous-conversation', keys: ['⌥', '↑'], label: 'Previous item in the sidebar', group: 'Conversations' },
   { action: 'next-conversation', keys: ['⌥', '↓'], label: 'Next item in the sidebar', group: 'Conversations' },

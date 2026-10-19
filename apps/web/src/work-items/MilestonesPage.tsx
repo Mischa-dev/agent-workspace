@@ -7,8 +7,8 @@ import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageSta
 import { useProject } from '../projects/hooks'
 import { AppShell } from '../shell/AppShell'
 import { WorkTabs } from '../shell/ProjectTabs'
-import { Banner, Button, Dialog, EmptyState, ErrorState, MessageSkeleton, PageHeader, SegmentedControl, TextArea, TextField } from '../ui'
-import { formatDateLabel } from '../ui/pickers'
+import { Banner, Button, Dialog, EmptyState, ErrorState, ListSkeleton, PageHeader, SegmentedControl, TextArea, TextField, countLabel, describeError, showToast } from '../ui'
+import { DatePicker, formatDateLabel } from '../ui/pickers'
 import { workItemsHref } from './links'
 import { useCreateMilestone, useMilestoneList, useUpdateMilestone } from './planningHooks'
 import { TaskGlyph } from './TaskGlyph'
@@ -24,10 +24,10 @@ function milestoneHref(projectId: string, milestoneId: string) {
 function saveMessage(error: unknown) {
   if (isApiError(error) && error.code === 'version_conflict') return 'Someone changed this milestone first. Close this and try again.'
   if (isApiError(error) && error.message) return error.message
-  return 'The milestone didn’t save. Check your connection and try again.'
+  return `The milestone didn’t save. ${describeError(error).message}`
 }
 
-/** A Project's milestones: how far along each is, when it's due, and its tasks one click away. */
+/** A project's milestones: how far along each is, when it's due, and its tasks one click away. */
 export function MilestonesPage() {
   const session = useAuthenticatedSession()
   const { projectId = '' } = useParams()
@@ -36,7 +36,6 @@ export function MilestonesPage() {
   const update = useUpdateMilestone()
   const [shown, setShown] = useState<Shown>('open')
   const [editing, setEditing] = useState<Milestone | 'new' | null>(null)
-  const [problem, setProblem] = useState<string | null>(null)
 
   if (project.isPending) {
     return (
@@ -48,7 +47,7 @@ export function MilestonesPage() {
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
@@ -57,31 +56,36 @@ export function MilestonesPage() {
   const all = milestones.data?.milestones ?? []
   const visible = all.filter((milestone) => (shown === 'archived' ? milestone.archived : !milestone.archived))
   const archivedCount = all.filter((milestone) => milestone.archived).length
+  // Archiving is reversible, so it happens at once with Undo.
   const setArchived = (milestone: Milestone, archived: boolean) => {
-    setProblem(null)
     update.mutate(
       { projectId, milestoneId: milestone.id, expectedVersion: milestone.version, archived, idempotencyKey: crypto.randomUUID() },
-      { onError: (error) => setProblem(saveMessage(error)) },
+      {
+        onError: (error) =>
+          showToast({ title: archived ? `${milestone.name} wasn’t archived` : `${milestone.name} wasn’t restored`, description: saveMessage(error), tone: 'danger' }),
+        onSuccess: (saved) =>
+          showToast({
+            title: archived ? `Archived ${milestone.name}` : `Restored ${milestone.name}`,
+            tone: 'success',
+            onUndo: () =>
+              update.mutateAsync({ projectId, milestoneId: milestone.id, expectedVersion: saved.version, archived: !archived, idempotencyKey: crypto.randomUUID() }),
+          }),
+      },
     )
   }
+  const newMilestone = readOnly ? null : (
+    <Button icon="plus" onClick={() => setEditing('new')} variant="primary">
+      New milestone
+    </Button>
+  )
 
   return (
     <AppShell project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-milestones">
-        <WorkTabs current="milestones" projectId={project.data.id} />
-        <PageHeader
-          actions={
-            readOnly ? null : (
-              <Button icon="plus" onClick={() => setEditing('new')} variant="primary">
-                New milestone
-              </Button>
-            )
-          }
-          icon="checklist"
-          title="Milestones"
-        >
-          Groups of work items with a target date in {project.data.name}.
+        <PageHeader actions={newMilestone} icon="checklist" title="Milestones">
+          Groups of tasks with a target date in {project.data.name}.
         </PageHeader>
+        <WorkTabs current="milestones" projectId={project.data.id} />
         {archivedCount ? (
           <SegmentedControl<Shown>
             label="Milestones to show"
@@ -93,20 +97,11 @@ export function MilestonesPage() {
             value={shown}
           />
         ) : null}
-        {problem ? (
-          <Banner className="aw-page__banner" tone="danger">
-            {problem}
-          </Banner>
-        ) : null}
-        {milestones.isPending ? <MessageSkeleton label="Loading milestones" rows={3} /> : null}
-        {milestones.isError ? (
-          <ErrorState action={<Button onClick={() => void milestones.refetch()}>Try again</Button>} title="Milestones didn’t load">
-            Check your connection and try again.
-          </ErrorState>
-        ) : null}
+        {milestones.isPending ? <ListSkeleton label="Loading milestones" rows={3} /> : null}
+        {milestones.isError ? <ErrorState error={milestones.error} onRetry={() => void milestones.refetch()} title="Milestones didn’t load" /> : null}
         {milestones.isSuccess && visible.length === 0 ? (
-          <EmptyState icon="checklist" title={shown === 'archived' ? 'No archived milestones' : 'No milestones yet'}>
-            {shown === 'archived' ? 'Archived milestones show up here.' : 'A milestone gathers work items toward a date, like a release.'}
+          <EmptyState action={shown === 'archived' ? undefined : newMilestone} icon="checklist" title={shown === 'archived' ? 'No archived milestones' : 'No milestones yet'}>
+            {shown === 'archived' ? 'Archived milestones show up here.' : 'A milestone gathers tasks toward a date, like a release.'}
           </EmptyState>
         ) : null}
         {visible.length ? (
@@ -148,26 +143,39 @@ function MilestoneRow({
   readOnly: boolean
 }) {
   const percent = Math.round(Math.min(1, Math.max(0, milestone.progress)) * 100)
+  const href = milestoneHref(projectId, milestone.id)
   return (
     <li className={['aw-milestone', milestone.overdue ? 'is-overdue' : ''].filter(Boolean).join(' ')}>
       <div className="aw-milestone__main">
-        <Link className="aw-milestone__name" to={milestoneHref(projectId, milestone.id)}>
+        <Link className="aw-milestone__name" to={href}>
           <TaskGlyph name="milestone" size={16} />
-          {milestone.name}
+          <span className="aw-milestone__title">{milestone.name}</span>
         </Link>
         {milestone.description ? <p className="aw-milestone__description">{milestone.description}</p> : null}
         <div className="aw-milestone__meta">
           <span className="aw-progress">
             <progress aria-label={`${milestone.name} progress`} className="aw-progress__bar" max={100} value={percent} />
             <span className="aw-progress__text">
-              {milestone.finished} of {milestone.total} done · {percent}%
+              {milestone.total ? `${milestone.finished} of ${milestone.total} done · ${percent}%` : 'No tasks yet'}
+              {milestone.canceled ? ` · ${milestone.canceled} canceled` : ''}
             </span>
           </span>
           <span className="aw-milestone__date">
             <TaskGlyph name="calendar" size={14} />
-            {milestone.targetDate ? formatDateLabel(milestone.targetDate) : 'No target date'}
+            {milestone.targetDate ? (
+              <time dateTime={milestone.targetDate} title={formatDateLabel(milestone.targetDate, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}>
+                {formatDateLabel(milestone.targetDate)}
+              </time>
+            ) : (
+              'No target date'
+            )}
             {milestone.overdue ? <strong className="aw-milestone__overdue"> Overdue</strong> : null}
           </span>
+          {milestone.total ? (
+            <Link className="aw-milestone__tasks" to={href}>
+              {milestone.open ? `${countLabel(milestone.open, 'open task')}` : 'View tasks'}
+            </Link>
+          ) : null}
         </div>
       </div>
       {readOnly ? null : (
@@ -212,7 +220,7 @@ function MilestoneDialog({ milestone, onClose, projectId }: { milestone: Milesto
     <Dialog
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
+          <Button onClick={onClose} variant="secondary">
             Cancel
           </Button>
           <Button busy={pending} disabled={!name.trim()} type="submit" variant="primary">
@@ -220,13 +228,19 @@ function MilestoneDialog({ milestone, onClose, projectId }: { milestone: Milesto
           </Button>
         </>
       }
+      dirty={name !== (milestone?.name ?? '') || description !== (milestone?.description ?? '') || targetDate !== (milestone?.targetDate ?? '')}
       onClose={onClose}
       onSubmit={submit}
       open
       title={milestone ? 'Edit milestone' : 'New milestone'}
     >
       <TextField data-autofocus label="Name" maxLength={120} onChange={(event) => setName(event.target.value)} required value={name} />
-      <TextField label="Target date" onChange={(event) => setTargetDate(event.target.value)} type="date" value={targetDate} />
+      <div className="aw-field">
+        <span aria-hidden="true" className="aw-field__label">
+          Target date
+        </span>
+        <DatePicker className="aw-milestone__datefield" label="Target date" onChange={(value) => setTargetDate(value ?? '')} placeholder="No target date" value={targetDate || null} />
+      </div>
       <TextArea label="Description" maxLength={2000} onChange={(event) => setDescription(event.target.value)} rows={3} value={description} />
       {error ? <Banner tone="danger">{saveMessage(error)}</Banner> : null}
     </Dialog>

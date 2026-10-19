@@ -2,6 +2,7 @@ import { useDeferredValue, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 
+import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
 import { AppShell } from '../shell/AppShell'
 import { useTheme } from '../theme/themeContext'
@@ -17,12 +18,14 @@ import {
   SegmentedControl,
   StatusChip,
   TextField,
+  countLabel,
   formatFullDate,
   formatRelative,
   showToast,
 } from '../ui'
 import {
   duplicateWhiteboard,
+  isDarkPreset,
   listWhiteboards,
   previewUrl,
   updateWhiteboard,
@@ -31,7 +34,6 @@ import {
   type Whiteboard,
 } from './api'
 import { NewWhiteboardDialog, RenameDialog } from './dialogs'
-import { errorText } from './errors'
 import './whiteboards.css'
 
 type View = 'boards' | 'trash'
@@ -51,7 +53,7 @@ export function WhiteboardsPage() {
   const workspaces = boards.data?.workspaces ?? []
   return (
     <AppShell home mainClassName="aw-main--page" user={session.user}>
-      <div className="aw-page aw-page--wide">
+      <div className="aw-page">
         <PageHeader
           actions={
             <Button disabled={workspaces.length === 0} icon="plus" onClick={() => setCreating(true)} variant="primary">
@@ -61,15 +63,16 @@ export function WhiteboardsPage() {
           icon="whiteboard"
           title="Whiteboards"
         >
-          Sketch, plan and diagram together. Agents can read and draw on the same boards, and one board can sit on many tasks,
-          projects and pages.
+          Sketch, plan and diagram together. Agents can read and draw on the same whiteboards, and one whiteboard can sit on many
+          tasks, projects and pages.
         </PageHeader>
         <div className="aw-boards__filters">
           <TextField
             aria-label="Search whiteboards"
             className="aw-boards__search"
+            compact
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search titles and words on boards"
+            placeholder="Search titles and words on whiteboards"
             type="search"
             value={query}
           />
@@ -77,26 +80,38 @@ export function WhiteboardsPage() {
             label="Show"
             onChange={setView}
             options={[
-              { value: 'boards', label: 'Boards' },
+              { value: 'boards', label: 'Whiteboards' },
               { value: 'trash', label: 'Trash', icon: 'trash' },
             ]}
             value={view}
           />
         </div>
         {boards.isPending ? <PageSkeleton cards={6} label="Loading whiteboards" /> : null}
-        {boards.isError ? (
-          <ErrorState action={<Button icon="retry" onClick={() => void boards.refetch()}>Try again</Button>} title="Whiteboards didn’t load">
-            {errorText(boards.error, 'Check your connection, then try again.')}
-          </ErrorState>
-        ) : null}
+        {boards.isError ? <ErrorState error={boards.error} onRetry={() => void boards.refetch()} title="Whiteboards didn’t load" /> : null}
         {boards.data && boards.data.whiteboards.length === 0 ? (
           search.trim() ? (
-            <EmptyState icon="search" title="No boards match">
+            <EmptyState
+              action={
+                <Button onClick={() => setQuery('')} variant="secondary">
+                  Clear the search
+                </Button>
+              }
+              icon="search"
+              title="No whiteboards match"
+            >
               Try other words, or clear the search.
             </EmptyState>
           ) : view === 'trash' ? (
-            <EmptyState icon="trash" title="The trash is empty">
-              Boards you move to the trash wait here, drawing and links intact, until you bring them back.
+            <EmptyState
+              action={
+                <Button onClick={() => setView('boards')} variant="secondary">
+                  Back to whiteboards
+                </Button>
+              }
+              icon="trash"
+              title="The trash is empty"
+            >
+              Whiteboards you move to the trash wait here, drawing and links intact, until you bring them back.
             </EmptyState>
           ) : (
             <EmptyState
@@ -120,7 +135,7 @@ export function WhiteboardsPage() {
           </ul>
         ) : null}
         {boards.data && boards.data.whiteboards.length === 200 ? (
-          <Banner tone="info">Showing the 200 most recently changed boards. Search to find older ones.</Banner>
+          <Banner tone="info">Showing the 200 most recently changed whiteboards. Search to find older ones.</Banner>
         ) : null}
       </div>
       <NewWhiteboardDialog onClose={() => setCreating(false)} open={creating} workspaces={workspaces} />
@@ -145,21 +160,23 @@ function BoardCard({ board }: { board: Whiteboard }) {
           onUndo: deleted ? () => trash(false) : undefined,
         })
       })
-      .catch((reason: unknown) => showToast({ tone: 'danger', title: errorText(reason, 'That didn’t work.') }))
+      .catch((reason: unknown) =>
+        toastError(deleted ? 'The whiteboard wasn’t moved to the trash' : 'The whiteboard wasn’t restored', reason),
+      )
   const duplicate = () =>
     duplicateWhiteboard(board.id)
       .then((copy) => {
         void refresh()
         navigate(whiteboardPath(copy.whiteboard.id))
       })
-      .catch((reason: unknown) => showToast({ tone: 'danger', title: errorText(reason, 'The board wasn’t copied.') }))
+      .catch((reason: unknown) => toastError('The whiteboard wasn’t copied', reason))
   return (
     <li className="aw-boardcard">
       <Link aria-hidden="true" className="aw-boardcard__preview" tabIndex={-1} to={href}>
         {board.elementCount > 0 ? (
-          <img alt="" loading="lazy" src={previewUrl(board.id, board.sceneSeq, preset === 'midnight')} />
+          <img alt="" loading="lazy" src={previewUrl(board.id, board.sceneSeq, isDarkPreset(preset))} />
         ) : (
-          <span className="aw-boardcard__blank">Empty board</span>
+          <span className="aw-boardcard__blank">Nothing drawn yet</span>
         )}
       </Link>
       <div className="aw-boardcard__body">
@@ -187,7 +204,7 @@ function BoardCard({ board }: { board: Whiteboard }) {
           </StatusChip>
           {board.linkCount > 0 ? (
             <StatusChip icon="link" tone="muted">
-              {board.linkCount === 1 ? '1 link' : `${board.linkCount} links`}
+              {countLabel(board.linkCount, 'link')}
             </StatusChip>
           ) : null}
         </p>

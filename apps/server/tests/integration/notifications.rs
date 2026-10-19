@@ -95,6 +95,8 @@ async fn mentions_reach_the_person_once_and_follow_the_message() {
     let item = &items(&page)[0];
     assert_eq!(item["kind"], "mention");
     assert_eq!(item["title"], "Owner mentioned you in #general");
+    // The actor carries its kind, so the inbox can draw an agent as an agent.
+    assert_eq!(item["actor"]["kind"], "human", "{item}");
     assert!(
         item["preview"]
             .as_str()

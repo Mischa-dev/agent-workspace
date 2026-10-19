@@ -7,7 +7,7 @@ import {
 } from '../../github/GitHubConnect'
 import { GitHubIntegrationSettings } from '../../github/GitHubIntegrationSettings'
 import { RepositorySettings } from '../../repositories/RepositorySettings'
-import { Button, ErrorState, PageHeader, Section } from '../../ui'
+import { ErrorState, PageHeader, Section } from '../../ui'
 import { GitHubReturnBanner } from '../GitHubReturnBanner'
 import type { SettingsPageProps } from '../types'
 
@@ -27,15 +27,13 @@ export default function RepositoriesPage({ project }: SettingsPageProps) {
       <PageHeader icon="repo" title="Repositories">
         The code runs can work in. The server keeps its own copy of each repository, so nothing is read from your computer.
       </PageHeader>
-      <GitHubReturnBanner className="aw-page__banner" />
+      <GitHubReturnBanner className="aw-page__banner" repositoriesHere />
       {manage && (
         <Section id="github-connect-heading" title="Add from GitHub">
           {connection.isPending ? (
             <GitHubConnectionLoading />
           ) : connection.isError ? (
-            <ErrorState action={<Button onClick={() => void connection.refetch()}>Try again</Button>} title="GitHub didn’t load">
-              Check your connection and try again.
-            </ErrorState>
+            <ErrorState error={connection.error} onRetry={() => void connection.refetch()} title="GitHub didn’t load" />
           ) : connection.data.connectAvailable ? (
             <div className="aw-settings-stack">
               <GitHubConnectPanel connection={connection.data} projectId={projectId} />
@@ -46,12 +44,12 @@ export default function RepositoriesPage({ project }: SettingsPageProps) {
           )}
         </Section>
       )}
-      <Section id="repositories-heading" title="In this Project">
+      <Section id="repositories-heading" title="In this project">
         <RepositorySettings projectId={projectId} showRegistration={false} />
       </Section>
       {manage && connection.data?.configured && (
         <Section
-          description="The installation this Project’s pull requests and checks come through."
+          description="The installation this project’s pull requests and checks come through."
           id="github-integration-heading"
           title="GitHub installation"
         >

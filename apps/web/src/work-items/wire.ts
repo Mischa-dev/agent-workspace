@@ -186,6 +186,7 @@ export function milestone(value: unknown): Milestone {
     total,
     finished,
     open: typeof entry.open === 'number' ? entry.open : Math.max(0, total - finished),
+    canceled: typeof entry.canceled === 'number' ? entry.canceled : 0,
     progress: Math.max(0, Math.min(1, progress)),
     overdue: boolean(entry.overdue),
     version: number(entry.version),

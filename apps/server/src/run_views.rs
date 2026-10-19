@@ -560,9 +560,14 @@ pub async fn usage_report(
             "to_char(usage.usage_date, 'YYYY-MM-DD')",
         ),
         "project" => ("project.id::text", "project.name"),
+        // A run that used no provider account (a connected runner, or one
+        // whose account was removed) is its own row, not someone else's.
         "account" => (
-            "CASE WHEN account.owner_actor_id = $1 THEN account.id::text ELSE 'others' END",
-            "CASE WHEN account.owner_actor_id = $1 THEN account.name ELSE 'Other people''s accounts' END",
+            "CASE WHEN account.id IS NULL THEN 'none' \
+                  WHEN account.owner_actor_id = $1 THEN account.id::text ELSE 'others' END",
+            "CASE WHEN account.id IS NULL THEN 'No account' \
+                  WHEN account.owner_actor_id = $1 THEN account.name \
+                  ELSE 'Other people''s accounts' END",
         ),
         "model" => ("usage.model", "usage.model"),
         _ => return Err(AppError::Validation("groupBy")),

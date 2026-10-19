@@ -175,6 +175,8 @@ export type ConversationCapabilities = {
   view: boolean
   sendMessage: boolean
   archive: boolean
+  /** Bring it back from the archive: it's archived, and a thread's channel isn't. */
+  restore: boolean
   markSeen: boolean
   /** Edit your own messages here (the same right as sending). */
   editMessages: boolean
@@ -244,6 +246,8 @@ export type SidebarChannel = {
   unread: boolean
   threads: SidebarThread[]
   hasMoreThreads: boolean
+  /** Threads under the channel that the sidebar leaves out; with threads.length, the exact count. Always set by the API. */
+  hiddenThreadCount?: number
 }
 
 export type ProjectConversationSidebar = {

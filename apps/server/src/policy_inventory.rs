@@ -1086,6 +1086,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects",
         OrganizationProjectCreate
     ),
+    policy_route!("projects", Patch, "/api/v1/projects/{id}", ProjectManage),
     policy_route!(
         "projects",
         Post,

@@ -1,4 +1,5 @@
-import { useNavigate, useParams } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 import { useAuthenticatedSession } from '../auth/session'
 import { NavigationSyncAlert } from '../projects/NavigationSyncAlert'
@@ -7,9 +8,13 @@ import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import { usePageTitle } from '../shell/documentTitleModel'
-import { useWorkItem } from './hooks'
+import { useWorkItem, useWorkItemWorkflow } from './hooks'
+import { workItemHref } from './links'
 import { TaskDetail } from './TaskDetail'
 import './work.css'
+
+// Only opened on request (C or the command menu), so the task panel's shared chunk doesn't carry it.
+const CreateWorkItemDialog = lazy(() => import('./CreateWorkItemDialog').then((module) => ({ default: module.CreateWorkItemDialog })))
 
 /** A task on its own page: the same parts as the side panel, with its fields in a rail beside the text when there's room. */
 export function WorkItemDetailPage() {
@@ -18,6 +23,23 @@ export function WorkItemDetailPage() {
   const { projectId = '', workItemId = '' } = useParams()
   const project = useProject(projectId)
   const item = useWorkItem(projectId, workItemId)
+  const workflow = useWorkItemWorkflow(projectId)
+  // C and the command menu's "Create task" open the dialog over this page instead of leaving it.
+  const [parameters, setParameters] = useSearchParams()
+  const createRequested = parameters.get('create') === 'task'
+  const [createOpen, setCreateOpen] = useState(false)
+  const [handledCreate, setHandledCreate] = useState(false)
+  if (createRequested !== handledCreate) {
+    setHandledCreate(createRequested)
+    if (createRequested) setCreateOpen(true)
+  }
+  useEffect(() => {
+    if (!createRequested) return
+    const next = new URLSearchParams(parameters)
+    next.delete('create')
+    setParameters(next, { replace: true })
+  }, [createRequested, parameters, setParameters])
+
   usePageTitle(item.data ? `${item.data.key} ${item.data.title}` : null)
   const navigationSync = useRememberProjectLocation(
     projectId,
@@ -36,11 +58,13 @@ export function WorkItemDetailPage() {
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
 
+  // Viewers and workers read tasks but don't make them.
+  const canCreate = !project.data.archivedAt && ['owner', 'admin', 'member'].includes(project.data.role)
   return (
     <AppShell project={project.data} user={session.user}>
       <div className="aw-taskpage">
@@ -54,6 +78,19 @@ export function WorkItemDetailPage() {
           taskId={workItemId}
         />
       </div>
+      {createOpen && workflow.data && canCreate ? (
+        <Suspense fallback={null}>
+          <CreateWorkItemDialog
+            onClose={() => setCreateOpen(false)}
+            onCreated={(id) => {
+              setCreateOpen(false)
+              navigate(workItemHref(projectId, id))
+            }}
+            projectId={projectId}
+            workflow={workflow.data}
+          />
+        </Suspense>
+      ) : null}
     </AppShell>
   )
 }

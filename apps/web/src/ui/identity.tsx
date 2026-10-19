@@ -104,7 +104,7 @@ export function Badge({
   if (dot) return <span aria-label={label} className={classes} role={label ? 'img' : undefined} />
   if (!count) return null
   return (
-    <span aria-label={label} className={classes}>
+    <span aria-label={label} className={classes} role={label ? 'img' : undefined}>
       {count > max ? `${max}+` : count}
     </span>
   )

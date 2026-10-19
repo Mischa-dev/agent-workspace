@@ -99,7 +99,7 @@
   --focus-ring: oklch(0.74 0.133 270);
   --mention-fg: oklch(0.86 0.068 272);
   --mention-bg: oklch(0.33 0.07 272);
-  --highlight-bg: oklch(0.285 0.045 85);
+  --highlight-bg: oklch(0.252 0.032 85);
   --presence-online: oklch(0.72 0.17 152);
   --agent: oklch(0.82 0.09 205);
   --agent-soft: oklch(0.31 0.05 205);
@@ -240,6 +240,8 @@
   --layer-dropdown: 40;
   --layer-backdrop: 60;
   --layer-modal: 70;
+  /* Menus and pickers open from drawers and dialogs, so they sit above both. */
+  --layer-popover: 75;
   --layer-toast: 80;
   --layer-tooltip: 90;
   --duration-fast: 120ms;
@@ -313,5 +315,14 @@
     --accent: Highlight;
     --on-accent: HighlightText;
     --focus-ring: Highlight;
+  }
+}
+
+/* Fingers need bigger targets than pointers: 44px for the main controls on touch screens. */
+@media (pointer: coarse) {
+  :root {
+    --size-control-sm: 36px;
+    --size-control: 40px;
+    --size-control-lg: 44px;
   }
 }

@@ -11,10 +11,46 @@
   gap: var(--space-4);
 }
 
-.aw-runs__back {
+/* A section's controls drop under its title on a narrow screen. */
+.aw-runs .aw-pagesection__head {
+  flex-wrap: wrap;
+}
+
+/* Buttons in a section keep their own width. */
+.aw-runs .aw-pagesection > .aw-btn {
+  justify-self: start;
+}
+
+/* The run's details in two columns where there's room, so what it did comes sooner. */
+@media (min-width: 1100px) {
+  .aw-runs__details .aw-dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aw-runs__details .aw-dl__row {
+    grid-template-columns: minmax(96px, 128px) minmax(0, 1fr);
+  }
+
+  .aw-runs__details .aw-dl__row + .aw-dl__row {
+    border-top: 0;
+  }
+
+  .aw-runs__details .aw-dl__row:nth-child(n + 3) {
+    border-top: 1px solid var(--content-border);
+  }
+}
+
+.aw-btn.aw-runs__back {
   align-self: flex-start;
-  font: var(--t-small);
-  color: var(--link);
+  margin-left: calc(-1 * var(--space-2));
+}
+
+/* The run's status and its controls, side by side, wrapping on a phone. */
+.aw-runs__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .aw-runs__link {
@@ -103,7 +139,7 @@
 }
 
 .aw-runs__log {
-  max-height: 70vh;
+  max-height: 70dvh;
 }
 
 /* Steps timeline */
@@ -242,18 +278,36 @@
   font-variant-numeric: tabular-nums;
 }
 
-.aw-rundiff__added,
-.aw-rundiff__line--add {
+.aw-rundiff__added {
   color: var(--success);
 }
 
-.aw-rundiff__removed,
-.aw-rundiff__line--del {
+.aw-rundiff__removed {
   color: var(--danger);
 }
 
+/* Each line is a block as wide as the longest one, so its colour reaches the edge when scrolled. */
+.aw-rundiff__lines {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.aw-rundiff__lines > span {
+  display: block;
+  padding: 0 var(--space-3);
+}
+
+.aw-rundiff__line--add {
+  background: var(--success-soft);
+}
+
+.aw-rundiff__line--del {
+  background: var(--danger-soft);
+}
+
 .aw-rundiff__line--hunk {
-  color: var(--agent);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
 }
 
 .aw-rundiff__line--meta {
@@ -275,6 +329,21 @@
 }
 
 .aw-rundiff__pre {
+  padding: var(--space-2) 0;
   white-space: pre;
   overflow-wrap: normal;
+}
+
+/* A long path wraps inside its toggle instead of running past it. */
+.aw-btn.aw-rundiff__toggle {
+  align-self: flex-start;
+  max-width: 100%;
+  height: auto;
+  min-height: var(--size-control-sm);
+  white-space: normal;
+  text-align: left;
+}
+
+.aw-rundiff__toggle code {
+  overflow-wrap: anywhere;
 }

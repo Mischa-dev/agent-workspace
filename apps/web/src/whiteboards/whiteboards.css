@@ -54,7 +54,7 @@
 
 .aw-boardcard__blank {
   color: var(--content-fg-muted);
-  font-size: var(--text-sm, 13px);
+  font: var(--t-small);
 }
 
 .aw-boardcard__body {
@@ -70,6 +70,7 @@
   justify-content: space-between;
   gap: var(--space-2);
   min-width: 0;
+  font: var(--t-ui);
   font-weight: 600;
 }
 
@@ -91,7 +92,7 @@
   gap: var(--space-2);
   margin: 0;
   color: var(--content-fg-muted);
-  font-size: var(--text-sm, 13px);
+  font: var(--t-small);
 }
 
 /* A board: a slim bar over a canvas that fills the rest of the window. */
@@ -141,20 +142,23 @@
   min-width: 0;
   max-width: 40ch;
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  font: var(--t-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .aw-wb__save {
   color: var(--content-fg-muted);
-  font-size: 13px;
+  font: var(--t-small);
 }
 
 .aw-wb__save[data-state='error'],
 .aw-wb__save[data-state='offline'] {
   color: var(--warning);
+}
+
+.aw-wb__save[data-state='failed'] {
+  color: var(--danger);
 }
 
 .aw-wb__spacer {
@@ -207,6 +211,13 @@
 
   .aw-wb__bar {
     flex-wrap: nowrap;
+  }
+
+  /* Only the arrow shows here, so give it a whole fingertip. */
+  .aw-wb__back {
+    justify-content: center;
+    min-width: 44px;
+    margin-left: calc(-1 * var(--space-3));
   }
 
   .aw-wb__title {

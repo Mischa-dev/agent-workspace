@@ -8,16 +8,16 @@ import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
 import { AppShell } from '../shell/AppShell'
 import { WorkTabs } from '../shell/ProjectTabs'
-import { Banner, Button, ErrorState, MessageSkeleton, PageHeader, SegmentedControl } from '../ui'
+import { Banner, Button, ErrorState, ListSkeleton, PageHeader, SegmentedControl } from '../ui'
+import { BoardSkeleton } from './BoardSkeleton'
 import { CreateWorkItemDialog } from './CreateWorkItemDialog'
 import { FilterBar } from './FilterBar'
 import { useWorkItemWorkflow } from './hooks'
 import { LabelManager } from './LabelManager'
 import { activeFilterKeys, parametersFromRemembered, rememberedState } from './listModel'
-import { NoticeBar } from './notice'
+import { notify } from './notice'
 import { TaskDetail } from './TaskDetail'
 import { useListState } from './useListState'
-import { useNotice } from './useNotice'
 import { WorkItemList } from './WorkItemList'
 import './work.css'
 
@@ -26,7 +26,7 @@ const ViewsMenu = lazy(() => import('./ViewsMenu'))
 const WorkItemBoard = lazy(() => import('./WorkItemBoard').then((module) => ({ default: module.WorkItemBoard })))
 
 /**
- * Every work item in a Project as a list or a board, with filters, sorting,
+ * Every task in a project as a list or a board, with filters, sorting,
  * grouping and a side panel for the one you're looking at. The whole view,
  * panel included, is in the URL.
  */
@@ -36,7 +36,7 @@ export function WorkItemsPage() {
   const { state, update, parameters, setParameters } = useListState()
   const [createOpen, setCreateOpen] = useState(false)
   const [managingLabels, setManagingLabels] = useState(false)
-  // C and the command menu's "Create task" land here with ?create=task.
+  // C and the command menu's "Create task" add ?create=task to whatever view is open.
   const createRequested = parameters.get('create') === 'task'
   const [handledCreate, setHandledCreate] = useState(false)
   if (createRequested !== handledCreate) {
@@ -52,24 +52,25 @@ export function WorkItemsPage() {
   const createButtonRef = useRef<HTMLButtonElement>(null)
   const project = useProject(projectId)
   const workflow = useWorkItemWorkflow(projectId)
-  const { notice, notify } = useNotice()
   const savedFilters = project.data?.navigation.filters
   // The remembered view comes back only when the page is entered with an
   // empty URL, once per project. Later, a URL emptied by the person (back to
-  // the default view, last filter cleared) stays empty.
+  // the default view, last filter cleared) stays empty. Arriving with only
+  // ?create=task (C from another page) counts as empty.
+  const viewParameters = [...parameters.keys()].filter((key) => key !== 'create').length
   const [entry, setEntry] = useState<{ projectId: string; restore: boolean } | null>(null)
   if (project.isSuccess && entry?.projectId !== projectId) {
     setEntry({
       projectId,
       restore:
-        parameters.size === 0 &&
+        viewParameters === 0 &&
         project.data.navigation.location.kind === 'work_items' &&
         Boolean(savedFilters && Object.keys(savedFilters).length > 0),
     })
-  } else if (entry?.restore && parameters.size > 0) {
+  } else if (entry?.restore && viewParameters > 0) {
     setEntry({ ...entry, restore: false })
   }
-  const shouldRestore = entry?.projectId === projectId && entry.restore && parameters.size === 0
+  const shouldRestore = entry?.projectId === projectId && entry.restore && viewParameters === 0
 
   useEffect(() => {
     if (shouldRestore && savedFilters) setParameters(parametersFromRemembered(savedFilters), { replace: true })
@@ -92,14 +93,14 @@ export function WorkItemsPage() {
   if (project.isPending) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageLoading label="Loading work items" />
+        <ProjectPageLoading label="Loading tasks" />
       </AppShell>
     )
   }
   if (project.isError) {
     return (
       <AppShell user={session.user}>
-        <ProjectPageError onRetry={() => void project.refetch()} />
+        <ProjectPageError error={project.error} onRetry={() => void project.refetch()} />
       </AppShell>
     )
   }
@@ -110,7 +111,7 @@ export function WorkItemsPage() {
   const hasFilters = activeFilterKeys(state).length > 0 || Boolean(state.filters.q)
   const newButton = readOnly ? null : (
     <Button disabled={!workflow.data} icon="plus" onClick={() => setCreateOpen(true)} ref={createButtonRef} variant="primary">
-      New work item
+      New task
     </Button>
   )
   const toggleDone = () => update((current) => ({ ...current, showDone: !current.showDone }), { replace: true })
@@ -157,23 +158,18 @@ export function WorkItemsPage() {
     <AppShell context={panel} contextKey={state.task ?? undefined} onContextDismiss={closeTask} project={project.data} user={session.user}>
       <div className="aw-page aw-page--wide aw-workpage">
         <NavigationSyncAlert {...navigationSync} />
-        <WorkTabs current="items" projectId={projectId} />
-        <PageHeader actions={headerActions} icon="work" title="Work items">
+        <PageHeader actions={headerActions} icon="work" title="Tasks">
           Everything that needs doing in {project.data.name}.
         </PageHeader>
+        <WorkTabs current="items" projectId={projectId} />
         <FilterBar projectId={projectId} state={state} update={update} workflow={workflow.data} />
         {archived ? (
           <Banner className="aw-page__banner" icon="archive">
-            This Project is archived, so its work items can’t change.
+            This project is archived, so its tasks can’t change.
           </Banner>
         ) : null}
-        <NoticeBar notice={notice} onDismiss={() => notify(null)} />
-        {workflow.isPending ? <MessageSkeleton label="Loading work items" rows={3} /> : null}
-        {workflow.isError ? (
-          <ErrorState action={<Button onClick={() => void workflow.refetch()}>Try again</Button>} title="Work items didn’t load">
-            Check your connection and try again.
-          </ErrorState>
-        ) : null}
+        {workflow.isPending ? (state.view === 'board' ? <BoardSkeleton /> : <ListSkeleton label="Loading tasks" rows={6} />) : null}
+        {workflow.isError ? <ErrorState error={workflow.error} onRetry={() => void workflow.refetch()} title="Tasks didn’t load" /> : null}
         {workflow.data && state.view === 'list' ? (
           <WorkItemList
             disabled={readOnly}
@@ -192,7 +188,7 @@ export function WorkItemsPage() {
           />
         ) : null}
         {workflow.data && state.view === 'board' ? (
-          <Suspense fallback={<MessageSkeleton label="Loading the board" rows={3} />}>
+          <Suspense fallback={<BoardSkeleton />}>
             <WorkItemBoard
               disabled={readOnly}
               notify={notify}

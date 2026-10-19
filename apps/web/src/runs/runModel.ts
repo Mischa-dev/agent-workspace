@@ -1,4 +1,4 @@
-import type { ChipTone, IconName } from '../ui'
+import { eventLabel, formatTime, type ChipTone, type IconName } from '../ui'
 import type { RunState, RunStep, RunSummary, UsageTotals } from './api'
 
 export const LIVE_STATES: readonly RunState[] = ['created', 'queued', 'starting', 'working', 'blocked', 'recovering']
@@ -7,21 +7,25 @@ export function isLiveRun(state: RunState) {
   return LIVE_STATES.includes(state)
 }
 
-const STATUS: Record<RunState, { label: string; tone: ChipTone; icon: IconName; spin?: boolean }> = {
+/**
+ * How each run state reads, everywhere a run shows: the Runs list, the run
+ * page, and (to be shared) the thread's run card and the agent sidebar.
+ */
+export const RUN_STATUS: Record<RunState, { label: string; tone: ChipTone; icon: IconName; spin?: boolean }> = {
   created: { label: 'Queued', tone: 'muted', icon: 'clock' },
   queued: { label: 'Queued', tone: 'muted', icon: 'clock' },
   starting: { label: 'Starting', tone: 'agent', icon: 'loader', spin: true },
   working: { label: 'Working', tone: 'agent', icon: 'loader', spin: true },
-  blocked: { label: 'Needs you', tone: 'warning', icon: 'circle-help' },
+  blocked: { label: 'Waiting on you', tone: 'warning', icon: 'circle-help' },
   recovering: { label: 'Recovering', tone: 'warning', icon: 'retry' },
-  completed: { label: 'Finished', tone: 'success', icon: 'circle-check' },
+  completed: { label: 'Done', tone: 'success', icon: 'circle-check' },
   failed: { label: 'Failed', tone: 'danger', icon: 'circle-alert' },
   canceled: { label: 'Stopped', tone: 'muted', icon: 'circle-minus' },
   interrupted: { label: 'Interrupted', tone: 'danger', icon: 'triangle-alert' },
 }
 
 export function runStatus(state: string) {
-  return STATUS[state as RunState] ?? { label: state, tone: 'muted' as ChipTone, icon: 'info' as IconName }
+  return RUN_STATUS[state as RunState] ?? { label: eventLabel(state), tone: 'muted' as ChipTone, icon: 'info' as IconName }
 }
 
 /** 950, 12.3k, 4.1M: short enough for a table cell. */
@@ -100,12 +104,32 @@ export function stepView(step: RunStep): StepView {
   }
 }
 
+/** "40 sec", "14 min", "1 hr 5 min", "2 days 3 hr": how long a run took. */
+export function formatDuration(milliseconds: number) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return ''
+  const seconds = Math.round(milliseconds / 1000)
+  if (seconds < 60) return `${seconds} sec`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? `${hours} hr ${minutes % 60} min` : `${hours} hr`
+  const days = Math.floor(hours / 24)
+  return `${days} ${days === 1 ? 'day' : 'days'}${hours % 24 ? ` ${hours % 24} hr` : ''}`
+}
+
+/** How long the run has taken so far, or took. Empty before it starts. */
+export function runDuration(run: Pick<RunSummary, 'startedAt' | 'finishedAt'>, now = Date.now()) {
+  if (!run.startedAt) return ''
+  const end = run.finishedAt ? new Date(run.finishedAt).getTime() : now
+  return formatDuration(end - new Date(run.startedAt).getTime())
+}
+
 /** The whole run as plain text, one block per step, for reading or copying. */
 export function logText(steps: RunStep[]) {
   return steps
     .map((step) => {
       const payload = step.payload ?? {}
-      const lines = [`[${step.createdAt}] ${step.kind}: ${step.summary}`]
+      const lines = [`${formatTime(step.createdAt)}  ${eventLabel(step.kind)}${step.summary ? `: ${step.summary}` : ''}`]
       if (payload.command) lines.push(`$ ${payload.command}`)
       if (typeof payload.exitCode === 'number') lines.push(`exit ${payload.exitCode}`)
       if (payload.files?.length) lines.push(...payload.files.map((file) => `  ${file.change ?? 'changed'} ${file.path}`))

@@ -2,7 +2,7 @@ import { ListFilter } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Avatar, Button, Icon, Menu, SegmentedControl, SelectField, TextField, actorKind, type MenuEntry } from '../ui'
-import { Calendar, ComboboxList, Popover, type ComboboxOption } from '../ui/pickers'
+import { Calendar, ComboboxList, Popover, formatDateLabel, type ComboboxOption } from '../ui/pickers'
 import { workItemPriorities } from './constants'
 import {
   CATEGORY_LABELS,
@@ -123,6 +123,7 @@ export function FilterBar({
         <TextField
           aria-label="Search tasks"
           className="aw-filterbar__search"
+          compact
           maxLength={120}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search by title or key"
@@ -130,7 +131,7 @@ export function FilterBar({
           type="search"
           value={search}
         />
-        <Button aria-haspopup="dialog" icon={ListFilter} onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} size="sm" variant="secondary">
+        <Button aria-haspopup="dialog" icon={ListFilter} onClick={(event) => setOpen({ field: null, anchor: event.currentTarget })} variant="secondary">
           Filter
         </Button>
         <span className="aw-filterbar__spacer" />
@@ -139,6 +140,7 @@ export function FilterBar({
             <SelectField
               aria-label="Sort"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => update((current) => ({ ...current, sort: event.target.value as WorkItemSort }))}
               prefix={<TaskGlyph name="sort" />}
               value={state.sort}
@@ -152,6 +154,7 @@ export function FilterBar({
             <SelectField
               aria-label="Group by"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => update((current) => ({ ...current, groupBy: (event.target.value || null) as WorkItemGroupBy | null }))}
               prefix={<TaskGlyph name="group" />}
               value={state.groupBy ?? ''}
@@ -169,6 +172,7 @@ export function FilterBar({
             <SelectField
               aria-label="Columns"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => {
                 const columnsBy = event.target.value as BoardColumnsBy
                 // Lanes by the same field as the columns would leave only the diagonal.
@@ -186,6 +190,7 @@ export function FilterBar({
             <SelectField
               aria-label="Swimlanes"
               className="aw-filterbar__select"
+              compact
               onChange={(event) => update((current) => ({ ...current, lanes: event.target.value as ListState['lanes'] }))}
               prefix={<TaskGlyph name="lanes" />}
               value={state.lanes}
@@ -421,7 +426,7 @@ function listOptions(
     case 'type':
       return (workflow?.types ?? []).map((type) => ({ value: type.id, label: type.name }))
     case 'milestone':
-      return [{ value: 'none', label: 'No milestone' }, ...milestones.map((milestone) => ({ value: milestone.id, label: milestone.name, description: milestone.targetDate ?? undefined }))]
+      return [{ value: 'none', label: 'No milestone' }, ...milestones.map((milestone) => ({ value: milestone.id, label: milestone.name, description: milestone.targetDate ? `Target ${formatDateLabel(milestone.targetDate)}` : undefined }))]
     case 'labels':
       return [
         { value: 'none', label: 'No labels' },
@@ -497,7 +502,7 @@ function FilterValueChooser({
       return one(
         'Claimed',
         [
-          { value: 'true', label: 'Claimed by an agent' },
+          { value: 'true', label: 'Claimed' },
           { value: 'false', label: 'Not claimed' },
         ],
         filters.claimed,

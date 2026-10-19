@@ -19,7 +19,14 @@
 }
 
 .aw-home__key {
-  font: var(--t-mono-small, var(--t-small));
+  font: var(--t-code);
+  color: var(--content-fg-muted);
+}
+
+/* "And 3 more in the inbox." under a list. */
+.aw-home__more {
+  margin: var(--space-2) 0 0;
+  font: var(--t-small);
   color: var(--content-fg-muted);
 }
 
@@ -73,7 +80,7 @@
 }
 
 .aw-home__window-link:hover {
-  background: var(--surface-hover, var(--surface-raised));
+  background: var(--content-hover);
 }
 
 .aw-home__window-link:focus-visible {
@@ -126,4 +133,13 @@
 
 .aw-home__window.is-danger .aw-home__meter > span {
   background: var(--danger);
+}
+
+/* All projects. Loads with Home's stylesheet. */
+.aw-projects__search {
+  margin-bottom: var(--space-4);
+}
+
+.aw-projects__note {
+  margin-top: var(--space-4);
 }

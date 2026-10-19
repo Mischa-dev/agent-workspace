@@ -1,4 +1,4 @@
-import { getProjectConversationSidebar, markConversationSeen } from '../conversations/api'
+import { getProjectConversationSidebar, markConversationSeen } from '../conversations/sidebarApi'
 import type { SidebarChannel } from '../conversations/types'
 import { getDirectOverview } from '../direct/api'
 

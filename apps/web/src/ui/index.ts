@@ -14,7 +14,8 @@ export {
   TextField,
   type ButtonVariant,
 } from './controls'
-export { DetailList, PageHeader, PageTabs, Row, RowList, Section } from './page'
+export { ButtonLink, DetailList, PageHeader, PageTabs, Row, RowList, Section } from './page'
+export { ConfirmDialog } from './confirm'
 export {
   Banner,
   ConversationIntro,
@@ -30,6 +31,7 @@ export {
   formatDateTime,
   formatFullDate,
   formatRelative,
+  formatRelativeShort,
   formatShortDate,
   formatTime,
   relativeDay,
@@ -38,3 +40,6 @@ export { DocumentSkeleton, ListSkeleton, PageSkeleton, SettingsSkeleton } from '
 export { filterCommands, matchScore, type CommandItem } from './commandModel'
 export { ToastViewport } from './toast'
 export { clearToasts, dismissToast, showToast, useToasts, type ToastInput, type ToastTone } from './toastStore'
+export { countLabel, plainPreview } from './text'
+export { describeError, describeLoadError } from './errorText'
+export { formatShortcut, isMac } from './shortcut'

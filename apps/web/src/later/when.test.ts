@@ -63,7 +63,7 @@ describe('typed times', () => {
     const night = new Date(2026, 9, 14, 2, 0, 0)
     const morning = whenChoices(night).find((choice) => choice.id === 'tomorrow')!
     expect(local(morning.at)).toBe('2026-10-14 09:00')
-    expect(morning.label).toBe('This morning')
+    expect(morning.label).toMatch(/^This morning at 9:00/)
   })
 
   it('offers quick choices in order', () => {

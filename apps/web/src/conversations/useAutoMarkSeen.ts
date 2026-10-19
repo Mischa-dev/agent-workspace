@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { markConversationSeen } from './api'
 
@@ -43,13 +43,29 @@ export function decideMarkSeen(
   }
 }
 
+/** Whether the tab is on screen. A conversation left open in a hidden tab isn't being read. */
+function useTabVisible() {
+  const read = () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  const [visible, setVisible] = useState(read)
+  useEffect(() => {
+    const update = () => setVisible(read())
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+  return visible
+}
+
 /**
- * Mark the conversation a page shows as seen, following `decideMarkSeen`.
- * `onMarked` runs after a mark is saved, for example to refresh a sidebar.
+ * Mark the conversation a page shows as seen, following `decideMarkSeen`,
+ * only while its tab is on screen: messages that arrive in a hidden tab stay
+ * unread until you come back to it. `onMarked` runs after a mark is saved,
+ * for example to refresh a sidebar.
  */
 export function useAutoMarkSeen(input: AutoMarkInput, onMarked: () => unknown) {
   const shown = useRef<ShownSequence | null>(null)
-  const { conversationId, highestSequence, highestSeenSequence, ready } = input
+  const visible = useTabVisible()
+  const { conversationId, highestSequence, highestSeenSequence } = input
+  const ready = input.ready && visible
   useEffect(() => {
     const previous = shown.current
     const decision = decideMarkSeen(previous, {

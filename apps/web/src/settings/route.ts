@@ -12,10 +12,16 @@ const LEGACY_PROJECT_TABS: Record<string, string> = {
   general: 'general',
   members: 'members',
   agents: 'agents',
-  codex: 'codex-runs',
+  codex: 'run-requests',
   workflow: 'workflow',
   repositories: 'repositories',
   github: 'repositories',
+}
+
+/** Project pages that were renamed or merged, and where their old addresses go now. */
+const RENAMED_PROJECT_PAGES: Record<string, string> = {
+  automation: 'automations',
+  'codex-runs': 'run-requests',
 }
 
 /** Pages that became part of another, and the section of it they became. */
@@ -62,6 +68,8 @@ export function parseSettingsPath(splat: string, search = ''): SettingsRoute {
     if (decoded.length === 3) {
       const moved = MOVED_PROJECT_PAGES[third]
       if (moved) return { kind: 'redirect', to: `${projectSettingsHref(second, moved.page)}#${moved.section}` }
+      const renamed = RENAMED_PROJECT_PAGES[third]
+      if (renamed) return { kind: 'redirect', to: projectSettingsHref(second, renamed) }
       return { kind: 'page', group: 'project', projectId: second, section: third }
     }
   }

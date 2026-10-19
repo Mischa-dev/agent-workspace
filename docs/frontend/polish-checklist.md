@@ -11,23 +11,27 @@ their own pages; nobody else will.
    (`ListSkeleton`, `SettingsSkeleton`, `PageSkeleton`, `DocumentSkeleton`),
    never a bare "Loading…" line or a spinner over a blank page.
 2. **Empty** uses `EmptyState` and names the next step with a button or link
-   to it ("Connect GitHub", "Create a task"), not just "Nothing here".
-3. **Error** uses `ErrorState` or a `Banner` with a retry. No screen tells you
-   to reload the page.
+   to it ("Connect GitHub", "New task"), not just "Nothing here".
+3. **Error** uses `<ErrorState error={query.error} onRetry={…}>` or a `Banner`
+   with `onRetry`, so it says the real cause (offline, gone, no access, server
+   trouble) and offers "Try again". No screen tells you to reload the page.
 4. **Saving** disables only the control that's busy, and a failure says what
    failed in words (the API's message, not a status code).
 
 ## Content
 
 5. **Dates and times** come from `ui/time.ts` (`formatRelative`,
-   `formatDateTime`, `formatShortDate`, `dayLabel`), with `formatFullDate` in a
-   tooltip or `title` where the short form hides the day. No
-   `toLocaleString` in a page.
+   `formatDateTime`, `formatShortDate`, `dayLabel`, and `formatRelativeShort`
+   for right-aligned time columns), with `formatFullDate` only in a tooltip or
+   `title`, never inline. No `toLocaleString` in a page.
 6. **Agents and providers are named by their data.** Show the agent's display
    name and the harness or provider the run used. Never hard-code "Codex",
    "Claude" or a model name in copy; they are examples, not the product.
-7. **Words** are plain and sentence case: buttons are verbs ("Launch 3 tasks"),
-   headings are nouns, and nothing says "Error 500", "null" or an internal id.
+7. **Words** are plain and sentence case and use the one vocabulary in
+   `apps/web/DESIGN.md` (task, project, run, agent, whiteboard): buttons are
+   verbs ("Launch 3 tasks"), headings are nouns, counts come from `countLabel`
+   ("1 task"), Markdown shown as a preview goes through `plainPreview`, and
+   nothing says "Error 500", "null", an enum value or an internal id.
 
 ## Markup
 

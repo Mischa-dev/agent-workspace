@@ -2,7 +2,7 @@
 
 .aw-popover {
   position: fixed;
-  z-index: var(--layer-dropdown);
+  z-index: var(--layer-popover);
   display: flex;
   flex-direction: column;
   min-width: 220px;
@@ -79,7 +79,7 @@
 }
 
 .aw-combobox__option.is-active {
-  background: var(--content-hover);
+  background: var(--accent-soft);
 }
 
 .aw-combobox__option[aria-disabled='true'] {
@@ -208,10 +208,6 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--space-1);
-}
-
-.aw-calendar__next .aw-icon {
-  transform: rotate(180deg);
 }
 
 .aw-calendar__month {
@@ -344,7 +340,8 @@
 }
 
 @media (pointer: coarse) {
-  .aw-table__row {
+  .aw-table__row,
+  .aw-combobox__option {
     min-height: 44px;
   }
 }

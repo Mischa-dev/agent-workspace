@@ -306,6 +306,38 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "{}",
         runs.1
     );
+    // Tokens a run used with no provider account are their own row in the
+    // usage by account, not counted as someone else's account.
+    sqlx::query(
+        r#"
+        INSERT INTO agent_run_usage (
+            agent_run_id, model, organization_id, project_id, provider_account_id,
+            adapter_kind, usage_date, input_tokens, output_tokens
+        )
+        VALUES ($1, 'w12-no-account', $2, $3, NULL, 'codex', current_date, 120, 30)
+        "#,
+    )
+    .bind(run_id)
+    .bind(seed.organization_id)
+    .bind(seed.project_id)
+    .execute(&pool)
+    .await
+    .expect("usage without an account");
+    let usage = send_get(&application, member, "/api/v1/runs/usage?groupBy=account").await;
+    assert_eq!(usage.0, StatusCode::OK, "{}", usage.1);
+    let rows = usage.2["rows"].as_array().cloned().unwrap_or_default();
+    let none = rows
+        .iter()
+        .find(|row| row["key"] == "none")
+        .unwrap_or_else(|| panic!("a no-account row: {}", usage.1));
+    assert_eq!(none["label"], "No account");
+    assert!(none["inputTokens"].as_i64().unwrap_or(0) >= 120, "{none}");
+    assert!(
+        rows.iter()
+            .all(|row| row["key"] != "others" || row["label"] == "Other people's accounts"),
+        "{}",
+        usage.1
+    );
 
     // An automation launches as the agent; another project's agent, or one
     // that doesn't exist, is refused when the rule is saved.

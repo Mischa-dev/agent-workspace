@@ -2,7 +2,8 @@ import { useRef, useState, type MouseEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
-import { Button, IconButton, Menu, StatusChip, formatRelative, showToast } from '../ui'
+import { accountSettingsHref, projectSettingsHref } from '../settings/paths'
+import { Button, IconButton, Menu, StatusChip, describeError, formatFullDate, formatRelative, showToast } from '../ui'
 import type { Launch } from './api'
 import { useCreateLaunches, useLaunchPlan } from './hooks'
 import { LazyLaunchDialog as LaunchDialog } from './LazyLaunchDialog'
@@ -26,7 +27,16 @@ export function LaunchCard({ embedded = false, item }: { embedded?: boolean; ite
   const accounts = (data?.accounts ?? []).filter((account) => account.harness === data?.harness)
   const latest = data?.launches[0]
   const blocked = (data?.blockers.length ?? 0) > 0
-  const unavailable = !data ? null : !harness ? 'No agent is set up for this project yet.' : accounts.length === 0 ? `Connect a ${harness.displayName} account in Settings › Provider accounts first.` : null
+  // Each reason links to the settings page that fixes it.
+  const unavailable = !data ? null : !harness ? (
+    <>
+      No agent is set up for this project yet. <Link to={`${projectSettingsHref(item.projectId, 'runs')}#environments`}>Set one up</Link>
+    </>
+  ) : accounts.length === 0 ? (
+    <>
+      Connect a {harness.displayName} account first. <Link to={accountSettingsHref('provider-accounts')}>Accounts for runs</Link>
+    </>
+  ) : null
 
   const launched = (launches: Launch[]) => {
     setDialogOpen(false)
@@ -37,7 +47,7 @@ export function LaunchCard({ embedded = false, item }: { embedded?: boolean; ite
       action:
         first?.conversationId && launches.length === 1
           ? { label: 'Open thread', onSelect: () => navigate(threadHref(item.projectId, first.conversationId ?? '')) }
-          : { label: 'View queue', onSelect: () => navigate(launchesHref(item.projectId)) },
+          : { label: 'View runs', onSelect: () => navigate(launchesHref(item.projectId)) },
     })
   }
 
@@ -51,7 +61,7 @@ export function LaunchCard({ embedded = false, item }: { embedded?: boolean; ite
       {
         onSuccess: (result) => launched(result.launches),
         onError: (error) =>
-          showToast({ tone: 'danger', title: `${item.key} didn’t launch.`, description: isApiError(error) ? error.message : undefined }),
+          showToast({ tone: 'danger', title: `${item.key} didn’t launch`, description: describeError(error).message }),
       },
     )
   }
@@ -89,7 +99,7 @@ export function LaunchCard({ embedded = false, item }: { embedded?: boolean; ite
         <Menu
           items={[
             { label: 'Choose options…', icon: 'settings', onSelect: () => setDialogOpen(true) },
-            { label: 'Launch queue', icon: 'clock', onSelect: () => navigate(launchesHref(item.projectId)) },
+            { label: 'View runs', icon: 'activity', onSelect: () => navigate(launchesHref(item.projectId)) },
           ]}
           label="More launch options"
           trigger={<IconButton icon="chevron-down" label="More launch options" size="sm" />}
@@ -117,7 +127,10 @@ function LatestLaunch({ launch, projectId }: { launch: Launch; projectId: string
         {status.label}
       </StatusChip>
       <span className="aw-sidecard__note">
-        {launch.harnessName ?? 'Agent'} · {formatRelative(launch.startedAt ?? launch.createdAt)}
+        {launch.harnessName ?? 'Agent'} ·{' '}
+        <time dateTime={launch.startedAt ?? launch.createdAt} title={formatFullDate(launch.startedAt ?? launch.createdAt)}>
+          {formatRelative(launch.startedAt ?? launch.createdAt)}
+        </time>
       </span>
       {launch.statusReason && launch.state !== 'started' ? <p className="aw-sidecard__note">{launch.statusReason}</p> : null}
       {launch.conversationId ? (

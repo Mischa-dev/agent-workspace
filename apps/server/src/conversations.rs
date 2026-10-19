@@ -414,6 +414,8 @@ pub struct ConversationCapabilities {
     pub view: bool,
     pub send_message: bool,
     pub archive: bool,
+    /// Bring it back from the archive: it's archived, and a thread's channel isn't.
+    pub restore: bool,
     pub mark_seen: bool,
     pub worker_invoke: bool,
     /// Edit your own messages here (the same right as sending).
@@ -3883,6 +3885,10 @@ fn conversation_capabilities(
         view: allows(Action::ProjectView)?,
         send_message: active && allows(Action::MessageSend)?,
         archive: active && allows(Action::ConversationArchive)?,
+        restore: !conversation.project_archived
+            && conversation.archived_at.is_some()
+            && !(conversation.kind == "thread" && conversation.parent_archived)
+            && allows(Action::ConversationArchive)?,
         mark_seen: allows(Action::ReadStateUpdate)?,
         worker_invoke: active && conversation.kind == "thread" && allows(Action::WorkerInvoke)?,
         edit_messages: active && allows(Action::MessageSend)?,

@@ -5,7 +5,83 @@
 }
 
 .aw-ai-page .aw-tabs {
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-4);
+}
+
+/* Up next, Suggestions, Graph, Import a plan: a switch, not a third row of tabs. */
+.aw-ai-subnav {
+  display: flex;
+  margin-bottom: var(--space-4);
+}
+
+.aw-ai-subnav .aw-seg__opt {
+  text-decoration: none;
+}
+
+.aw-ai-subnav .aw-seg__opt[aria-current='page'] {
+  background: var(--surface-raised);
+  color: var(--content-fg);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Phones: all four fit across without scrolling once the icons go. */
+@media (max-width: 640px) {
+  .aw-ai-subnav {
+    width: 100%;
+  }
+
+  .aw-ai-subnav .aw-seg__opt {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 0 var(--space-2);
+  }
+
+  .aw-ai-subnav .aw-seg__opt > .aw-icon {
+    display: none;
+  }
+}
+
+.aw-ai-subnav__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--content-fg);
+  font: var(--t-small);
+  font-weight: 600;
+  text-align: center;
+}
+
+.aw-ai-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.aw-ai-intro__text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.aw-ai-intro__title {
+  margin: 0 0 var(--space-1);
+  font: var(--t-heading);
+  overflow-wrap: anywhere;
+}
+
+.aw-ai-intro__lede {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--content-fg-muted);
+  font: var(--t-ui);
+}
+
+.aw-ai-intro__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .aw-ai-toolbar {
@@ -33,6 +109,20 @@
 
 .aw-ai-back {
   font: var(--t-small);
+}
+
+.aw-ai-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-ai-file__name {
+  min-width: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  overflow-wrap: anywhere;
 }
 
 /* Runs */
@@ -254,6 +344,25 @@
 
 .aw-ai-readiness {
   margin-top: var(--space-2);
+}
+
+.aw-ai-readiness--compact {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin-bottom: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-ai-readiness--compact svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.aw-ai-readiness--compact strong {
+  color: var(--content-fg);
+  font-weight: 600;
 }
 
 .aw-ai-readiness__chips {

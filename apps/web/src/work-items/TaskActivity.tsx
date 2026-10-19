@@ -7,7 +7,7 @@ import { MessageContent } from '../conversations/MessageContent'
 import { StructuredComposer } from '../conversations/StructuredComposer'
 import { Attachments } from '../files/Attachments'
 import { uploadFile, type FileAttachment } from '../files/api'
-import { ActorTag, Avatar, AvatarStack, Banner, Button, Icon, MessageSkeleton, actorKind, formatFullDate, formatRelative } from '../ui'
+import { ActorTag, Avatar, AvatarStack, Banner, Button, Icon, MessageSkeleton, actorKind, describeLoadError, formatFullDate, formatRelative } from '../ui'
 import { searchWorkItemReferences } from './api'
 import { formatChanges, type FormattedChange } from './historyFormat'
 import { taskFilesKey, useCreateWorkItemComment, useTaskFiles, useWorkItemTimeline } from './hooks'
@@ -84,6 +84,8 @@ function groupTimeline(entries: WorkItemTimelineEntry[]): Group[] {
 /** Comments and changes, oldest first, with the comment box at the end; long runs of changes fold away. */
 export function TaskActivity({ disabled, item, projectArchived }: { disabled: boolean; item: WorkItem; projectArchived: boolean }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
+  // Pages come newest first; the list reads oldest to newest, so older pages go on top.
+  const entries = (timeline.data?.pages ?? []).flatMap((page) => page.entries).reverse()
   const createComment = useCreateWorkItemComment()
   const queryClient = useQueryClient()
   const files = useTaskFiles(item.projectId, item.id)
@@ -155,7 +157,7 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
   }
 
   const rows: ReactNode[] = []
-  groupTimeline([...(timeline.data ?? [])].reverse()).forEach((group) => {
+  groupTimeline(entries).forEach((group) => {
     if (group.kind === 'comment') {
       rows.push(comment(group.entry))
       return
@@ -187,7 +189,19 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
         <WatchControl item={item} readOnly={projectArchived} />
       </header>
       {timeline.isPending ? <MessageSkeleton label="Loading activity" rows={2} /> : null}
-      {timeline.isError ? <Banner tone="danger">Activity didn’t load.</Banner> : null}
+      {timeline.isError && !timeline.isFetchNextPageError ? (
+        <Banner onRetry={() => void timeline.refetch()} title="Activity didn’t load" tone="danger">
+          {describeLoadError(timeline.error)}
+        </Banner>
+      ) : null}
+      {timeline.hasNextPage ? (
+        <div className="aw-activity__older">
+          <Button busy={timeline.isFetchingNextPage} icon="arrow-up" onClick={() => void timeline.fetchNextPage()} size="sm" variant="ghost">
+            Show older activity
+          </Button>
+          {timeline.isFetchNextPageError ? <span className="aw-prop__error">Older activity didn’t load. Try again.</span> : null}
+        </div>
+      ) : null}
       {rows.length ? <ol className="aw-activity">{rows}</ol> : null}
       {!disabled ? (
         <StructuredComposer
@@ -242,7 +256,7 @@ function WatchControl({ item, readOnly }: { item: WorkItem; readOnly: boolean })
       )}
       {watch.isError ? (
         <span className="aw-prop__error" role="alert">
-          That didn’t save. Try again.
+          {item.watching ? 'Unwatching' : 'Watching'} didn’t save. Try again.
         </span>
       ) : null}
     </div>

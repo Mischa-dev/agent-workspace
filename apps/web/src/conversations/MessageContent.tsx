@@ -58,7 +58,7 @@ const PLACEHOLDER = /\uE000(\d+)\uE001/g
 
 /**
  * Message text as Markdown (lists, quotes, code, links; never HTML), with
- * people, agents and work items as chips where they were picked.
+ * people, agents and tasks as chips where they were picked.
  */
 export function MessageContent({ actors, content, fallbackPlainText, workItems = [], viewerId }: MessageContentProps) {
   const parsed = parseMessageContent(content)
@@ -83,8 +83,8 @@ export function MessageContent({ actors, content, fallbackPlainText, workItems =
       const item = workItemsById.get(node.workItemId)
       if (!item) {
         return (
-          <span aria-label="Unavailable Work Item reference" className="aw-workref is-unavailable" key={`chip-${index}`}>
-            Unavailable work item
+          <span aria-label="A task you can’t see" className="aw-workref is-unavailable" key={`chip-${index}`} title="A task you can’t see">
+            Unavailable task
           </span>
         )
       }
@@ -106,8 +106,13 @@ export function MessageContent({ actors, content, fallbackPlainText, workItems =
     const actor = actorsById.get(node.actorId)
     if (!actor) {
       return (
-        <span aria-label="Unavailable Actor mention" className="aw-mention is-unavailable" key={`chip-${index}`}>
-          @unavailable
+        <span
+          aria-label="Someone who isn’t here any more"
+          className="aw-mention is-unavailable"
+          key={`chip-${index}`}
+          title="Someone who isn’t here any more, or whom you can’t see"
+        >
+          @someone
         </span>
       )
     }
@@ -129,7 +134,7 @@ export function MessageContent({ actors, content, fallbackPlainText, workItems =
     const node = parsed.nodes[index]
     if (node?.type === 'mention') {
       const actor = actorsById.get(node.actorId)
-      return actor ? `@${actor.handle}` : '@unavailable'
+      return actor ? `@${actor.handle}` : '@someone'
     }
     if (node?.type === 'work_item_ref') return workItemsById.get(node.workItemId)?.key ?? ''
     return ''

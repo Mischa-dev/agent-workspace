@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { LazyLaunchDialog as LaunchDialog } from '../launch/LazyLaunchDialog'
 import { launchSummary, launchesHref } from '../launch/launchModel'
-import { Button, EmptyState, ErrorState, Icon, MessageSkeleton } from '../ui'
+import { Button, EmptyState, ErrorState, Icon, ListSkeleton, countLabel } from '../ui'
 import { Table, type TableRow } from '../ui/pickers'
 import { BulkBar } from './BulkBar'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
@@ -53,15 +53,21 @@ function taskCells({
   return {
     // A read-only list (archived project, viewer or worker role) has nothing to select for.
     select: disabled ? null : (
-      <input
-        aria-label={`Select ${card.key}`}
-        checked={selected}
-        className="aw-tasks__check"
-        onChange={() => undefined}
-        onClick={(event) => onSelect(card, event)}
-        tabIndex={-1}
-        type="checkbox"
-      />
+      // The whole cell is the hit area; the box is the kit checkbox.
+      <label className="aw-tasks__check">
+        <input
+          aria-label={`Select ${card.key}`}
+          checked={selected}
+          className="aw-check__input"
+          onChange={() => undefined}
+          onClick={(event) => onSelect(card, event)}
+          tabIndex={-1}
+          type="checkbox"
+        />
+        <span aria-hidden="true" className="aw-check__box">
+          <Icon name="check" size={12} />
+        </span>
+      </label>
     ),
     priority: editable ? (
       <PickerCell field="priority" label={`Priority of ${card.key}, change`} onPick={pick}>
@@ -122,7 +128,7 @@ export function WorkItemList({
   disabled: boolean
   emptyAction: ReactNode
   hasFilters: boolean
-  notify: (notice: Notice | null) => void
+  notify: (notice: Notice) => void
   onClearFilters: () => void
   onClosePanel: () => void
   onManageLabels: () => void
@@ -241,7 +247,7 @@ export function WorkItemList({
     const editable = targets.filter((target) => target.capabilities.edit && !target.archivedAt)
     if (!editable.length) return
     if (editable.length > MAX_BULK) {
-      notify({ tone: 'warning', message: `Bulk changes take up to ${MAX_BULK} work items at a time.` })
+      notify({ tone: 'info', title: `Bulk changes take up to ${countLabel(MAX_BULK, 'task')} at a time`, description: 'Select fewer and try again.' })
       return
     }
     setPicker({ field, anchor, targets: editable })
@@ -258,7 +264,7 @@ export function WorkItemList({
       })
       return result
     } catch (error) {
-      notify({ tone: 'danger', message: editErrorMessage(error, 'That change') })
+      notify({ tone: 'danger', title: cards.length === 1 ? `${cards[0].key} didn’t change` : `${countLabel(cards.length, 'task')} didn’t change`, description: editErrorMessage(error, 'The change') })
       return null
     } finally {
       setBulkBusy(false)
@@ -273,9 +279,14 @@ export function WorkItemList({
       { projectId, result, targets: targets.map(editTarget) },
       {
         onSuccess: () => {
-          if (targets.length > 1) notify({ tone: 'success', message: `Changed ${targets.length} work items.` })
+          if (targets.length > 1) notify({ tone: 'success', title: `Changed ${countLabel(targets.length, 'task')}` })
         },
-        onError: (error) => notify({ tone: 'danger', message: editErrorMessage(error) }),
+        onError: (error) =>
+          notify({
+            tone: 'danger',
+            title: targets.length === 1 ? `${targets[0].key} didn’t change` : `${countLabel(targets.length, 'task')} didn’t change`,
+            description: editErrorMessage(error),
+          }),
       },
     )
   }
@@ -288,11 +299,8 @@ export function WorkItemList({
     setSelection(emptySelection)
     notify({
       tone: 'success',
-      message: `Archived ${cards.length} work item${cards.length === 1 ? '' : 's'}.`,
-      action: {
-        label: 'Undo',
-        run: () => void runBulk({ archived: false }, result.items),
-      },
+      title: `Archived ${countLabel(cards.length, 'task')}`,
+      onUndo: () => runBulk({ archived: false }, result.items),
     })
   }
 
@@ -302,14 +310,14 @@ export function WorkItemList({
     const result = await runBulk({ archived: false }, cards)
     if (!result) return
     setSelection(emptySelection)
-    notify({ tone: 'success', message: `Restored ${cards.length} work item${cards.length === 1 ? '' : 's'}.` })
+    notify({ tone: 'success', title: `Restored ${countLabel(cards.length, 'task')}` })
   }
 
   const setDueDate = async (value: string | null) => {
     const cards = selectedCards()
     if (!cards.length) return
     const result = await runBulk({ dueDate: value }, cards)
-    if (result) notify({ tone: 'success', message: `Changed ${cards.length} work items.` })
+    if (result) notify({ tone: 'success', title: value ? `Changed the due date of ${countLabel(cards.length, 'task')}` : `Cleared the due date of ${countLabel(cards.length, 'task')}` })
   }
 
   const onRowSelect = (card: WorkItemCard, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
@@ -321,7 +329,7 @@ export function WorkItemList({
     const key = event.key.toLowerCase()
     if (!disabled && (event.metaKey || event.ctrlKey) && key === 'a' && bodyRef.current?.contains(document.activeElement)) {
       setSelection(selectAll(order))
-      if (order.length > MAX_BULK) notify({ tone: 'info', message: `Selected the first ${MAX_BULK}; bulk changes take up to ${MAX_BULK} at a time.` })
+      if (order.length > MAX_BULK) notify({ tone: 'info', title: `Selected the first ${countLabel(MAX_BULK, 'task')}`, description: `Bulk changes take up to ${MAX_BULK} at a time.` })
       return true
     }
     if (event.metaKey || event.ctrlKey) return false
@@ -336,6 +344,9 @@ export function WorkItemList({
       const index = focusable.findIndex((row) => row.key === currentKey)
       const next = index < 0 ? 0 : Math.max(0, Math.min(focusable.length - 1, index + (key === 'j' ? 1 : -1)))
       activate(focusable[next].key, true)
+      // With a task open beside the list, the panel follows, the way a peek does.
+      const target = focusable[next]
+      if (openTaskId && target.kind === 'task' && target.item.id !== openTaskId) onOpenTask(target.item.id)
       return true
     }
     const row = currentKey ? rowByKey(currentKey) : undefined
@@ -359,20 +370,14 @@ export function WorkItemList({
     return false
   })
 
-  if (pages.isPending) return <MessageSkeleton label="Loading work items" rows={4} />
-  if (pages.isError && !pages.data) {
-    return (
-      <ErrorState action={<Button onClick={() => void pages.refetch()}>Try again</Button>} title="Work items didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
-  }
+  if (pages.isPending) return <ListSkeleton label="Loading tasks" rows={6} />
+  if (pages.isError && !pages.data) return <ErrorState error={pages.error} onRetry={() => void pages.refetch()} title="Tasks didn’t load" />
   if (items.length === 0 && !pages.hasNextPage && !(tucked && doneCount > 0)) {
     return (
       <EmptyState
         action={hasFilters ? <Button onClick={onClearFilters}>Clear filters</Button> : emptyAction}
         icon="work"
-        title={hasFilters ? 'No matching work items' : 'No work items yet'}
+        title={hasFilters ? 'No matching tasks' : 'No tasks yet'}
       >
         {hasFilters ? 'Try a different search, or clear some filters.' : 'Write down what needs doing, then hand it to a person or an agent.'}
       </EmptyState>
@@ -391,7 +396,7 @@ export function WorkItemList({
         height: rowHeight,
         full: (doneRow ? done.failed : isFetchNextPageError) ? (
           <span className="aw-tasks__loading">
-            More work items didn’t load.
+            More tasks didn’t load.
             <Button onClick={doneRow ? done.retry : () => void fetchNextPage()} size="sm">
               Try again
             </Button>
@@ -409,7 +414,7 @@ export function WorkItemList({
         index,
         height: rowHeight,
         className: 'aw-tasks__grouprow',
-        label: `${row.collapsed ? 'Show' : 'Hide'} done and canceled, ${row.count ?? row.loaded} work items`,
+        label: `${row.collapsed ? 'Show' : 'Hide'} done and canceled, ${countLabel(row.count ?? row.loaded, 'task')}`,
         full: <DoneToggle count={row.count ?? row.loaded} onToggle={() => toggleGroup(row.groupKey)} open={!row.collapsed} />,
       }
     }
@@ -419,7 +424,7 @@ export function WorkItemList({
         index,
         height: rowHeight,
         className: 'aw-tasks__grouprow',
-        label: `${row.label || 'None'}, ${row.count ?? row.loaded} work items, ${row.collapsed ? 'collapsed' : 'expanded'}`,
+        label: `${row.label || 'None'}, ${countLabel(row.count ?? row.loaded, 'task')}, ${row.collapsed ? 'collapsed' : 'expanded'}`,
         full: (
           <GroupHeader
             groupBy={state.groupBy}
@@ -468,7 +473,7 @@ export function WorkItemList({
   return (
     <div className="aw-tasks">
       <p aria-live="polite" className="aw-tasks__summary">
-        {total === 1 ? '1 work item' : `${total.toLocaleString()} work items`}
+        {countLabel(total, 'task')}
         {pages.isFetching && !pages.isFetchingNextPage ? <Icon className="aw-spin" name="loader" size={12} /> : null}
       </p>
       <Table
@@ -477,7 +482,7 @@ export function WorkItemList({
         bodyRef={bodyRef}
         className="aw-tasks__table"
         columns={state.fields ? LIST_COLUMNS.filter((column) => column.id === 'select' || column.id === 'title' || state.fields?.includes(column.id)) : LIST_COLUMNS}
-        label="Work items"
+        label="Tasks"
         onActivate={(key) => {
           const row = rowByKey(key)
           if (row?.kind === 'task') onOpenTask(row.item.id)
@@ -517,11 +522,8 @@ export function WorkItemList({
           onLaunched={(launches) => {
             setLaunching(null)
             setSelection(emptySelection)
-            notify({
-              tone: 'success',
-              message: launchSummary(launches).title,
-              action: { label: 'View queue', run: () => navigate(launchesHref(projectId)) },
-            })
+            const summary = launchSummary(launches)
+            notify({ ...summary, action: { label: 'View runs', run: () => navigate(launchesHref(projectId)) } })
           }}
           projectId={projectId}
           tasks={launching.map((card) => ({ id: card.id, key: card.key, title: card.title }))}

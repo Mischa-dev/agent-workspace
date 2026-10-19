@@ -819,7 +819,7 @@ async fn check_environment(
         (Some(manifest), None) => (
             false,
             format!(
-                "Sign in to {} under your provider accounts first; checks run as you.",
+                "Sign in to {} in Settings > Accounts for runs first; checks run as you.",
                 manifest.display_name
             ),
         ),

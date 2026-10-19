@@ -107,8 +107,8 @@ describe('MessageContent', () => {
       />,
     )
 
-    expect(screen.getByLabelText('Unavailable Actor mention')).toHaveTextContent(
-      '@unavailable',
+    expect(screen.getByLabelText('Someone who isn’t here any more')).toHaveTextContent(
+      '@someone',
     )
   })
 

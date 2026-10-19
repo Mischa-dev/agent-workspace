@@ -1,16 +1,26 @@
-import { IconButton, Menu, Tooltip } from '../ui'
+import { useRef, useState, type KeyboardEvent } from 'react'
+
+import { Icon, IconButton, Tooltip } from '../ui'
+import { Popover } from '../ui/Popover'
 import { REACTION_CHOICES, reactionNames, type ReactionChoice } from './reactions'
 import type { MessageReaction } from './types'
 
+/** Columns in the emoji grid, for arrow keys. */
+const COLUMNS = 6
+
 /**
  * A message's reactions as chips. With `onToggle`, each chip adds or takes
- * away your own reaction; without it they're read-only.
+ * away your own reaction, and a last chip adds a new one; without it they're
+ * read-only.
  */
 export function MessageReactions({
+  onPick,
   onToggle,
   reactions,
   viewerId,
 }: {
+  /** Adds the "add reaction" chip at the end of the row. */
+  onPick?: (choice: ReactionChoice, reacted: boolean) => void
   onToggle?: (reaction: MessageReaction) => void
   reactions: readonly MessageReaction[]
   viewerId?: string
@@ -22,6 +32,7 @@ export function MessageReactions({
         const names = reactionNames(reaction, viewerId)
         const label = `${reaction.emoji} ${reaction.count}${names ? `, ${names}` : ''}`
         const className = reaction.byViewer ? 'aw-reaction is-mine' : 'aw-reaction'
+        const named = REACTION_CHOICES.find((choice) => choice.name === reaction.name)?.label ?? reaction.emoji
         const face = (
           <>
             <span aria-hidden="true" className="aw-reaction__emoji">
@@ -33,7 +44,7 @@ export function MessageReactions({
           </>
         )
         return (
-          <Tooltip key={reaction.name} label={names || reaction.name}>
+          <Tooltip key={reaction.name} label={names ? `${names} reacted with ${reaction.emoji}` : named}>
             {onToggle ? (
               <button
                 aria-label={label}
@@ -52,29 +63,86 @@ export function MessageReactions({
           </Tooltip>
         )
       })}
+      {onPick ? <ReactionPicker onPick={onPick} reactions={reactions} variant="chip" /> : null}
     </div>
   )
 }
 
-/** The toolbar's "Add reaction" menu: the 12 choices, yours checked. */
+/**
+ * "Add reaction": a small grid of emoji, yours marked. One click reacts (or
+ * takes yours away) and closes it; arrow keys move around the grid.
+ */
 export function ReactionPicker({
   onPick,
   reactions,
+  variant = 'toolbar',
 }: {
   onPick: (choice: ReactionChoice, reacted: boolean) => void
   reactions: readonly MessageReaction[]
+  /** The toolbar's icon button, or the chip at the end of a message's reactions. */
+  variant?: 'toolbar' | 'chip'
 }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const grid = useRef<HTMLDivElement>(null)
   const mine = new Set(reactions.filter((reaction) => reaction.byViewer).map((reaction) => reaction.name))
+  const toggle = (element: HTMLElement) => setAnchor((current) => (current ? null : element))
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const buttons = [...(grid.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    if (index < 0) return
+    const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: COLUMNS, ArrowUp: -COLUMNS }[event.key]
+    if (!step) return
+    event.preventDefault()
+    buttons[Math.min(buttons.length - 1, Math.max(0, index + step))]?.focus()
+  }
+
   return (
-    <Menu
-      items={REACTION_CHOICES.map((choice) => ({
-        label: `${choice.emoji} ${choice.label}`,
-        checked: mine.has(choice.name),
-        onSelect: () => onPick(choice, !mine.has(choice.name)),
-      }))}
-      label="Add reaction"
-      placement="bottom-end"
-      trigger={<IconButton icon="smile-plus" label="Add reaction" size="sm" />}
-    />
+    <>
+      {variant === 'chip' ? (
+        <Tooltip label="Add reaction">
+          <button
+            aria-expanded={Boolean(anchor)}
+            aria-haspopup="dialog"
+            aria-label="Add reaction"
+            className="aw-reaction aw-reaction--add"
+            onClick={(event) => toggle(event.currentTarget)}
+            type="button"
+          >
+            <Icon name="smile-plus" size={14} />
+          </button>
+        </Tooltip>
+      ) : (
+        <IconButton
+          aria-expanded={Boolean(anchor)}
+          aria-haspopup="dialog"
+          icon="smile-plus"
+          label="Add reaction"
+          onClick={(event) => toggle(event.currentTarget)}
+          pressed={Boolean(anchor)}
+          size="sm"
+        />
+      )}
+      <Popover anchor={anchor} label="Add reaction" onClose={() => setAnchor(null)} open={Boolean(anchor)} placement="bottom-end">
+        <div className="aw-emojigrid" onKeyDown={onKeyDown} ref={grid} role="group">
+          {REACTION_CHOICES.map((choice) => (
+            <button
+              aria-label={choice.label}
+              aria-pressed={mine.has(choice.name)}
+              className={mine.has(choice.name) ? 'aw-emojigrid__item is-mine' : 'aw-emojigrid__item'}
+              key={choice.name}
+              onClick={() => {
+                onPick(choice, !mine.has(choice.name))
+                setAnchor(null)
+              }}
+              title={choice.label}
+              type="button"
+            >
+              <span aria-hidden="true">{choice.emoji}</span>
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </>
   )
 }

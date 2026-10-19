@@ -1,7 +1,7 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
 import type { MessageUpdate } from '../realtime/realtimeModel'
-import { REMOVED_MESSAGE_CONTENT } from './api'
+import { REMOVED_MESSAGE_CONTENT } from './sidebarApi'
 import { isThreadsKey } from './threadModel'
 import type { ConversationMessage, ConversationTimelineEntry, MessageReaction } from './types'
 

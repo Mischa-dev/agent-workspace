@@ -1,7 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 
-import { isApiError } from '../api/errors'
-import { Button, showToast } from '../ui'
+import { Button, describeError, showToast } from '../ui'
 import { useCreateLaunches } from './hooks'
 import { launchSummary, launchesHref, threadHref } from './launchModel'
 
@@ -28,11 +27,11 @@ export function QuickLaunch({
             ...launchSummary(launches),
             action: first?.conversationId
               ? { label: 'Open thread', onSelect: () => navigate(threadHref(task.projectId, first.conversationId ?? '')) }
-              : { label: 'View queue', onSelect: () => navigate(launchesHref(task.projectId)) },
+              : { label: 'View runs', onSelect: () => navigate(launchesHref(task.projectId)) },
           })
         },
         onError: (error) =>
-          showToast({ tone: 'danger', title: `${task.key} didn’t launch.`, description: isApiError(error) ? error.message : undefined }),
+          showToast({ tone: 'danger', title: `${task.key} didn’t launch`, description: describeError(error).message }),
       },
     )
   return (

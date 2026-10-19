@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 
 import { isApiError } from '../../api/errors'
-import { Banner, Button, Dialog, SegmentedControl, SelectField, TextArea, TextField, showToast } from '../../ui'
+import { Banner, Button, Dialog, SegmentedControl, SelectField, TextArea, TextField, describeError, showToast } from '../../ui'
 import {
   STARTER_MANIFEST,
   createHarness,
@@ -20,7 +21,15 @@ function refusalText(error: unknown) {
   if (isApiError(error) && error.status === 422 && error.code === 'request_failed') {
     return 'The server refused this harness. Check the manifest, the command and the runner.'
   }
-  return error instanceof Error ? error.message : 'Try again.'
+  return isApiError(error) ? describeError(error).message : error instanceof Error ? error.message : 'Try again.'
+}
+
+/** The manifest's own name, when it has one. */
+function manifestName(text: string) {
+  const parsed = parseManifest(text)
+  if ('error' in parsed) return ''
+  const name = parsed.value.name
+  return typeof name === 'string' ? name.trim() : ''
 }
 
 /** Registers a harness, or edits one. Its transport can't change once registered. */
@@ -52,8 +61,10 @@ export function HarnessForm({
         transport === 'command'
           ? { command: splitLines(command), secretNames: splitLines(secrets, true) }
           : { runnerActorId: runner || undefined }
-      if (harness) return updateHarness(organizationId, harness.id, { version: harness.version, name: name.trim(), manifest: parsed.value, ...pieces })
-      return createHarness(organizationId, { name: name.trim(), transport, manifest: parsed.value, ...pieces })
+      // The name shown defaults to the manifest's, so it isn't asked for twice.
+      const shownAs = name.trim() || manifestName(manifest)
+      if (harness) return updateHarness(organizationId, harness.id, { version: harness.version, name: shownAs, manifest: parsed.value, ...pieces })
+      return createHarness(organizationId, { name: shownAs, transport, manifest: parsed.value, ...pieces })
     },
     onSuccess: (saved) => {
       void client.invalidateQueries({ queryKey: harnessKeys.list(organizationId) })
@@ -70,20 +81,26 @@ export function HarnessForm({
   }
 
   const commandBlocked = transport === 'command' && !list.commandsAllowed
-  const missing = !name.trim() || (transport === 'command' ? splitLines(command).length === 0 : !runner)
+  const missing = !(name.trim() || manifestName(manifest)) || (transport === 'command' ? splitLines(command).length === 0 : !runner)
+  const dirty = harness
+    ? name !== harness.name ||
+      manifest !== JSON.stringify(harness.manifest, null, 2) ||
+      command !== (harness.command?.join('\n') ?? '') ||
+      secrets !== harness.secretNames.join(', ') ||
+      runner !== (harness.runnerActorId ?? '')
+    : Boolean(name || command || secrets || runner || manifest !== STARTER_MANIFEST)
 
   return (
     <Dialog
       footer={
         <>
-          <Button onClick={onClose} variant="ghost">
-            Cancel
-          </Button>
+          <Button onClick={onClose}>Cancel</Button>
           <Button busy={save.isPending} disabled={missing || commandBlocked} type="submit" variant="primary">
-            {harness ? 'Save' : 'Register'}
+            {harness ? 'Save changes' : 'Register harness'}
           </Button>
         </>
       }
+      dirty={dirty}
       onClose={onClose}
       onSubmit={submit}
       open
@@ -96,7 +113,15 @@ export function HarnessForm({
             {problem}
           </Banner>
         ) : null}
-        <TextField autoFocus label="Name" maxLength={80} onChange={(event) => setName(event.target.value)} required value={name} />
+        <TextField
+          autoFocus
+          hint="How it’s named in the Launch dialog. Leave it empty to use the name in the manifest below."
+          label="Shown as"
+          maxLength={80}
+          onChange={(event) => setName(event.target.value)}
+          placeholder={manifestName(manifest) || undefined}
+          value={name}
+        />
         {harness ? null : (
           <SegmentedControl
             label="How it runs"
@@ -128,7 +153,15 @@ export function HarnessForm({
           </>
         ) : (
           <SelectField
-            hint={list.runners.length === 0 ? 'No agent has a runner attached yet. Attach one on the Agents page first.' : 'The agent whose runner takes these launches.'}
+            hint={
+              list.runners.length === 0 ? (
+                <>
+                  No agent has a runner attached yet. Attach one in <Link to="/messages/agents">Agents</Link> first.
+                </>
+              ) : (
+                'The agent whose runner takes these runs.'
+              )
+            }
             label="Runner"
             onChange={(event) => setRunner(event.target.value)}
             value={runner}
@@ -157,9 +190,17 @@ export function HarnessForm({
 
 export function CommandsOffNote() {
   return (
-    <Banner tone="info" title="Command harnesses are off on this server.">
-      The server owner turns them on by setting <code>AGENT_WORKSPACE_COMMAND_HARNESS_DIRS</code> to the folders their programs may run from. Connected runners
-      work without it.
-    </Banner>
+    <div className="aw-settings-stack">
+      <Banner tone="info" title="Command harnesses are off on this server.">
+        Whoever runs the server can turn them on. Connected runners work without it.
+      </Banner>
+      <details className="aw-disclosure">
+        <summary>How to turn them on</summary>
+        <p className="aw-quiet">
+          Set <code>AGENT_WORKSPACE_COMMAND_HARNESS_DIRS</code> on the server to the folders the programs may run from,
+          then restart it.
+        </p>
+      </details>
+    </div>
   )
 }

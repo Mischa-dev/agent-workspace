@@ -17,12 +17,14 @@ import {
   SettingsSkeleton,
   StatusChip,
   TextField,
-  formatDateTime,
+  countLabel,
+  describeLoadError,
+  formatFullDate,
   formatRelative,
   formatShortDate,
   showToast,
 } from '../../ui'
-import { actionSentence } from '../auditActions'
+import { actionPhrase, actionSentence } from '../auditActions'
 import type { SettingsPageProps } from '../types'
 import {
   accountKeys,
@@ -65,9 +67,7 @@ export default function SecurityPage({ session }: SettingsPageProps) {
       {security.isPending ? (
         <SettingsSkeleton label="Loading security settings" sections={3} />
       ) : security.isError ? (
-        <ErrorState action={<Button onClick={() => void security.refetch()}>Try again</Button>} title="Security settings didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={security.error} onRetry={() => void security.refetch()} title="Security settings didn’t load" />
       ) : (
         <>
           <PasswordSection hasPassword={security.data.hasPassword} />
@@ -188,7 +188,7 @@ function TwoFactorSection({ loginName, security }: { loginName: string; security
   if (!twoFactor.available) {
     body = (
       <Banner role="note" tone="info" title="Not available on this server.">
-        Two-factor authentication needs the server’s encryption key to be set up. Ask the host operator to set it up.
+        Two-factor authentication needs an encryption key on the server. Ask whoever runs this server to add one.
       </Banner>
     )
   } else if (!security.hasPassword) {
@@ -203,8 +203,10 @@ function TwoFactorSection({ loginName, security }: { loginName: string; security
           <div className="aw-profile__titles">
             <h3 className="aw-profile__name">Authenticator app</h3>
             <p className="aw-profile__sub">
-              {twoFactor.enabledAt ? `On since ${formatShortDate(twoFactor.enabledAt)}. ` : ''}
-              {twoFactor.recoveryCodesLeft === 1 ? '1 recovery code left.' : `${twoFactor.recoveryCodesLeft} recovery codes left.`}
+              {twoFactor.enabledAt ? (
+                <span title={formatFullDate(twoFactor.enabledAt)}>On since {formatShortDate(twoFactor.enabledAt)}. </span>
+              ) : null}
+              {countLabel(twoFactor.recoveryCodesLeft, 'recovery code')} left.
             </p>
           </div>
           <StatusChip icon="circle-check" tone="success">
@@ -212,7 +214,11 @@ function TwoFactorSection({ loginName, security }: { loginName: string; security
           </StatusChip>
         </header>
         {twoFactor.recoveryCodesLeft <= 3 && (
-          <Banner tone="warning">You’re running low on recovery codes. Make new ones so you don’t get locked out.</Banner>
+          <Banner tone="warning">
+            {twoFactor.recoveryCodesLeft === 0
+              ? 'You have no recovery codes left. Make new ones now so you don’t get locked out.'
+              : `You have only ${countLabel(twoFactor.recoveryCodesLeft, 'recovery code')} left. Make new ones so you don’t get locked out.`}
+          </Banner>
         )}
         <div className="aw-onetime__actions">
           <Button icon="retry" onClick={() => setDialog('regenerate')}>
@@ -380,9 +386,7 @@ function TwoFactorSetupFlow({
         />
         {error && <Banner tone="danger">{error}</Banner>}
         <div className="aw-form__actions">
-          <Button onClick={onCancel} variant="ghost">
-            Cancel
-          </Button>
+          <Button onClick={onCancel}>Cancel</Button>
           <Button busy={start.isPending} disabled={!password} type="submit" variant="primary">
             Continue
           </Button>
@@ -442,9 +446,7 @@ function TwoFactorSetupFlow({
       />
       {error && <Banner tone="danger">{error}</Banner>}
       <div className="aw-form__actions">
-        <Button onClick={onCancel} variant="ghost">
-          Cancel
-        </Button>
+        <Button onClick={onCancel}>Cancel</Button>
         <Button busy={confirm.isPending} disabled={!code.trim()} type="submit" variant="primary">
           Turn on
         </Button>
@@ -454,7 +456,17 @@ function TwoFactorSetupFlow({
 }
 
 function RecoveryCodes({ codes, loginName, onDone }: { codes: string[]; loginName: string; onDone: () => void }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
+  const copy = () => {
+    if (!navigator.clipboard) {
+      setCopied('failed')
+      return
+    }
+    navigator.clipboard.writeText(text).then(
+      () => setCopied('yes'),
+      () => setCopied('failed'),
+    )
+  }
   const text = codes.join('\n')
   const download = () => {
     const url = URL.createObjectURL(new Blob([`Agent Workspace recovery codes for ${loginName}\n\n${text}\n`], { type: 'text/plain' }))
@@ -482,23 +494,19 @@ function RecoveryCodes({ codes, loginName, onDone }: { codes: string[]; loginNam
         ))}
       </ol>
       <div className="aw-onetime__actions">
-        <Button
-          icon={copied ? 'check' : 'copy'}
-          onClick={() =>
-            void navigator.clipboard
-              ?.writeText(text)
-              .then(() => setCopied(true))
-              .catch(() => undefined)
-          }
-          variant="primary"
-        >
-          {copied ? 'Copied' : 'Copy codes'}
+        <Button icon={copied === 'yes' ? 'check' : 'copy'} onClick={copy} variant="primary">
+          {copied === 'yes' ? 'Copied' : 'Copy codes'}
         </Button>
         <Button onClick={download}>
           Download
         </Button>
         <Button onClick={onDone}>I saved them</Button>
       </div>
+      {copied === 'failed' && (
+        <p className="aw-quiet" role="status">
+          Couldn’t copy. Select the codes and copy them yourself, or download them.
+        </p>
+      )}
     </aside>
   )
 }
@@ -560,6 +568,7 @@ function CodeDialog({
           </Button>
         </>
       }
+      dirty={Boolean(password || code)}
       onClose={close}
       onSubmit={(event) => void submit(event)}
       open={open}
@@ -608,7 +617,7 @@ function SessionsSection() {
     onSuccess: ({ revoked }) =>
       showToast({
         tone: 'success',
-        title: revoked === 1 ? 'Signed out 1 other session' : `Signed out ${revoked} other sessions`,
+        title: `Signed out ${countLabel(revoked, 'other session')}`,
       }),
     onError: (error) => {
       toastError('Couldn’t sign out the other sessions', error)
@@ -633,7 +642,9 @@ function SessionsSection() {
       {sessions.isPending ? (
         <ListSkeleton label="Loading sessions" rows={2} />
       ) : sessions.isError ? (
-        <Banner tone="danger">Sessions didn’t load.</Banner>
+        <Banner onRetry={() => void sessions.refetch()} title="Sessions didn’t load." tone="danger">
+          {describeLoadError(sessions.error)}
+        </Banner>
       ) : (
         <RowList label="Sessions">
           {[...sessions.data.sessions]
@@ -662,10 +673,10 @@ function SessionsSection() {
                 meta={
                   <span className="aw-row__metaline aw-wrap">
                     <span>{SIGN_IN_METHODS[candidate.signInMethod] ?? 'Signed in'}</span>
-                    <span title={formatDateTime(candidate.lastSeenAt)}>
+                    <span title={formatFullDate(candidate.lastSeenAt)}>
                       {candidate.current ? 'Active now' : `Last seen ${formatRelative(candidate.lastSeenAt)}`}
                     </span>
-                    <span>Signed in {formatShortDate(candidate.createdAt)}</span>
+                    <span title={formatFullDate(candidate.createdAt)}>Signed in {formatShortDate(candidate.createdAt)}</span>
                   </span>
                 }
                 title={
@@ -698,12 +709,12 @@ function ActivitySection({ events }: { events: AccountSecurity['recentEvents'] }
               }
               key={event.id}
               meta={
-                <span title={formatDateTime(event.occurredAt)}>
+                <span title={formatFullDate(event.occurredAt)}>
                   {formatRelative(event.occurredAt)}
                   {event.clientName ? ` · ${event.clientName}` : event.channel === 'browser' ? ' · Browser' : ''}
                 </span>
               }
-              title={actionSentence(event.action)}
+              title={actionPhrase(event.action) ? actionSentence(event.action) : <span title={event.action}>{actionSentence(event.action)}</span>}
             />
           ))}
         </RowList>

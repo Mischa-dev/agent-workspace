@@ -15,11 +15,20 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 
-import { Icon, type IconName } from './icons'
+import { Icon, type IconGlyph } from './icons'
 
 export type Placement = 'top' | 'bottom' | 'right' | 'bottom-start' | 'bottom-end' | 'top-start' | 'right-start'
 
 const GAP = 6
+
+/** `element.matches`, treating a selector the browser can't parse as a match. */
+function safeMatches(element: Element, selector: string) {
+  try {
+    return element.matches(selector)
+  } catch {
+    return true
+  }
+}
 
 function place(anchor: HTMLElement, floating: HTMLElement | null, placement: Placement) {
   const a = anchor.getBoundingClientRect()
@@ -103,7 +112,11 @@ export function Tooltip({
     <span
       className="aw-tip"
       onBlur={hide}
-      onFocus={() => {
+      onFocus={(event) => {
+        // Keyboard focus only: a click focuses the button too, and the label
+        // popping up right after the click is noise.
+        const target = event.target as HTMLElement
+        if (typeof target.matches === 'function' && !safeMatches(target, ':focus-visible')) return
         window.clearTimeout(timer.current)
         setOpen(true)
       }}
@@ -135,11 +148,14 @@ export function Tooltip({
 export type MenuEntry =
   | {
       label: string
-      icon?: IconName
+      icon?: IconGlyph
       shortcut?: string
       danger?: boolean
+      /** Makes it a checkbox item: ✓ when true. */
       checked?: boolean
       disabled?: boolean
+      /** Leaves the menu open after choosing, for toggling several checkbox items in a row. */
+      keepOpen?: boolean
       onSelect: () => void
     }
   | { separator: true }
@@ -198,12 +214,12 @@ export function Menu({
     }
     if (position && !focusedOnOpen.current) {
       focusedOnOpen.current = true
-      panel.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus()
+      panel.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus()
     }
   }, [open, position])
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const entries = [...(panel.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])]
+    const entries = [...(panel.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])') ?? [])]
     const index = entries.indexOf(document.activeElement as HTMLElement)
     const go = (next: number) => {
       event.preventDefault()
@@ -254,17 +270,27 @@ export function Menu({
                     </div>
                   )
                 }
+                const checkable = item.checked !== undefined
                 return (
                   <button
+                    aria-checked={checkable ? item.checked : undefined}
                     className={item.danger ? 'aw-menu__item is-danger' : 'aw-menu__item'}
                     disabled={item.disabled}
                     key={index}
                     onClick={() => {
-                      close()
+                      if (item.keepOpen) {
+                        item.onSelect()
+                        return
+                      }
+                      // Focus goes back to the trigger before the action runs, so a
+                      // dialog it opens remembers the trigger and returns focus there.
+                      setOpen(false)
+                      anchor?.focus()
                       item.onSelect()
                     }}
-                    role="menuitem"
+                    role={checkable ? 'menuitemcheckbox' : 'menuitem'}
                     tabIndex={-1}
+                    title={item.label.length > 40 ? item.label : undefined}
                     type="button"
                   >
                     {item.icon ? <Icon name={item.icon} /> : null}
@@ -289,6 +315,7 @@ const focusableSelector =
 export function Dialog({
   children,
   description,
+  dirty = false,
   footer,
   onClose,
   onSubmit,
@@ -299,6 +326,8 @@ export function Dialog({
 }: {
   children?: ReactNode
   description?: ReactNode
+  /** Something typed would be lost: a click outside doesn't close it (Escape, Cancel and ✕ still do). */
+  dirty?: boolean
   footer?: ReactNode
   onClose: () => void
   /** Makes the body and footer one form, so the footer's submit button sends it. */
@@ -313,12 +342,14 @@ export function Dialog({
   const restore = useRef<HTMLElement | null>(null)
   const returnRef = useRef(returnFocus)
   const closeRef = useRef(onClose)
+  const dirtyRef = useRef(dirty)
   const titleId = useId()
   const descriptionId = useId()
   useEffect(() => {
     closeRef.current = onClose
     returnRef.current = returnFocus
-  }, [onClose, returnFocus])
+    dirtyRef.current = dirty
+  }, [dirty, onClose, returnFocus])
 
   useEffect(() => {
     if (!open) return undefined
@@ -328,7 +359,8 @@ export function Dialog({
     root?.setAttribute('inert', '')
     const first =
       panel.current?.querySelector<HTMLElement>('[data-autofocus]') ??
-      panel.current?.querySelector<HTMLElement>('input, textarea, select') ??
+      panel.current?.querySelector<HTMLElement>('.aw-dialog__body input:not([type="hidden"]):not([disabled]), .aw-dialog__body textarea:not([disabled]), .aw-dialog__body select:not([disabled])') ??
+      panel.current?.querySelector<HTMLElement>('.aw-dialog__foot .aw-btn:not(.aw-btn--danger):not([disabled])') ??
       panel.current?.querySelector<HTMLElement>(focusableSelector)
     first?.focus()
     const onKey = (event: KeyboardEvent) => {
@@ -362,7 +394,12 @@ export function Dialog({
   if (!open) return null
   return createPortal(
     <div className="aw-dialog-layer">
-      <div className="aw-scrim" onMouseDown={() => closeRef.current()} />
+      <div
+        className="aw-scrim"
+        onMouseDown={() => {
+          if (!dirtyRef.current) closeRef.current()
+        }}
+      />
       <div
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}

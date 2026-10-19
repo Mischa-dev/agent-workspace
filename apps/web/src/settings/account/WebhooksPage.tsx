@@ -20,6 +20,7 @@ import {
   Banner,
   Button,
   Checkbox,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
@@ -34,6 +35,7 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  countLabel,
   formatFullDate,
   formatRelative,
   showToast,
@@ -65,6 +67,7 @@ export default function WebhooksPage() {
   const [secret, setSecret] = useState<{ name: string; value: string } | null>(null)
   const [editing, setEditing] = useState<Webhook | 'new' | null>(null)
   const [deleting, setDeleting] = useState<Webhook | null>(null)
+  const [replacing, setReplacing] = useState<Webhook | null>(null)
   const [log, setLog] = useState<Webhook | null>(null)
   const refresh = () => queryClient.invalidateQueries({ queryKey: automationKeys.webhooks })
 
@@ -73,17 +76,21 @@ export default function WebhooksPage() {
       updateWebhook(webhook, {
         state: webhook.state === 'active' ? 'paused' : 'active',
       }),
-    onSuccess: (webhook) =>
+    onSuccess: (webhook): void => {
       showToast({
         title: webhook.state === 'active' ? `${webhook.name} is on` : `${webhook.name} paused`,
-      }),
+        onUndo: () => toggle.mutate(webhook),
+      })
+    },
     onError: (error) => toastError('The webhook didn’t change', error),
     onSettled: refresh,
   })
   const rotate = useMutation({
     mutationFn: (webhook: Webhook) => rotateWebhookSecret(webhook.id),
-    onSuccess: (result) => setSecret({ name: result.webhook.name, value: result.secret }),
-    onError: (error) => toastError('The secret wasn’t replaced', error),
+    onSuccess: (result) => {
+      setReplacing(null)
+      setSecret({ name: result.webhook.name, value: result.secret })
+    },
     onSettled: refresh,
   })
   const ping = useMutation({
@@ -98,13 +105,9 @@ export default function WebhooksPage() {
   })
   const remove = useMutation({
     mutationFn: (webhook: Webhook) => deleteWebhook(webhook.id),
-    onSuccess: () => {
+    onSuccess: (_, webhook) => {
       setDeleting(null)
-      showToast({ title: 'Webhook deleted' })
-    },
-    onError: (error) => {
-      setDeleting(null)
-      toastError('The webhook wasn’t deleted', error)
+      showToast({ title: `${webhook.name} deleted` })
     },
     onSettled: refresh,
   })
@@ -119,7 +122,7 @@ export default function WebhooksPage() {
             </Button>
           ) : null
         }
-        icon="link"
+        icon="send"
         title="Webhooks"
       >
         Send events to your own services as signed JSON. A webhook hears only what you can see, and turns itself off if you lose access.
@@ -132,9 +135,7 @@ export default function WebhooksPage() {
       {list.isPending ? (
         <ListSkeleton label="Loading webhooks" rows={2} />
       ) : list.isError ? (
-        <ErrorState action={<Button onClick={() => void list.refetch()}>Try again</Button>} title="Webhooks didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={list.error} onRetry={() => void list.refetch()} title="Webhooks didn’t load" />
       ) : (
         <>
           <Section id="webhooks-heading" title="Your webhooks">
@@ -168,7 +169,7 @@ export default function WebhooksPage() {
                             {
                               label: 'Replace the secret',
                               icon: 'key',
-                              onSelect: () => rotate.mutate(webhook),
+                              onSelect: () => setReplacing(webhook),
                             },
                             { separator: true },
                             {
@@ -187,7 +188,7 @@ export default function WebhooksPage() {
                     key={webhook.id}
                     leading={
                       <span className="aw-row__tile">
-                        <Icon name="link" size={16} />
+                        <Icon name="send" size={16} />
                       </span>
                     }
                     meta={
@@ -217,7 +218,7 @@ export default function WebhooksPage() {
                     New webhook
                   </Button>
                 }
-                icon="link"
+                icon="send"
                 title="No webhooks yet"
               >
                 Hear about finished runs, failing checks, new tasks and messages in your own tools.
@@ -242,20 +243,34 @@ export default function WebhooksPage() {
         />
       )}
       {log && <DeliveriesDialog onClose={() => setLog(null)} webhook={log} />}
-      <Dialog
-        description={deleting ? `${deleting.url} stops hearing from this workspace, and its delivery log goes too.` : undefined}
-        footer={
-          <>
-            <Button onClick={() => setDeleting(null)}>Cancel</Button>
-            <Button busy={remove.isPending} data-autofocus onClick={() => deleting && remove.mutate(deleting)} variant="danger">
-              Delete webhook
-            </Button>
-          </>
-        }
-        onClose={() => setDeleting(null)}
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Delete webhook"
+        error={remove.isError ? `The webhook wasn’t deleted. ${describeError(remove.error).message}` : null}
+        onClose={() => {
+          setDeleting(null)
+          remove.reset()
+        }}
+        onConfirm={() => deleting && remove.mutate(deleting)}
         open={deleting !== null}
-        title="Delete this webhook?"
-      />
+        title={`Delete ${deleting?.name ?? 'this webhook'}?`}
+      >
+        It stops sending events right away, and its delivery log goes too.
+      </ConfirmDialog>
+      <ConfirmDialog
+        busy={rotate.isPending}
+        confirmLabel="Replace secret"
+        error={rotate.isError ? `The secret wasn’t replaced. ${describeError(rotate.error).message}` : null}
+        onClose={() => {
+          setReplacing(null)
+          rotate.reset()
+        }}
+        onConfirm={() => replacing && rotate.mutate(replacing)}
+        open={replacing !== null}
+        title={`Replace the secret for ${replacing?.name ?? 'this webhook'}?`}
+      >
+        Deliveries signed with the old secret will fail until the receiving service has the new one.
+      </ConfirmDialog>
     </>
   )
 }
@@ -295,13 +310,18 @@ function WebhookDialog({
       return { name: created.webhook.name, secret: created.secret }
     },
     onSuccess: onSaved,
-    onError: (reason) => setError(describeError(reason).message),
+    onError: (reason) => setError(`The webhook wasn’t saved. ${describeError(reason).message}`),
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!name.trim() || !url.trim() || !events.length) return
     save.mutate()
   }
+  const dirty =
+    name !== (webhook?.name ?? '') ||
+    url !== (webhook?.url ?? 'https://') ||
+    projectId !== (webhook?.projectId ?? '') ||
+    events.join() !== (webhook?.eventTypes ?? ['run.finished']).join()
 
   return (
     <Dialog
@@ -309,10 +329,11 @@ function WebhookDialog({
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button busy={save.isPending} disabled={!name.trim() || !events.length} type="submit" variant="primary">
-            {webhook ? 'Save' : 'Create webhook'}
+            {webhook ? 'Save changes' : 'Create webhook'}
           </Button>
         </>
       }
+      dirty={dirty}
       onClose={onClose}
       onSubmit={submit}
       open
@@ -332,7 +353,7 @@ function WebhookDialog({
         />
         {!webhook && (
           <SelectField id="webhook-project" label="Hear from" onChange={(event) => setProjectId(event.target.value)} value={projectId}>
-            <option value="">Every project I can see</option>
+            <option value="">Every project you can see</option>
             {list.projects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.name}
@@ -384,9 +405,7 @@ function DeliveriesDialog({ onClose, webhook }: { onClose: () => void; webhook: 
       {deliveries.isPending ? (
         <ListSkeleton label="Loading deliveries" rows={3} />
       ) : deliveries.isError ? (
-        <ErrorState action={<Button onClick={() => void deliveries.refetch()}>Try again</Button>} title="Deliveries didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={deliveries.error} onRetry={() => void deliveries.refetch()} title="Deliveries didn’t load" />
       ) : deliveries.data.deliveries.length ? (
         <RowList label="Deliveries">
           {deliveries.data.deliveries.map((delivery) => (
@@ -405,10 +424,7 @@ function DeliveriesDialog({ onClose, webhook }: { onClose: () => void; webhook: 
                     Delivery <code className="aw-inline-code">{delivery.id}</code>
                   </span>
                   <span title={formatFullDate(delivery.createdAt)}>{formatRelative(delivery.createdAt)}</span>
-                  <span>
-                    {delivery.attempts} attempt
-                    {delivery.attempts === 1 ? '' : 's'}
-                  </span>
+                  <span>{countLabel(delivery.attempts, 'attempt')}</span>
                   {delivery.lastStatusCode !== null && <span>HTTP {delivery.lastStatusCode}</span>}
                   {delivery.lastError && <span>{delivery.lastError}</span>}
                 </span>

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { describeError } from '../../app/mutations'
@@ -20,9 +20,19 @@ import { Banner, Button, Checkbox, Dialog, IconButton, SelectField, TextArea, Te
 import '../../automations/automations.css'
 import { WEEKDAYS } from '../../automations/ruleModel'
 import { listViews } from '../../views/api'
+import { workItemPriorities } from '../../work-items/constants'
+import { useWorkItemWorkflow } from '../../work-items/hooks'
+import { useLabels } from '../../work-items/planningHooks'
+import { TimeZoneField } from '../TimeZoneField'
+import { deviceTimeZone } from '../timeZones'
 
 const MAX_ACTIONS = 5
-const RUN_OUTCOMES = ['completed', 'failed', 'canceled', 'interrupted']
+const RUN_OUTCOMES = [
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'canceled', label: 'Canceled' },
+  { value: 'interrupted', label: 'Interrupted' },
+]
 
 const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   {
@@ -36,7 +46,7 @@ const TRIGGERS: { kind: TriggerKind; label: string }[] = [
   { kind: 'schedule', label: 'On a schedule' },
   {
     kind: 'capacity_window',
-    label: 'A provider account resets soon with capacity left',
+    label: 'An account for runs resets soon with capacity left',
   },
 ]
 
@@ -46,14 +56,6 @@ const ACTIONS: { kind: RuleActionKind; label: string }[] = [
   { kind: 'notify', label: 'Notify people' },
   { kind: 'post_message', label: 'Post a message' },
 ]
-
-const localTimezone = () => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  } catch {
-    return 'UTC'
-  }
-}
 
 function defaultTrigger(kind: TriggerKind): Trigger {
   switch (kind) {
@@ -69,7 +71,7 @@ function defaultTrigger(kind: TriggerKind): Trigger {
         weekdays: [1],
         monthDay: null,
         time: '09:00',
-        timezone: localTimezone(),
+        timezone: deviceTimeZone(),
       }
     case 'capacity_window':
       return { kind, providerAccountId: null, maxTasks: 3 }
@@ -95,7 +97,6 @@ function defaultAction(kind: RuleActionKind): RuleAction {
   }
 }
 
-/** One line for the rule list: "When checks fail on a pull request". */
 /** Make or change an automation rule: a trigger, a saved view, and up to five actions. */
 export function RuleDialog({
   onClose,
@@ -113,6 +114,9 @@ export function RuleDialog({
   const [viewId, setViewId] = useState(rule?.conditions.viewId ?? '')
   const [actions, setActions] = useState<RuleAction[]>(rule?.actions ?? [defaultAction('launch')])
   const [error, setError] = useState<string | null>(null)
+  // A half-made rule survives a stray click outside the dialog.
+  const [initial] = useState(() => JSON.stringify({ name, trigger, viewId, actions }))
+  const dirty = JSON.stringify({ name, trigger, viewId, actions }) !== initial
   const views = useQuery({
     queryKey: ['project', projectId, 'views'],
     queryFn: () => listViews(projectId),
@@ -164,10 +168,11 @@ export function RuleDialog({
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button busy={save.isPending} disabled={!name.trim() || !actions.length} type="submit" variant="primary">
-            {rule ? 'Save' : 'Create rule'}
+            {rule ? 'Save changes' : 'Create rule'}
           </Button>
         </>
       }
+      dirty={dirty}
       onClose={onClose}
       onSubmit={submit}
       open
@@ -239,6 +244,7 @@ export function RuleDialog({
                 index={index}
                 profiles={(profiles.data?.profiles ?? []).filter((profile) => profile.enabled)}
                 onChange={(next) => setAction(index, next)}
+                projectId={projectId}
               />
             </div>
           ))}
@@ -275,15 +281,15 @@ function TriggerFields({
         <div className="aw-rule-choices">
           {RUN_OUTCOMES.map((outcome) => (
             <Checkbox
-              checked={trigger.outcomes?.includes(outcome) ?? false}
-              key={outcome}
-              label={outcome[0].toUpperCase() + outcome.slice(1)}
+              checked={trigger.outcomes?.includes(outcome.value) ?? false}
+              key={outcome.value}
+              label={outcome.label}
               onChange={(checked) =>
                 onChange({
                   ...trigger,
                   outcomes: checked
-                    ? [...(trigger.outcomes ?? []), outcome]
-                    : (trigger.outcomes ?? []).filter((entry) => entry !== outcome),
+                    ? [...(trigger.outcomes ?? []), outcome.value]
+                    : (trigger.outcomes ?? []).filter((entry) => entry !== outcome.value),
                 })
               }
             />
@@ -305,7 +311,7 @@ function TriggerFields({
             }
             value={trigger.conversationId ?? ''}
           >
-            <option value="">Any conversation I can see</option>
+            <option value="">Any conversation you can see</option>
             {channels.map((channel) => (
               <option key={channel.id} value={channel.id}>
                 #{channel.name}
@@ -397,12 +403,7 @@ function TriggerFields({
               value={trigger.monthDay ?? ''}
             />
           )}
-          <TextField
-            id="rule-schedule-timezone"
-            label="Time zone"
-            onChange={(event) => onChange({ ...trigger, timezone: event.target.value })}
-            value={trigger.timezone}
-          />
+          <TimeZoneField id="rule-schedule-timezone" onChange={(timezone) => onChange({ ...trigger, timezone })} value={trigger.timezone} />
         </>
       )
     case 'capacity_window':
@@ -437,6 +438,7 @@ function ActionFields({
   index,
   onChange,
   profiles,
+  projectId,
 }: {
   action: RuleAction
   channels: ChannelChoice[]
@@ -444,6 +446,7 @@ function ActionFields({
   index: number
   onChange: (action: RuleAction) => void
   profiles: { id: string; name: string; handle: string }[]
+  projectId: string
 }) {
   const id = (name: string) => `rule-action-${index}-${name}`
   switch (action.kind) {
@@ -497,6 +500,7 @@ function ActionFields({
               onChange({
                 ...action,
                 field: event.target.value as typeof action.field,
+                value: '',
               })
             }
             value={action.field}
@@ -507,14 +511,7 @@ function ActionFields({
             <option value="add_label">Add label</option>
             <option value="remove_label">Remove label</option>
           </SelectField>
-          <TextField
-            hint={action.field === 'assignee' ? 'me, none, or a handle' : action.field === 'status' ? 'A status name' : undefined}
-            id={id('value')}
-            label="To"
-            onChange={(event) => onChange({ ...action, value: event.target.value })}
-            required
-            value={action.value}
-          />
+          <FieldValue field={action.field} id={id('value')} onChange={(value) => onChange({ ...action, value })} projectId={projectId} value={action.value} />
         </div>
       )
     case 'notify':
@@ -574,4 +571,55 @@ function ActionFields({
         </>
       )
   }
+}
+
+/** What a "Change a field" action sets: a status, priority or label from the project, or a person. */
+function FieldValue({
+  field,
+  id,
+  onChange,
+  projectId,
+  value,
+}: {
+  field: Extract<RuleAction, { kind: 'set_field' }>['field']
+  id: string
+  onChange: (value: string) => void
+  projectId: string
+  value: string
+}) {
+  const workflow = useWorkItemWorkflow(field === 'status' ? projectId : '')
+  const labels = useLabels(field === 'add_label' || field === 'remove_label' ? projectId : '')
+  const choices = useMemo(() => {
+    if (field === 'status') return workflow.data?.statuses.map((status) => ({ value: status.name, label: status.name })) ?? null
+    if (field === 'priority') return workItemPriorities.map((priority) => ({ value: priority.value, label: priority.label }))
+    if (field === 'add_label' || field === 'remove_label') return labels.data?.map((label) => ({ value: label.name, label: label.name })) ?? null
+    return null
+  }, [field, labels.data, workflow.data])
+
+  if (field === 'assignee' || !choices) {
+    return (
+      <TextField
+        hint={field === 'assignee' ? 'me, none, or someone’s @handle' : undefined}
+        id={id}
+        label="To"
+        onChange={(event) => onChange(event.target.value)}
+        required
+        value={value}
+      />
+    )
+  }
+  const known = choices.some((choice) => choice.value === value)
+  return (
+    <SelectField id={id} label="To" onChange={(event) => onChange(event.target.value)} required value={value}>
+      <option disabled value="">
+        {field === 'status' ? 'Choose a status' : field === 'priority' ? 'Choose a priority' : 'Choose a label'}
+      </option>
+      {value && !known ? <option value={value}>{value}</option> : null}
+      {choices.map((choice) => (
+        <option key={choice.value} value={choice.value}>
+          {choice.label}
+        </option>
+      ))}
+    </SelectField>
+  )
 }

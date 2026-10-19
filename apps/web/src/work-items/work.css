@@ -28,6 +28,36 @@
   max-width: 200px;
 }
 
+/* Phones: search and Filter on one row, the two view selects sharing the next. */
+@media (max-width: 640px) {
+  .aw-filterbar__search {
+    flex: 1 1 60%;
+    max-width: none;
+  }
+
+  .aw-filterbar__spacer {
+    display: none;
+  }
+
+  /* Each as wide as its text, growing to share the row; side by side when both fit. */
+  .aw-filterbar__select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .aw-filterbar__select .aw-field__control--select select {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+/* No keyboard to list shortcuts for. */
+@media (hover: none) and (pointer: coarse) {
+  .aw-tasks__help {
+    display: none;
+  }
+}
+
 .aw-filterbar__chips {
   display: flex;
   flex-wrap: wrap;
@@ -191,11 +221,26 @@
 }
 
 .aw-tasks__check {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  width: calc(100% + 2 * var(--space-2));
+  margin: 0 calc(-1 * var(--space-2));
+  cursor: pointer;
+}
+
+/* The input covers the whole cell, so the cell is the hit area. */
+.aw-tasks__check .aw-check__input {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.aw-tasks__check .aw-check__box {
   width: 16px;
   height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
+  margin-top: 0;
 }
 
 .aw-tasks__cellbtn {
@@ -213,6 +258,15 @@
 
 .aw-tasks__cellbtn:hover {
   background: var(--surface-sunken);
+}
+
+/* Touch: a 44px target around the same small mark, without moving the row's layout. */
+@media (pointer: coarse) {
+  .aw-tasks__cellbtn {
+    min-width: 44px;
+    min-height: 44px;
+    margin: -9px;
+  }
 }
 
 .aw-tasks__key {
@@ -343,6 +397,30 @@
   flex-wrap: nowrap;
 }
 
+/* In a list row the badges fill the cell, so the labels know how much room is left. */
+.aw-tasks__table .aw-taskmeta {
+  flex: 1 1 auto;
+}
+
+/* Fitted labels: whole chips only. The ones that don't fit stay measurable but out of sight. */
+.aw-labels.is-fitted {
+  position: relative;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.aw-labels.is-fitted .aw-label {
+  flex: none;
+}
+
+.aw-label.is-overflow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .aw-due {
   font: var(--t-small);
   color: var(--content-fg-muted);
@@ -394,16 +472,6 @@
   font: var(--t-small);
 }
 
-.aw-notice {
-  margin-bottom: var(--space-3);
-}
-
-.aw-notice__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
 .aw-shortcuts {
   padding: var(--space-2);
   outline: none;
@@ -440,6 +508,42 @@
 }
 
 /* Board */
+.aw-tboard-skel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: var(--space-3);
+  overflow: hidden;
+  padding: 0;
+}
+
+.aw-tboard-skel__column {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--surface-sunken) 60%, transparent);
+}
+
+.aw-tboard-skel__column > .aw-skel__bar {
+  margin: var(--space-2) var(--space-1);
+}
+
+.aw-tboard-skel__card {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+@media (max-width: 640px) {
+  .aw-tboard-skel {
+    grid-template-columns: 84vw 84vw;
+  }
+}
+
 .aw-tboard-wrap {
   min-width: 0;
 }
@@ -1713,6 +1817,14 @@ span.aw-taskstart__fix {
 }
 
 /* Activity */
+.aw-activity__older {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
 .aw-activity {
   display: grid;
   gap: var(--space-3);
@@ -2001,8 +2113,27 @@ span.aw-taskstart__fix {
   text-decoration: none;
 }
 
-.aw-milestone__name:hover {
+.aw-milestone__name:hover .aw-milestone__title {
   text-decoration: underline;
+}
+
+.aw-milestone__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.aw-milestone__tasks {
+  font: var(--t-small);
+  color: var(--link);
+  text-decoration: none;
+}
+
+.aw-milestone__tasks:hover {
+  text-decoration: underline;
+}
+
+.aw-milestone__datefield {
+  justify-self: start;
 }
 
 .aw-milestone__description {
@@ -2091,6 +2222,29 @@ span.aw-taskstart__fix {
 
 .aw-wf__count {
   min-width: 64px;
+}
+
+/* The kit's checkbox look, for the default radio and the matrix's checkboxes. */
+.aw-wf__mark {
+  position: relative;
+  display: inline-grid;
+  vertical-align: middle;
+}
+
+.aw-wf__mark .aw-check__input {
+  top: 0;
+}
+
+.aw-wf__mark .aw-check__box {
+  margin-top: 0;
+}
+
+.aw-wf__radio {
+  border-radius: 50%;
+}
+
+.aw-check__input:checked + .aw-wf__radio {
+  box-shadow: inset 0 0 0 3.5px var(--surface-raised);
 }
 
 .aw-wf__buttons {

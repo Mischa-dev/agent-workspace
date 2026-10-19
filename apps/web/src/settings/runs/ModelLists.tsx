@@ -178,7 +178,7 @@ function RefreshFailure({ error, harness }: { error: unknown; harness: Harness }
     return (
       <Banner tone="warning">
         The list comes through your own {harness.displayName} account. Sign in to one in{' '}
-        <Link to={accountSettingsHref('provider-accounts')}>Provider accounts</Link> first.
+        <Link to={accountSettingsHref('provider-accounts')}>Accounts for runs</Link> first.
       </Banner>
     )
   }

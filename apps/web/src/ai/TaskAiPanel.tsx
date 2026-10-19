@@ -33,7 +33,16 @@ export default function TaskAiPanel({
     onSuccess: (result) => setSummary(result.summary),
   })
   const [notice, setNotice] = useState<string | null>(null)
-  const error = decide.error ?? triage.error ?? criteria.error ?? summarize.error
+  // Names what failed, so the message isn't a bare "That didn't work".
+  const failed: [string, unknown] | null = decide.error
+    ? ['Deciding on the suggestion', decide.error]
+    : triage.error
+      ? ['Suggesting labels and links', triage.error]
+      : criteria.error
+        ? ['Drafting criteria', criteria.error]
+        : summarize.error
+          ? ['Catching up', summarize.error]
+          : null
   const configured = status.data?.configured ?? false
   const canAct = configured && !disabled && (status.data?.canEdit ?? false)
   const pending = suggestions.data?.suggestions ?? []
@@ -89,7 +98,7 @@ export default function TaskAiPanel({
           {notice}
         </p>
       ) : null}
-      {error ? <Banner tone="danger">{aiErrorMessage(error)}</Banner> : null}
+      {failed ? <Banner tone="danger">{aiErrorMessage(failed[1], failed[0])}</Banner> : null}
       {summary ? <SummaryView summary={summary} /> : null}
     </section>
   )

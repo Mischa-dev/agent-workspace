@@ -110,7 +110,7 @@ impl AiError {
             Self::OverBudget { budget_usd } => format!(
                 "This workspace has spent this month's budget for suggestions and summaries (${budget_usd}). An admin can raise it in Runs and models settings."
             ),
-            Self::Provider(error) => format!("The AI call failed: {}.", error.category()),
+            Self::Provider(error) => format!("The model call failed: {}.", error.category()),
             Self::InvalidOutput => {
                 "The model's answer didn't have the expected shape, twice. Try again, or pick another model.".to_owned()
             }

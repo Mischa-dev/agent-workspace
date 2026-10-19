@@ -6,7 +6,7 @@ import type { IconName } from '../ui'
  * outside a conversation. Text starting with "/" that names no command here
  * is sent as an ordinary message.
  */
-export type SlashCommandName = 'remind' | 'later' | 'schedule' | 'mute' | 'task' | 'tag' | 'launch'
+export type SlashCommandName = 'remind' | 'later' | 'schedule' | 'mute' | 'unmute' | 'notify' | 'task' | 'tag' | 'launch'
 
 export type SlashCommand = {
   name: SlashCommandName
@@ -24,7 +24,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'remind', usage: 'me to … at 3pm', description: 'Set a reminder for yourself', icon: 'clock', paletteHref: '/later?new=reminder' },
   { name: 'later', usage: '[note]', description: 'Save the last message, or a note, for later', icon: 'bookmark', paletteHref: '/later' },
   { name: 'schedule', usage: 'tomorrow 9am message', description: 'Send a message here later', icon: 'send', paletteHref: '/later?view=scheduled' },
-  { name: 'mute', usage: '[mentions | all | off]', description: 'Choose what you hear from this conversation', icon: 'circle-minus' },
+  { name: 'mute', usage: '', description: 'Stop notifications from this conversation', icon: 'circle-minus' },
+  { name: 'unmute', usage: '', description: 'Hear from this conversation again', icon: 'messages' },
+  { name: 'notify', usage: 'all | mentions | off', description: 'Choose what you hear from this conversation', icon: 'at-sign' },
   { name: 'task', usage: 'title', description: 'Create a task in this project', icon: 'work', projectOnly: true },
   { name: 'tag', usage: '', description: 'Ask an agent: mention it with @', icon: 'bot' },
   { name: 'launch', usage: '', description: 'Launch agents on ready tasks', icon: 'play', projectOnly: true },

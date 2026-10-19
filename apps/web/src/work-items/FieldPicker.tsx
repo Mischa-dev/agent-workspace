@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Avatar, Icon, actorKind } from '../ui'
-import { ComboboxList, Popover, type ComboboxOption } from '../ui/pickers'
+import { ComboboxList, Popover, formatDateLabel, type ComboboxOption } from '../ui/pickers'
 import { workItemPriorities } from './constants'
 import { useAssignableActors } from './hooks'
 import { useCreateLabel, useLabels, useMilestones } from './planningHooks'
@@ -222,13 +222,13 @@ function MilestoneOptions({
     ...(milestones.data ?? []).map((milestone) => ({
       value: milestone.id,
       label: milestone.name,
-      description: milestone.targetDate ?? undefined,
+      description: milestone.targetDate ? `Target ${formatDateLabel(milestone.targetDate)}` : undefined,
       leading: <TaskGlyph name="milestone" />,
     })),
   ]
   return (
     <ComboboxList
-      emptyText={milestones.isError ? 'Milestones didn’t load.' : 'No milestones yet'}
+      emptyText={milestones.isError ? 'Milestones didn’t load' : 'No milestones yet'}
       label={label}
       loading={milestones.isPending}
       onClose={onClose}

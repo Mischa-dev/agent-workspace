@@ -6,13 +6,15 @@ import { Banner } from '../ui'
 
 /**
  * What GitHub's return (`?github=connected` or `?github=error&reason=`) means,
- * read once and then taken out of the address. Most returns land on a Project's
- * Repositories page; one whose connect link expired or belonged to another
- * browser lands on /settings, which has no Project in it.
+ * read once and then taken out of the address. Most returns land on a project's
+ * Repositories page (`repositoriesHere`); one whose connect link expired or
+ * belonged to another browser lands on /settings, which has no project in it.
  */
-export function GitHubReturnBanner({ className }: { className?: string }) {
+export function GitHubReturnBanner({ className, repositoriesHere = false }: { className?: string; repositoriesHere?: boolean }) {
   const [parameters, setParameters] = useSearchParams()
-  const [returned] = useState(() => githubReturnMessage(parameters.get('github'), parameters.get('reason')))
+  const [returned] = useState(() =>
+    githubReturnMessage(parameters.get('github'), parameters.get('reason'), repositoriesHere),
+  )
   useEffect(() => {
     if (!parameters.has('github')) return
     const next = new URLSearchParams(parameters)

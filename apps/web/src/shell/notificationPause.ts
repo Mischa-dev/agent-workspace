@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { getNotificationSettings, notificationKeys, setPersonalSetting } from '../settings/account/usageApi'
+import { formatDateTime, formatTime } from '../ui'
 
 /**
  * Pausing notifications by hand ("for an hour", "until tomorrow"). The pause
@@ -27,14 +28,15 @@ export function pauseChoices(now: Date): PauseChoice[] {
   ]
 }
 
-/** "14:30", or "tomorrow 09:00" when it isn't today. */
+/** "2:30 PM", "tomorrow at 9:00 AM", or "Oct 21, 9:00 AM" further out. */
 export function pausedUntilLabel(until: Date, now: Date) {
-  const time = until.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const iso = until.toISOString()
+  const time = formatTime(iso)
   if (until.toDateString() === now.toDateString()) return time
   const tomorrow = new Date(now)
   tomorrow.setDate(now.getDate() + 1)
-  if (until.toDateString() === tomorrow.toDateString()) return `tomorrow ${time}`
-  return `${until.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${time}`
+  if (until.toDateString() === tomorrow.toDateString()) return `tomorrow at ${time}`
+  return formatDateTime(iso, now)
 }
 
 /** When the pause ends, if one is on. Re-renders the moment it runs out. */

@@ -1,6 +1,7 @@
 import { workItemPriorities } from './constants'
 import { SEMANTIC_CATEGORIES, canonicalValues, type FilterValues } from './listModel'
 import type { Milestone, ProjectLabel, WorkItemWorkflow } from './types'
+import { formatDateLabel } from '../ui/dateModel'
 
 /** The filters a person adds from the Filter menu, in the order the menu lists them. */
 export type FilterField =
@@ -240,9 +241,7 @@ export function filterChips(filters: FilterValues, lookups: FilterLookups): Filt
 }
 
 function formatDay(value: string) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
-  if (!match) return value
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return formatDateLabel(value) || value
 }
 
 /** The words on a chip for a filter with nothing to pick from a list, such as "Blocked". Null when it isn't set. */

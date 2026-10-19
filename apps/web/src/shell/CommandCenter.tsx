@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useProjects } from '../projects/hooks'
 import { projectSettingsHref } from '../settings/paths'
+import { createTaskHref } from '../work-items/links'
 import { closeCommandMenu, openCommandMenu, openMarkAllRead, openShortcutSheet, useCommandState } from './commandStore'
 import { loadShellLazy } from './loadShellLazy'
 import { createShortcutMatcher, type ShortcutAction } from './shortcuts'
@@ -58,7 +59,8 @@ export function CommandCenter() {
       'shortcut-sheet': openShortcutSheet,
       'create-task': () => {
         const project = currentRef.current
-        if (project) go(projectPath(project.id, '/work-items?create=task'))
+        // Keeps the open tasks view (filters, board, open task) behind the dialog.
+        if (project) go(createTaskHref(project.id, window.location))
         else openCommandMenu('Create task in')
       },
       search: () => go('/search'),
@@ -87,6 +89,9 @@ export function CommandCenter() {
       const action = press(event)
       if (!action) return
       event.preventDefault()
+      // One sheet: it lists the task list and board keys too, so a page's own
+      // "?" listener (on window, after this one) doesn't open a second.
+      if (action === 'shortcut-sheet') event.stopPropagation()
       if (action === 'command-menu' && document.querySelector('.aw-cmdk')) {
         closeCommandMenu()
         return

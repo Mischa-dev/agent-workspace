@@ -664,16 +664,21 @@ export async function createWorkItemComment(input: {
   )
 }
 
+/** One page of a task's timeline, newest first; `nextCursor` reaches older entries. */
 export async function getWorkItemTimeline(
   projectId: string,
   workItemId: string,
-): Promise<WorkItemTimelineEntry[]> {
+  cursor?: string | null,
+): Promise<{ entries: WorkItemTimelineEntry[]; nextCursor: string | null }> {
+  const query = new URLSearchParams({ limit: '100' })
+  if (cursor) query.set('cursor', cursor)
   const payload = record(
     await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/timeline?limit=100`,
+      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/timeline?${query.toString()}`,
     ),
   )
-  return (Array.isArray(payload.entries) ? payload.entries : []).map((value) => {
+  const nextCursor = typeof payload.nextCursor === 'string' && payload.nextCursor ? payload.nextCursor : null
+  const entries = (Array.isArray(payload.entries) ? payload.entries : []).map((value): WorkItemTimelineEntry => {
     const entry = record(value)
     const activity = entry.activity ? record(entry.activity) : null
     const activityActor = activity?.actor ? record(activity.actor) : null
@@ -728,4 +733,5 @@ export async function getWorkItemTimeline(
           : null,
     }
   })
+  return { entries, nextCursor }
 }

@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
-import { isApiError } from '../api/errors'
 import { humanize, roleLabel } from '../projects/format'
+import { OneTimeValue } from '../settings/OneTimeValue'
+import { DEFAULT_INVITATION_HOURS, INVITATION_EXPIRY_OPTIONS, PROJECT_INVITATION_MAX_HOURS } from '../settings/invitationExpiry'
 import {
   Avatar,
   Banner,
   Button,
+  ConfirmDialog,
   ErrorState,
   Icon,
   ListSkeleton,
@@ -16,7 +18,11 @@ import {
   Section,
   SelectField,
   StatusChip,
-  formatDateTime,
+  describeError,
+  describeLoadError,
+  formatFullDate,
+  formatShortDate,
+  showToast,
   type ChipTone,
 } from '../ui'
 import {
@@ -36,9 +42,7 @@ import {
 
 const INVITATION_TONES: Record<string, ChipTone> = { active: 'success', accepted: 'muted', revoked: 'muted', expired: 'muted' }
 
-function formatDate(iso: string | null | undefined) {
-  return formatDateTime(iso) || null
-}
+const PROJECT_EXPIRY_OPTIONS = INVITATION_EXPIRY_OPTIONS.filter((option) => option.hours <= PROJECT_INVITATION_MAX_HOURS)
 
 /** Whether a member's provider account can take runs, whichever harness it signs in to. */
 function runReadiness(readiness: string) {
@@ -71,9 +75,10 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
       queryClient.invalidateQueries({ queryKey: queryKeys.invitations(projectId) }),
     ])
   }
-  const mutationError = (reason: unknown) => {
-    setError(isApiError(reason) ? reason.message : 'That change to the team didn’t go through. Try again.')
+  const mutationError = (what: string) => (reason: unknown) => {
+    setError(`${what} ${describeError(reason).message}`)
   }
+  const [revoking, setRevoking] = useState<Invitation | null>(null)
   const memberMutation = useMutation({
     mutationFn: ({
       actorId,
@@ -82,8 +87,20 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
       actorId: string
       input: { expectedVersion: number; role?: TeamRole; enabled?: boolean }
     }) => updateMember(projectId, actorId, input),
-    onSuccess: refresh,
-    onError: mutationError,
+    onSuccess: async (updated, { input }) => {
+      // Turning access off or on is undone from the toast.
+      if (input.enabled !== undefined) {
+        showToast({
+          tone: 'success',
+          title: input.enabled ? `${updated.displayName} can use the project again` : `${updated.displayName} disabled`,
+          description: input.enabled ? undefined : 'They keep their history here but can’t open the project.',
+          onUndo: () =>
+            memberMutation.mutate({ actorId: updated.actorId, input: { expectedVersion: updated.version, enabled: !input.enabled } }),
+        })
+      }
+      await refresh()
+    },
+    onError: mutationError('That change to the team didn’t go through.'),
   })
   const issueMutation = useMutation({
     mutationFn: ({ role, hours }: { role: Exclude<TeamRole, 'owner'>; hours: number }) => issueInvitation(projectId, role, hours),
@@ -91,20 +108,23 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
       setOneShot(issued)
       await refresh()
     },
-    onError: mutationError,
+    onError: mutationError('The invitation wasn’t created.'),
   })
   const revokeMutation = useMutation({
     mutationFn: (invitation: Invitation) => revokeInvitation(invitation.id, invitation.version),
-    onSuccess: refresh,
-    onError: mutationError,
+    onSuccess: async () => {
+      setRevoking(null)
+      showToast({ tone: 'success', title: 'Invitation revoked', description: 'Its link no longer works.' })
+      await refresh()
+    },
   })
   const replaceMutation = useMutation({
-    mutationFn: (invitation: Invitation) => replaceInvitation(invitation.id, invitation.version),
+    mutationFn: (invitation: Invitation) => replaceInvitation(invitation.id, invitation.version, DEFAULT_INVITATION_HOURS),
     onSuccess: async (issued) => {
       setOneShot(issued)
       await refresh()
     },
-    onError: mutationError,
+    onError: mutationError('The link wasn’t replaced.'),
   })
 
   if (members.isPending || invitations.isPending) {
@@ -113,20 +133,13 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
   if (members.isError || invitations.isError) {
     return (
       <ErrorState
-        action={
-          <Button
-            onClick={() => {
-              void members.refetch()
-              void invitations.refetch()
-            }}
-          >
-            Try again
-          </Button>
-        }
+        error={members.error ?? invitations.error}
+        onRetry={() => {
+          void members.refetch()
+          void invitations.refetch()
+        }}
         title="Members didn’t load"
-      >
-        Check your connection and try again.
-      </ErrorState>
+      />
     )
   }
 
@@ -140,7 +153,11 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
       )}
       <ExistingMemberForm projectId={projectId} onAdded={refresh} />
       <Section description="Anyone with the link can join as the role you pick, until it expires or is used." title="Invite people">
-        {oneShot && <OneShotInvitation invitation={oneShot} onDismiss={() => setOneShot(null)} />}
+        {oneShot && (
+          <OneTimeValue copyLabel="Copy link" icon="link" onDone={() => setOneShot(null)} title="Invitation link ready" value={oneShot.invitationUrl}>
+            Copy it now and send it to the person you’re inviting. It can’t be shown again after you close this.
+          </OneTimeValue>
+        )}
         <InviteForm
           canInviteAdmin={organizationRole === 'owner'}
           disabled={issueMutation.isPending}
@@ -180,7 +197,7 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
                       <Button disabled={invitationBusy} icon="retry" onClick={() => replaceMutation.mutate(invitation)} size="sm" variant="ghost">
                         Replace link
                       </Button>
-                      <Button disabled={invitationBusy} icon="x" onClick={() => revokeMutation.mutate(invitation)} size="sm" variant="ghost">
+                      <Button disabled={invitationBusy} icon="x" onClick={() => setRevoking(invitation)} size="sm" variant="ghost">
                         Revoke
                       </Button>
                     </>
@@ -192,9 +209,14 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
                     <Icon name="link" size={16} />
                   </span>
                 }
-                meta={`Issued by ${invitation.issuedByDisplayName}${
-                  invitation.status === 'active' && formatDate(invitation.expiresAt) ? ` · expires ${formatDate(invitation.expiresAt)}` : ''
-                }`}
+                meta={
+                  <span className="aw-row__metaline aw-wrap">
+                    <span>Issued by {invitation.issuedByDisplayName}</span>
+                    {invitation.status === 'active' ? (
+                      <span title={formatFullDate(invitation.expiresAt)}>Expires {formatShortDate(invitation.expiresAt)}</span>
+                    ) : null}
+                  </span>
+                }
                 title={
                   <span className="aw-row__titleline">
                     {roleLabel(invitation.role)} invitation
@@ -205,6 +227,20 @@ export function TeamSettings({ projectId, organizationRole }: { projectId: strin
             ))}
           </RowList>
         )}
+        <ConfirmDialog
+          busy={revokeMutation.isPending}
+          confirmLabel="Revoke invitation"
+          error={revokeMutation.isError ? `The invitation wasn’t revoked. ${describeError(revokeMutation.error).message}` : null}
+          onClose={() => {
+            setRevoking(null)
+            revokeMutation.reset()
+          }}
+          onConfirm={() => revoking && revokeMutation.mutate(revoking)}
+          open={revoking !== null}
+          title="Revoke this invitation?"
+        >
+          Its link stops working right away. You can make a new one at any time.
+        </ConfirmDialog>
       </Section>
     </div>
   )
@@ -220,7 +256,7 @@ function InviteForm({
   onSubmit: (role: Exclude<TeamRole, 'owner'>, hours: number) => void
 }) {
   const [role, setRole] = useState<Exclude<TeamRole, 'owner'>>('member')
-  const [hours, setHours] = useState(24)
+  const [hours, setHours] = useState(DEFAULT_INVITATION_HOURS)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     onSubmit(role, hours)
@@ -241,44 +277,20 @@ function InviteForm({
       <SelectField
         disabled={disabled}
         id="invitation-expiry"
-        label="Expires in"
+        label="Link works for"
         onChange={(event) => setHours(Number(event.target.value))}
         value={hours}
       >
-        <option value={24}>24 hours</option>
-        <option value={72}>3 days</option>
-        <option value={168}>7 days</option>
+        {PROJECT_EXPIRY_OPTIONS.map((option) => (
+          <option key={option.hours} value={option.hours}>
+            {option.label}
+          </option>
+        ))}
       </SelectField>
       <Button busy={disabled} icon="user-plus" type="submit" variant="primary">
         Create invitation link
       </Button>
     </form>
-  )
-}
-
-function OneShotInvitation({ invitation, onDismiss }: { invitation: IssuedInvitation; onDismiss: () => void }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <aside aria-labelledby="invitation-ready-heading" className="aw-card aw-token">
-      <div className="aw-token__head">
-        <Icon name="link" size={18} />
-        <h3 id="invitation-ready-heading">Invitation link ready</h3>
-      </div>
-      <p>Copy it now and send it to the person you’re inviting. It can’t be shown again after you close this.</p>
-      <code className="aw-token__value">{invitation.invitationUrl}</code>
-      <div className="aw-card__actions">
-        <Button
-          icon={copied ? 'check' : 'copy'}
-          onClick={() => {
-            void navigator.clipboard.writeText(invitation.invitationUrl).then(() => setCopied(true))
-          }}
-          variant="primary"
-        >
-          {copied ? 'Copied' : 'Copy link'}
-        </Button>
-        <Button onClick={onDismiss}>Done</Button>
-      </div>
-    </aside>
   )
 }
 
@@ -332,8 +344,21 @@ function MemberRow({
         </>
       }
       className={member.enabled ? undefined : 'is-disabled'}
-      leading={<Avatar name={member.displayName} seed={member.actorId} size={32} />}
-      meta={`@${member.handle} · ${member.enabled ? (member.actorKind === 'external_agent' ? 'Agent' : runReadiness(member.executionProfileReadiness)) : 'Disabled'}`}
+      leading={
+        <Avatar
+          kind={member.actorKind === 'external_agent' ? 'agent' : 'person'}
+          name={member.displayName}
+          seed={member.actorId}
+          size={32}
+        />
+      }
+      meta={`@${member.handle} · ${
+        member.enabled
+          ? member.actorKind === 'external_agent'
+            ? 'Agent'
+            : runReadiness(member.executionProfileReadiness)
+          : 'Disabled: keeps their history here, but can’t open the project'
+      }`}
       title={member.displayName}
     />
   )
@@ -343,22 +368,61 @@ function ExistingMemberForm({ projectId, onAdded }: { projectId: string; onAdded
   const candidates = useQuery({ queryKey: ['member-candidates', projectId], queryFn: () => listMemberCandidates(projectId) })
   const [actorId, setActorId] = useState('')
   const [role, setRole] = useState<'member' | 'viewer'>('member')
+  const chosen = (candidates.data ?? []).find((member) => member.actorId === actorId)
   const mutation = useMutation({
     mutationFn: () => addExistingMember(projectId, actorId, role),
-    onSuccess: async () => { setActorId(''); await onAdded(); await candidates.refetch() },
+    onSuccess: async () => {
+      if (chosen) showToast({ tone: 'success', title: `Added ${chosen.displayName}` })
+      setActorId('')
+      await onAdded()
+      await candidates.refetch()
+    },
   })
-  return <Section title="Add a workspace member" description="Add an existing person or agent. Agents keep their identity, connection and conversations.">
-    <form className="aw-form-stack" onSubmit={(event) => { event.preventDefault(); if (actorId) mutation.mutate() }}>
-      {candidates.isError && <Banner tone="danger">Members could not be loaded. <Button onClick={() => void candidates.refetch()}>Retry</Button></Banner>}
-      {mutation.isError && <Banner tone="danger">{isApiError(mutation.error) ? mutation.error.message : 'Could not add this member.'}</Banner>}
-      <SelectField id="existing-member" label="Person or agent" value={actorId} onChange={(event) => setActorId(event.target.value)} disabled={candidates.isPending || mutation.isPending}>
-        <option value="">Choose a member</option>
-        {(candidates.data ?? []).map((member) => <option key={member.actorId} value={member.actorId}>{member.displayName} (@{member.handle}) · {member.actorKind === 'external_agent' ? 'Agent' : 'Person'}</option>)}
-      </SelectField>
-      <SelectField id="existing-member-role" label="Project role" value={role} onChange={(event) => setRole(event.target.value as 'member' | 'viewer')}>
-        <option value="member">Member</option><option value="viewer">Viewer</option>
-      </SelectField>
-      <Button type="submit" disabled={!actorId || mutation.isPending} busy={mutation.isPending}>Add member</Button>
-    </form>
-  </Section>
+  return (
+    <Section
+      description="Add an existing person or agent. Agents keep their identity, connection and conversations."
+      title="Add a workspace member"
+    >
+      {candidates.isError && (
+        <Banner onRetry={() => void candidates.refetch()} title="Workspace members didn’t load." tone="danger">
+          {describeLoadError(candidates.error)}
+        </Banner>
+      )}
+      {mutation.isError && <Banner tone="danger">They weren’t added. {describeError(mutation.error).message}</Banner>}
+      <form
+        className="aw-inline-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (actorId) mutation.mutate()
+        }}
+      >
+        <SelectField
+          disabled={candidates.isPending || mutation.isPending}
+          id="existing-member"
+          label="Person or agent"
+          onChange={(event) => setActorId(event.target.value)}
+          value={actorId}
+        >
+          <option value="">Choose a member</option>
+          {(candidates.data ?? []).map((member) => (
+            <option key={member.actorId} value={member.actorId}>
+              {member.displayName} (@{member.handle}) · {member.actorKind === 'external_agent' ? 'Agent' : 'Person'}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          id="existing-member-role"
+          label="Project role"
+          onChange={(event) => setRole(event.target.value as 'member' | 'viewer')}
+          value={role}
+        >
+          <option value="member">Member</option>
+          <option value="viewer">Viewer</option>
+        </SelectField>
+        <Button busy={mutation.isPending} disabled={!actorId || mutation.isPending} type="submit">
+          Add member
+        </Button>
+      </form>
+    </Section>
+  )
 }

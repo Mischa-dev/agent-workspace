@@ -1,7 +1,7 @@
 import { useState, type RefObject } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { Button, Dialog, ErrorState, MessageSkeleton, SegmentedControl } from '../ui'
+import { Button, Dialog, DocumentSkeleton, ErrorState, SegmentedControl } from '../ui'
 import { summarizeConversation } from './api'
 import { aiErrorMessage } from './links'
 import { SummaryView } from './SummaryView'
@@ -48,9 +48,9 @@ export default function CatchUpDialog({
         value={range}
       />
       <div aria-live="polite">
-        {summary.isPending ? <MessageSkeleton label="Summarizing" rows={2} /> : null}
+        {summary.isPending ? <DocumentSkeleton label="Summarizing" paragraphs={2} /> : null}
         {summary.isError ? (
-          <ErrorState action={<Button onClick={() => void summary.refetch()}>Try again</Button>} title="No summary this time">
+          <ErrorState onRetry={() => void summary.refetch()} title="The summary didn’t load">
             {aiErrorMessage(summary.error, 'Summarizing')}
           </ErrorState>
         ) : null}

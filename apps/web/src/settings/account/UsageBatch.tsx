@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
 import { Link } from 'react-router-dom'
 
 import { describeError } from '../../app/mutations'
-import { Banner, Button, Checkbox, ListSkeleton, showToast } from '../../ui'
+import { Banner, Button, ButtonLink, Checkbox, ListSkeleton, countLabel, describeLoadError, showToast } from '../../ui'
 import { getBatch, launchBatch, usageKeys, type BatchTask } from './usageApi'
 import { batchOutcome, launchLabel, newAttemptKey } from './usageModel'
 
@@ -43,8 +44,8 @@ export function UsageBatch({
       ) : batch.isPending ? (
         <ListSkeleton label="Loading the batch" rows={3} />
       ) : batch.isError ? (
-        <Banner tone="danger">
-          The batch didn’t load. <Button onClick={() => void batch.refetch()} size="sm" variant="ghost">Try again</Button>
+        <Banner onRetry={() => void batch.refetch()} title="The batch didn’t load." tone="danger">
+          {describeLoadError(batch.error)}
         </Banner>
       ) : (
         <BatchEditor
@@ -106,7 +107,9 @@ function BatchEditor({
   return (
     <div className="aw-batch">
       <p className="aw-usage__at">{summary}</p>
-      {launch.isError ? <Banner tone="danger">{describeError(launch.error).message}</Banner> : null}
+      {launch.isError ? (
+        <Banner tone="danger">The batch didn’t launch. {describeError(launch.error).message}</Banner>
+      ) : null}
       {all.length === 0 ? (
         <p className="aw-usage__at">
           Nothing is ready for an agent in the projects this account runs for. A task is ready when its blockers are done and it has acceptance
@@ -126,9 +129,9 @@ function BatchEditor({
                 }
                 onChange={(on) => toggle(task.id, on)}
               />
-              <Link aria-label={`Open ${task.key}`} className="aw-btn aw-btn--ghost aw-btn--sm" to={task.href}>
-                <span className="aw-btn__label">Open</span>
-              </Link>
+              <ButtonLink aria-label={`Open ${task.key}`} size="sm" to={task.href} variant="ghost">
+                Open
+              </ButtonLink>
             </li>
           ))}
         </ul>
@@ -136,7 +139,7 @@ function BatchEditor({
       {skipped.length > 0 ? (
         <details className="aw-batch__skipped">
           <summary>
-            {skipped.length === 1 ? '1 project can’t join' : `${skipped.length} projects can’t join`}
+            {countLabel(skipped.length, 'project')} can’t join
           </summary>
           <ul>
             {skipped.map((project) => (

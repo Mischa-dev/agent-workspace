@@ -1,23 +1,33 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { WorkOsAgentSettings } from './WorkOsAgentSettings'
-import { isApiError } from '../api/errors'
+import { toastError } from '../app/mutations'
 import { queryKeys } from '../api/queryKeys'
+import { OneTimeValue } from '../settings/OneTimeValue'
 import {
   ActorTag,
   Avatar,
   Banner,
   Button,
+  ConfirmDialog,
+  EmptyState,
   ErrorState,
   Icon,
+  IconButton,
   ListSkeleton,
+  Menu,
   Section,
   SegmentedControl,
   SelectField,
   StatusChip,
   TextField,
-  formatDateTime,
+  describeError,
+  formatFullDate,
+  formatRelative,
+  formatShortDate,
+  showToast,
+  type MenuEntry,
 } from '../ui'
 import {
   createExternalAgent,
@@ -46,10 +56,18 @@ const SCOPE_LABELS: Record<ExternalAgentScope, string> = {
   worker_request: 'Ask for runs',
 }
 
-function formatWhen(iso: string | null | undefined) {
-  if (!iso) return null
-  return formatDateTime(iso) || iso
+const ROLE_LABELS: Record<ExternalAgentRole, string> = { member: 'Reads and posts', viewer: 'Reads only' }
+
+function RoleOptions() {
+  return (
+    <>
+      <option value="member">{ROLE_LABELS.member}</option>
+      <option value="viewer">{ROLE_LABELS.viewer}</option>
+    </>
+  )
 }
+
+type Confirming = { kind: 'rotate' | 'remove'; connection: ExternalAgentConnection }
 
 export function ExternalAgentSettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
@@ -64,69 +82,72 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
     setup?: { handle: string; runner: RunnerPresetId; webhookSecret: string | null }
   } | null>(null)
   const [creatingAs, setCreatingAs] = useState<RunnerPresetId>('agent')
-  const [error, setError] = useState<string | null>(null)
-  const errorRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (error) errorRef.current?.focus()
-  }, [error])
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState<Confirming | null>(null)
 
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(projectId) })
   }
-  const handleSuccess = async (result: ExternalAgentMutation, created = false) => {
-    if (result.oneTimeCredential) {
-      setOneTimeCredential({
-        agentName: result.connection.displayName,
-        credential: result.oneTimeCredential,
-        setup: created
-          ? { handle: result.connection.handle, runner: creatingAs, webhookSecret: result.webhookSecret ?? null }
-          : undefined,
-      })
-    }
-    await refresh()
-  }
-  const handleError = (reason: unknown) => {
-    setError(isApiError(reason) ? reason.message : 'That change to the agent didn’t go through. Try again.')
+  const showCredential = (result: ExternalAgentMutation, created = false) => {
+    if (!result.oneTimeCredential) return
+    setOneTimeCredential({
+      agentName: result.connection.displayName,
+      credential: result.oneTimeCredential,
+      setup: created ? { handle: result.connection.handle, runner: creatingAs, webhookSecret: result.webhookSecret ?? null } : undefined,
+    })
   }
   const createMutation = useMutation({
     mutationFn: (input: Parameters<typeof createExternalAgent>[1]) => createExternalAgent(projectId, input),
-    onSuccess: (result) => handleSuccess(result, true),
-    onError: handleError,
+    onSuccess: async (result) => {
+      showCredential(result, true)
+      await refresh()
+    },
+    onError: (reason) => setCreateError(`The agent wasn’t connected. ${describeError(reason).message}`),
   })
-  const updateMutation = useMutation({
-    mutationFn: ({ connection, input }: { connection: ExternalAgentConnection; input: Parameters<typeof updateExternalAgent>[2] }) =>
-      updateExternalAgent(projectId, connection.id, input),
-    onSuccess: (result) => handleSuccess(result),
-    onError: handleError,
+  const enableMutation = useMutation({
+    mutationFn: (input: { connection: ExternalAgentConnection; enabled: boolean; undo?: boolean }) =>
+      updateExternalAgent(projectId, input.connection.id, { expectedVersion: input.connection.version, enabled: input.enabled }),
+    onSuccess: async (result, input) => {
+      if (!input.undo) {
+        showToast({
+          title: input.enabled ? `${result.connection.displayName} turned back on` : `${result.connection.displayName} disabled`,
+          description: input.enabled ? undefined : 'It can’t connect until you turn it back on.',
+          onUndo: () => enableMutation.mutate({ connection: result.connection, enabled: !input.enabled, undo: true }),
+        })
+      }
+      await refresh()
+    },
+    onError: (reason, input) => {
+      toastError(input.enabled ? `${input.connection.displayName} wasn’t turned back on` : `${input.connection.displayName} wasn’t disabled`, reason)
+      void refresh()
+    },
   })
   const rotateMutation = useMutation({
     mutationFn: (connection: ExternalAgentConnection) => rotateExternalAgentCredential(projectId, connection.id, connection.version),
-    onSuccess: (result) => handleSuccess(result),
-    onError: handleError,
+    onSuccess: async (result) => {
+      setConfirming(null)
+      showCredential(result)
+      await refresh()
+    },
   })
   const removeMutation = useMutation({
     mutationFn: (connection: ExternalAgentConnection) => removeExternalAgent(projectId, connection.id, connection.version),
-    onSuccess: (result) => handleSuccess(result),
-    onError: handleError,
+    onSuccess: async (result) => {
+      setConfirming(null)
+      showToast({ title: `${result.connection.displayName} removed` })
+      await refresh()
+    },
   })
-  const pending = createMutation.isPending || updateMutation.isPending || rotateMutation.isPending || removeMutation.isPending
+  const confirmMutation = confirming?.kind === 'rotate' ? rotateMutation : removeMutation
+  const pending = createMutation.isPending || enableMutation.isPending || rotateMutation.isPending || removeMutation.isPending
 
   if (connections.isPending) return <ListSkeleton label="Loading agents" rows={2} avatars />
   if (connections.isError) {
-    return (
-      <ErrorState action={<Button onClick={() => void connections.refetch()}>Try again</Button>} title="Agents didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
+    return <ErrorState error={connections.error} onRetry={() => void connections.refetch()} title="Agents didn’t load" />
   }
 
   return (
     <div className="aw-agents">
-      {error && (
-        <Banner className="aw-agents__error" ref={errorRef} tabIndex={-1} tone="danger">
-          {error}
-        </Banner>
-      )}
       {oneTimeCredential && (
         <OneTimeToken
           agentName={oneTimeCredential.agentName}
@@ -136,42 +157,73 @@ export function ExternalAgentSettings({ projectId }: { projectId: string }) {
         />
       )}
       <Section description="The agents that can read and post here." title="Connected agents">
-        {!connections.data.connections.length && <p className="aw-agents__empty">No agents connected yet.</p>}
-        <div className="aw-agents__list">
-          {connections.data.connections.map((connection) => (
-            <AgentCard
-              connection={connection}
-              disabled={pending}
-              key={connection.id}
-              onRemove={() => {
-                setError(null)
-                removeMutation.mutate(connection)
-              }}
-              onRotate={() => {
-                setError(null)
-                rotateMutation.mutate(connection)
-              }}
-              onUpdate={(input) => {
-                setError(null)
-                updateMutation.mutate({ connection, input })
-              }}
-            />
-          ))}
-        </div>
+        {!connections.data.connections.length ? (
+          <EmptyState icon="bot" title="No agents connected yet">
+            Connect one below. It gets its own token and posts as itself.
+          </EmptyState>
+        ) : (
+          <div className="aw-agents__list">
+            {connections.data.connections.map((connection) => (
+              <AgentCard
+                connection={connection}
+                disabled={pending}
+                key={connection.id}
+                onConfirm={(kind) => {
+                  rotateMutation.reset()
+                  removeMutation.reset()
+                  setConfirming({ kind, connection })
+                }}
+                onEnable={(enabled) => enableMutation.mutate({ connection, enabled })}
+                projectId={projectId}
+              />
+            ))}
+          </div>
+        )}
       </Section>
       <Section
-        description="Pick a runner to tag it in conversations (@claude, @codex), or connect any other agent. You’ll get its token once; it can’t be shown again."
+        description="A runner answers when people tag it in a conversation (for example @reviewer). Any other agent connects over MCP. You’ll see its token once; it can’t be shown again."
         title="Connect an agent"
       >
+        {createError ? (
+          <Banner className="aw-agents__error" tone="danger">
+            {createError}
+          </Banner>
+        ) : null}
         <CreateAgentForm
           disabled={pending}
           onSubmit={(preset, input) => {
-            setError(null)
+            setCreateError(null)
             setCreatingAs(preset)
             createMutation.mutate(input)
           }}
         />
       </Section>
+      <ConfirmDialog
+        busy={confirmMutation.isPending}
+        confirmLabel={confirming?.kind === 'rotate' ? 'Make a new token' : 'Remove'}
+        error={
+          confirmMutation.isError
+            ? `${confirming?.kind === 'rotate' ? 'No new token was made.' : 'It wasn’t removed.'} ${describeError(confirmMutation.error).message}`
+            : null
+        }
+        onClose={() => setConfirming(null)}
+        onConfirm={() => {
+          if (!confirming) return
+          if (confirming.kind === 'rotate') rotateMutation.mutate(confirming.connection)
+          else removeMutation.mutate(confirming.connection)
+        }}
+        open={confirming !== null}
+        title={
+          confirming?.kind === 'rotate'
+            ? `Make a new token for ${confirming.connection.displayName}?`
+            : `Remove ${confirming?.connection.displayName ?? 'this agent'}?`
+        }
+        tone={confirming?.kind === 'rotate' ? 'primary' : 'danger'}
+      >
+        {confirming?.kind === 'rotate'
+          ? `${confirming.connection.displayName} stops working until you give it the new one. The old token stops working right away.`
+          : 'Its token stops working and it can’t connect here again. What it already posted stays.'}
+      </ConfirmDialog>
     </div>
   )
 }
@@ -290,12 +342,11 @@ function CreateAgentForm({
           <SelectField
             disabled={disabled}
             id="external-agent-role"
-            label="Role"
+            label="Access"
             onChange={(event) => changeRole(event.target.value as ExternalAgentRole)}
             value={role}
           >
-            <option value="member">Member: reads and posts</option>
-            <option value="viewer">Viewer: reads only</option>
+            <RoleOptions />
           </SelectField>
         )}
       </div>
@@ -347,20 +398,29 @@ function ScopeFields({
 function AgentCard({
   connection,
   disabled,
-  onRemove,
-  onRotate,
-  onUpdate,
+  onConfirm,
+  onEnable,
+  projectId,
 }: {
   connection: ExternalAgentConnection
   disabled: boolean
-  onRemove: () => void
-  onRotate: () => void
-  onUpdate: (input: Parameters<typeof updateExternalAgent>[2]) => void
+  onConfirm: (kind: Confirming['kind']) => void
+  onEnable: (enabled: boolean) => void
+  projectId: string
 }) {
   const active = connection.status === 'active'
-  const [removeArmed, setRemoveArmed] = useState(false)
   const [editing, setEditing] = useState(false)
-  const lastUsed = formatWhen(connection.lastUsedAt)
+  const [secret, setSecret] = useState<string | null>(null)
+  const menu: MenuEntry[] = [
+    ...(active
+      ? [
+          { label: 'New token…', icon: 'retry' as const, disabled, onSelect: () => onConfirm('rotate') },
+          { label: 'Disable', icon: 'circle-minus' as const, disabled, onSelect: () => onEnable(false) },
+          { separator: true as const },
+        ]
+      : []),
+    { label: 'Remove…', icon: 'trash', danger: true, disabled, onSelect: () => onConfirm('remove') },
+  ]
   return (
     <article className="aw-card aw-agentcard">
       <header className="aw-agentcard__head">
@@ -371,7 +431,12 @@ function AgentCard({
             <ActorTag kind="agent" />
           </div>
           <span className="aw-agentcard__sub">
-            @{connection.handle} · {connection.role === 'viewer' ? 'Viewer' : 'Member'} · {lastUsed ? `last active ${lastUsed}` : 'not used yet'}
+            @{connection.handle} · {ROLE_LABELS[connection.role] ?? ROLE_LABELS.member} ·{' '}
+            {connection.lastUsedAt ? (
+              <span title={formatFullDate(connection.lastUsedAt)}>last active {formatRelative(connection.lastUsedAt)}</span>
+            ) : (
+              'not used yet'
+            )}
           </span>
         </div>
         <StatusChip icon={active ? 'circle-check' : 'circle-minus'} tone={active ? 'success' : 'muted'}>
@@ -383,80 +448,194 @@ function AgentCard({
           <li key={scope}>{SCOPE_LABELS[scope] ?? scope}</li>
         ))}
       </ul>
+      {secret ? (
+        <OneTimeValue copyLabel="Copy secret" onDone={() => setSecret(null)} title={`Signing secret for ${connection.displayName}`} value={secret}>
+          Give it to the runner now so it can check each wakeup. It can’t be shown again after you close this.
+        </OneTimeValue>
+      ) : null}
       {active && editing ? (
         <div className="aw-agentcard__edit">
-          <SelectField
-            aria-label={`Role for ${connection.displayName}`}
-            disabled={disabled}
-            label="Role"
-            onChange={(event) => {
-              const role = event.target.value as ExternalAgentRole
-              onUpdate({ expectedVersion: connection.version, role, scopes: role === 'viewer' ? viewerScopes : connection.scopes })
-            }}
-            value={connection.role}
-          >
-            <option value="member">Member: reads and posts</option>
-            <option value="viewer">Viewer: reads only</option>
-          </SelectField>
-          <ScopeFields
-            disabled={disabled}
-            onChange={(scopes) => onUpdate({ expectedVersion: connection.version, scopes })}
-            role={connection.role}
-            scopes={connection.scopes}
+          <AgentEditForm
+            connection={connection}
+            onClose={() => setEditing(false)}
+            onSecret={setSecret}
+            projectId={projectId}
           />
-          <WebhookField connection={connection} disabled={disabled} />
           <WorkOsAgentSettings connection={connection} />
         </div>
       ) : null}
       {connection.status !== 'removed' && (
-        <footer className="aw-card__actions">
+        <footer className="aw-card__actions aw-agentcard__actions">
           {active ? (
-            <>
-              <Button icon="settings" onClick={() => setEditing(!editing)} size="sm" variant="ghost">
-                {editing ? 'Done editing' : 'Edit'}
+            editing ? null : (
+              <Button icon="pencil" onClick={() => setEditing(true)} size="sm" variant="ghost">
+                Edit
               </Button>
-              <Button disabled={disabled} icon="retry" onClick={onRotate} size="sm" variant="ghost">
-                New token
-              </Button>
-              <Button
-                disabled={disabled}
-                icon="circle-minus"
-                onClick={() => onUpdate({ expectedVersion: connection.version, enabled: false })}
-                size="sm"
-                variant="ghost"
-              >
-                Disable
-              </Button>
-            </>
+            )
           ) : (
-            <Button
-              disabled={disabled}
-              icon="circle-check"
-              onClick={() => onUpdate({ expectedVersion: connection.version, enabled: true })}
-              size="sm"
-            >
-              Re-enable
+            <Button disabled={disabled} icon="circle-check" onClick={() => onEnable(true)} size="sm">
+              Turn back on
             </Button>
           )}
           <span className="aw-agentcard__spacer" />
-          {removeArmed ? (
-            <>
-              <Button disabled={disabled} onClick={() => setRemoveArmed(false)} size="sm">
-                Cancel
-              </Button>
-              <Button disabled={disabled} icon="trash" onClick={onRemove} size="sm" variant="danger">
-                Confirm removal
-              </Button>
-            </>
-          ) : (
-            <Button disabled={disabled} icon="trash" onClick={() => setRemoveArmed(true)} size="sm" variant="ghost">
-              Remove…
-            </Button>
-          )}
+          <Menu
+            items={menu}
+            label={`${connection.displayName} actions`}
+            placement="bottom-end"
+            trigger={<IconButton icon="more" label={`${connection.displayName} actions`} size="sm" />}
+          />
         </footer>
       )}
     </article>
   )
+}
+
+/** Access, what it can do and where wakeups go, saved together. */
+function AgentEditForm({
+  connection,
+  onClose,
+  onSecret,
+  projectId,
+}: {
+  connection: ExternalAgentConnection
+  onClose: () => void
+  onSecret: (secret: string | null) => void
+  projectId: string
+}) {
+  const queryClient = useQueryClient()
+  const [role, setRole] = useState<ExternalAgentRole>(connection.role)
+  const [scopes, setScopes] = useState<ExternalAgentScope[]>(connection.scopes)
+  const [url, setUrl] = useState(connection.webhookUrl ?? '')
+  const [test, setTest] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null)
+  const savedUrl = connection.webhookUrl ?? ''
+  const roleChanged = role !== connection.role
+  const scopesChanged = scopes.length !== connection.scopes.length || scopes.some((scope) => !connection.scopes.includes(scope))
+  const urlChanged = url.trim() !== savedUrl
+  const dirty = roleChanged || scopesChanged || urlChanged
+  const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(projectId) })
+
+  const save = useMutation({
+    mutationFn: async (input: { resaveWebhook?: boolean } = {}) => {
+      let secret: string | null = null
+      if (!input.resaveWebhook && (roleChanged || scopesChanged)) {
+        await updateExternalAgent(projectId, connection.id, {
+          expectedVersion: connection.version,
+          ...(roleChanged ? { role } : {}),
+          ...(scopesChanged ? { scopes } : {}),
+        })
+      }
+      if (input.resaveWebhook || urlChanged) {
+        const result = await setExternalAgentWebhook(projectId, connection.id, input.resaveWebhook ? savedUrl : url.trim() || null)
+        secret = result.webhookSecret
+      }
+      return secret
+    },
+    onSuccess: (secret, input) => {
+      showToast({ tone: 'success', title: input?.resaveWebhook ? 'Wakeups updated' : 'Changes saved' })
+      if (secret) onSecret(secret)
+      if (!input?.resaveWebhook) onClose()
+    },
+    onSettled: refresh,
+  })
+  const sendTest = useMutation({
+    mutationFn: () => testExternalAgentWebhook(projectId, connection.id),
+    onMutate: () => setTest(null),
+    onSuccess: (result) =>
+      setTest(
+        result.ok
+          ? { tone: 'success', text: `The runner answered ${result.status ?? 'OK'} in ${result.elapsedMs} ms.` }
+          : { tone: 'danger', text: `The test wakeup didn’t get through: ${result.error ?? 'no answer'}.` },
+      ),
+    onError: (reason) => setTest({ tone: 'danger', text: `The test wakeup wasn’t sent. ${describeError(reason).message}` }),
+  })
+  const changeRole = (next: ExternalAgentRole) => {
+    setRole(next)
+    setScopes(next === 'viewer' ? viewerScopes : next === connection.role ? connection.scopes : memberScopes)
+  }
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (dirty) save.mutate({})
+  }
+  const busy = save.isPending
+  return (
+    <form className="aw-agentcard__form" onSubmit={submit}>
+      <SelectField
+        disabled={busy}
+        id={`agent-role-${connection.id}`}
+        label="Access"
+        onChange={(event) => changeRole(event.target.value as ExternalAgentRole)}
+        value={role}
+      >
+        <RoleOptions />
+      </SelectField>
+      <ScopeFields disabled={busy} onChange={setScopes} role={role} scopes={scopes} />
+      <div className="aw-webhook">
+        {connection.webhookUrl && connection.wakeupFormat === 'inbox' ? (
+          <Banner
+            action={
+              <Button busy={busy} onClick={() => save.mutate({ resaveWebhook: true })} size="sm">
+                Update wakeups
+              </Button>
+            }
+            tone="warning"
+          >
+            This webhook gets the old “check your inbox” wakeups, which stop working in a later release. Update it for wakeups
+            that say what happened (a new request, a follow-up, a stop), then give the runner the new secret.
+          </Banner>
+        ) : null}
+        <TextField
+          disabled={busy}
+          hint={
+            connection.lastWakeupAt ? (
+              <>
+                <span title={formatFullDate(connection.lastWakeupAt)}>Last wakeup {formatRelative(connection.lastWakeupAt)}</span>
+                {connection.lastWakeupError ? `, which failed: ${connection.lastWakeupError}` : ''}. Leave it empty to stop wakeups.
+              </>
+            ) : (
+              'We call this when someone asks the agent for a reply, follows up, or stops it. Leave it empty for agents that check in on a schedule.'
+            )
+          }
+          id={`webhook-${connection.id}`}
+          label="Wakeup webhook (optional)"
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="https://…"
+          spellCheck={false}
+          type="url"
+          value={url}
+        />
+        {test ? <Banner tone={test.tone}>{test.text}</Banner> : null}
+      </div>
+      {save.isError ? <Banner tone="danger">{`Your changes weren’t saved. ${describeError(save.error).message}`}</Banner> : null}
+      <div className="aw-card__actions">
+        <Button busy={busy} disabled={!dirty} type="submit" variant="primary">
+          Save changes
+        </Button>
+        <Button disabled={busy} onClick={onClose}>
+          Cancel
+        </Button>
+        {connection.webhookUrl ? (
+          <Button busy={sendTest.isPending} disabled={busy || urlChanged} onClick={() => sendTest.mutate()} variant="ghost">
+            Send a test wakeup
+          </Button>
+        ) : null}
+      </div>
+    </form>
+  )
+}
+
+function useCopy() {
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null)
+  const copy = (value: string) => {
+    if (!navigator.clipboard) {
+      setCopied('failed')
+      return
+    }
+    navigator.clipboard.writeText(value).then(
+      () => setCopied('yes'),
+      () => setCopied('failed'),
+    )
+  }
+  return [copied, copy] as const
 }
 
 function OneTimeToken({
@@ -470,8 +649,8 @@ function OneTimeToken({
   onDismiss: () => void
   setup?: { handle: string; runner: RunnerPresetId; webhookSecret: string | null }
 }) {
-  const [copied, setCopied] = useState(false)
-  const [settingsCopied, setSettingsCopied] = useState(false)
+  const [copied, copyToken] = useCopy()
+  const [settingsCopied, copySettings] = useCopy()
   const settings = setup
     ? runnerSettings({
         origin: window.location.origin,
@@ -490,139 +669,47 @@ function OneTimeToken({
       </div>
       <p>Copy it into the agent’s secret file now. It can’t be shown again after you close this.</p>
       <code className="aw-token__value">{credential.token}</code>
-      <p className="aw-token__meta">Expires {formatWhen(credential.expiresAt) ?? credential.expiresAt}</p>
-      {setup?.webhookSecret ? (
-        <p className="aw-token__meta">
-          Webhook signing secret: <code>{setup.webhookSecret}</code>
-        </p>
-      ) : null}
+      <p className="aw-token__meta" title={formatFullDate(credential.expiresAt)}>
+        Expires {formatShortDate(credential.expiresAt)}
+      </p>
       {settings && runner ? (
         <>
-          <p>Your runner’s settings, with the token and secret in them. Keep them somewhere private.</p>
+          <p>Your runner’s settings, with the token and signing secret in them. Keep them somewhere private.</p>
           <pre aria-label="Runner settings" className="aw-token__settings">
             {settings}
           </pre>
           <p className="aw-token__help">
-            The runner checks the signature on each wakeup, claims the request with <code>reply_claim</code>, reports
-            with <code>reply_progress</code>, answers with <code>reply_send</code>, and stops when it hears{' '}
-            <code>reply.cancelled</code>. The whole contract is at{' '}
-            <a href="/agent-runner.md" rel="noreferrer" target="_blank">{`${window.location.origin}/agent-runner.md`}</a>.
+            The runner checks the signature on each wakeup, claims the request, posts progress, answers in the thread and stops
+            when someone stops it.{' '}
+            <a href="/agent-runner.md" rel="noreferrer" target="_blank">
+              How a runner works
+            </a>
           </p>
         </>
       ) : null}
       <p className="aw-token__help" hidden={runner}>
-        Point the agent’s MCP client at <code>{`${window.location.origin}/api/v1/mcp`}</code> with this token. It checks{' '}
-        <code>inbox_list</code>, then answers with <code>reply_claim</code> and <code>reply_send</code>, or <code>reply_pass</code>.
-        Send the agent <a href="/connect.md" rel="noreferrer" target="_blank">{`${window.location.origin}/connect.md`}</a> for
-        step-by-step setup.
+        Point the agent’s MCP client at <code>{`${window.location.origin}/api/v1/mcp`}</code> with this token, or send it the{' '}
+        <a href="/connect.md" rel="noreferrer" target="_blank">
+          setup guide
+        </a>{' '}
+        for step-by-step instructions.
       </p>
       <div className="aw-card__actions">
-        <Button
-          icon={copied ? 'check' : 'copy'}
-          onClick={() => {
-            void navigator.clipboard.writeText(credential.token).then(() => setCopied(true))
-          }}
-          variant="primary"
-        >
-          {copied ? 'Copied' : 'Copy token'}
+        <Button icon={copied === 'yes' ? 'check' : 'copy'} onClick={() => copyToken(credential.token)} variant="primary">
+          {copied === 'yes' ? 'Copied' : 'Copy token'}
         </Button>
         {settings && runner ? (
-          <Button
-            icon={settingsCopied ? 'check' : 'copy'}
-            onClick={() => {
-              void navigator.clipboard.writeText(settings).then(() => setSettingsCopied(true))
-            }}
-          >
-            {settingsCopied ? 'Copied settings' : 'Copy settings'}
+          <Button icon={settingsCopied === 'yes' ? 'check' : 'copy'} onClick={() => copySettings(settings)}>
+            {settingsCopied === 'yes' ? 'Copied settings' : 'Copy settings'}
           </Button>
         ) : null}
         <Button onClick={onDismiss}>Done</Button>
       </div>
-    </aside>
-  )
-}
-
-/** Optional push wakeups. Agents that can't receive webhooks check their inbox on a schedule instead. */
-function WebhookField({ connection, disabled }: { connection: ExternalAgentConnection; disabled: boolean }) {
-  const queryClient = useQueryClient()
-  const [url, setUrl] = useState(connection.webhookUrl ?? '')
-  const [secret, setSecret] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [test, setTest] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null)
-  const save = (next: string | null) => {
-    setBusy(true)
-    setError(null)
-    setTest(null)
-    void setExternalAgentWebhook(connection.projectId, connection.id, next)
-      .then(async (result) => {
-        setSecret(result.webhookSecret)
-        await queryClient.invalidateQueries({ queryKey: queryKeys.externalAgents(connection.projectId) })
-      })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The webhook wasn’t saved.'))
-      .finally(() => setBusy(false))
-  }
-  const sendTest = () => {
-    setBusy(true)
-    setTest(null)
-    void testExternalAgentWebhook(connection.projectId, connection.id)
-      .then((result) =>
-        setTest(
-          result.ok
-            ? { tone: 'success', text: `The runner answered ${result.status ?? 'OK'} in ${result.elapsedMs} ms.` }
-            : { tone: 'danger', text: `The test wakeup didn’t get through: ${result.error ?? 'no answer'}.` },
-        ),
-      )
-      .catch((reason: unknown) =>
-        setTest({ tone: 'danger', text: reason instanceof Error ? reason.message : 'The test wakeup wasn’t sent.' }),
-      )
-      .finally(() => setBusy(false))
-  }
-  const lastWakeup = formatWhen(connection.lastWakeupAt)
-  return (
-    <div className="aw-webhook">
-      {connection.webhookUrl && connection.wakeupFormat === 'inbox' ? (
-        <Banner tone="warning">
-          This webhook gets the old “check your inbox” wakeups, which stop working in a later release. Save it again for
-          wakeups that say what happened (a new request, a follow-up, a stop), then give the runner the new secret.
-        </Banner>
-      ) : null}
-      <TextField
-        disabled={disabled || busy}
-        error={error ?? undefined}
-        hint={
-          lastWakeup
-            ? `Last wakeup ${lastWakeup}${connection.lastWakeupError ? `, which failed: ${connection.lastWakeupError}` : ''}.`
-            : 'We call this when someone asks the agent for a reply, follows up, or stops it. Leave it empty for agents that check in on a schedule.'
-        }
-        id={`webhook-${connection.id}`}
-        label="Wakeup webhook (optional)"
-        onChange={(event) => setUrl(event.target.value)}
-        placeholder="https://…"
-        type="url"
-        value={url}
-      />
-      <div className="aw-card__actions">
-        <Button disabled={disabled || busy || !url.trim()} onClick={() => save(url.trim())} size="sm">
-          Save webhook
-        </Button>
-        {connection.webhookUrl ? (
-          <Button disabled={disabled || busy} onClick={sendTest} size="sm" variant="secondary">
-            Send a test wakeup
-          </Button>
-        ) : null}
-        {connection.webhookUrl ? (
-          <Button disabled={disabled || busy} onClick={() => save(null)} size="sm" variant="ghost">
-            Stop wakeups
-          </Button>
-        ) : null}
-      </div>
-      {test ? <Banner tone={test.tone}>{test.text}</Banner> : null}
-      {secret ? (
-        <p className="aw-token__meta">
-          Signing secret, shown once: <code>{secret}</code>
+      {copied === 'failed' || settingsCopied === 'failed' ? (
+        <p className="aw-quiet" role="status">
+          Couldn’t copy. Select the text above and copy it yourself.
         </p>
       ) : null}
-    </div>
+    </aside>
   )
 }

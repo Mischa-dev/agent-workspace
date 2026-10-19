@@ -7,10 +7,12 @@ import { queryKeys } from '../../api/queryKeys'
 import {
   Button,
   Checkbox,
+  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
   Icon,
+  IconButton,
   ListSkeleton,
   PageHeader,
   Row,
@@ -19,7 +21,9 @@ import {
   SelectField,
   TextArea,
   TextField,
+  countLabel,
   formatDateTime,
+  formatFullDate,
   showToast,
 } from '../../ui'
 import {
@@ -39,6 +43,9 @@ import {
 } from '../../views/api'
 import { workItemPriorities } from '../../work-items/constants'
 import { workItemHref } from '../../work-items/links'
+import { workspaceSettingsHref } from '../paths'
+import { TimeZoneField } from '../TimeZoneField'
+import { deviceTimeZone } from '../timeZones'
 import type { SettingsPageProps } from '../types'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -56,7 +63,7 @@ function describeSchedule(recurring: Pick<Recurring, 'frequency' | 'every' | 'we
   return `${every}${on} at ${recurring.timeOfDay} (${recurring.timezone})`
 }
 
-/** Project › Templates: task templates, recurring tasks, and saving the Project's setup as a template. */
+/** Project › Templates: task templates, recurring tasks, and saving the project's setup as a template. */
 export default function TemplatesPage({ project }: SettingsPageProps) {
   const projectId = project?.id ?? ''
   const queryClient = useQueryClient()
@@ -65,6 +72,7 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
   const [editing, setEditing] = useState<TaskTemplate | 'new' | null>(null)
   const [scheduling, setScheduling] = useState(false)
   const [savingProject, setSavingProject] = useState(false)
+  const [removing, setRemoving] = useState<Recurring | null>(null)
   const refresh = () => queryClient.invalidateQueries({ queryKey: viewKeys.templates(projectId) })
 
   const use = useMutation({
@@ -76,27 +84,86 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
     onError: (error) => toastError('The task wasn’t created', error),
   })
   const archive = useMutation({
-    mutationFn: (template: TaskTemplate) => updateTemplate(projectId, template, { archived: !template.archived }, crypto.randomUUID()),
-    onSuccess: (template) => showToast({ title: template.archived ? `“${template.name}” archived` : `“${template.name}” restored` }),
-    onError: (error) => toastError('That didn’t save', error),
+    mutationFn: (input: { template: TaskTemplate; undo?: boolean }) =>
+      updateTemplate(projectId, input.template, { archived: !input.template.archived }, crypto.randomUUID()),
+    onSuccess: (template, input) => {
+      if (input.undo) return
+      showToast({
+        title: template.archived ? `${template.name} archived` : `${template.name} restored`,
+        onUndo: () => archive.mutate({ template, undo: true }),
+      })
+    },
+    onError: (error, input) => toastError(input.template.archived ? 'The template wasn’t restored' : 'The template wasn’t archived', error),
     onSettled: refresh,
   })
   const toggleRecurring = useMutation({
-    mutationFn: (recurring: Recurring) => updateRecurring(projectId, recurring, { enabled: !recurring.enabled }, crypto.randomUUID()),
-    onSuccess: (recurring) => showToast({ title: recurring.enabled ? `“${recurring.templateName}” resumed` : `“${recurring.templateName}” paused` }),
-    onError: (error) => toastError('That didn’t save', error),
+    mutationFn: (input: { recurring: Recurring; undo?: boolean }) =>
+      updateRecurring(projectId, input.recurring, { enabled: !input.recurring.enabled }, crypto.randomUUID()),
+    onSuccess: (recurring, input) => {
+      if (input.undo) return
+      showToast({
+        title: recurring.enabled ? `${recurring.templateName} resumed` : `${recurring.templateName} paused`,
+        onUndo: () => toggleRecurring.mutate({ recurring, undo: true }),
+      })
+    },
+    onError: (error, input) => toastError(input.recurring.enabled ? 'It wasn’t paused' : 'It wasn’t resumed', error),
     onSettled: refresh,
   })
   const removeRecurring = useMutation({
     mutationFn: (recurring: Recurring) => deleteRecurring(projectId, recurring, crypto.randomUUID()),
-    onSuccess: () => showToast({ title: 'Recurring task removed. Tasks it already made stay.' }),
-    onError: (error) => toastError('That didn’t delete', error),
+    onSuccess: () => {
+      setRemoving(null)
+      showToast({ title: 'Recurring task removed', description: 'Tasks it already made stay.' })
+    },
     onSettled: refresh,
   })
   if (!project) return null
   const canEdit = Boolean(templates.data?.canEdit)
   const active = (templates.data?.templates ?? []).filter((template) => !template.archived)
   const archived = (templates.data?.templates ?? []).filter((template) => template.archived)
+  const templateRow = (template: TaskTemplate) => (
+    <Row
+      actions={
+        canEdit ? (
+          <>
+            {template.archived ? null : (
+              <Button busy={use.isPending && use.variables?.id === template.id} onClick={() => use.mutate(template)} size="sm">
+                Create task
+              </Button>
+            )}
+            {template.archived ? null : (
+              <Button onClick={() => setEditing(template)} size="sm" variant="ghost">
+                Edit
+              </Button>
+            )}
+            <Button
+              disabled={archive.isPending && archive.variables?.template.id === template.id}
+              onClick={() => archive.mutate({ template })}
+              size="sm"
+              variant="ghost"
+            >
+              {template.archived ? 'Restore' : 'Archive'}
+            </Button>
+          </>
+        ) : null
+      }
+      key={template.id}
+      leading={
+        <span className="aw-row__tile">
+          <Icon name={template.archived ? 'archive' : 'bookmark'} size={16} />
+        </span>
+      }
+      meta={
+        <span className="aw-row__metaline aw-wrap">
+          <span>{template.title}</span>
+          {template.acceptanceCriteria.length ? <span>{countLabel(template.acceptanceCriteria.length, 'criterion', 'criteria')}</span> : null}
+          {template.subtasks.length ? <span>{countLabel(template.subtasks.length, 'subtask')}</span> : null}
+          {template.labels.length ? <span>{template.labels.join(', ')}</span> : null}
+        </span>
+      }
+      title={template.name}
+    />
+  )
 
   return (
     <>
@@ -108,72 +175,34 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
             </Button>
           ) : null
         }
-        icon="list"
+        icon="bookmark"
         title="Templates"
       >
         Tasks you make often, ready with their criteria and subtasks, and tasks that make themselves on a schedule.
       </PageHeader>
       {templates.isPending ? <ListSkeleton label="Loading templates" rows={3} /> : null}
-      {templates.isError ? (
-        <ErrorState action={<Button onClick={() => void templates.refetch()}>Try again</Button>} title="Templates didn’t load">
-          Check your connection and try again.
-        </ErrorState>
-      ) : null}
+      {templates.isError ? <ErrorState error={templates.error} onRetry={() => void templates.refetch()} title="Templates didn’t load" /> : null}
       {templates.data ? (
         <>
           <Section id="task-templates-heading" title="Task templates">
             {active.length ? (
-              <RowList label="Task templates">
-                {[...active, ...archived].map((template) => (
-                  <Row
-                    actions={
-                      canEdit ? (
-                        <>
-                          {template.archived ? null : (
-                            <Button busy={use.isPending && use.variables?.id === template.id} onClick={() => use.mutate(template)} size="sm">
-                              Create task
-                            </Button>
-                          )}
-                          {template.archived ? null : (
-                            <Button onClick={() => setEditing(template)} size="sm" variant="ghost">
-                              Edit
-                            </Button>
-                          )}
-                          <Button onClick={() => archive.mutate(template)} size="sm" variant="ghost">
-                            {template.archived ? 'Restore' : 'Archive'}
-                          </Button>
-                        </>
-                      ) : null
-                    }
-                    key={template.id}
-                    leading={
-                      <span className="aw-row__tile">
-                        <Icon name={template.archived ? 'archive' : 'list'} size={16} />
-                      </span>
-                    }
-                    meta={
-                      <span className="aw-row__metaline aw-wrap">
-                        <span>{template.title}</span>
-                        {template.acceptanceCriteria.length ? <span>{template.acceptanceCriteria.length} criteria</span> : null}
-                        {template.subtasks.length ? <span>{template.subtasks.length} subtasks</span> : null}
-                        {template.labels.length ? <span>{template.labels.join(', ')}</span> : null}
-                        {template.archived ? <span>Archived</span> : null}
-                      </span>
-                    }
-                    title={template.name}
-                  />
-                ))}
-              </RowList>
+              <RowList label="Task templates">{active.map(templateRow)}</RowList>
             ) : (
               <EmptyState
                 action={canEdit ? <Button onClick={() => setEditing('new')}>New template</Button> : undefined}
-                icon="list"
+                icon="bookmark"
                 title="No task templates yet"
               >
                 A template fills in a task’s title, description, labels, acceptance criteria and subtasks in one go. Agents
                 can use them too.
               </EmptyState>
             )}
+            {archived.length ? (
+              <details className="aw-disclosure">
+                <summary>Archived ({archived.length})</summary>
+                <RowList label="Archived task templates">{archived.map(templateRow)}</RowList>
+              </details>
+            ) : null}
           </Section>
           <Section
             actions={
@@ -194,12 +223,18 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
                     actions={
                       canEdit ? (
                         <>
-                          <Button onClick={() => toggleRecurring.mutate(recurring)} size="sm" variant="ghost">
+                          <Button
+                            disabled={toggleRecurring.isPending && toggleRecurring.variables?.recurring.id === recurring.id}
+                            onClick={() => toggleRecurring.mutate({ recurring })}
+                            size="sm"
+                            variant="ghost"
+                          >
                             {recurring.enabled ? 'Pause' : 'Resume'}
                           </Button>
-                          <Button icon="trash" onClick={() => removeRecurring.mutate(recurring)} size="sm" variant="ghost">
-                            Remove
-                          </Button>
+                          <IconButton icon="trash" label={`Remove recurring ${recurring.templateName}`} onClick={() => {
+                            removeRecurring.reset()
+                            setRemoving(recurring)
+                          }} size="sm" />
                         </>
                       ) : null
                     }
@@ -212,7 +247,9 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
                     meta={
                       <span className="aw-row__metaline aw-wrap">
                         <span>{describeSchedule(recurring)}</span>
-                        {recurring.enabled && recurring.nextRunAt ? <span>Next {formatDateTime(recurring.nextRunAt)}</span> : null}
+                        {recurring.enabled && recurring.nextRunAt ? (
+                          <span title={formatFullDate(recurring.nextRunAt)}>Next {formatDateTime(recurring.nextRunAt)}</span>
+                        ) : null}
                         {!recurring.enabled ? <span>Paused{recurring.pausedReason ? `: ${recurring.pausedReason}` : ''}</span> : null}
                         {recurring.lastWorkItemId && recurring.lastWorkItemKey ? (
                           <Link to={workItemHref(projectId, recurring.lastWorkItemId)}>Last made {recurring.lastWorkItemKey}</Link>
@@ -226,7 +263,9 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
                 ))}
               </RowList>
             ) : (
-              <p className="aw-pagesection__desc">{active.length ? 'None yet.' : 'Make a task template first, then schedule it here.'}</p>
+              <p className="aw-pagesection__desc">
+                {active.length ? 'No recurring tasks yet.' : 'Make a task template first, then schedule it here.'}
+              </p>
             )}
           </Section>
         </>
@@ -235,23 +274,37 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
         <Section
           actions={
             <Button onClick={() => setSavingProject(true)} size="sm">
-              Save as Project template
+              Save as project template
             </Button>
           }
-          description="Keeps this Project’s workflow, labels, channels, defaults and task templates so a new Project can start the same way."
+          description="Keeps this project’s workflow, labels, channels, defaults and task templates so a new project can start the same way."
           id="project-template-heading"
           title="Project template"
         >
-          <p className="aw-pagesection__desc">Choose the template when you create a Project. Workspace settings list them all.</p>
+          <p className="aw-pagesection__desc">
+            Choose the template when you create a project. <Link to={workspaceSettingsHref('project-templates')}>Project templates</Link> in
+            workspace settings lists them all.
+          </p>
         </Section>
       ) : null}
+      <ConfirmDialog
+        busy={removeRecurring.isPending}
+        confirmLabel="Remove"
+        error={removeRecurring.isError ? `It wasn’t removed. ${describeError(removeRecurring.error).message}` : null}
+        onClose={() => setRemoving(null)}
+        onConfirm={() => removing && removeRecurring.mutate(removing)}
+        open={removing !== null}
+        title={`Stop making ${removing?.templateName ?? 'this task'}?`}
+      >
+        The schedule is removed and no more tasks are made from it. Tasks it already made stay.
+      </ConfirmDialog>
       {editing ? (
         <TemplateDialog
           onClose={() => setEditing(null)}
           onSaved={(template) => {
             setEditing(null)
             void refresh()
-            showToast({ tone: 'success', title: `“${template.name}” saved` })
+            showToast({ tone: 'success', title: `${template.name} saved` })
           }}
           projectId={projectId}
           template={editing === 'new' ? null : editing}
@@ -307,6 +360,13 @@ function TemplateDialog({
   const [subtasks, setSubtasks] = useState(template?.subtasks.map((subtask) => subtask.title).join('\n') ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const dirty =
+    name !== (template?.name ?? '') ||
+    title !== (template?.title ?? '') ||
+    description !== (template?.description ?? '') ||
+    labels !== (template?.labels.join(', ') ?? '') ||
+    criteria !== (template?.acceptanceCriteria.join('\n') ?? '') ||
+    subtasks !== (template?.subtasks.map((subtask) => subtask.title).join('\n') ?? '')
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -348,13 +408,14 @@ function TemplateDialog({
           </Button>
         </>
       }
+      dirty={dirty}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
       open
       title={template ? 'Edit template' : 'New task template'}
       width={560}
     >
-      <TextField autoFocus error={error ?? undefined} label="Template name" maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="e.g. Weekly release check" value={name} />
+      <TextField autoFocus error={error ?? undefined} label="Template name" maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="Weekly release check" value={name} />
       <TextField label="Task title" maxLength={500} onChange={(event) => setTitle(event.target.value)} value={title} />
       <TextArea label="Description" onChange={(event) => setDescription(event.target.value)} rows={4} value={description} />
       <SelectField label="Priority" onChange={(event) => setPriority(event.target.value)} value={priority}>
@@ -369,14 +430,6 @@ function TemplateDialog({
       <TextArea hint="One per line. Each becomes a task under the new one." label="Subtasks" onChange={(event) => setSubtasks(event.target.value)} rows={3} value={subtasks} />
     </Dialog>
   )
-}
-
-function localTimezone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  } catch {
-    return 'UTC'
-  }
 }
 
 function RecurringDialog({
@@ -398,7 +451,7 @@ function RecurringDialog({
     weekdays: [1],
     monthDay: 1,
     timeOfDay: '09:00',
-    timezone: localTimezone(),
+    timezone: deviceTimeZone(),
     dueInDays: null,
   })
   const [error, setError] = useState<string | null>(null)
@@ -432,7 +485,7 @@ function RecurringDialog({
 
   return (
     <Dialog
-      description="It runs with your access. If you leave the Project, it pauses."
+      description="It runs with your access. If you leave the project, it pauses."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -462,7 +515,7 @@ function RecurringDialog({
         <TextField label="Every" max={52} min={1} onChange={(event) => change({ every: Math.max(1, Number(event.target.value) || 1) })} type="number" value={schedule.every} />
       </div>
       {schedule.frequency === 'weekly' ? (
-        <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
+        <fieldset className="aw-fieldset">
           <legend className="aw-field__label">On</legend>
           <div className="aw-form__row">
             {WEEKDAYS.map((label, index) => (
@@ -491,7 +544,7 @@ function RecurringDialog({
       ) : null}
       <div className="aw-form__row">
         <TextField label="At" onChange={(event) => change({ timeOfDay: event.target.value })} type="time" value={schedule.timeOfDay} />
-        <TextField label="Time zone" onChange={(event) => change({ timezone: event.target.value })} value={schedule.timezone} />
+        <TimeZoneField onChange={(timezone) => change({ timezone })} value={schedule.timezone} />
       </div>
       <TextField
         hint="Leave empty for no due date."
@@ -521,7 +574,7 @@ function SaveProjectTemplateDialog({ defaultName, onClose, projectId }: { defaul
     try {
       const template = await saveAsProjectTemplate(projectId, { name: name.trim(), description }, idempotencyKey.current)
       void queryClient.invalidateQueries({ queryKey: ['organization', template.organizationId, 'project-templates'] })
-      showToast({ tone: 'success', title: `“${template.name}” saved`, description: 'Pick it when you create a Project.' })
+      showToast({ tone: 'success', title: `${template.name} saved`, description: 'Pick it when you create a project.' })
       onClose()
     } catch (reason) {
       idempotencyKey.current = crypto.randomUUID()
@@ -533,7 +586,7 @@ function SaveProjectTemplateDialog({ defaultName, onClose, projectId }: { defaul
 
   return (
     <Dialog
-      description="Saves the workflow, labels, channel names, Project defaults and task templates. Not tasks, members, repositories or keys."
+      description="Saves the workflow, labels, channel names, project defaults and task templates. Not tasks, members, repositories or keys."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -542,10 +595,11 @@ function SaveProjectTemplateDialog({ defaultName, onClose, projectId }: { defaul
           </Button>
         </>
       }
+      dirty={name !== `${defaultName} setup` || description !== ''}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
       open
-      title="Save as Project template"
+      title="Save as project template"
     >
       <TextField autoFocus error={error ?? undefined} label="Name" maxLength={80} onChange={(event) => setName(event.target.value)} value={name} />
       <TextArea label="Description" maxLength={2000} onChange={(event) => setDescription(event.target.value)} rows={3} value={description} />

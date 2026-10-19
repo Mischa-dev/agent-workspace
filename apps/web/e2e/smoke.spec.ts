@@ -10,20 +10,20 @@ test('signs in with a password and lands on Home', async ({ page }) => {
   await expect(page).toHaveURL(/\/sign-in/)
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible()
 
-  await page.getByLabel('Login name').fill(seeded.loginName)
+  await page.getByLabel('Username').fill(seeded.loginName)
   await page.getByLabel('Password').fill(seededValue('E2E_PASSWORD'))
   await page.getByRole('button', { name: 'Sign in' }).click()
 
   await expect(page).toHaveURL(/\/home$/)
-  await expect(page.getByRole('heading', { name: `Welcome back, ${seeded.displayName}` })).toBeVisible()
+  await expect(page.getByRole('heading', { name: new RegExp(`^(Welcome|Good \\w+), ${seeded.displayName.split(' ')[0]}$`) })).toBeVisible()
   await expect(
-    page.getByRole('navigation', { name: 'Projects' }).getByRole('link', { name: seeded.projectName }),
+    page.getByRole('navigation', { name: 'Spaces' }).getByRole('link', { name: seeded.projectName }),
   ).toBeVisible()
 })
 
 test('rejects a wrong password', async ({ page }) => {
   await page.goto('/sign-in')
-  await page.getByLabel('Login name').fill(seeded.loginName)
+  await page.getByLabel('Username').fill(seeded.loginName)
   await page.getByLabel('Password').fill('not-the-right-password')
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('alert').first()).toBeVisible()
@@ -34,23 +34,23 @@ test('creates a task and moves it across the board', async ({ page }) => {
   const title = `Smoke task ${Date.now()}`
 
   await page.goto('/sign-in')
-  await page.getByLabel('Login name').fill(seeded.loginName)
+  await page.getByLabel('Username').fill(seeded.loginName)
   await page.getByLabel('Password').fill(seededValue('E2E_PASSWORD'))
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page).toHaveURL(/\/home$/)
 
-  // Into the Project and its work items, the way a person would get there.
+  // Into the project and its tasks, the way a person would get there.
   // The rail reopens the last place this person was in the Project, which
   // another spec may have left on its settings, so start from the channel.
   await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/channels/${seededValue('E2E_CHANNEL_ID')}`)
-  await page.getByRole('link', { name: 'Work items' }).click()
-  await expect(page.getByRole('heading', { name: 'Work items', exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Tasks', exact: true }).first().click()
+  await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: 'New work item' }).first().click()
-  const dialog = page.getByRole('dialog', { name: 'New work item' })
+  await page.getByRole('button', { name: 'New task' }).first().click()
+  const dialog = page.getByRole('dialog', { name: 'New task' })
   await dialog.getByLabel('Title').fill(title)
   await dialog.getByLabel('Type').selectOption({ label: 'Task' })
-  await dialog.getByRole('button', { name: 'Create work item' }).click()
+  await dialog.getByRole('button', { name: 'Create task' }).click()
 
   // Creating opens the new item in the task panel beside the list; the URL
   // carries it, so the panel survives a reload or a shared link.
@@ -65,7 +65,7 @@ test('creates a task and moves it across the board', async ({ page }) => {
   await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}/work-items`)
   await page.getByRole('radiogroup', { name: 'View' }).getByRole('radio', { name: 'Board' }).click()
   await expect(page).toHaveURL(/view=board/)
-  const board = page.getByRole('region', { name: 'Work item board' })
+  const board = page.getByRole('region', { name: 'Task board' })
   const column = (name: string) => board.getByRole('region', { name, exact: true })
   const card = (name: string) => column(name).getByRole('listitem', { name: `${key} ${title}` })
 

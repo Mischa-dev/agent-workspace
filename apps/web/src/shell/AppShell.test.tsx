@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { queryKeys } from '../api/queryKeys'
 import type { SessionUser } from '../auth/session'
 import type { Project } from '../projects/types'
 import { AppShell } from './AppShell'
@@ -62,6 +64,17 @@ const project: Project = {
   },
 }
 
+/** The shell reads the address and the project list, as it does inside the app. */
+function renderInApp(ui: ReactElement) {
+  const client = new QueryClient()
+  client.setQueryData(queryKeys.projects, { projects: [] })
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/projects/project-a']}>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
 describe('AppShell on narrow screens', () => {
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -81,7 +94,7 @@ describe('AppShell on narrow screens', () => {
   })
 
   it('opens the rail and sidebar as one drawer, keeps focus inside it, and makes the rest inert', async () => {
-    render(
+    renderInApp(
       <AppShell context={<aside className="context-drawer">Context</aside>} project={project} user={user}>
         <button type="button">Main action</button>
       </AppShell>,
@@ -128,7 +141,7 @@ describe('AppShell on narrow screens', () => {
   })
 
   it('closes the drawer from the backdrop and restores its trigger focus', () => {
-    render(
+    renderInApp(
       <AppShell project={project} user={user}>
         <h1>Workspace</h1>
       </AppShell>,
@@ -159,7 +172,7 @@ describe('AppShell on narrow screens', () => {
         </AppShell>
       )
     }
-    render(<Page />)
+    renderInApp(<Page />)
 
     // A conversation brings its own header, so the shell's bar is gone.
     expect(screen.queryByRole('button', { name: /open navigation/ })).not.toBeInTheDocument()
@@ -169,7 +182,7 @@ describe('AppShell on narrow screens', () => {
     fireEvent.click(toggle)
     expect(screen.getByRole('dialog', { name: 'Details' })).toHaveAttribute('aria-modal', 'true')
     expect(document.querySelector('#main-workspace')).toHaveAttribute('inert')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Close Details' })).toHaveFocus())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close details' })).toHaveFocus())
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

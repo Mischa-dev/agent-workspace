@@ -1,23 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 
 import { Kbd } from '../ui'
 import { Popover } from '../ui/pickers'
-import { isTypingTarget } from './shortcutKeys'
 import { TaskGlyph } from './TaskGlyph'
 
-/** A "?" button that lists the shortcuts. The ? key opens it too. */
+/**
+ * A button that lists this view's shortcuts. The ? key opens the app's one
+ * shortcut sheet instead, which lists these too, so only one ever opens.
+ */
 export function ShortcutHelp({ shortcuts }: { shortcuts: Array<{ keys: string[]; label: string }> }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
-  const button = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== '?' || isTypingTarget(event.target) || document.querySelector('.aw-dialog-layer')) return
-      event.preventDefault()
-      setAnchor((current) => (current ? null : button.current))
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
   return (
     <>
       <button
@@ -26,8 +18,7 @@ export function ShortcutHelp({ shortcuts }: { shortcuts: Array<{ keys: string[];
         aria-label="Keyboard shortcuts"
         className="aw-iconbtn aw-iconbtn--md aw-tasks__help"
         onClick={(event) => setAnchor(anchor ? null : event.currentTarget)}
-        ref={button}
-        title="Keyboard shortcuts (?)"
+        title="Keyboard shortcuts"
         type="button"
       >
         <TaskGlyph name="keyboard" size={18} />

@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react'
 
 import { isSafeMessageText, messageTextScalarValues } from '../conversations/messageContentModel'
-import { Button, Icon } from '../ui'
+import { Button, Icon, Kbd, formatShortcut } from '../ui'
 import { runAgent } from './runAgent'
+import { automationNote, publishFailure, pullRequestFailure, pullRequestProgress, syncFailure } from './runNotes'
 import type { Run } from './threadTypes'
 import type { ThreadRunActions } from './useThreadRunActions'
 
@@ -58,35 +59,30 @@ export function RunCardActions({
 
 /** What still needs attention after the last run: publishing, the pull request, GitHub sync. */
 export function RunCardNotes({ run }: { run: Run }) {
+  const progress = run.pullRequestRequestState && !run.pullRequestUrl ? pullRequestProgress(run.pullRequestRequestState) : null
+  const automation = run.pullRequestAutomationState ? automationNote(run.pullRequestAutomationState, run.pullRequestAutomationReason ?? null) : null
   return (
     <>
       {run.publishFailureCategory ? (
         <p className="aw-run__error" role="status">
           <Icon name="circle-alert" size={14} />
-          Publishing needs attention: {run.publishFailureCategory.replaceAll('_', ' ')}.
+          {publishFailure(run.publishFailureCategory)}
         </p>
       ) : null}
-      {run.pullRequestRequestState && !run.pullRequestUrl ? (
-        <p className="aw-run__detail">Pull request: {run.pullRequestRequestState.replaceAll('_', ' ')}</p>
-      ) : null}
+      {progress ? <p className="aw-run__detail">{progress}</p> : null}
       {run.pullRequestFailureCategory ? (
         <p className="aw-run__error" role="status">
           <Icon name="circle-alert" size={14} />
-          The pull request needs attention: {run.pullRequestFailureCategory.replaceAll('_', ' ')}.
+          {pullRequestFailure(run.pullRequestFailureCategory)}
         </p>
       ) : null}
       {run.pullRequestSyncState === 'failed' ? (
         <p className="aw-run__error" role="status">
           <Icon name="circle-alert" size={14} />
-          GitHub status needs attention: {(run.pullRequestSyncFailureCategory ?? 'sync_failed').replaceAll('_', ' ')}.
+          {syncFailure()}
         </p>
       ) : null}
-      {run.pullRequestAutomationState && run.pullRequestAutomationState !== 'not_evaluated' ? (
-        <p className="aw-run__detail">
-          Work item automation: {run.pullRequestAutomationState.replaceAll('_', ' ')}
-          {run.pullRequestAutomationReason ? ` · ${run.pullRequestAutomationReason.replaceAll('_', ' ')}` : ''}
-        </p>
-      ) : null}
+      {automation ? <p className="aw-run__detail">{automation}</p> : null}
     </>
   )
 }
@@ -114,6 +110,13 @@ export function RunComposer({
           disabled={Boolean(activeRun) || busyAction === 'start'}
           id="agent-prompt"
           onChange={(event) => actions.editPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            // ⌘ or Ctrl with Enter starts it; Enter alone is a new line in a prompt.
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              event.currentTarget.form?.requestSubmit()
+            }
+          }}
           placeholder={
             working ? `${working} is already working in this thread. Stop the run to start a new one.` : 'Describe the change for an agent to make…'
           }
@@ -141,7 +144,9 @@ export function RunComposer({
           </div>
         </div>
       </div>
-      <p className="aw-composer__hint" aria-hidden="true" />
+      <p aria-hidden={!prompt} className={prompt ? 'aw-composer__hint is-visible' : 'aw-composer__hint'}>
+        <Kbd>{formatShortcut('mod+enter')}</Kbd> to start the run · <Kbd>{formatShortcut('enter')}</Kbd> for a new line
+      </p>
     </form>
   )
 }

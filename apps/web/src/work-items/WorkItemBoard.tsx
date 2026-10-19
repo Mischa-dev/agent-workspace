@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
-import { Button, ErrorState, Icon, MessageSkeleton, actorKind, Avatar } from '../ui'
+import { Button, ErrorState, Icon, actorKind, Avatar } from '../ui'
 import { ASSIGNEE_PAGE, listWorkItems, moveWorkItem, updateWorkItem } from './api'
 import { BoardCard } from './BoardCard'
+import { BoardSkeleton } from './BoardSkeleton'
 import { statusBoardColumns, tucksDone, withoutDone } from './doneModel'
 import { applyMove, dropAnchor, fieldMove, laneOf, lanesFor, orderedIndex, PRIORITY_ORDER, runOptimisticMove } from './boardModel'
 import { FieldPicker, type PickerField, type PickResult } from './FieldPicker'
@@ -53,7 +54,7 @@ export function WorkItemBoard({
   workflow,
 }: {
   disabled: boolean
-  notify: (notice: Notice | null) => void
+  notify: (notice: Notice) => void
   onClosePanel: () => void
   onManageLabels: () => void
   onOpenTask: (id: string) => void
@@ -112,6 +113,7 @@ export function WorkItemBoard({
     }
   }, [assignees.data, milestones.data, state.lanes, workflow.types])
   const lanes = useMemo(() => lanesFor(columns, state.lanes, knownLanes), [columns, knownLanes, state.lanes])
+  const assigneeKinds = useMemo(() => new Map((assignees.data ?? []).map((actor) => [actor.id, actor.kind])), [assignees.data])
   const canMove = !disabled
   // A lane for an archived milestone or a removed member holds its tasks, but nothing new can join it.
   // Only a complete, loaded list of lane values can rule a lane out. The
@@ -150,11 +152,11 @@ export function WorkItemBoard({
       const currentIndex = inCell.findIndex((item) => item.id === cardId)
       if (sameColumn && !laneChanged && (columnsBy !== 'status' || currentIndex === target.index)) return
       if (columnsBy === 'status' && !sameColumn && !allowedStatuses(workflow, card.status.id).some((status) => status.id === to.key)) {
-        notify({ tone: 'warning', message: `This workflow doesn’t allow moving from ${card.status.name} to ${to.label}.` })
+        notify({ tone: 'info', title: `${card.key} can’t move to ${to.label}`, description: `This workflow doesn’t allow moving from ${card.status.name} to ${to.label}.` })
         return
       }
       if ((!sameColumn && !to.droppable) || (laneChanged && !laneDroppable(target.laneKey))) {
-        notify({ tone: 'warning', message: 'That column is archived or no longer available, so tasks can’t be moved into it.' })
+        notify({ tone: 'info', title: `${card.key} can’t move there`, description: 'That column is archived or no longer available, so tasks can’t move into it.' })
         return
       }
       // Anchor on the cards of the target cell; an empty cell goes after the column's last card.
@@ -232,11 +234,11 @@ export function WorkItemBoard({
             )
           }
           setAnnouncement(`Moved ${card.key} to ${to.label}, but its lane didn’t change.`)
-          notify({ tone: 'warning', message: `${card.key} moved to ${to.label}, but it stayed in ${lane.label}. ${editErrorMessage(laneError, 'The lane change')}` })
+          notify({ tone: 'danger', title: `${card.key} moved to ${to.label} but stayed in ${lane.label}`, description: editErrorMessage(laneError, 'The lane change') })
         })
         .catch((error) => {
           setAnnouncement(`${card.key} went back: the move didn’t save.`)
-          notify({ tone: 'danger', message: `${card.key} went back to ${from.label}. ${editErrorMessage(error, 'The move')}` })
+          notify({ tone: 'danger', title: `${card.key} went back to ${from.label}`, description: editErrorMessage(error, 'The move') })
         })
         .finally(() => void invalidate(projectId))
     },
@@ -299,7 +301,7 @@ export function WorkItemBoard({
           : current,
       )
     } catch (error) {
-      notify({ tone: 'danger', message: editErrorMessage(error, 'Loading more') })
+      notify({ tone: 'danger', title: `More tasks in ${column.label || 'this column'} didn’t load`, description: editErrorMessage(error, 'Loading more') })
     } finally {
       setLoadingColumn(null)
     }
@@ -442,18 +444,12 @@ export function WorkItemBoard({
     const card = picker.card
     applyPick.mutate(
       { projectId, result, targets: [{ id: card.id, projectId: card.projectId, version: card.version, key: card.key }] },
-      { onError: (error) => notify({ tone: 'danger', message: editErrorMessage(error) }) },
+      { onError: (error) => notify({ tone: 'danger', title: `${card.key} didn’t change`, description: editErrorMessage(error) }) },
     )
   }
 
-  if (board.isPending) return <MessageSkeleton label="Loading the board" rows={3} />
-  if (board.isError && !board.data) {
-    return (
-      <ErrorState action={<Button onClick={() => void board.refetch()}>Try again</Button>} title="The board didn’t load">
-        Check your connection and try again.
-      </ErrorState>
-    )
-  }
+  if (board.isPending) return <BoardSkeleton />
+  if (board.isError && !board.data) return <ErrorState error={board.error} onRetry={() => void board.refetch()} title="The board didn’t load" />
 
   const firstCard = columns.flatMap((column) => column.items.map((card) => dragIdFor(column.key, card.id)))[0] ?? null
   const tabStop = focusedId ?? firstCard
@@ -476,7 +472,7 @@ export function WorkItemBoard({
         {announcement}
       </p>
       <div
-        aria-label="Work item board"
+        aria-label="Task board"
         className={drag.drag ? 'aw-tboard is-dragging' : 'aw-tboard'}
         ref={scrollerRef}
         role="region"
@@ -487,7 +483,7 @@ export function WorkItemBoard({
         <div className="aw-tboard__grid">
           {columns.map((column) => (
             <header className="aw-tboard__head" key={column.key}>
-              <ColumnMark column={column} columnsBy={columnsBy} />
+              <ColumnMark assigneeKinds={assigneeKinds} column={column} columnsBy={columnsBy} />
               <h2 className="aw-tboard__title">{column.label || 'None'}</h2>
               <span className="aw-tboard__count">{column.total}</span>
             </header>
@@ -532,7 +528,7 @@ export function WorkItemBoard({
                         ),
                       )}
                     </ol>
-                    {entries.length === 0 && state.lanes === 'none' ? <p className="aw-tboard__empty">Nothing here</p> : null}
+                    {entries.length === 0 && state.lanes === 'none' ? <p className="aw-tboard__empty">No tasks</p> : null}
                   </section>
                 )
               })}
@@ -599,11 +595,14 @@ function LaneRows({ children, label }: { children: ReactNode; label: string | nu
   )
 }
 
-function ColumnMark({ column, columnsBy }: { column: BoardColumn; columnsBy: string }) {
+function ColumnMark({ assigneeKinds, column, columnsBy }: { assigneeKinds: Map<string, string>; column: BoardColumn; columnsBy: string }) {
   if (column.status) return <StatusIcon category={column.status.semanticCategory} />
   if (columnsBy === 'priority') return <PriorityIcon decorative priority={(column.key === 'none' ? 'no_priority' : column.key) as WorkItemPriority} />
   if (columnsBy === 'assignee') {
-    return column.key === 'none' ? <Icon name="unassigned" size={16} /> : <Avatar kind={actorKind('human')} name={column.label} seed={column.key} size={18} />
+    if (column.key === 'none') return <Icon name="unassigned" size={16} />
+    // Agents get square avatars: the kind comes from a card in the column, or the member list.
+    const kind = column.items.find((card) => card.assignee?.actorId === column.key)?.assignee?.kind ?? assigneeKinds.get(column.key) ?? 'human'
+    return <Avatar kind={actorKind(kind)} name={column.label} seed={column.key} size={18} />
   }
   if (columnsBy === 'milestone') return <TaskGlyph name="milestone" />
   if (columnsBy === 'label') return <TaskGlyph name="tag" />

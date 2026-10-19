@@ -5,9 +5,22 @@
 .aw-toasts {
   position: fixed;
   right: var(--space-4);
-  bottom: var(--space-4);
+  /* A conversation page sets --toast-offset to its composer's height, so toasts don't cover Send. */
+  bottom: calc(var(--space-4) + var(--toast-offset, 0px) + env(safe-area-inset-bottom));
   z-index: var(--layer-toast);
   pointer-events: none;
+  transition: bottom var(--duration-standard) var(--ease-out);
+}
+
+@media (max-width: 640px) {
+  .aw-toasts {
+    right: var(--space-2);
+    left: var(--space-2);
+  }
+
+  .aw-toasts__list {
+    align-items: stretch;
+  }
 }
 
 .aw-toasts__list {
@@ -184,7 +197,7 @@
   border: 0;
   outline: 0;
   background: none;
-  font: 500 calc(17px * var(--text-scale)) / 24px var(--font-sans);
+  font: 500 calc(17px * var(--text-scale)) / calc(24px * var(--text-scale)) var(--font-sans);
   color: var(--content-fg);
 }
 
@@ -194,7 +207,7 @@
   padding: 1px 6px;
   border: 1px solid var(--content-border);
   border-radius: var(--radius-xs);
-  font: 500 11px/16px var(--font-mono);
+  font: 600 calc(11px * var(--text-scale)) / calc(16px * var(--text-scale)) var(--font-sans);
   color: var(--content-fg-muted);
   background: var(--surface-sunken);
 }
@@ -212,10 +225,9 @@
 
 .aw-cmdk__heading {
   padding: var(--space-1) var(--space-2);
-  font: var(--t-tag);
+  font: var(--t-caption);
+  font-weight: 600;
   color: var(--content-fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .aw-cmdk__item {

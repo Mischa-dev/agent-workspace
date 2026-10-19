@@ -13,7 +13,7 @@ describe('presenceLabel', () => {
   })
 
   it('says when it waits for a person, and idle otherwise', () => {
-    expect(presenceLabel({ ...base, state: 'waiting', taskKey: 'KEY-3', active: 1 })).toBe('Waiting for you')
+    expect(presenceLabel({ ...base, state: 'waiting', taskKey: 'KEY-3', active: 1 })).toBe('Waiting on you')
     expect(presenceLabel({ ...base, state: 'idle' })).toBe('Idle')
   })
 })

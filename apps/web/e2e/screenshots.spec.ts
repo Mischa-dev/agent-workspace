@@ -15,7 +15,7 @@ const keyPages: KeyPage[] = [
   {
     name: 'home',
     path: () => '/home',
-    ready: (page) => expect(page.getByRole('heading', { name: `Welcome back, ${seeded.displayName}` })).toBeVisible(),
+    ready: (page) => expect(page.getByRole('heading', { name: new RegExp(`^(Welcome|Good \\w+), ${seeded.displayName.split(' ')[0]}$`) })).toBeVisible(),
   },
   {
     name: 'welcome',
@@ -37,12 +37,12 @@ const keyPages: KeyPage[] = [
   {
     name: 'work-items-list',
     path: () => `/projects/${seededValue('E2E_PROJECT_ID')}/work-items`,
-    ready: (page) => expect(page.getByRole('heading', { name: 'Work items', exact: true })).toBeVisible(),
+    ready: (page) => expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible(),
   },
   {
     name: 'work-items-board',
     path: () => `/projects/${seededValue('E2E_PROJECT_ID')}/work-items?view=board`,
-    ready: (page) => expect(page.getByRole('region', { name: 'Work item board' })).toBeVisible(),
+    ready: (page) => expect(page.getByRole('region', { name: 'Task board' })).toBeVisible(),
   },
   {
     name: 'later',
@@ -97,7 +97,7 @@ const keyPages: KeyPage[] = [
   {
     name: 'share',
     path: () => '/share?title=Flaky%20deploy&text=Fails%20on%20the%20second%20try%20https%3A%2F%2Fci.example%2Frun%2F1',
-    ready: (page) => expect(page.getByRole('heading', { name: 'Share to Workspace' })).toBeVisible(),
+    ready: (page) => expect(page.getByRole('heading', { name: 'Share', exact: true })).toBeVisible(),
   },
   {
     name: 'appearance',

@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 
-import { Button, Dialog, TextField } from '../ui'
+import { Button, Dialog, TextField, describeError } from '../ui'
 import { createThread } from './api'
 
 function suggestedName(text: string) {
@@ -39,7 +39,7 @@ export function ThreadDialog({
         onClose()
         onCreated(thread.id)
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'The thread wasn’t created. Try again.'))
+      .catch((reason: unknown) => setError(`The thread wasn’t started. ${describeError(reason).message}`))
       .finally(() => setBusy(false))
   }
 

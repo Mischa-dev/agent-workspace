@@ -2,6 +2,8 @@ import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData, type 
 
 import { requestJson } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
+import { whenChoices } from '../later/when'
+import { actorKind, type ActorKind } from '../ui/identityModel'
 
 export const inboxKeys = {
   root: ['inbox'] as const,
@@ -31,7 +33,8 @@ export type InboxNotification = {
   subject: { kind: string; id: string; title: string }
   title: string
   preview: string | null
-  actor: { id: string; name: string } | null
+  /** Who caused it; agents keep their square mark and Agent tag. */
+  actor: { id: string; name: string; kind: ActorKind } | null
   count: number
   read: boolean
   archived: boolean
@@ -90,6 +93,12 @@ function normalizeApproval(value: unknown): InboxApproval | null {
   return { id, kind: record.kind, status, options }
 }
 
+/** Agents read as agents here, whichever way they run. */
+function inboxActorKind(kind: string | null): ActorKind {
+  const mapped = actorKind(kind ?? 'human')
+  return mapped === 'worker' ? 'agent' : mapped
+}
+
 export function normalizeNotification(value: unknown): InboxNotification | null {
   const record = asRecord(value)
   const subject = asRecord(record.subject)
@@ -112,7 +121,10 @@ export function normalizeNotification(value: unknown): InboxNotification | null 
     },
     title,
     preview: text(record.preview),
-    actor: text(actor.id) && text(actor.name) ? { id: actor.id as string, name: actor.name as string } : null,
+    actor:
+      text(actor.id) && text(actor.name)
+        ? { id: actor.id as string, name: actor.name as string, kind: inboxActorKind(text(actor.kind)) }
+        : null,
     count: typeof record.count === 'number' && record.count > 0 ? record.count : 1,
     read: record.read === true,
     archived: record.archived === true,
@@ -162,7 +174,14 @@ export type InboxUpdate =
   | { action: InboxAction; ids: string[]; snoozeUntil?: string }
   | { action: 'read' | 'archive'; all: true }
 
-/** What the update does to a cached row: changed, or gone from this view. */
+/** What the server changed: the notifications that moved, for Undo. */
+export type InboxUpdateResult = { updated: string[]; unreadCount: number }
+
+/**
+ * What the update does to a cached row: changed, or gone from this view. In
+ * Unread, a row you just read stays (marked read) so you can act on it; only
+ * "mark all read" empties the view at once.
+ */
 export function applyUpdate(
   notification: InboxNotification,
   view: InboxView,
@@ -172,7 +191,7 @@ export function applyUpdate(
   if ('all' in update && view !== 'inbox' && view !== 'unread') return notification
   switch (update.action) {
     case 'read':
-      return view === 'unread' ? null : { ...notification, read: true }
+      return view === 'unread' && 'all' in update ? null : { ...notification, read: true }
     case 'unread':
       return { ...notification, read: false }
     case 'archive':
@@ -192,8 +211,7 @@ export function useUpdateInbox(view: InboxView, category: InboxCategory) {
   const queryClient = useQueryClient()
   const key = inboxKeys.list(view, category)
   return useMutation({
-    mutationFn: (update: InboxUpdate) =>
-      requestJson<unknown>('/api/v1/inbox/update', { method: 'POST', json: update }),
+    mutationFn: (update: InboxUpdate) => postUpdate(update),
     onMutate: async (update) => {
       await queryClient.cancelQueries({ queryKey: key })
       const previous = queryClient.getQueryData<InboxCache>(key)
@@ -220,6 +238,51 @@ export function useUpdateInbox(view: InboxView, category: InboxCategory) {
   })
 }
 
+function readResult(value: unknown): InboxUpdateResult {
+  const record = asRecord(value)
+  return {
+    updated: Array.isArray(record.updated) ? record.updated.filter((id): id is string => typeof id === 'string') : [],
+    unreadCount: typeof record.unreadCount === 'number' ? record.unreadCount : 0,
+  }
+}
+
+/** The server takes at most this many ids in one change. */
+const MAX_UPDATE_IDS = 200
+
+/** One change, split into requests the server accepts when it names many ids. */
+export async function postUpdate(update: InboxUpdate): Promise<InboxUpdateResult> {
+  if (!('ids' in update) || update.ids.length <= MAX_UPDATE_IDS) {
+    return readResult(await requestJson<unknown>('/api/v1/inbox/update', { method: 'POST', json: update }))
+  }
+  const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
+  for (let start = 0; start < update.ids.length; start += MAX_UPDATE_IDS) {
+    const part = await postUpdate({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) })
+    result.updated.push(...part.updated)
+    result.unreadCount = part.unreadCount
+  }
+  return result
+}
+
+/** The most unread notifications one "mark read" gathers in a category. */
+const MAX_CATEGORY_READ = 1_000
+
+/**
+ * The unread notifications of one kind, every page of them, so "mark all
+ * read" under a filter marks exactly what the filter shows.
+ */
+export async function unreadIds(category: InboxCategory): Promise<string[]> {
+  const ids: string[] = []
+  let cursor: string | null = null
+  do {
+    const search = new URLSearchParams({ view: 'unread', category, limit: '100' })
+    if (cursor) search.set('cursor', cursor)
+    const page = normalizePage(await requestJson<unknown>(`/api/v1/inbox?${search}`))
+    ids.push(...page.notifications.map((item) => item.id))
+    cursor = page.nextCursor
+  } while (cursor && ids.length < MAX_CATEGORY_READ)
+  return ids
+}
+
 export function respondToApproval(approvalId: string, decision: 'approve' | 'deny') {
   return requestJson<unknown>(`/api/v1/agent-approvals/${encodeURIComponent(approvalId)}/respond`, {
     method: 'POST',
@@ -228,20 +291,19 @@ export function respondToApproval(approvalId: string, decision: 'approve' | 'den
   })
 }
 
-/** Snooze choices, in the viewer's own time zone. */
+/**
+ * Snooze choices, in the viewer's own time zone and by the same rules as
+ * Later's reminders: "Later today" only while the day has some left, and the
+ * morning after the night's sleep.
+ */
 export function snoozeChoices(now = new Date()): Array<{ id: string; label: string; until: Date }> {
-  const laterToday = new Date(now.getTime() + 3 * 60 * 60 * 1000)
-  const tomorrow = new Date(now)
-  tomorrow.setDate(now.getDate() + 1)
-  tomorrow.setHours(9, 0, 0, 0)
-  const nextWeek = new Date(now)
-  const daysToMonday = ((8 - now.getDay()) % 7) || 7
-  nextWeek.setDate(now.getDate() + daysToMonday)
-  nextWeek.setHours(9, 0, 0, 0)
+  const quick = whenChoices(now)
+  const pick = (id: string) => quick.find((choice) => choice.id === id)!
+  const hour = now.getHours()
   return [
-    { id: 'later', label: 'Later today', until: laterToday },
-    { id: 'tomorrow', label: 'Tomorrow morning', until: tomorrow },
-    { id: 'next-week', label: 'Next week', until: nextWeek },
+    ...(hour >= 5 && hour < 18 ? [{ id: 'later', label: 'Later today', until: new Date(now.getTime() + 3 * 60 * 60 * 1000) }] : []),
+    { id: 'tomorrow', label: pick('tomorrow').label, until: pick('tomorrow').at },
+    { id: 'next-week', label: pick('next-week').label, until: pick('next-week').at },
   ]
 }
 

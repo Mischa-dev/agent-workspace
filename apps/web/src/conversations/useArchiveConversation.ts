@@ -36,7 +36,7 @@ export function useArchiveConversation({
   }
   return useInstantMutation({
     mutationFn: (expectedVersion: number) => archiveConversation({ conversationId, kind, expectedVersion }),
-    errorTitle: `Couldn’t archive ${label}`,
+    errorTitle: `${label} wasn’t archived`,
     onSuccess: () => {
       if (kind === 'channel') {
         // Drop the archived channel from every cached sidebar now, so the
@@ -60,5 +60,33 @@ export function useArchiveConversation({
         navigate(here)
       },
     }),
+  })
+}
+
+/**
+ * Bring an archived channel or thread back, from its menu, its disabled
+ * composer or the Archived conversations list. `expectedVersion` is the
+ * version it has now.
+ */
+export function useRestoreConversation({
+  conversationId,
+  kind,
+  label,
+  projectId,
+}: {
+  conversationId: string
+  kind: 'channel' | 'thread'
+  label: string
+  projectId: string
+}) {
+  return useInstantMutation({
+    mutationFn: (expectedVersion: number) => restoreConversation({ conversationId, kind, expectedVersion }),
+    errorTitle: `${label} wasn’t restored`,
+    invalidate: () => [
+      queryKeys.conversationSidebarRoot(projectId),
+      ['project', projectId, 'conversation', conversationId],
+      ['project', projectId, 'threads'],
+    ],
+    success: () => ({ id: `restore:${conversationId}`, tone: 'success', title: `Restored ${label}` }),
   })
 }

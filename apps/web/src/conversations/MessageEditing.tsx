@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import { isApiError } from '../api/errors'
-import { Banner, Button, Dialog } from '../ui'
+import { ConfirmDialog, describeError } from '../ui'
 import { editConversationMessage, getConversationMessage, removeConversationMessage } from './api'
 import { draftFromContent, EDIT_HISTORY_HINT } from './composerModel'
 import { StructuredComposer } from './StructuredComposer'
@@ -18,9 +18,7 @@ async function editError(
   conversationId: string,
   messageId: string,
 ): Promise<{ message: string; removedEntry?: ConversationTimelineEntry }> {
-  if (!isApiError(reason)) {
-    return { message: reason instanceof Error ? reason.message : 'Your edit wasn’t saved.' }
-  }
+  if (!isApiError(reason)) return { message: describeError(reason).message }
   if (reason.status === 403) return { message: 'You can only edit your own messages.' }
   if (reason.status === 404) return { message: 'That message wasn’t found, or you can’t see it.' }
   if (reason.code === 'version_conflict') {
@@ -37,7 +35,7 @@ async function editError(
     return { message: 'This message can’t be edited any more.' }
   }
   if (reason.status === 422) return { message: 'That isn’t a message that can be saved. Check its length and mentions.' }
-  return { message: reason.message }
+  return { message: describeError(reason).message }
 }
 
 /**
@@ -98,14 +96,14 @@ export function MessageEditor({
 }
 
 function removeError(reason: unknown, own: boolean) {
-  if (!isApiError(reason)) return reason instanceof Error ? reason.message : 'The message wasn’t removed.'
+  if (!isApiError(reason)) return `The message wasn’t removed. ${describeError(reason).message}`
   if (reason.status === 403) {
     return own
       ? 'You can’t remove messages here any more.'
       : 'Only project owners and admins can remove other people’s messages.'
   }
   if (reason.status === 404) return 'That message wasn’t found, or you can’t see it.'
-  return reason.message
+  return `The message wasn’t removed. ${describeError(reason).message}`
 }
 
 /** Confirms removing a message, as its author or as a project owner or admin. */
@@ -141,21 +139,16 @@ export function RemoveMessageDialog({
   }
   const description = 'Everyone will see “This message was removed” instead. The text and its earlier versions are deleted and can’t be brought back.'
   return (
-    <Dialog
-      description={own ? description : `${description} They’ll see that you removed it.`}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button busy={busy} onClick={confirm} variant="danger">
-            Remove message
-          </Button>
-        </>
-      }
+    <ConfirmDialog
+      busy={busy}
+      confirmLabel="Remove message"
+      error={error}
       onClose={onClose}
+      onConfirm={confirm}
       open
       title={own ? 'Remove this message?' : `Remove ${message.author.displayName}’s message?`}
     >
-      {error ? <Banner tone="danger">{error}</Banner> : null}
-    </Dialog>
+      {own ? description : `${description} They’ll see that you removed it.`}
+    </ConfirmDialog>
   )
 }

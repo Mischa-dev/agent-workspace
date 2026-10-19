@@ -2,7 +2,7 @@ import { TeamSettings } from '../../team/TeamSettings'
 import { PageHeader } from '../../ui'
 import type { SettingsPageProps } from '../types'
 
-/** Project › Members: who is in this Project and what they can do. */
+/** Project › Members: who is in this project and what they can do. */
 export default function MembersPage({ project, workspace }: SettingsPageProps) {
   if (!project || !workspace) return null
   return (

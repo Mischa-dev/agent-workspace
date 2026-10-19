@@ -94,6 +94,8 @@ type FieldProps = {
   error?: ReactNode
   prefix?: ReactNode
   mono?: boolean
+  /** As tall as a Button (32px) instead of a form field (40px), for toolbars and inline forms. */
+  compact?: boolean
 }
 
 function describedBy(id: string, hint: unknown, error: unknown) {
@@ -105,17 +107,17 @@ function FieldNote({ error, hint, id }: { error?: ReactNode; hint?: ReactNode; i
   return (
     <p className="aw-field__note" id={`${id}-note`} role={error ? 'alert' : undefined}>
       {error ? <Icon name="circle-alert" size={14} /> : null}
-      {error || hint}
+      <span>{error || hint}</span>
     </p>
   )
 }
 
 export const TextField = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, 'prefix'> & FieldProps>(
-  function TextField({ className, error, hint, id: given, label, mono, prefix, ...input }, ref) {
+  function TextField({ className, compact, error, hint, id: given, label, mono, prefix, ...input }, ref) {
     const generated = useId()
     const id = given ?? generated
     return (
-      <div className={['aw-field', error ? 'is-invalid' : '', className].filter(Boolean).join(' ')}>
+      <div className={['aw-field', compact ? 'aw-field--compact' : '', error ? 'is-invalid' : '', className].filter(Boolean).join(' ')}>
         {label ? (
           <label className="aw-field__label" htmlFor={id}>
             {label}
@@ -138,7 +140,7 @@ export const TextField = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<H
   },
 )
 
-export const TextArea = forwardRef<HTMLTextAreaElement, Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'prefix'> & Omit<FieldProps, 'prefix' | 'mono'>>(
+export const TextArea = forwardRef<HTMLTextAreaElement, Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'prefix'> & Omit<FieldProps, 'prefix' | 'mono' | 'compact'>>(
   function TextArea({ className, error, hint, id: given, label, ...input }, ref) {
     const generated = useId()
     const id = given ?? generated
@@ -159,11 +161,11 @@ export const TextArea = forwardRef<HTMLTextAreaElement, Omit<TextareaHTMLAttribu
 )
 
 export const SelectField = forwardRef<HTMLSelectElement, Omit<SelectHTMLAttributes<HTMLSelectElement>, 'prefix'> & Omit<FieldProps, 'mono'>>(
-  function SelectField({ children, className, error, hint, id: given, label, prefix, ...input }, ref) {
+  function SelectField({ children, className, compact, error, hint, id: given, label, prefix, ...input }, ref) {
     const generated = useId()
     const id = given ?? generated
     return (
-      <div className={['aw-field', error ? 'is-invalid' : '', className].filter(Boolean).join(' ')}>
+      <div className={['aw-field', compact ? 'aw-field--compact' : '', error ? 'is-invalid' : '', className].filter(Boolean).join(' ')}>
         {label ? (
           <label className="aw-field__label" htmlFor={id}>
             {label}
@@ -171,7 +173,7 @@ export const SelectField = forwardRef<HTMLSelectElement, Omit<SelectHTMLAttribut
         ) : null}
         <div className="aw-field__control aw-field__control--select">
           {prefix ? <span className="aw-field__prefix">{prefix}</span> : null}
-          <select aria-describedby={describedBy(id, hint, error)} id={id} ref={ref} {...input}>
+          <select aria-describedby={describedBy(id, hint, error)} aria-invalid={error ? true : undefined} id={id} ref={ref} {...input}>
             {children}
           </select>
           <Icon name="chevron-down" size={14} />

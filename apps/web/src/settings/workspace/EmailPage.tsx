@@ -5,7 +5,7 @@ import { describeError, toastError } from '../../app/mutations'
 import {
   Banner,
   Button,
-  Dialog,
+  ConfirmDialog,
   ErrorState,
   PageHeader,
   Section,
@@ -14,6 +14,7 @@ import {
   StatusChip,
   Switch,
   TextField,
+  formatFullDate,
   formatRelative,
   showToast,
 } from '../../ui'
@@ -41,16 +42,14 @@ export default function EmailPage({ workspace }: SettingsPageProps) {
   if (!workspace) return null
   return (
     <>
-      <PageHeader icon="at-sign" title="Email">
+      <PageHeader icon="message" title="Email">
         How {workspace.name} sends email: password reset links, address confirmations and the notifications people choose
         to get by email. Use your mail provider’s SMTP details.
       </PageHeader>
       {settings.isPending ? (
         <SettingsSkeleton label="Loading email settings" sections={2} />
       ) : settings.isError ? (
-        <ErrorState action={<Button onClick={() => void settings.refetch()}>Try again</Button>} title="Email settings didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={settings.error} onRetry={() => void settings.refetch()} title="Email settings didn’t load" />
       ) : (
         <>
           <SmtpSection key={settings.data.updatedAt ?? 'new'} organizationId={organizationId} settings={settings.data} />
@@ -186,7 +185,8 @@ function TestSection({ organizationId, settings }: { organizationId: string; set
       {last &&
         (last.ok ? (
           <p className="aw-quiet" role="status">
-            <StatusChip icon="check" tone="success">Worked</StatusChip> {last.at ? `Last test ${formatRelative(last.at)}.` : 'The mail server accepted it.'}
+            <StatusChip icon="check" tone="success">Worked</StatusChip>{' '}
+            {last.at ? <span title={formatFullDate(last.at)}>Last test {formatRelative(last.at)}.</span> : 'The mail server accepted it.'}
           </p>
         ) : (
           <Banner role="status" title="The test didn’t go through" tone="warning">
@@ -207,34 +207,26 @@ function RemoveSection({ organizationId }: { organizationId: string }) {
       void queryClient.invalidateQueries({ queryKey: mailKeys.settings(organizationId) })
       showToast({ tone: 'success', title: 'Email settings removed' })
     },
-    onError: (reason) => {
-      setConfirming(false)
-      toastError('The settings weren’t removed', reason)
-    },
   })
   return (
     <Section description="Stops all email from this workspace and forgets the password." id="remove-email-heading" title="Remove">
       <Button onClick={() => setConfirming(true)} variant="danger">
         Remove email settings
       </Button>
-      <Dialog
-          footer={
-            <>
-              <Button onClick={() => setConfirming(false)} variant="ghost">
-                Cancel
-              </Button>
-              <Button busy={remove.isPending} onClick={() => remove.mutate()} variant="danger">
-                Remove
-              </Button>
-            </>
-          }
-          onClose={() => setConfirming(false)}
-          open={confirming}
-          title="Remove email settings?"
-        >
-          People won’t be able to reset their password by email, and email notifications stop until an owner sets it up
-          again.
-        </Dialog>
+      <ConfirmDialog
+        busy={remove.isPending}
+        confirmLabel="Remove email settings"
+        error={remove.isError ? `The settings weren’t removed. ${describeError(remove.error).message}` : null}
+        onClose={() => {
+          setConfirming(false)
+          remove.reset()
+        }}
+        onConfirm={() => remove.mutate()}
+        open={confirming}
+        title="Remove email settings?"
+      >
+        People won’t be able to reset their password by email, and email notifications stop until an owner sets it up again.
+      </ConfirmDialog>
     </Section>
   )
 }

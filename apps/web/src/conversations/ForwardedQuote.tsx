@@ -1,8 +1,9 @@
 import { Forward } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { Markdown } from '../ui/markdown/Markdown'
 import { isSafeMessageText } from './messageContentModel'
-import { formatFullDate } from './timeFormat'
+import { formatDateTime, formatFullDate } from '../ui/time'
 import type { ForwardedMessage } from './types'
 
 function text(value: unknown) {
@@ -30,7 +31,7 @@ function readForwarded(value: unknown): ForwardedMessage | null {
 
 /**
  * The message a forward quotes, read live for you: its author, where it was
- * said and its text, with a link back. Someone who can't see the original
+ * said and its text (as Markdown, cut at four lines), with a link back. Someone who can't see the original
  * sees only that a message was forwarded.
  */
 export function ForwardedQuote({ value }: { value: unknown }) {
@@ -50,8 +51,8 @@ export function ForwardedQuote({ value }: { value: unknown }) {
       <span className="aw-forward__author">{forwarded.authorName}</span>
       {forwarded.place ? <span className="aw-forward__place">in {forwarded.place}</span> : null}
       {forwarded.createdAt ? (
-        <time className="aw-forward__time" dateTime={forwarded.createdAt}>
-          {formatFullDate(forwarded.createdAt)}
+        <time className="aw-forward__time" dateTime={forwarded.createdAt} title={formatFullDate(forwarded.createdAt)}>
+          {formatDateTime(forwarded.createdAt)}
         </time>
       ) : null}
     </>
@@ -68,7 +69,7 @@ export function ForwardedQuote({ value }: { value: unknown }) {
       {forwarded.removed ? (
         <p className="aw-forward__removed">The original was removed.</p>
       ) : (
-        <p className="aw-forward__text">{forwarded.text}</p>
+        <Markdown className="aw-forward__text" source={forwarded.text ?? ''} />
       )}
     </blockquote>
   )

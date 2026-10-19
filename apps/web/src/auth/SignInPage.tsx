@@ -43,7 +43,9 @@ export function SignInPage() {
   const errorRef = useRef<HTMLDivElement>(null)
   const [loginName, setLoginName] = useState('')
   const [password, setPassword] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  // Which way in is under way, so only that button spins.
+  const [busy, setBusy] = useState<'password' | 'code' | 'google' | 'sso' | 'signup' | null>(null)
+  const submitting = busy !== null
   const [error, setError] = useState<string | null>(null)
   // Set once the password was right and the account asks for a second step.
   const [challenge, setChallenge] = useState<string | null>(null)
@@ -63,11 +65,17 @@ export function SignInPage() {
     if (error) errorRef.current?.focus()
   }, [error])
 
-  const workOsSignIn = async (signup = false, provider?: 'GoogleOAuth') => {
-    setSubmitting(true)
+  const workOsSignIn = async (way: 'google' | 'sso' | 'signup') => {
+    setBusy(way)
     setError(null)
-    try { await startWorkOs(signup ? { username: loginName.trim(), provider } : { provider }) }
-    catch { setError('Could not open secure sign-in. Try again.'); setSubmitting(false) }
+    try {
+      await startWorkOs(
+        way === 'signup' ? { username: loginName.trim() } : way === 'google' ? { provider: 'GoogleOAuth' } : {},
+      )
+    } catch {
+      setError(way === 'google' ? 'Google sign-in didn’t open. Try again.' : 'Single sign-on didn’t open. Try again.')
+      setBusy(null)
+    }
   }
 
   const finish = (nextSession: SessionResponse) => {
@@ -86,7 +94,7 @@ export function SignInPage() {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!loginName.trim() || password.length < 12) return
-    setSubmitting(true)
+    setBusy('password')
     setError(null)
     try {
       const response = await login(loginName.trim(), password)
@@ -101,7 +109,7 @@ export function SignInPage() {
       setPassword('')
       setError(describeFailure(reason))
     } finally {
-      setSubmitting(false)
+      setBusy(null)
     }
   }
 
@@ -109,7 +117,7 @@ export function SignInPage() {
     event.preventDefault()
     const trimmed = code.trim()
     if (!challenge || !trimmed) return
-    setSubmitting(true)
+    setBusy('code')
     setError(null)
     try {
       finish(await loginTwoFactor(challenge, trimmed))
@@ -125,7 +133,7 @@ export function SignInPage() {
         setError(describeFailure(reason))
       }
     } finally {
-      setSubmitting(false)
+      setBusy(null)
     }
   }
 
@@ -157,7 +165,7 @@ export function SignInPage() {
             value={code}
           />
           <Button
-            busy={submitting}
+            busy={busy === 'code'}
             className="aw-auth__submit"
             disabled={!code.trim()}
             size="lg"
@@ -182,12 +190,13 @@ export function SignInPage() {
     )
   }
 
+  const google = Boolean(workos.data?.googleEnabled)
+  const sso = Boolean(workos.data?.enabled)
   return (
     <AuthLayout
       footer={
         <>
-          Existing account? You can link WorkOS from Account settings after signing in.
-          {' '}
+          {sso ? 'Signed up with a password? Link single sign-on in Account settings after signing in. ' : null}
           {resetByEmail.data?.available ? (
             <Link to="/forgot-password">Forgot your password?</Link>
           ) : (
@@ -199,9 +208,11 @@ export function SignInPage() {
       title="Sign in"
       titleId="sign-in-heading"
     >
-      {new URLSearchParams(location.search).has('workosError') && <Banner tone="danger">WorkOS sign-in could not be completed. If you have an existing account, sign in below and link it in Account settings.</Banner>}
-      {workos.data?.googleEnabled && <Button busy={submitting} onClick={() => void workOsSignIn(false, 'GoogleOAuth')} variant="primary">Continue with Google</Button>}
-      {workos.data?.enabled && <Button busy={submitting} onClick={() => void workOsSignIn()} variant="primary">Continue with WorkOS</Button>}
+      {new URLSearchParams(location.search).has('workosError') && (
+        <Banner tone="danger">
+          Single sign-on didn’t finish. If you already have an account, sign in below and link single sign-on in Account settings.
+        </Banner>
+      )}
       {error && (
         <div className="aw-auth__error" ref={errorRef} role="alert" tabIndex={-1}>
           <Banner tone="danger">{error}</Banner>
@@ -213,7 +224,7 @@ export function SignInPage() {
           autoFocus
           disabled={submitting}
           id="login-name"
-          label="Login name"
+          label="Username"
           maxLength={64}
           onChange={(event) => setLoginName(event.target.value)}
           required
@@ -231,17 +242,55 @@ export function SignInPage() {
           value={password}
         />
         <Button
-          busy={submitting}
+          busy={busy === 'password'}
           className="aw-auth__submit"
-          disabled={!loginName.trim() || password.length < 12}
+          disabled={!loginName.trim() || password.length < 12 || (submitting && busy !== 'password')}
           size="lg"
           type="submit"
           variant="primary"
         >
-          {submitting ? 'Signing in…' : 'Sign in'}
+          {busy === 'password' ? 'Signing in…' : 'Sign in'}
         </Button>
-        {workos.data?.signupEnabled && <Button disabled={submitting || loginName.trim().length < 3} onClick={() => void workOsSignIn(true)}>Create account with this username</Button>}
+        {workos.data?.signupEnabled && (
+          <Button
+            busy={busy === 'signup'}
+            disabled={(submitting && busy !== 'signup') || loginName.trim().length < 3}
+            onClick={() => void workOsSignIn('signup')}
+          >
+            Create account with this username
+          </Button>
+        )}
       </form>
+      {/* Below the form, so the field you're typing in doesn't move when these arrive. */}
+      {google || sso ? (
+        <div className="aw-auth__sso">
+          <p className="aw-auth__divider">
+            <span>or</span>
+          </p>
+          {google ? (
+            <Button
+              busy={busy === 'google'}
+              className="aw-auth__submit"
+              disabled={submitting && busy !== 'google'}
+              onClick={() => void workOsSignIn('google')}
+              size="lg"
+            >
+              Continue with Google
+            </Button>
+          ) : null}
+          {sso ? (
+            <Button
+              busy={busy === 'sso'}
+              className="aw-auth__submit"
+              disabled={submitting && busy !== 'sso'}
+              onClick={() => void workOsSignIn('sso')}
+              size="lg"
+            >
+              Continue with single sign-on
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </AuthLayout>
   )
 }

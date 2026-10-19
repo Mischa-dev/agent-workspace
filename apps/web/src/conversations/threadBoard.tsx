@@ -1,6 +1,22 @@
 import { useState, type FormEvent } from 'react'
 
-import { Banner, Button, Dialog, EmptyState, IconButton, SegmentedControl, SelectField, StatusChip, TextField, type ChipTone } from '../ui'
+import {
+  Banner,
+  Button,
+  Dialog,
+  EmptyState,
+  IconButton,
+  ListSkeleton,
+  SegmentedControl,
+  SelectField,
+  StatusChip,
+  TextField,
+  countLabel,
+  describeError,
+  formatFullDate,
+  formatRelative,
+  type ChipTone,
+} from '../ui'
 import { updateThread } from './api'
 import { THREAD_STATUSES, isSettled, useThreads } from './threadModel'
 import type { ThreadSummary } from './types'
@@ -57,7 +73,7 @@ export function ThreadStatusDialog({
         onSaved()
         onClose()
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'That didn’t save. Try again.'))
+      .catch((reason: unknown) => setError(`The thread status wasn’t saved. ${describeError(reason).message}`))
       .finally(() => setBusy(false))
   }
 
@@ -88,7 +104,7 @@ export function ThreadStatusDialog({
         <option value="custom">Something else…</option>
       </SelectField>
       {choice === 'custom' ? (
-        <TextField autoFocus label="Your status" maxLength={40} onChange={(event) => setCustom(event.target.value)} value={custom} />
+        <TextField autoFocus label="Status name" maxLength={40} onChange={(event) => setCustom(event.target.value)} value={custom} />
       ) : null}
       <TextField
         hint="One line on where it landed, such as “Going with design tokens; AW-51 created”."
@@ -104,23 +120,30 @@ export function ThreadStatusDialog({
 /** A button showing a thread's status that opens the status dialog. */
 export function ThreadStatusButton({
   onSaved,
+  quietWhenOpen = false,
   thread,
 }: {
   onSaved: () => void
+  /** An open thread shows a small "Set status" button instead of an "Open" chip that says nothing. */
+  quietWhenOpen?: boolean
   thread: { id: string; name: string; status: string; outcome: string | null }
 }) {
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button
-        aria-label={`Status: ${thread.status}. Change it`}
-        className="aw-threadstatus"
-        onClick={() => setOpen(true)}
-        title={thread.outcome ?? 'Set the status and outcome'}
-        type="button"
-      >
-        <ThreadStatusChip status={thread.status} />
-      </button>
+      {quietWhenOpen && thread.status === 'Open' ? (
+        <IconButton icon="circle-check" label="Set status" onClick={() => setOpen(true)} size="sm" />
+      ) : (
+        <button
+          aria-label={`Status: ${thread.status}. Change it`}
+          className="aw-threadstatus"
+          onClick={() => setOpen(true)}
+          title={thread.outcome ?? 'Set the status and outcome'}
+          type="button"
+        >
+          <ThreadStatusChip status={thread.status} />
+        </button>
+      )}
       {open ? <ThreadStatusDialog onClose={() => setOpen(false)} onSaved={onSaved} thread={thread} /> : null}
     </>
   )
@@ -133,12 +156,15 @@ export function ThreadBoard({
   conversationId,
   onClose,
   onOpen,
+  onStart,
   projectId,
 }: {
   conversationId: string
   projectId: string
   onClose: () => void
   onOpen: (thread: ThreadSummary) => void
+  /** Offers "Start a thread" when there are none; leave it out where you can't post. */
+  onStart?: () => void
 }) {
   const threads = useThreads(projectId, conversationId)
   const [filter, setFilter] = useState<Filter>('open')
@@ -149,7 +175,7 @@ export function ThreadBoard({
     <aside aria-label="Threads" className="context-drawer aw-threadboard">
       <div className="aw-members__head">
         <h2>Threads</h2>
-        <IconButton icon="x" label="Close threads" onClick={onClose} size="sm" />
+        <IconButton className="aw-panelclose" icon="x" label="Close threads" onClick={onClose} size="sm" />
       </div>
       <SegmentedControl<Filter>
         label="Show threads"
@@ -161,10 +187,27 @@ export function ThreadBoard({
         ]}
         value={filter}
       />
-      {threads.isError ? <Banner tone="danger">Threads didn’t load.</Banner> : null}
+      {threads.isPending ? <ListSkeleton label="Loading threads" rows={3} /> : null}
+      {threads.isError ? (
+        <Banner onRetry={() => void threads.refetch()} title="Threads didn’t load." tone="danger">
+          {describeError(threads.error).message}
+        </Banner>
+      ) : null}
       {threads.isSuccess && shown.length === 0 ? (
-        <EmptyState icon="messages" title={filter === 'settled' ? 'Nothing settled yet' : 'No threads here'}>
-          Start a thread from any message when a topic is going to run long.
+        <EmptyState
+          action={
+            onStart && filter !== 'settled' ? (
+              <Button icon="messages" onClick={onStart} size="sm">
+                Start a thread
+              </Button>
+            ) : undefined
+          }
+          icon="messages"
+          title={filter === 'settled' ? 'Nothing settled yet' : 'No threads here'}
+        >
+          {filter === 'settled'
+            ? 'Threads marked Decided, Done or Dropped show up here.'
+            : 'Start a thread from any message when a topic is going to run long.'}
         </EmptyState>
       ) : null}
       <ul className="aw-threadboard__list">
@@ -176,10 +219,14 @@ export function ThreadBoard({
                 {thread.unread ? <span aria-label="New replies" className="aw-badge aw-badge--mention aw-badge--dot" role="img" /> : null}
               </span>
               <span className="aw-threadboard__meta">
-                <ThreadStatusChip status={thread.status} />
-                <span>
-                  {thread.messageCount} {thread.messageCount === 1 ? 'message' : 'messages'}
-                </span>
+                {/* "Open" says nothing here: the filter already does. */}
+                {thread.status === 'Open' ? null : <ThreadStatusChip status={thread.status} />}
+                <span>{thread.messageCount === 0 ? 'No replies yet' : countLabel(thread.messageCount, 'reply', 'replies')}</span>
+                {thread.lastActivityAt ? (
+                  <time dateTime={thread.lastActivityAt} title={formatFullDate(thread.lastActivityAt)}>
+                    · {formatRelative(thread.lastActivityAt)}
+                  </time>
+                ) : null}
               </span>
               {thread.outcome ? <span className="aw-threadboard__outcome">{thread.outcome}</span> : null}
             </button>

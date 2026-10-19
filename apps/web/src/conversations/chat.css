@@ -1,0 +1,313 @@
+/* Styles only the conversation pages use. They load with those pages, not
+   with the app, to keep the first load small; the shared conversation styles
+   stay in styles/conversation.css. */
+
+/* The line under a message that opened a thread */
+.aw-threadchip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 28px;
+  margin: 6px 0 2px -6px;
+  padding: 3px var(--space-2) 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.aw-threadchip__icon {
+  flex: none;
+  color: var(--link);
+}
+
+.aw-threadchip__name {
+  min-width: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  color: var(--link);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-threadchip__count {
+  color: var(--content-fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.aw-threadchip__when {
+  white-space: nowrap;
+}
+
+.aw-threadchip .aw-chip {
+  flex: none;
+}
+
+/* "New": a small badge that never wraps inside itself. */
+.aw-threadchip__new {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  font: var(--t-tag);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.aw-threadchip__chev {
+  flex: none;
+  opacity: 0;
+  color: var(--content-fg-muted);
+}
+
+.aw-threadchip:hover,
+.aw-threadchip[aria-current="true"] {
+  border-color: var(--content-border);
+  background: var(--surface-raised);
+}
+
+.aw-threadchip:hover .aw-threadchip__chev,
+.aw-threadchip[aria-current="true"] .aw-threadchip__chev {
+  opacity: 1;
+}
+
+.aw-threadchip:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+@media (max-width: 600px) {
+  .aw-threadchip__name {
+    max-width: 22ch;
+  }
+
+  .aw-threadchip__chev {
+    display: none;
+  }
+}
+
+/* "Add reaction": one tap reacts. */
+.aw-emojigrid {
+  display: grid;
+  grid-template-columns: repeat(6, 36px);
+  gap: 2px;
+  padding: var(--space-1);
+}
+
+.aw-emojigrid__item {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.aw-emojigrid__item:hover {
+  background: var(--content-hover);
+}
+
+.aw-emojigrid__item:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.aw-emojigrid__item.is-mine {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@media (pointer: coarse) {
+  .aw-emojigrid {
+    grid-template-columns: repeat(6, 44px);
+    justify-content: center;
+  }
+
+  .aw-emojigrid__item {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* "12 new messages since 3:04 PM · Jump": while the New line is above what's on screen */
+.aw-jumpbar {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  z-index: var(--layer-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: calc(100% - var(--space-4) * 2);
+  padding: 2px 2px 2px var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--content-fg);
+  font: var(--t-ui-strong);
+  translate: -50% 0;
+  animation: aw-rise var(--duration-standard) var(--ease-out);
+}
+
+.aw-jumpbar::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--badge-bg);
+}
+
+.aw-jumpbar__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-jumpbar,
+  .aw-latest {
+    animation: none;
+  }
+}
+
+/* The message a thread started from, at the top of the thread */
+.aw-origin {
+  margin: var(--space-2) 0 var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-origin__where {
+  margin: 0 var(--space-4) var(--space-1);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-origin__where a {
+  color: var(--link);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.aw-origin__where a:hover {
+  text-decoration: underline;
+}
+
+.aw-origin .aw-msg:hover {
+  background: none;
+}
+
+.aw-threadpanel .aw-origin__where {
+  margin-left: var(--space-3);
+  margin-right: var(--space-3);
+}
+
+/* Restore beside an archived conversation's row */
+.aw-archive__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-archive__item .aw-archive__row {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-archive__item .aw-archive__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A run's pull request: open, approved, ready to merge */
+.aw-run__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* A disabled composer that offers Restore */
+.aw-composer.is-disabled .aw-btn {
+  margin-left: var(--space-2);
+}
+
+/* Phones: a thread's name keeps the room, the glyph and run badge give it up. */
+@media (max-width: 600px) {
+  .aw-convhead__glyph {
+    display: none;
+  }
+
+  .aw-convhead__main > .aw-chip {
+    display: none;
+  }
+
+  .aw-convhead__title {
+    height: auto;
+    min-height: 34px;
+    padding: 0 var(--space-1);
+    font-size: calc(16px * var(--text-scale));
+    line-height: calc(20px * var(--text-scale));
+    text-align: left;
+  }
+
+  /* A long thread name gets two lines before it's cut. */
+  .aw-convhead__name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* On a phone the shell puts its own close button on the drawer's corner, so a
+   panel's own steps aside (keeping its place) and there's one, not two. */
+@media (max-width: 860px) {
+  .aw-panel[data-mobile-open="true"] .aw-panelclose {
+    visibility: hidden;
+  }
+}
+
+/* The last chip in the row: add another reaction. */
+.aw-reaction--add {
+  border-style: dashed;
+  background: none;
+  color: var(--content-fg-muted);
+}
+
+.aw-reaction--add:hover,
+.aw-reaction--add[aria-expanded="true"] {
+  color: var(--content-fg);
+}
+
+/* A long quote shows its first few lines; the original has the rest. */
+.aw-forward__text {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}

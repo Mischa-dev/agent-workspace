@@ -42,6 +42,24 @@ describe('AppErrorBoundary', () => {
     expect(screen.queryByRole('button', { name: 'Reload workspace' })).toBeNull()
   })
 
+  it('clears the error when the address changes, so Back works again', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { rerender } = render(
+      <AppErrorBoundary resetKey="/broken">
+        <Flaky />
+      </AppErrorBoundary>,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong on this page')
+
+    broken = false
+    rerender(
+      <AppErrorBoundary resetKey="/home">
+        <Flaky />
+      </AppErrorBoundary>,
+    )
+    expect(screen.getByText('Back to work')).toBeInTheDocument()
+  })
+
   it('names the failing component without URLs', () => {
     expect(failingComponent('\n    at ThreadPage (http://localhost:5173/src/threads/ThreadPage.tsx:10:3)\n    at div')).toBe(
       'ThreadPage',

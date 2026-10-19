@@ -12,10 +12,12 @@ import { ProjectInitials } from '../projects/ProjectInitials'
 import type { Project } from '../projects/types'
 import { THEME_PRESETS } from '../theme/slots'
 import { useTheme } from '../theme/themeContext'
-import { Avatar, Button, Dialog, showToast, type CommandItem } from '../ui'
+import { Avatar, Button, Dialog, countLabel, isMac, showToast, type CommandItem } from '../ui'
 import { CommandMenu } from '../ui/commandMenu'
 import { SLASH_COMMANDS } from '../later/slashCommands'
 import { searchWorkItemReferences } from '../work-items/api'
+import { createTaskHref } from '../work-items/links'
+import { BOARD_SHORTCUTS, LIST_SHORTCUTS } from '../work-items/shortcutKeys'
 import { closeCommandMenu, openMarkAllRead, openShortcutSheet, pageCommands, useCommandState } from './commandStore'
 import { markAllRead } from './markAllRead'
 import { pauseChoices, pausedUntilLabel, useNotificationPause } from './notificationPause'
@@ -112,19 +114,21 @@ export function CommandPalette() {
     if (current) {
       const id = current.id
       list.push(
-        { id: 'p:tasks', group: current.name, label: 'Tasks', icon: 'checklist', shortcut: 'G T', onSelect: go(projectPath(id, '/work-items')) },
-        { id: 'p:board', group: current.name, label: 'Board', icon: 'board', shortcut: 'G B', onSelect: go(projectPath(id, '/work-items?view=board')) },
-        { id: 'p:timeline', group: current.name, label: 'Timeline', icon: 'clock', keywords: ['gantt', 'roadmap', 'schedule', 'milestones'], onSelect: go(projectPath(id, '/timeline')) },
-        { id: 'p:ready', group: current.name, label: 'Ready for agents', icon: 'bot', keywords: ['view', 'unclaimed'], onSelect: go(projectPath(id, '/work-items?ready=true&claimed=false&sort=priority')) },
         { id: 'p:overview', group: current.name, label: 'Overview', icon: 'home', onSelect: go(projectPath(id)) },
-        { id: 'p:next', group: current.name, label: 'Up next', icon: 'play', keywords: ['ready', 'what to do', 'ranking', 'priorities'], onSelect: go(projectPath(id, '/next')) },
-        { id: 'p:suggestions', group: current.name, label: 'AI suggestions', icon: 'bot', keywords: ['dependencies', 'blockers', 'review', 'triage'], onSelect: go(projectPath(id, '/suggestions')) },
+        { id: 'p:tasks', group: current.name, label: 'Tasks', icon: 'checklist', shortcut: 'G T', keywords: ['list'], onSelect: go(projectPath(id, '/work-items')) },
+        { id: 'p:board', group: current.name, label: 'Board', icon: 'board', shortcut: 'G B', onSelect: go(projectPath(id, '/work-items?view=board')) },
+        { id: 'p:pages', group: current.name, label: 'Pages', icon: 'list', shortcut: 'G P', keywords: ['docs', 'wiki'], onSelect: go(projectPath(id, '/pages')) },
+        { id: 'p:milestones', group: current.name, label: 'Milestones', icon: 'checklist', keywords: ['releases', 'goals'], onSelect: go(projectPath(id, '/milestones')) },
+        { id: 'p:timeline', group: current.name, label: 'Timeline', icon: 'clock', keywords: ['gantt', 'roadmap', 'schedule', 'milestones'], onSelect: go(projectPath(id, '/timeline')) },
+        { id: 'p:next', group: current.name, label: 'Planning', icon: 'branch', keywords: ['up next', 'ready', 'what to do', 'ranking', 'priorities'], onSelect: go(projectPath(id, '/next')) },
+        { id: 'p:ready', group: current.name, label: 'Ready for agents', icon: 'bot', keywords: ['view', 'unclaimed'], onSelect: go(projectPath(id, '/work-items?ready=true&claimed=false&sort=priority')) },
+        { id: 'p:runs', group: current.name, label: 'Runs', icon: 'activity', keywords: ['launches', 'launch queue', 'agent runs'], onSelect: go(projectPath(id, '/launches')) },
+        { id: 'p:suggestions', group: current.name, label: 'Suggestions', icon: 'bot', keywords: ['dependencies', 'blockers', 'review', 'triage'], onSelect: go(projectPath(id, '/suggestions')) },
         { id: 'p:graph', group: current.name, label: 'Dependency graph', icon: 'branch', keywords: ['blocked', 'critical path', 'dependencies'], onSelect: go(projectPath(id, '/graph')) },
         { id: 'p:plan-import', group: current.name, label: 'Import a plan', icon: 'list', keywords: ['roadmap', 'spec', 'plan to tasks'], onSelect: go(projectPath(id, '/plan-import')) },
-        { id: 'p:pages', group: current.name, label: 'Pages', icon: 'list', shortcut: 'G P', onSelect: go(projectPath(id, '/pages')) },
         { id: 'p:decisions', group: current.name, label: 'Decisions', icon: 'circle-check', shortcut: 'G D', onSelect: go(projectPath(id, '/decisions')) },
         { id: 'p:archived', group: current.name, label: 'Archived conversations', icon: 'archive', onSelect: go(projectPath(id, '/conversations/archived')) },
-        { id: 'p:settings', group: current.name, label: 'Project settings', icon: 'settings', shortcut: 'G S', keywords: ['members', 'repositories', 'github', 'agents', 'automation', 'environments'], onSelect: go(projectSettingsHref(id)) },
+        { id: 'p:settings', group: current.name, label: 'Project settings', icon: 'settings', shortcut: 'G S', keywords: ['members', 'invite', 'repositories', 'github', 'agents', 'automation', 'environments'], onSelect: go(projectSettingsHref(id)) },
       )
       for (const channel of sidebar.data?.channels ?? []) {
         if (channel.archivedAt) continue
@@ -167,6 +171,23 @@ export function CommandPalette() {
       list.push({ id: `k:${typedKey.key}`, group: 'Tasks', label: `Open ${typedKey.key}`, icon: 'checklist', matched: true, onSelect: go(`/${typedKey.key}`) })
     }
 
+    // The menu matches names; messages, pages and decisions are a full search away.
+    const typed = query.trim()
+    if (typed) {
+      const words = new URLSearchParams({ q: typed })
+      if (current) {
+        list.push({
+          id: 's:project',
+          group: 'Search',
+          label: `Search ${current.name} for “${typed}”`,
+          icon: 'search',
+          matched: true,
+          onSelect: go(`/search?${words}&projectId=${encodeURIComponent(current.id)}`),
+        })
+      }
+      list.push({ id: 's:everywhere', group: 'Search', label: `Search everything for “${typed}”`, icon: 'search', matched: true, onSelect: go(`/search?${words}`) })
+    }
+
     list.push(...pageCommands(state.page))
 
     if (current) {
@@ -177,7 +198,8 @@ export function CommandPalette() {
         icon: 'plus',
         shortcut: 'C',
         keywords: ['new task', 'work item', 'issue'],
-        onSelect: go(projectPath(current.id, '/work-items?create=task')),
+        // Keeps the open tasks view (filters, board, open task) behind the dialog.
+        onSelect: () => navigate(createTaskHref(current.id, window.location)),
       })
     }
     for (const project of projects) {
@@ -197,21 +219,22 @@ export function CommandPalette() {
       list.push({
         id: 'a:pin',
         group: 'Actions',
-        label: pinned ? `Unpin ${project.name}` : `Pin ${project.name}`,
+        label: pinned ? `Unpin ${project.name} from the rail` : `Pin ${project.name} to the rail`,
         icon: 'star',
         keywords: ['pin', 'favorite', 'rail'],
         onSelect: () => {
           updateNavigation({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation, pinned: !pinned })
-            .then(() => showToast({ tone: 'success', title: pinned ? `Unpinned ${project.name}` : `Pinned ${project.name}` }))
+            .then(() => showToast({ tone: 'success', title: pinned ? `${project.name} unpinned from the rail` : `${project.name} pinned to the rail` }))
             .catch((reason: unknown) =>
-              showToast({ tone: 'danger', title: 'Couldn’t update the pin.', description: reason instanceof Error ? reason.message : 'Try again.' }),
+              showToast({ tone: 'danger', title: 'The pin didn’t change', description: reason instanceof Error ? reason.message : 'Try again.' }),
             )
         },
       })
     }
     if (session.user.capabilities.createProject) {
-      list.push({ id: 'a:create-project', group: 'Actions', label: 'Create project', icon: 'plus', keywords: ['new project'], onSelect: go('/projects/new') })
+      list.push({ id: 'a:create-project', group: 'Actions', label: 'New project', icon: 'plus', keywords: ['create project'], onSelect: go('/projects/new') })
     }
+    list.push({ id: 'a:setup', group: 'Actions', label: 'Workspace setup', icon: 'checklist', keywords: ['onboarding', 'welcome', 'getting started', 'set up'], onSelect: go('/welcome') })
     if (direct.data?.capabilities.startConversation) {
       list.push({ id: 'a:new-message', group: 'Actions', label: 'New message', icon: 'compose', keywords: ['dm', 'group'], onSelect: go('/messages') })
     }
@@ -239,7 +262,7 @@ export function CommandPalette() {
     })
     if (notificationPause.available) {
       const pauseFailed = (reason: unknown) =>
-        showToast({ tone: 'danger', title: 'Couldn’t change notifications.', description: reason instanceof Error ? reason.message : 'Try again.' })
+        showToast({ tone: 'danger', title: 'Notifications didn’t change', description: reason instanceof Error ? reason.message : 'Try again.' })
       const pauseWords = ['pause', 'do not disturb', 'dnd', 'snooze', 'quiet', 'mute', 'notifications']
       if (notificationPause.until) {
         list.push({
@@ -280,18 +303,20 @@ export function CommandPalette() {
             navigate('/sign-in', { replace: true })
           })
           .catch((reason: unknown) =>
-            showToast({ tone: 'danger', title: 'Couldn’t sign out.', description: reason instanceof Error ? reason.message : 'Try again.' }),
+            showToast({ tone: 'danger', title: 'You’re still signed in', description: reason instanceof Error ? reason.message : 'Try again.' }),
           )
       },
     })
 
     list.push(
       { id: 'g:home', group: 'Go to', label: 'Home', icon: 'home', shortcut: 'G H', onSelect: go('/home') },
+      { id: 'g:inbox', group: 'Go to', label: 'Inbox', icon: 'inbox', shortcut: 'G I', keywords: ['notifications', 'mentions', 'needs you'], onSelect: go('/inbox') },
       { id: 'g:my-work', group: 'Go to', label: 'My work', icon: 'checklist', shortcut: 'G W', keywords: ['assigned', 'tasks', 'review', 'claimed'], onSelect: go('/my-work') },
       { id: 'g:later', group: 'Go to', label: 'Later', icon: 'bookmark', shortcut: 'G L', keywords: ['saved', 'bookmarks', 'reminders', 'scheduled'], onSelect: go('/later') },
       { id: 'g:runs', group: 'Go to', label: 'Runs', icon: 'activity', keywords: ['agent runs', 'tokens', 'cost', 'usage', 'diff'], onSelect: go('/runs') },
       { id: 'g:whiteboards', group: 'Go to', label: 'Whiteboards', icon: 'whiteboard', keywords: ['excalidraw', 'draw', 'diagram', 'sketch', 'canvas'], onSelect: go('/whiteboards') },
-      { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['inbox', 'dms'], onSelect: go('/messages') },
+      { id: 'g:messages', group: 'Go to', label: 'Messages', icon: 'message', shortcut: 'G M', keywords: ['dms', 'direct messages', 'groups'], onSelect: go('/messages') },
+      { id: 'g:projects', group: 'Go to', label: 'All projects', icon: 'list', keywords: ['projects', 'archived'], onSelect: go('/projects') },
       { id: 'g:agents', group: 'Go to', label: 'Agents', icon: 'bot', onSelect: go('/messages/agents') },
       { id: 'g:search', group: 'Go to', label: 'Search', icon: 'search', shortcut: '/', onSelect: go('/search') },
       { id: 'g:appearance', group: 'Go to', label: 'Appearance', icon: 'palette', shortcut: 'G A', keywords: ['theme', 'dark', 'light', 'density'], onSelect: go('/settings/account/appearance') },
@@ -312,17 +337,11 @@ export function CommandPalette() {
         keywords: [project.key],
         matched: !listed.has(project.id),
         onSelect: () => {
-          const href = projectLocationHref(project.id, project.navigation.location)
-          if (!project.capabilities.navigationWrite) return navigate(href)
-          // Record the switch so the rail's recent Projects stay in order.
-          void switchProject({
-            projectId: project.id,
-            expectedVersion: project.navigation.version,
-            navigation: project.navigation,
-          }).then(
-            (result) => navigate(result.href),
-            () => navigate(href),
-          )
+          navigate(projectLocationHref(project.id, project.navigation.location))
+          // Recorded in the background, so the rail knows it was opened.
+          if (project.capabilities.navigationWrite) {
+            switchProject({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation }).catch(() => undefined)
+          }
         },
       })
     }
@@ -352,7 +371,7 @@ export function CommandPalette() {
             void openDm(person.id)
               .then((conversationId) => navigate(`/messages/${encodeURIComponent(conversationId)}`))
               .catch((reason: unknown) =>
-                showToast({ tone: 'danger', title: 'Couldn’t open that conversation.', description: reason instanceof Error ? reason.message : 'Try again.' }),
+                showToast({ tone: 'danger', title: `The conversation with ${person.displayName} didn’t open`, description: reason instanceof Error ? reason.message : 'Try again.' }),
               )
           },
         })
@@ -386,7 +405,16 @@ export function CommandPalette() {
   const visibleItems = useMemo(() => {
     if (query.trim()) return items
     const quiet = new Set(['Threads', 'People', 'Theme'])
-    return items.filter((item) => !quiet.has(item.group) && !item.id.startsWith('a:create-task:') && !item.id.startsWith('a:pause-notifications:'))
+    // The project's main places; the rest (Timeline, Graph, Import a plan…) come up as you type.
+    const projectFirst = new Set(['p:overview', 'p:tasks', 'p:board', 'p:pages'])
+    return items.filter(
+      (item) =>
+        !quiet.has(item.group) &&
+        !(item.id.startsWith('p:') && !projectFirst.has(item.id)) &&
+        item.id !== 'a:setup' &&
+        !item.id.startsWith('a:create-task:') &&
+        !item.id.startsWith('a:pause-notifications:'),
+    )
   }, [items, query])
 
   return (
@@ -397,7 +425,7 @@ export function CommandPalette() {
             <>
               <span>↑↓ to move</span>
               <span>↵ to open</span>
-              <span>Type a task key like {current?.key ?? 'AWD'}-12</span>
+              <span>Type a task key, like {current?.key ?? 'AWD'}-12</span>
             </>
           }
           items={visibleItems}
@@ -405,21 +433,40 @@ export function CommandPalette() {
           loading={tasks.isFetching}
           onClose={closeCommandMenu}
           onQueryChange={setQuery}
-          placeholder={current ? `Search ${current.name}, go anywhere, or run a command` : 'Go anywhere or run a command'}
+          placeholder="Go anywhere, find a task, or run a command"
           query={query}
         />
       ) : null}
-      <ShortcutSheet inProject={Boolean(current)} onClose={closeCommandMenu} open={state.open === 'shortcuts'} />
+      <ShortcutSheet
+        inProject={Boolean(current)}
+        onClose={closeCommandMenu}
+        open={state.open === 'shortcuts'}
+        taskView={taskViewAt(location.pathname, location.search)}
+      />
       <MarkAllReadDialog onClose={closeCommandMenu} open={state.open === 'mark-all-read'} projectIds={projects.map((project) => project.id)} />
     </>
   )
 }
 
-function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClose: () => void; open: boolean }) {
-  const groups = ['General', 'Conversations', 'Go to'] as const
+/** The task list or board on screen, whose own keys the sheet lists too. */
+function taskViewAt(pathname: string, search: string): 'list' | 'board' | null {
+  if (!/^\/projects\/[^/]+\/work-items\/?$/.test(pathname)) return null
+  return new URLSearchParams(search).get('view') === 'board' ? 'board' : 'list'
+}
+
+function ShortcutSheet({ inProject, onClose, open, taskView }: { inProject: boolean; onClose: () => void; open: boolean; taskView: 'list' | 'board' | null }) {
+  const groups = ['General', 'Go to', 'Conversations'] as const
+  // The sheet already says how to open itself.
+  const taskKeys = (taskView === 'board' ? BOARD_SHORTCUTS : LIST_SHORTCUTS).filter((shortcut) => shortcut.keys.join() !== '?')
   return (
     <Dialog
-      description={inProject ? undefined : 'Open a Project for its Tasks, Board, Pages and settings shortcuts.'}
+      description={
+        !inProject
+          ? 'Open a project for its Tasks, Board, Pages and settings shortcuts.'
+          : !taskView
+            ? 'The task list and board have keys of their own, shown here when one is open.'
+            : undefined
+      }
       footer={<Button onClick={onClose}>Close</Button>}
       onClose={onClose}
       open={open}
@@ -427,6 +474,23 @@ function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClo
       width={640}
     >
       <div className="aw-shortcuts">
+        {taskView ? (
+          <section>
+            <h3>{taskView === 'board' ? 'Task board' : 'Task list'}</h3>
+            <dl>
+              {taskKeys.map((shortcut) => (
+                <div className="aw-shortcuts__row" key={shortcut.label} style={{ display: 'contents' }}>
+                  <dt>{shortcut.label}</dt>
+                  <dd>
+                    {shortcut.keys.map((key, index) => (
+                      <kbd key={index}>{key}</kbd>
+                    ))}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ) : null}
         {groups.map((group) => (
           <section key={group}>
             <h3>{group}</h3>
@@ -436,7 +500,7 @@ function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClo
                   <dt>{shortcut.label}</dt>
                   <dd aria-label={shortcut.keys.length === 2 && shortcut.keys[0] === 'G' ? `G then ${shortcut.keys[1]}` : shortcut.keys.map(spokenKey).join(' ')}>
                     {shortcut.keys.map((key, index) => (
-                      <kbd key={index}>{key}</kbd>
+                      <kbd key={index}>{shownKey(key)}</kbd>
                     ))}
                   </dd>
                 </div>
@@ -449,7 +513,16 @@ function ShortcutSheet({ inProject, onClose, open }: { inProject: boolean; onClo
   )
 }
 
-const SPOKEN_KEYS: Record<string, string> = { '⌘': 'Command', '⌥': 'Option', '⇧': 'Shift', '↑': 'Up', '↓': 'Down', Esc: 'Escape' }
+const SPOKEN_KEYS: Record<string, string> = isMac
+  ? { '⌘': 'Command', '⌥': 'Option', '⇧': 'Shift', '↑': 'Up', '↓': 'Down', Esc: 'Escape' }
+  : { '⌘': 'Control', '⌥': 'Alt', '⇧': 'Shift', '↑': 'Up', '↓': 'Down', Esc: 'Escape' }
+
+/** The sheet's keys are written for a Mac; elsewhere they read Ctrl, Alt and Shift. */
+const OTHER_KEYS: Record<string, string> = { '⌘': 'Ctrl', '⌥': 'Alt', '⇧': 'Shift' }
+
+function shownKey(key: string) {
+  return isMac ? key : (OTHER_KEYS[key] ?? key)
+}
 
 function spokenKey(key: string) {
   return SPOKEN_KEYS[key] ?? key
@@ -465,13 +538,13 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
       const { marked, failed } = await markAllRead(projectIds)
       await queryClient.invalidateQueries()
       if (failed) {
-        showToast({ tone: 'danger', title: `Marked ${marked} read; some didn’t update.`, description: 'Try again in a moment.' })
+        showToast({ tone: 'danger', title: `${countLabel(marked, 'conversation')} marked read, but some weren’t`, description: 'Try again in a moment.' })
       } else {
-        showToast({ tone: 'success', title: marked ? `Marked ${marked} ${marked === 1 ? 'conversation' : 'conversations'} read` : 'Everything was already read' })
+        showToast({ tone: 'success', title: marked ? `${countLabel(marked, 'conversation')} marked read` : 'Everything was already read' })
       }
       onClose()
     } catch (reason) {
-      showToast({ tone: 'danger', title: 'Couldn’t mark everything read.', description: reason instanceof Error ? reason.message : 'Try again.' })
+      showToast({ tone: 'danger', title: 'Conversations weren’t marked read', description: reason instanceof Error ? reason.message : 'Try again.' })
     } finally {
       setBusy(false)
     }
@@ -483,7 +556,7 @@ function MarkAllReadDialog({ onClose, open, projectIds }: { onClose: () => void;
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button busy={busy} onClick={() => void run()} variant="primary">
-            Mark all read
+            Mark messages read
           </Button>
         </>
       }

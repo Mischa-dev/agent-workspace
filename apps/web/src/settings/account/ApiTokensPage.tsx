@@ -2,11 +2,11 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
-import { describeError, toastError } from '../../app/mutations'
+import { describeError } from '../../app/mutations'
 import {
   Banner,
   Button,
-  Dialog,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   Icon,
@@ -19,6 +19,7 @@ import {
   SelectField,
   StatusChip,
   TextField,
+  formatFullDate,
   formatRelative,
   formatShortDate,
   showToast,
@@ -43,7 +44,7 @@ const STATUS: Record<ApiToken['status'], { label: string; tone: ChipTone }> = {
   expired: { label: 'Expired', tone: 'muted' },
 }
 
-/** Account › API tokens: personal tokens for scripts and tools, one Project each, acting as you. */
+/** Account › API tokens: personal tokens for scripts and tools, one project each, acting as you. */
 export default function ApiTokensPage() {
   const queryClient = useQueryClient()
   const tokens = useQuery({ queryKey: accountKeys.apiTokens, queryFn: listApiTokens })
@@ -55,17 +56,13 @@ export default function ApiTokensPage() {
       setRevoking(null)
       showToast({ tone: 'success', title: `${token.name} revoked`, description: 'Anything using it stops working now.' })
     },
-    onError: (error) => {
-      setRevoking(null)
-      toastError('Couldn’t revoke the token', error)
-    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: accountKeys.apiTokens }),
   })
 
   return (
     <>
       <PageHeader icon="key" title="API tokens">
-        Tokens let scripts and tools reach one Project as you, through the MCP server or the REST API (see{' '}
+        Tokens let scripts and tools reach one project as you, through the MCP server or the REST API (see{' '}
         <Link to={accountSettingsHref('api-reference')}>API reference</Link>). Treat them like passwords.
       </PageHeader>
       {created && (
@@ -80,12 +77,10 @@ export default function ApiTokensPage() {
       {tokens.isPending ? (
         <ListSkeleton label="Loading API tokens" rows={2} />
       ) : tokens.isError ? (
-        <ErrorState action={<Button onClick={() => void tokens.refetch()}>Try again</Button>} title="API tokens didn’t load">
-          Check your connection and try again.
-        </ErrorState>
+        <ErrorState error={tokens.error} onRetry={() => void tokens.refetch()} title="API tokens didn’t load" />
       ) : (
         <>
-          <Section id="new-token-heading" title="Create a token">
+          <Section id="new-token-heading" title="New token">
             {tokens.data.projects.length ? (
               <CreateTokenForm
                 onCreated={(result) => {
@@ -95,7 +90,7 @@ export default function ApiTokensPage() {
                 projects={tokens.data.projects}
               />
             ) : (
-              <p className="aw-quiet">You need to be a member of a Project to create a token for it.</p>
+              <p className="aw-quiet">Tokens reach one project. Join a project as a member to create one.</p>
             )}
           </Section>
           <Section id="tokens-heading" title="Your tokens">
@@ -128,9 +123,15 @@ export default function ApiTokensPage() {
                         <code className="aw-inline-code">{token.tokenPrefix}…</code>
                         <span>{token.projectName}</span>
                         <span>{token.scopes.includes('write') ? 'Read and write' : 'Read only'}</span>
-                        <span>Created {formatShortDate(token.createdAt)}</span>
-                        <span>{token.lastUsedAt ? `Used ${formatRelative(token.lastUsedAt)}` : 'Never used'}</span>
-                        {token.status === 'active' && <span>Expires {formatShortDate(token.expiresAt)}</span>}
+                        <span title={formatFullDate(token.createdAt)}>Created {formatShortDate(token.createdAt)}</span>
+                        {token.lastUsedAt ? (
+                          <span title={formatFullDate(token.lastUsedAt)}>Used {formatRelative(token.lastUsedAt)}</span>
+                        ) : (
+                          <span>Never used</span>
+                        )}
+                        {token.status === 'active' && (
+                          <span title={formatFullDate(token.expiresAt)}>Expires {formatShortDate(token.expiresAt)}</span>
+                        )}
                       </span>
                     }
                     title={
@@ -150,24 +151,22 @@ export default function ApiTokensPage() {
           </Section>
         </>
       )}
-      <Dialog
-        description={
-          revoking
-            ? `Anything using ${revoking.name} (${revoking.tokenPrefix}…) loses access to ${revoking.projectName} at once. This can’t be undone.`
-            : undefined
-        }
-        footer={
-          <>
-            <Button onClick={() => setRevoking(null)}>Cancel</Button>
-            <Button busy={revoke.isPending} data-autofocus onClick={() => revoking && revoke.mutate(revoking)} variant="danger">
-              Revoke token
-            </Button>
-          </>
-        }
-        onClose={() => setRevoking(null)}
+      <ConfirmDialog
+        busy={revoke.isPending}
+        confirmLabel="Revoke token"
+        error={revoke.isError ? `The token wasn’t revoked. ${describeError(revoke.error).message}` : null}
+        onClose={() => {
+          setRevoking(null)
+          revoke.reset()
+        }}
+        onConfirm={() => revoking && revoke.mutate(revoking)}
         open={revoking !== null}
-        title="Revoke this token?"
-      />
+        title={`Revoke ${revoking?.name ?? 'this token'}?`}
+      >
+        {revoking
+          ? `Anything using it (${revoking.tokenPrefix}…) loses access to ${revoking.projectName} right away. This can’t be undone.`
+          : null}
+      </ConfirmDialog>
     </>
   )
 }
@@ -182,7 +181,10 @@ function CreateTokenForm({
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '')
   const [name, setName] = useState('')
   const [access, setAccess] = useState<'read' | 'write'>('read')
-  const [days, setDays] = useState(30)
+  // The field keeps what's typed, so it can be cleared and retyped; it's checked on submit.
+  const [daysText, setDaysText] = useState('30')
+  const days = Number(daysText)
+  const daysValid = Number.isInteger(days) && days >= 1 && days <= 365
   const [error, setError] = useState<string | null>(null)
   const project = projects.find((candidate) => candidate.id === projectId) ?? projects[0]
   const canWrite = project?.canWrite ?? false
@@ -199,15 +201,17 @@ function CreateTokenForm({
       setError(null)
       onCreated(result)
     },
-    onError: (reason) => setError(describeError(reason).message),
+    onError: (reason) => setError(`The token wasn’t created. ${describeError(reason).message}`),
   })
   const trimmed = name.trim()
   const nameError = trimmed && (!NAME_PATTERN.test(trimmed) || trimmed.length > 80)
     ? 'Start with a letter or digit; use letters, digits, spaces and . _ - (up to 80).'
     : null
+  const [daysChecked, setDaysChecked] = useState(false)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!trimmed || nameError || !project) return
+    setDaysChecked(true)
+    if (!trimmed || nameError || !project || !daysValid) return
     create.mutate()
   }
 
@@ -246,25 +250,26 @@ function CreateTokenForm({
             ]}
             value={canWrite ? access : 'read'}
           />
-          {!canWrite && <p className="aw-field__note">You can only read in this Project, so its tokens are read only.</p>}
+          {!canWrite && <p className="aw-field__note">You can only read in this project, so its tokens are read only.</p>}
         </div>
         <div className="aw-field">
           <span className="aw-field__label">Expires after</span>
           <div className="aw-token-expiry">
             <SegmentedControl
               label="Expires after"
-              onChange={(value) => setDays(Number(value))}
+              onChange={setDaysText}
               options={EXPIRY_PRESETS.map((preset) => ({ value: String(preset), label: preset === 365 ? '1 year' : `${preset} days` }))}
-              value={String(days)}
+              value={daysText}
             />
             <TextField
               aria-label="Days until it expires"
+              error={daysChecked && !daysValid ? 'Enter a number of days from 1 to 365.' : null}
               inputMode="numeric"
               max={365}
               min={1}
-              onChange={(event) => setDays(Math.max(1, Math.min(365, Math.round(Number(event.target.value) || 1))))}
+              onChange={(event) => setDaysText(event.target.value)}
               type="number"
-              value={days}
+              value={daysText}
             />
           </div>
         </div>

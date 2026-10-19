@@ -5,7 +5,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-5);
 }
 
 .aw-inbox__chips {
@@ -14,40 +14,23 @@
   gap: var(--space-1);
 }
 
-.aw-inbox__chip {
-  min-height: 32px;
-  padding: 0 var(--space-3);
+/* Kind filters: kit buttons drawn as pills, the chosen one in the accent. */
+.aw-btn.aw-inbox__chip {
   border: 1px solid var(--content-border);
   border-radius: var(--radius-full);
-  background: var(--surface-raised);
   color: var(--content-fg-muted);
-  font: inherit;
-  font-size: 0.875rem;
-  cursor: pointer;
 }
 
-.aw-inbox__chip:hover {
-  background: var(--content-hover);
-}
-
-.aw-inbox__chip[aria-pressed='true'] {
+.aw-btn.aw-inbox__chip[aria-pressed='true'] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
 }
 
-.aw-inbox__help-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+.aw-btn.aw-inbox__help-toggle {
   margin-left: auto;
-  border: 0;
-  background: none;
   color: var(--content-fg-muted);
-  font: inherit;
-  font-size: 0.875rem;
-  cursor: pointer;
 }
 
 .aw-inbox__help {
@@ -59,15 +42,8 @@
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
   color: var(--content-fg-muted);
-  font-size: 0.875rem;
+  font: var(--t-small);
   list-style: none;
-}
-
-.aw-inbox__status {
-  min-height: 1.25em;
-  margin: 0 0 var(--space-2);
-  color: var(--content-fg-muted);
-  font-size: 0.875rem;
 }
 
 .aw-inbox__panes {
@@ -97,7 +73,7 @@
   padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--content-border);
   background: var(--surface-sunken);
-  font-size: 0.8125rem;
+  font: var(--t-caption);
   font-weight: 600;
 }
 
@@ -140,18 +116,19 @@
   border: 0;
   background: none;
   color: inherit;
-  font: inherit;
+  font: var(--t-ui);
+  font-weight: 400;
   text-align: left;
   cursor: pointer;
 }
 
-.aw-inbox__row-main:hover {
-  background: var(--content-hover);
+@media (hover: hover) {
+  .aw-inbox__row-main:hover {
+    background: var(--content-hover);
+  }
 }
 
-.aw-inbox__row-main:focus-visible,
-.aw-inbox__row-action:focus-visible,
-.aw-inbox__chip:focus-visible {
+.aw-inbox__row-main:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
@@ -168,6 +145,7 @@
   background: var(--accent);
 }
 
+/* Rows nobody caused (reminders, usage, failed sends) show what kind they are, quietly. */
 .aw-inbox__kind-icon {
   display: grid;
   flex: none;
@@ -175,8 +153,13 @@
   width: 28px;
   height: 28px;
   border-radius: var(--radius-full);
-  background: var(--agent-soft);
-  color: var(--agent);
+  background: var(--surface-sunken);
+  color: var(--content-fg-muted);
+}
+
+.aw-inbox__kind-icon.is-failure {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .aw-inbox__row-text {
@@ -207,27 +190,29 @@
   display: -webkit-box;
   overflow: hidden;
   color: var(--content-fg-muted);
-  font-size: 0.875rem;
+  font: var(--t-small);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
 .aw-inbox__time {
+  display: inline-flex;
   flex: none;
+  align-items: center;
+  gap: 3px;
   margin-top: 2px;
   color: var(--content-fg-muted);
-  font-size: 0.8125rem;
+  font: var(--t-caption);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.aw-inbox__row-action {
-  display: grid;
-  place-items: center;
+/* Archive sits in its own column; hidden until the row is hovered or chosen, always there on touch. */
+.aw-iconbtn.aw-inbox__row-action {
+  align-self: stretch;
   width: 44px;
-  border: 0;
-  background: none;
-  color: var(--content-fg-muted);
-  cursor: pointer;
+  height: auto;
+  border-radius: 0;
   opacity: 0;
 }
 
@@ -237,8 +222,10 @@
   opacity: 1;
 }
 
-.aw-inbox__row-action:hover {
-  color: var(--content-fg);
+@media (hover: none) {
+  .aw-iconbtn.aw-inbox__row-action {
+    opacity: 1;
+  }
 }
 
 .aw-inbox__more {
@@ -259,29 +246,29 @@
   border: 1px dashed var(--content-border);
   border-radius: var(--radius-md);
   color: var(--content-fg-muted);
+  font: var(--t-ui);
+  font-weight: 400;
   text-align: center;
+}
+
+.aw-inbox__detail-empty p {
+  margin: 0;
 }
 
 .aw-inbox__card {
   display: grid;
   gap: var(--space-3);
+  min-width: 0;
   padding: var(--space-5);
   border: 1px solid var(--content-border);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
 }
 
-.aw-inbox__back {
+.aw-btn.aw-inbox__back {
   display: none;
-  align-items: center;
-  gap: var(--space-1);
   justify-self: start;
-  min-height: 44px;
-  border: 0;
-  background: none;
-  color: var(--link);
-  font: inherit;
-  cursor: pointer;
+  margin-left: calc(-1 * var(--space-2));
 }
 
 .aw-inbox__card-meta {
@@ -291,19 +278,19 @@
   gap: var(--space-2);
   margin: 0;
   color: var(--content-fg-muted);
-  font-size: 0.875rem;
+  font: var(--t-small);
 }
 
 .aw-inbox__card-title {
   margin: 0;
-  font-size: 1.125rem;
-  line-height: 1.35;
+  font: var(--t-title);
+  overflow-wrap: anywhere;
 }
 
 .aw-inbox__card-when {
   margin: 0;
   color: var(--content-fg-muted);
-  font-size: 0.8125rem;
+  font: var(--t-small);
 }
 
 .aw-inbox__quote {
@@ -312,8 +299,8 @@
   border-left: 3px solid var(--content-border);
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
+  font: var(--t-body);
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }
 
 .aw-inbox__actions {
@@ -342,15 +329,15 @@
     display: none;
   }
 
-  .aw-inbox__back {
+  .aw-btn.aw-inbox__back {
     display: inline-flex;
   }
 
-  .aw-inbox__help-toggle {
+  .aw-btn.aw-inbox__help-toggle {
     display: none;
   }
 
-  .aw-inbox__row-action {
+  .aw-iconbtn.aw-inbox__row-action {
     opacity: 1;
   }
 }

@@ -92,7 +92,7 @@ describe('authenticated route loading', () => {
     )
 
     expect(
-      screen.getByRole('navigation', { name: 'Projects' }),
+      screen.getByRole('navigation', { name: 'Spaces' }),
     ).toBeVisible()
     expect(
       screen.getByRole('complementary', {

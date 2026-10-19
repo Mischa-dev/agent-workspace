@@ -7,7 +7,7 @@ import { useProject, useProjects } from '../projects/hooks'
 import { projectLocationHref } from '../projects/locations'
 import type { Project } from '../projects/types'
 import { AppShell } from '../shell/AppShell'
-import { Button, EmptyState, Icon, SettingsSkeleton } from '../ui'
+import { Button, ButtonLink, EmptyState, Icon, SettingsSkeleton } from '../ui'
 import { useSettingsRegistry } from './api'
 import { isArchiving } from './archiving'
 import { accountSettingsHref, projectSettingsHref, workspaceSettingsHref } from './paths'
@@ -32,7 +32,7 @@ function rememberProject(projectId: string) {
   try {
     window.sessionStorage.setItem(LAST_PROJECT_KEY, projectId)
   } catch {
-    // Only a convenience: settings open on the first Project without it.
+    // Only a convenience: settings open on the first project without it.
   }
 }
 
@@ -46,7 +46,7 @@ function organizationFor(session: AuthenticatedSession, project: Project | null)
   return project ? (session.organizations.find((organization) => organization.id === project.organizationId) ?? null) : null
 }
 
-/** /settings/*: one area for your account, the workspace and each Project. */
+/** /settings/*: one area for your account, the workspace and each project. */
 export default function SettingsArea() {
   const session = useAuthenticatedSession()
   const { '*': splat = '' } = useParams()
@@ -98,7 +98,7 @@ export default function SettingsArea() {
     return <Navigate replace state={location.state} to={`${path}${location.search}${hash}`} />
   }
   if (route.group === 'project' && !route.projectId) {
-    if (projectList.isPending) return <SettingsFrame session={session}><SettingsSkeleton label="Loading Projects" /></SettingsFrame>
+    if (projectList.isPending) return <SettingsFrame session={session}><SettingsSkeleton label="Loading projects" /></SettingsFrame>
     if (preferredProjectId) return <Navigate replace to={projectSettingsHref(preferredProjectId)} />
   }
 
@@ -107,8 +107,16 @@ export default function SettingsArea() {
   let content
   if (group === 'project' && !route.projectId) {
     content = (
-      <EmptyState icon="settings" title="No Projects yet">
-        Project settings appear here once you create or join a Project.
+      <EmptyState
+        action={
+          <ButtonLink icon="plus" to="/projects/new" variant="primary">
+            New project
+          </ButtonLink>
+        }
+        icon="settings"
+        title="No projects yet"
+      >
+        Project settings appear here once you create or join a project.
       </EmptyState>
     )
   } else if (group === 'workspace' && !workspace) {
@@ -130,7 +138,7 @@ export default function SettingsArea() {
   } else {
     const context = contexts[group]
     if (entry && projectList.isPending && !(entry.visible?.(context) ?? true)) {
-      // Some pages depend on the person's Projects; wait for them before deciding.
+      // Some pages depend on the person's projects; wait for them before deciding.
       content = <SettingsSkeleton label="Loading settings" />
     } else if (!entry || !(entry.visible?.(context) ?? true)) {
       const first = pagesIn(group, context)[0]
@@ -140,7 +148,10 @@ export default function SettingsArea() {
     }
   }
 
-  const current = entry ? `${GROUP_LABELS[group]} · ${entry.label}` : GROUP_LABELS[group]
+  // The phone menu's button names the page the way the nav does, with the
+  // project's name in place of the group for a project page.
+  const scope = group === 'project' && pickerProject ? pickerProject.name : GROUP_LABELS[group]
+  const current = entry ? `${scope} · ${entry.label}` : scope
 
   return (
     <SettingsFrame session={session}>
@@ -152,7 +163,7 @@ export default function SettingsArea() {
           onClick={() => setNavOpen((open) => !open)}
           type="button"
         >
-          <Icon name="settings" />
+          <Icon name={entry?.icon ?? 'settings'} />
           <span className="aw-settings__toggle-label">{current}</span>
           <Icon name="chevron-down" />
         </button>
@@ -199,8 +210,8 @@ function PageBody({ entry, props }: { entry: SettingsPage; props: SettingsPagePr
 }
 
 /**
- * A Project page: loads the Project and checks you can use the page. It doesn't
- * remember settings as where you were, or the Project's tile would lead back here.
+ * A project page: loads the project and checks you can use the page. It doesn't
+ * remember settings as where you were, or the project's tile would lead back here.
  */
 function ProjectScope({
   entry,
@@ -216,8 +227,8 @@ function ProjectScope({
   session: AuthenticatedSession
 }) {
   const project = query.data ?? null
-  if (query.isPending) return <SettingsSkeleton label="Loading Project" />
-  if (query.isError || !project) return <ProjectPageError onRetry={() => void query.refetch()} />
+  if (query.isPending) return <SettingsSkeleton label="Loading project" />
+  if (query.isError || !project) return <ProjectPageError error={query.error ?? undefined} onRetry={() => void query.refetch()} />
   if (project.archivedAt && !isArchiving(project.id)) {
     return <Navigate replace to={projectLocationHref(project.id, { kind: 'project_overview' })} />
   }
@@ -325,7 +336,7 @@ function SettingsNav({
                   Project
                 </label>
                 <select id={projectId} onChange={(event) => onPickProject(event.target.value)} value={pickerProject?.id ?? ''}>
-                  {!pickerProject && <option value="">Choose a Project</option>}
+                  {!pickerProject && <option value="">Choose a project</option>}
                   {pickerProject && !projects.some((project) => project.id === pickerProject.id) && (
                     <option value={pickerProject.id}>{pickerProject.name}</option>
                   )}
